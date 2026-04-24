@@ -33,7 +33,6 @@ from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
 )
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 
-
 class _LocalArtifactStorage:
     def __init__(self, root: Path) -> None:
         self._root = root
@@ -50,7 +49,6 @@ class _LocalArtifactStorage:
     def resolve_storage_path(self, ref: str) -> Path:
         return self._root / ref
 
-
 def _workspace_git_command(workspace_path: str | Path, *args: str) -> tuple[str, ...]:
     resolved_workspace = str(Path(workspace_path).resolve())
     return (
@@ -61,7 +59,6 @@ def _workspace_git_command(workspace_path: str | Path, *args: str) -> tuple[str,
         resolved_workspace,
         *args,
     )
-
 
 @pytest.mark.asyncio
 async def test_default_command_runner_clears_supplemental_groups_when_uid_changes(
@@ -97,7 +94,6 @@ async def test_default_command_runner_clears_supplemental_groups_when_uid_change
     assert captured_kwargs["user"] == 1000
     assert captured_kwargs["extra_groups"] == []
     assert "group" not in captured_kwargs
-
 
 @pytest.mark.asyncio
 async def test_controller_launches_container_and_returns_typed_handle(
@@ -190,7 +186,6 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert stored.runtime_id == "codex_cli"
     session_supervisor.start.assert_awaited_once()
 
-
 @pytest.mark.asyncio
 async def test_controller_record_keeps_auth_and_runtime_homes_out_of_artifact_refs(
     monkeypatch: pytest.MonkeyPatch,
@@ -266,7 +261,6 @@ async def test_controller_record_keeps_auth_and_runtime_homes_out_of_artifact_re
     assert ".codex-auth" not in json.dumps(record_payload)
     assert "codex-home" not in json.dumps(stored.published_artifact_refs())
 
-
 @pytest.mark.asyncio
 async def test_controller_uses_request_moonmind_url_for_docker_network(
     monkeypatch: pytest.MonkeyPatch,
@@ -331,7 +325,6 @@ async def test_controller_uses_request_moonmind_url_for_docker_network(
     assert "--network" in run_command
     assert "local-network" in run_command
 
-
 @pytest.mark.asyncio
 async def test_controller_replaces_blank_request_moonmind_url(
     tmp_path: Path,
@@ -391,7 +384,6 @@ async def test_controller_replaces_blank_request_moonmind_url(
 
     run_command = commands[1]
     assert "MOONMIND_URL=http://api:8000" in run_command
-
 
 @pytest.mark.asyncio
 async def test_controller_launch_normalizes_created_paths_for_container_user(
@@ -478,7 +470,6 @@ async def test_controller_launch_normalizes_created_paths_for_container_user(
     assert all(uid == 1000 and gid == 1000 for _path, uid, gid, _follow in chown_calls)
     assert all(follow_symlinks is False for _path, _uid, _gid, follow_symlinks in chown_calls)
     assert commands[1][:2] == ("docker", "run")
-
 
 @pytest.mark.asyncio
 async def test_controller_launch_clones_workspace_before_starting_container(
@@ -634,7 +625,6 @@ async def test_controller_launch_clones_workspace_before_starting_container(
     assert Path(request.session_workspace_path) in chowned_paths
     assert Path(request.artifact_spool_path) in chowned_paths
 
-
 @pytest.mark.asyncio
 async def test_controller_clone_uses_launch_scoped_github_token_for_git_auth(
     monkeypatch: pytest.MonkeyPatch,
@@ -712,7 +702,6 @@ async def test_controller_clone_uses_launch_scoped_github_token_for_git_auth(
     message = str(exc_info.value)
     assert token not in message
     assert "[REDACTED]" in message
-
 
 @pytest.mark.asyncio
 async def test_controller_clone_resolves_descriptor_for_git_without_container_token(
@@ -869,7 +858,6 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
     )
     assert github_auth_brokers.stops == [request.session_id]
 
-
 def test_persist_brokered_github_config_preserves_container_visible_paths(
     tmp_path: Path,
 ) -> None:
@@ -915,7 +903,6 @@ def test_persist_brokered_github_config_preserves_container_visible_paths(
     )
     gh_wrapper_text = (support_root / "bin" / "gh").read_text(encoding="utf-8")
     assert "real_gh_path" not in gh_wrapper_text
-
 
 @pytest.mark.asyncio
 async def test_controller_reuses_resolved_git_environment_for_target_branch(
@@ -1005,7 +992,6 @@ async def test_controller_reuses_resolved_git_environment_for_target_branch(
         assert env["GITHUB_TOKEN"] == token
         assert env["GIT_TERMINAL_PROMPT"] == "0"
 
-
 @pytest.mark.asyncio
 async def test_controller_required_github_descriptor_fails_before_clone(
     monkeypatch: pytest.MonkeyPatch,
@@ -1051,7 +1037,6 @@ async def test_controller_required_github_descriptor_fails_before_clone(
 
     with pytest.raises(RuntimeError, match="GitHub credential"):
         await controller.launch_session(request)
-
 
 @pytest.mark.asyncio
 async def test_controller_launch_redacts_github_token_from_command_failures(
@@ -1113,7 +1098,6 @@ async def test_controller_launch_redacts_github_token_from_command_failures(
     message = str(exc_info.value)
     assert "ghp_inline_secret_token_12345678901234567890" not in message
     assert "[REDACTED]" in message
-
 
 @pytest.mark.asyncio
 async def test_controller_launch_creates_target_branch_when_remote_branch_missing(
@@ -1210,7 +1194,6 @@ async def test_controller_launch_creates_target_branch_when_remote_branch_missin
         "-b",
         "codex/session-fix",
     )
-
 
 @pytest.mark.asyncio
 async def test_controller_launch_reuses_existing_workspace_and_checks_out_target_branch(
@@ -1337,7 +1320,6 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
     assert all(follow is False for _path, _uid, _gid, follow in chown_calls)
     assert git_identities == [(1000, 1000), (1000, 1000)]
 
-
 @pytest.mark.asyncio
 async def test_controller_launch_normalizes_support_paths_before_git_failures(
     monkeypatch: pytest.MonkeyPatch,
@@ -1435,7 +1417,6 @@ async def test_controller_launch_normalizes_support_paths_before_git_failures(
     assert session_path in chown_calls
     assert artifacts_path in chown_calls
 
-
 @pytest.mark.asyncio
 async def test_controller_launch_reclones_invalid_workspace_before_target_checkout(
     tmp_path: Path,
@@ -1528,7 +1509,6 @@ async def test_controller_launch_reclones_invalid_workspace_before_target_checko
         "codex/session-fix",
     )
 
-
 @pytest.mark.asyncio
 async def test_controller_launch_trusts_workspace_git_commands_for_container_owned_repo(
     tmp_path: Path,
@@ -1609,7 +1589,6 @@ async def test_controller_launch_trusts_workspace_git_commands_for_container_own
 
     assert handle.status == "ready"
 
-
 @pytest.mark.asyncio
 async def test_controller_send_turn_executes_inside_container(tmp_path: Path) -> None:
     commands: list[tuple[str, ...]] = []
@@ -1661,7 +1640,6 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
     assert exec_command[:3] == ("docker", "exec", "-i")
     assert "-c" not in exec_command
     assert exec_command[-2:] == ("invoke", "send_turn")
-
 
 @pytest.mark.asyncio
 async def test_controller_send_turn_polls_session_status_until_completed() -> None:
@@ -1760,7 +1738,6 @@ async def test_controller_send_turn_polls_session_status_until_completed() -> No
     assert any(command[-2:] == ("invoke", "send_turn") for command in commands)
     assert any(command[-2:] == ("invoke", "session_status") for command in commands)
 
-
 @pytest.mark.asyncio
 async def test_controller_send_turn_does_not_poll_session_status_for_terminal_failure() -> None:
     commands: list[tuple[str, ...]] = []
@@ -1823,7 +1800,6 @@ async def test_controller_send_turn_does_not_poll_session_status_for_terminal_fa
             "send_turn",
         )
     ]
-
 
 @pytest.mark.asyncio
 async def test_controller_send_turn_recovers_from_blank_output_using_runtime_state(
@@ -1917,7 +1893,6 @@ async def test_controller_send_turn_recovers_from_blank_output_using_runtime_sta
     assert response.turn_id == "vendor-turn-1"
     assert response.metadata["assistantText"] == "Recovered OK"
 
-
 @pytest.mark.asyncio
 async def test_controller_send_turn_does_not_recover_stale_completed_turn_state(
     tmp_path: Path,
@@ -1990,7 +1965,6 @@ async def test_controller_send_turn_does_not_recover_stale_completed_turn_state(
             )
         )
 
-
 @pytest.mark.asyncio
 async def test_controller_send_turn_times_out_when_session_never_reaches_terminal_state(
 ) -> None:
@@ -2054,7 +2028,6 @@ async def test_controller_send_turn_times_out_when_session_never_reaches_termina
                 instructions="Reply with exactly the word OK",
             )
         )
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -2135,7 +2108,6 @@ async def test_controller_send_turn_rejects_malformed_transport_output(
         assert fragment in message
     for fragment in unexpected_fragments:
         assert fragment not in message
-
 
 @pytest.mark.asyncio
 async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
@@ -2222,7 +2194,6 @@ async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
         },
     ]
 
-
 @pytest.mark.asyncio
 async def test_controller_session_status_emits_session_resumed_event(
     tmp_path: Path,
@@ -2296,7 +2267,6 @@ async def test_controller_session_status_emits_session_resumed_event(
     refreshed = store.load("sess-1")
     assert refreshed is not None
     assert refreshed.active_turn_id == "turn-fresh"
-
 
 @pytest.mark.asyncio
 async def test_controller_steer_turn_emits_normalized_session_annotation(
@@ -2373,7 +2343,6 @@ async def test_controller_steer_turn_emits_normalized_session_annotation(
         "action": "steer_turn",
         "reason": "operator_steer",
     }
-
 
 @pytest.mark.asyncio
 async def test_controller_clear_and_terminate_preserve_container_boundary(
@@ -2495,7 +2464,6 @@ async def test_controller_clear_and_terminate_preserve_container_boundary(
     }
     assert commands[-1] == ("docker", "rm", "-f", "ctr-1")
 
-
 @pytest.mark.asyncio
 async def test_controller_duplicate_terminate_retries_container_cleanup(
     tmp_path: Path,
@@ -2553,7 +2521,6 @@ async def test_controller_duplicate_terminate_retries_container_cleanup(
     assert handle.status == "terminated"
     assert commands == [("docker", "rm", "-f", "ctr-1")]
 
-
 @pytest.mark.asyncio
 async def test_controller_duplicate_terminate_rejects_stale_locator(
     tmp_path: Path,
@@ -2600,7 +2567,6 @@ async def test_controller_duplicate_terminate_rejects_stale_locator(
         )
 
     runner.assert_not_awaited()
-
 
 @pytest.mark.asyncio
 async def test_controller_duplicate_launch_reuses_existing_live_record(
@@ -2662,7 +2628,6 @@ async def test_controller_duplicate_launch_reuses_existing_live_record(
     assert handle.session_state.container_id == "ctr-1"
     assert commands == [("docker", "inspect", "-f", "{{.Id}}", "ctr-1")]
 
-
 def test_controller_launch_duplicate_match_requires_epoch_and_thread(
     tmp_path: Path,
 ) -> None:
@@ -2705,7 +2670,6 @@ def test_controller_launch_duplicate_match_requires_epoch_and_thread(
         base_request.model_copy(update={"thread_id": "logical-thread-2"}),
         record,
     )
-
 
 @pytest.mark.asyncio
 async def test_controller_duplicate_clear_returns_existing_advanced_epoch(
@@ -2760,7 +2724,6 @@ async def test_controller_duplicate_clear_returns_existing_advanced_epoch(
     assert handle.status == "ready"
     assert handle.session_state.session_epoch == 2
     assert handle.session_state.thread_id == "logical-thread-2"
-
 
 @pytest.mark.asyncio
 async def test_controller_clear_session_publishes_durable_reset_artifacts(
@@ -2871,7 +2834,6 @@ async def test_controller_clear_session_publishes_durable_reset_artifacts(
     assert publication.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
     assert publication.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
 
-
 @pytest.mark.asyncio
 async def test_controller_send_turn_tolerates_event_publication_failure(
     tmp_path: Path,
@@ -2942,7 +2904,6 @@ async def test_controller_send_turn_tolerates_event_publication_failure(
 
     assert response.status == "completed"
 
-
 @pytest.mark.asyncio
 async def test_controller_clear_session_rejects_stale_durable_locator(
     tmp_path: Path,
@@ -2990,7 +2951,6 @@ async def test_controller_clear_session_rejects_stale_durable_locator(
         )
 
     runner.assert_not_awaited()
-
 
 @pytest.mark.asyncio
 async def test_controller_summary_and_publication_read_from_durable_record(
@@ -3070,7 +3030,6 @@ async def test_controller_summary_and_publication_read_from_durable_record(
     assert publication.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
     assert publication.metadata["observabilityEventsRef"] == "sess-1/observability.events.jsonl"
 
-
 @pytest.mark.asyncio
 async def test_controller_publication_uses_snapshot_without_stopping_supervision(
     tmp_path: Path,
@@ -3147,7 +3106,6 @@ async def test_controller_publication_uses_snapshot_without_stopping_supervision
     )
     assert publication.metadata["observabilityEventsRef"] == "sess-1/observability.events.jsonl"
 
-
 @pytest.mark.asyncio
 async def test_controller_reconcile_reattaches_or_degrades_active_sessions(
     tmp_path: Path,
@@ -3221,7 +3179,6 @@ async def test_controller_reconcile_reattaches_or_degrades_active_sessions(
     assert degraded.status == "degraded"
     assert degraded.error_message == "managed session container is missing during reconcile"
 
-
 @pytest.mark.asyncio
 async def test_controller_reconcile_degrades_when_container_inspect_fails(
     tmp_path: Path,
@@ -3274,7 +3231,6 @@ async def test_controller_reconcile_degrades_when_container_inspect_fails(
         "failed to inspect managed session container ctr-ok: "
         "docker daemon unavailable"
     )
-
 
 @pytest.mark.asyncio
 async def test_controller_session_status_persists_returned_session_identity(
@@ -3341,7 +3297,6 @@ async def test_controller_session_status_persists_returned_session_identity(
     assert updated.container_id == "ctr-2"
     assert updated.thread_id == "thread-2"
 
-
 @pytest.mark.asyncio
 async def test_controller_send_turn_skips_missing_durable_record(tmp_path: Path) -> None:
     store = ManagedSessionStore(tmp_path / "session-store")
@@ -3388,7 +3343,6 @@ async def test_controller_send_turn_skips_missing_durable_record(tmp_path: Path)
 
     assert response.status == "completed"
     assert store.load("sess-1") is None
-
 
 @pytest.mark.asyncio
 async def test_controller_send_turn_persists_failed_turn_status(tmp_path: Path) -> None:
@@ -3456,7 +3410,6 @@ async def test_controller_send_turn_persists_failed_turn_status(tmp_path: Path) 
     assert updated is not None
     assert updated.status == "failed"
     assert updated.error_message == "turn execution failed"
-
 
 @pytest.mark.asyncio
 async def test_controller_interrupt_turn_preserves_failed_runtime_result(
@@ -3527,7 +3480,6 @@ async def test_controller_interrupt_turn_preserves_failed_runtime_result(
     assert updated.status == "failed"
     assert updated.error_message == "turn-id mismatch"
 
-
 @pytest.mark.asyncio
 async def test_controller_launch_retries_ready_probe_errors(tmp_path: Path) -> None:
     request = LaunchCodexManagedSessionRequest(
@@ -3587,7 +3539,6 @@ async def test_controller_launch_retries_ready_probe_errors(tmp_path: Path) -> N
 
     assert handle.status == "ready"
     assert ready_attempts == 2
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -3654,7 +3605,6 @@ async def test_controller_launch_reports_terminal_container_logs_during_ready_pr
     assert ("docker", "logs", "--tail", "40", "ctr-1") in commands
     assert commands[-1] == ("docker", "rm", "-f", "ctr-1")
 
-
 @pytest.mark.asyncio
 async def test_controller_launch_uses_mount_syntax_for_colon_scoped_paths(
     tmp_path: Path,
@@ -3719,7 +3669,6 @@ async def test_controller_launch_uses_mount_syntax_for_colon_scoped_paths(
         "type=volume,src=codex_auth_volume," in arg for arg in run_command
     )
 
-
 @pytest.mark.asyncio
 async def test_controller_launch_mounts_auth_volume_at_separate_managed_auth_path() -> None:
     workspace_root = Path("/tmp/agent_jobs")
@@ -3782,7 +3731,6 @@ async def test_controller_launch_mounts_auth_volume_at_separate_managed_auth_pat
         f"type=volume,src=codex_auth_volume,dst={request.codex_home_path}"
         not in run_command
     )
-
 
 @pytest.mark.asyncio
 async def test_controller_launch_normalizes_materialized_codex_home_for_container_user(
@@ -3869,7 +3817,6 @@ async def test_controller_launch_normalizes_materialized_codex_home_for_containe
     assert config_path in chowned_paths
     assert all(uid == 1000 and gid == 1000 for _path, uid, gid, _follow in chown_calls)
 
-
 @pytest.mark.asyncio
 async def test_controller_launch_cleans_up_container_when_handshake_fails() -> None:
     request = LaunchCodexManagedSessionRequest(
@@ -3913,7 +3860,6 @@ async def test_controller_launch_cleans_up_container_when_handshake_fails() -> N
         await controller.launch_session(request)
 
     assert commands[-1] == ("docker", "rm", "-f", "ctr-1")
-
 
 @pytest.mark.asyncio
 async def test_controller_launch_rejects_reserved_session_environment() -> None:

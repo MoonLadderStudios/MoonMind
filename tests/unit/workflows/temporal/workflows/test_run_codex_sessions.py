@@ -14,7 +14,6 @@ from moonmind.workflows.temporal.workflows.run import (
     MoonMindRunWorkflow,
 )
 
-
 def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     workflow_info = type(
         "WorkflowInfo",
@@ -34,7 +33,6 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(run_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_module.workflow, "logger", logger)
 
-
 def _managed_request(agent_id: str = "codex") -> AgentExecutionRequest:
     return AgentExecutionRequest(
         agentKind="managed",
@@ -44,14 +42,12 @@ def _managed_request(agent_id: str = "codex") -> AgentExecutionRequest:
         executionProfileRef="codex-default",
     )
 
-
 def _use_external_handle(monkeypatch: pytest.MonkeyPatch, handle: Any) -> None:
     monkeypatch.setattr(
         run_module.workflow,
         "get_external_workflow_handle",
         lambda _workflow_id, run_id=None: handle,
     )
-
 
 @pytest.mark.asyncio
 async def test_run_starts_one_task_scoped_codex_session_and_reuses_it(
@@ -114,7 +110,6 @@ async def test_run_starts_one_task_scoped_codex_session_and_reuses_it(
     assert first.managed_session.session_id == "sess:wf-run-1:codex_cli"
     assert first.managed_session.session_epoch == 1
 
-
 @pytest.mark.asyncio
 async def test_run_skips_task_scoped_session_for_non_codex_managed_runtime(
     monkeypatch: pytest.MonkeyPatch,
@@ -141,7 +136,6 @@ async def test_run_skips_task_scoped_session_for_non_codex_managed_runtime(
     assert request.managed_session is None
     assert started is False
 
-
 def test_run_pending_agent_step_refs_include_session_task_run_id() -> None:
     workflow = MoonMindRunWorkflow()
     request = _managed_request("codex").model_copy(
@@ -164,7 +158,6 @@ def test_run_pending_agent_step_refs_include_session_task_run_id() -> None:
         "childWorkflowId": "wf-run-1:agent:node-1",
         "taskRunId": "wf-run-1",
     }
-
 
 @pytest.mark.asyncio
 async def test_run_termination_v3_executes_session_update(
@@ -208,7 +201,6 @@ async def test_run_termination_v3_executes_session_update(
     assert patch_calls == [RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH]
     assert workflow._codex_session_handle is None
     assert workflow._codex_session_binding is None
-
 
 @pytest.mark.asyncio
 async def test_run_termination_v3_update_failure_falls_back_to_activity_then_signal(
@@ -321,7 +313,6 @@ async def test_run_termination_v3_update_failure_falls_back_to_activity_then_sig
     assert workflow._codex_session_handle is None
     assert workflow._codex_session_binding is None
 
-
 @pytest.mark.asyncio
 async def test_run_terminates_active_task_scoped_codex_session_with_v2_signal(
     monkeypatch: pytest.MonkeyPatch,
@@ -376,7 +367,6 @@ async def test_run_terminates_active_task_scoped_codex_session_with_v2_signal(
     assert workflow._codex_session_handle is None
     assert workflow._codex_session_binding is None
 
-
 @pytest.mark.asyncio
 async def test_run_terminates_task_scoped_codex_session_with_binding_only(
     monkeypatch: pytest.MonkeyPatch,
@@ -425,7 +415,6 @@ async def test_run_terminates_task_scoped_codex_session_with_binding_only(
     ]
     assert workflow._codex_session_handle is None
     assert workflow._codex_session_binding is None
-
 
 @pytest.mark.asyncio
 async def test_run_termination_uses_v1_patch_history_for_inflight_runs(
@@ -527,7 +516,6 @@ async def test_run_termination_uses_v1_patch_history_for_inflight_runs(
     assert workflow._codex_session_handle is None
     assert workflow._codex_session_binding is None
 
-
 @pytest.mark.asyncio
 async def test_run_termination_uses_v1_signal_fallback_without_runtime_handles(
     monkeypatch: pytest.MonkeyPatch,
@@ -605,7 +593,6 @@ async def test_run_termination_uses_v1_signal_fallback_without_runtime_handles(
         )
     ]
 
-
 @pytest.mark.asyncio
 async def test_run_termination_keeps_legacy_signal_only_path_when_patch_unset(
     monkeypatch: pytest.MonkeyPatch,
@@ -655,7 +642,6 @@ async def test_run_termination_keeps_legacy_signal_only_path_when_patch_unset(
     assert workflow._codex_session_handle is None
     assert workflow._codex_session_binding is None
 
-
 @pytest.mark.asyncio
 async def test_run_termination_v2_uses_session_control_signal(
     monkeypatch: pytest.MonkeyPatch,
@@ -704,7 +690,6 @@ async def test_run_termination_v2_uses_session_control_signal(
     ]
     assert workflow._codex_session_handle is None
     assert workflow._codex_session_binding is None
-
 
 @pytest.mark.asyncio
 async def test_run_termination_signals_session_when_v1_terminate_activity_fails(

@@ -4,7 +4,6 @@ from moonmind.config.settings import settings
 
 TaskTarget = Literal["temporal"]
 
-
 class TemporalSubmitDisabledError(RuntimeError):
     """Raised when Temporal task submission is disabled via configuration.
 
@@ -12,12 +11,10 @@ class TemporalSubmitDisabledError(RuntimeError):
     with a structured error body rather than allowing it to surface as a 500.
     """
 
-
 # Accepted truthy string forms: 1, true, yes, on
 # Accepted falsy string forms:  0, false, no, off
 _TRUTHY_STRINGS = frozenset({"1", "true", "yes", "on"})
 _FALSY_STRINGS = frozenset({"0", "false", "no", "off"})
-
 
 def _coerce_bool(value: object, *, default: bool) -> bool:
     """Normalize bool-like request values with fallback to ``default``.
@@ -39,7 +36,6 @@ def _coerce_bool(value: object, *, default: bool) -> bool:
         f"Unsupported boolean value: {value!r}; "
         f"expected true/false, yes/no, on/off, 1/0, or omit for default"
     )
-
 
 def get_routing_target_for_task(
     *,

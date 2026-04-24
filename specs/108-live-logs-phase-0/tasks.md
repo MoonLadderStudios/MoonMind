@@ -29,5 +29,5 @@
 - [x] T018 [US3] Validate canonical reference logic DOC-REQ-001 via `git diff`.
 - [x] T019 [US3] Scrub outdated `tmate/web_ro` dependencies from documentation for DOC-REQ-009 inside `docs/`.
 - [x] T020 [US3] Validate documentation cleanup DOC-REQ-009 via `grep`.
-- [x] T021 [US3] Emit implementation phase planning issues for DOC-REQ-010 updating `docs/tmp/009-LiveLogsPlan.md`.
+- [x] T021 [US3] Emit implementation phase planning issues for DOC-REQ-010 updating `docs/ManagedAgents/LiveLogs.md`.
 - [x] T022 [US3] Validate future plan issues for DOC-REQ-010 via checking `.specify/scripts/bash/validate-implementation-scope.sh`.

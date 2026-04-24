@@ -6,7 +6,7 @@
 
 ## Scope
 
-Verified the implementation against `specs/227-claude-token-enrollment/spec.md`, the canonical Jira preset brief in `docs/tmp/jira-orchestration-inputs/MM-446-moonspec-orchestration-input.md`, and source requirements DESIGN-REQ-005, DESIGN-REQ-008, and DESIGN-REQ-009 from `docs/ManagedAgents/ClaudeAnthropicOAuth.md`.
+Verified the implementation against `specs/227-claude-token-enrollment/spec.md`, the canonical Jira preset brief in `spec.md` (Input), and source requirements DESIGN-REQ-005, DESIGN-REQ-008, and DESIGN-REQ-009 from `docs/ManagedAgents/ClaudeAnthropicOAuth.md`.
 
 ## Requirement Coverage
 

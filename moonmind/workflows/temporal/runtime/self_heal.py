@@ -17,18 +17,14 @@ from typing import Protocol
 
 from moonmind.utils.logging import SecretRedactor
 
-
 class SelfHealError(RuntimeError):
     """Base error for self-heal controller failures."""
-
 
 class AttemptBudgetExceeded(SelfHealError):
     """Raised when a step exhausts its configured attempt budget."""
 
-
 class HardResetBudgetExceeded(SelfHealError):
     """Raised when a job exhausts its configured hard reset budget."""
-
 
 class FailureClass(str, Enum):
     """Classification buckets that determine retry behavior."""
@@ -39,7 +35,6 @@ class FailureClass(str, Enum):
     DETERMINISTIC_POLICY = "deterministic_policy"
     DETERMINISTIC_REPO = "deterministic_repo"
 
-
 class SelfHealStrategy(str, Enum):
     """Strategy selected for the next attempt."""
 
@@ -49,22 +44,17 @@ class SelfHealStrategy(str, Enum):
     QUEUE_RETRY = "queue_retry"
     OPERATOR_REQUEST = "operator_request"
 
-
 class StepTimeoutExceeded(SelfHealError):
     """Raised when a step attempt exceeds the configured wall-clock timeout."""
-
 
 class StepIdleTimeoutExceeded(SelfHealError):
     """Raised when a step attempt emits no output for the configured idle window."""
 
-
 class NoProgressThresholdExceeded(SelfHealError):
     """Raised when repeated attempts yield the same outcome and diff hash."""
 
-
 class WorkspaceReplayError(SelfHealError):
     """Raised when hard reset replay fails."""
-
 
 @dataclass(frozen=True, slots=True)
 class SelfHealConfig:
@@ -110,7 +100,6 @@ class SelfHealConfig:
             "job_self_heal_max_resets": self.job_self_heal_max_resets,
         }
 
-
 class FailureSignature:
     """Normalized + scrubbed signature used for no-progress detection."""
 
@@ -126,7 +115,6 @@ class FailureSignature:
 
     def __str__(self) -> str:  # pragma: no cover - debug helper
         return self.value
-
 
 def build_failure_signature(
     *,
@@ -158,7 +146,6 @@ def build_failure_signature(
     redactor = secret_redactor or SecretRedactor.from_environ()
     scrubbed = redactor.scrub(payload).lower()
     return FailureSignature(scrubbed)
-
 
 @dataclass(slots=True)
 class StepAttemptState:
@@ -210,7 +197,6 @@ class StepAttemptState:
         self.last_failure_signature = None
         self.last_diff_hash = None
 
-
 @dataclass(slots=True)
 class StepAttemptSnapshot:
     """Snapshot persisted for artifacts and telemetry events."""
@@ -227,7 +213,6 @@ class StepAttemptSnapshot:
     changed_files: tuple[str, ...] = ()
     strategy: SelfHealStrategy = SelfHealStrategy.NONE
 
-
 @dataclass(slots=True)
 class SelfHealJobState:
     """Job-level controller state (hard reset budget)."""
@@ -242,7 +227,6 @@ class SelfHealJobState:
                 f"hard reset budget exhausted (max={max_resets})"
             )
         self.resets_consumed += 1
-
 
 class SelfHealController:
     """Coordinates self-heal budgets for steps and jobs."""
@@ -325,7 +309,6 @@ class SelfHealController:
             secret_redactor=self._secret_redactor,
         )
 
-
 def _read_positive_int(
     env: Mapping[str, str],
     key: str,
@@ -341,10 +324,8 @@ def _read_positive_int(
         raise ValueError(f"{key} must be greater than zero")
     return value
 
-
 def _collapse_whitespace(value: str) -> str:
     return " ".join(value.split())
-
 
 class IdleTimeoutWatcher:
     """Async idle timeout watchdog updated by output chunk callbacks."""
@@ -392,7 +373,6 @@ class IdleTimeoutWatcher:
         finally:
             self._task = None
 
-
 class RebuildableWorkspace(Protocol):
     """Defines the expected structure for a workspace that can be rebuilt."""
 
@@ -401,7 +381,6 @@ class RebuildableWorkspace(Protocol):
     execute_log_path: Path
     starting_branch: str
     new_branch: str | None
-
 
 class HardResetWorkspaceBuilder:
     """Replays successful step patches into a clean workspace clone."""
@@ -473,7 +452,6 @@ class HardResetWorkspaceBuilder:
         except Exception as exc:  # pragma: no cover - defensive
             raise WorkspaceReplayError(f"hard reset replay failed: {exc}") from exc
 
-
 def is_failure_retryable(failure_class: FailureClass | None) -> bool:
     """Return True when the failure class supports further retries."""
 
@@ -481,7 +459,6 @@ def is_failure_retryable(failure_class: FailureClass | None) -> bool:
         FailureClass.TRANSIENT_RUNTIME,
         FailureClass.STUCK_NO_PROGRESS,
     }
-
 
 __all__ = [
     "AttemptBudgetExceeded",

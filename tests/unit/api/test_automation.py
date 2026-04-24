@@ -20,7 +20,6 @@ from moonmind.workflows.automation import models
 
 ALLOWED_REPOSITORY = "moonladder/moonmind"
 
-
 class FakeTaskState:
     """Lightweight stand-in for AutomationTaskState."""
 
@@ -94,7 +93,6 @@ class FakeTaskState:
             "shadowModeRequested": shadow_mode,
         }
 
-
 class FakeArtifact:
     """Lightweight stand-in for AutomationArtifact."""
 
@@ -117,7 +115,6 @@ class FakeArtifact:
         self.expires_at = datetime.now(UTC)
         self.source_phase = models.AutomationPhase.SPECKIT_PLAN
         self.run = run
-
 
 @pytest.fixture
 def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
@@ -151,7 +148,6 @@ def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
         yield test_client, mock_repo, mock_user
     app.dependency_overrides.clear()
 
-
 def _build_run(run_id: UUID | None = None) -> SimpleNamespace:
     run_id = run_id or uuid4()
     return SimpleNamespace(
@@ -164,7 +160,6 @@ def _build_run(run_id: UUID | None = None) -> SimpleNamespace:
         completed_at=datetime.now(UTC),
         repository=ALLOWED_REPOSITORY,
     )
-
 
 def test_get_run_detail_success(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -200,7 +195,6 @@ def test_get_run_detail_success(
     assert data["artifacts"][0]["artifact_id"] == str(artifact.id)
     repo.get_run_detail.assert_awaited_once_with(run_id)
 
-
 def test_get_run_detail_uses_explicit_skill_metadata(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -233,7 +227,6 @@ def test_get_run_detail_uses_explicit_skill_metadata(
     assert phase_payload["used_fallback"] is True
     assert phase_payload["shadow_mode_requested"] is False
 
-
 def test_get_run_detail_backfills_blank_speckit_adapter_fields(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -261,7 +254,6 @@ def test_get_run_detail_backfills_blank_speckit_adapter_fields(
     assert phase_payload["used_skills"] is True
     assert phase_payload["used_fallback"] is False
 
-
 def test_get_run_detail_keeps_non_speckit_partial_metadata(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -285,7 +277,6 @@ def test_get_run_detail_keeps_non_speckit_partial_metadata(
     assert phase_payload["used_skills"] is False
     assert phase_payload["used_fallback"] is False
 
-
 def test_get_run_detail_not_found(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -297,7 +288,6 @@ def test_get_run_detail_not_found(
 
     assert response.status_code == 404
     repo.get_run_detail.assert_awaited_once_with(run_id)
-
 
 def test_get_artifact_detail_success(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -328,7 +318,6 @@ def test_get_artifact_detail_success(
     )
     repo.get_artifact.assert_awaited_once_with(run_id=run_id, artifact_id=artifact.id)
 
-
 def test_get_artifact_detail_not_found(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -344,7 +333,6 @@ def test_get_artifact_detail_not_found(
     assert response.status_code == 404
     repo.get_artifact.assert_awaited_once_with(run_id=run_id, artifact_id=artifact_id)
 
-
 def test_get_run_detail_forbidden(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -358,7 +346,6 @@ def test_get_run_detail_forbidden(
     response = http_client.get(f"/api/workflows/runs/{run_id}")
 
     assert response.status_code == 403
-
 
 def test_get_artifact_detail_forbidden(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -383,7 +370,6 @@ def test_get_artifact_detail_forbidden(
     )
 
     assert response.status_code == 403
-
 
 def test_download_artifact_success(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -424,7 +410,6 @@ def test_download_artifact_success(
         in response.headers["content-disposition"]
     )
     assert response.headers["content-type"].startswith("text/plain")
-
 
 def test_download_artifact_missing_file(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],

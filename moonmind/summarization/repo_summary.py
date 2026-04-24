@@ -30,16 +30,13 @@ IGNORED_DIRS = frozenset(
 
 MAX_FILES_IN_REPO_INFO = 200
 
-
 def _normalize_path(path: str) -> str:
     """Normalize path separators for portable path representation."""
     return path.replace(os.path.sep, "/")
 
-
 def _normalize_dir_path(directory: str) -> str:
     """Normalize a directory name for consistency in ignore checks."""
     return directory.rstrip("/").rstrip("\\")
-
 
 def summarize_repo_for_readme(
     repo_path: str,

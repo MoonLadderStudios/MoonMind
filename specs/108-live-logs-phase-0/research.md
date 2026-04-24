@@ -4,7 +4,7 @@
 
 - `docs/ManagedAgents/LiveLogs.md` is confirmed as the target canonical blueprint for live log delivery.
 - Legacy mentions of `tmate` / `web_ro`:
-  - `docs/tmp/005-ProviderProfilesPlan.md`
+  - `docs/ManagedAgents/LiveLogs.md`
   - `docs/ManagedAgents/OAuthTerminal.md`
   - `docs/ManagedAgents/SharedManagedAgentAbstractions.md`
   - `specs/084-live-log-tailing/` contains legacy tailing requirements that intersect with this design.

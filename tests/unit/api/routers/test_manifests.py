@@ -16,7 +16,6 @@ from api_service.api.routers.worker_auth import _WorkerRequestAuth
 from moonmind.workflows.tasks.manifest_contract import ManifestContractError
 from api_service.services.manifests_service import ManifestRegistryNotFoundError
 
-
 def _record(**overrides):
     now = datetime.now(UTC)
     base = {
@@ -39,7 +38,6 @@ def _record(**overrides):
     base.update(overrides)
     return SimpleNamespace(**base)
 
-
 @pytest.fixture
 def client() -> tuple[TestClient, AsyncMock]:
     app = FastAPI()
@@ -48,7 +46,6 @@ def client() -> tuple[TestClient, AsyncMock]:
     app.dependency_overrides[manifests_router._get_service] = lambda: mock_service
     with TestClient(app) as test_client:
         yield test_client, mock_service
-
 
 def _worker_auth(**overrides: object) -> _WorkerRequestAuth:
     base = {
@@ -61,7 +58,6 @@ def _worker_auth(**overrides: object) -> _WorkerRequestAuth:
     }
     base.update(overrides)
     return _WorkerRequestAuth(**base)  # type: ignore[arg-type]
-
 
 @pytest.mark.asyncio
 async def test_list_manifests_serializes_records() -> None:
@@ -84,7 +80,6 @@ async def test_list_manifests_serializes_records() -> None:
     assert response.items[0].last_run_status == "queued"
     service.list_manifests.assert_awaited_once_with(limit=10, search=None)
 
-
 @pytest.mark.asyncio
 async def test_get_manifest_not_found_raises_404() -> None:
     """get_manifest should raise when registry entry missing."""
@@ -100,7 +95,6 @@ async def test_get_manifest_not_found_raises_404() -> None:
             _user=user,
         )
     assert exc.value.status_code == 404
-
 
 @pytest.mark.asyncio
 async def test_get_manifest_returns_detail() -> None:
@@ -125,7 +119,6 @@ async def test_get_manifest_returns_detail() -> None:
     assert response.state.state_json == {"foo": "bar"}
     service.get_manifest.assert_awaited_once_with("demo")
 
-
 @pytest.mark.asyncio
 async def test_upsert_manifest_returns_detail() -> None:
     """upsert_manifest should return detail response."""
@@ -146,7 +139,6 @@ async def test_upsert_manifest_returns_detail() -> None:
     assert response.state.state_json == {"foo": "bar"}
     service.upsert_manifest.assert_awaited_once()
 
-
 @pytest.mark.asyncio
 async def test_upsert_manifest_validation_error() -> None:
     """Manifest validation errors should propagate as HTTP 422."""
@@ -164,7 +156,6 @@ async def test_upsert_manifest_validation_error() -> None:
         )
     assert exc.value.status_code == 422
     assert exc.value.detail == {"code": "invalid_manifest", "message": "invalid"}
-
 
 @pytest.mark.asyncio
 async def test_create_manifest_run_returns_temporal_execution_metadata() -> None:
@@ -204,7 +195,6 @@ async def test_create_manifest_run_returns_temporal_execution_metadata() -> None
     assert service.submit_manifest_run.await_args.kwargs["action"] == "run"
     assert service.submit_manifest_run.await_args.kwargs["options"] is None
 
-
 @pytest.mark.asyncio
 async def test_create_manifest_run_not_found() -> None:
     """Missing registry entries should return 404."""
@@ -221,7 +211,6 @@ async def test_create_manifest_run_not_found() -> None:
             user=user,
         )
     assert exc.value.status_code == 404
-
 
 @pytest.mark.asyncio
 async def test_create_manifest_run_validation_error() -> None:
@@ -240,7 +229,6 @@ async def test_create_manifest_run_validation_error() -> None:
         )
     assert exc.value.status_code == 422
     assert exc.value.detail == {"code": "invalid_manifest_job", "message": "bad job"}
-
 
 @pytest.mark.asyncio
 async def test_update_manifest_state_returns_detail() -> None:
@@ -265,7 +253,6 @@ async def test_update_manifest_state_returns_detail() -> None:
     assert response.state.state_json == {"docs": {"cursor": "abc"}}
     service.update_manifest_state.assert_awaited_once()
 
-
 @pytest.mark.asyncio
 async def test_update_manifest_state_not_found() -> None:
     """Missing manifests should return 404 from state update endpoint."""
@@ -281,7 +268,6 @@ async def test_update_manifest_state_not_found() -> None:
             worker_auth=_worker_auth(),
         )
     assert exc.value.status_code == 404
-
 
 @pytest.mark.asyncio
 async def test_update_manifest_state_requires_worker_token() -> None:
@@ -300,7 +286,6 @@ async def test_update_manifest_state_requires_worker_token() -> None:
     assert exc.value.status_code == 403
     assert exc.value.detail["code"] == "worker_not_authorized"
 
-
 def test_create_manifest_run_http_validation_rejects_invalid_action(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -317,7 +302,6 @@ def test_create_manifest_run_http_validation_rejects_invalid_action(
     detail = response.json()["detail"]
     assert detail[0]["loc"][-1] == "action"
     service.submit_manifest_run.assert_not_awaited()
-
 
 def test_create_manifest_run_http_response_preserves_queue_metadata(
     client: tuple[TestClient, AsyncMock],
@@ -352,7 +336,6 @@ def test_create_manifest_run_http_response_preserves_queue_metadata(
     assert body["queue"]["manifestHash"] == "sha256:abc123"
     called = service.submit_manifest_run.await_args.kwargs
     assert called["action"] == "plan"
-
 
 def test_create_manifest_run_http_response_includes_temporal_execution_fields(
     client: tuple[TestClient, AsyncMock],

@@ -26,7 +26,6 @@ _DEFAULT_PORT = 8080
 
 _start_time: float = time.monotonic()
 
-
 def _is_enabled() -> bool:
     return os.environ.get("WORKER_HEALTHCHECK_ENABLED", "true").lower() not in (
         "false",
@@ -34,13 +33,11 @@ def _is_enabled() -> bool:
         "no",
     )
 
-
 def _port() -> int:
     raw = os.environ.get("WORKER_HEALTHCHECK_PORT", "")
     if raw.strip().isdigit():
         return int(raw.strip())
     return _DEFAULT_PORT
-
 
 def _build_response_body() -> bytes:
     """Build the JSON health response payload."""
@@ -53,7 +50,6 @@ def _build_response_body() -> bytes:
         "uptime_seconds": uptime,
     }
     return json.dumps(body).encode("utf-8")
-
 
 async def _handle_connection(
     reader: asyncio.StreamReader,
@@ -89,7 +85,6 @@ async def _handle_connection(
             await writer.wait_closed()
         except (ConnectionError, OSError):
             pass
-
 
 async def start_healthcheck_server() -> asyncio.Server | None:
     """Start the health-check HTTP server as a background asyncio task.

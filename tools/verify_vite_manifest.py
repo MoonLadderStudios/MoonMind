@@ -15,7 +15,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SHARED_ENTRYPOINT = "mission-control"
 
-
 def expected_entrypoints() -> list[str]:
     vite_config = ROOT / "frontend" / "vite.config.ts"
     if not vite_config.is_file():
@@ -39,7 +38,6 @@ def expected_entrypoints() -> list[str]:
         sys.exit(1)
     return names
 
-
 def _file_refs(meta: dict) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     js = meta.get("file")
@@ -49,7 +47,6 @@ def _file_refs(meta: dict) -> list[tuple[str, str]]:
         if isinstance(css, str):
             out.append(("css", css))
     return out
-
 
 def main() -> int:
     names = expected_entrypoints()
@@ -105,7 +102,6 @@ def main() -> int:
         f"OK: shared Mission Control entrypoint {SHARED_ENTRYPOINT!r}; manifest {manifest_path.relative_to(ROOT)}"
     )
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

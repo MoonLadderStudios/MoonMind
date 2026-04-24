@@ -16,7 +16,7 @@
 ## Phase 1: Setup
 
 - [X] T001 Create MoonSpec artifacts for MM-425 in `specs/217-surface-hierarchy-liquidgl/`
-- [X] T002 Preserve canonical Jira input in `docs/tmp/jira-orchestration-inputs/MM-425-moonspec-orchestration-input.md` and `specs/217-surface-hierarchy-liquidgl/spec.md`
+- [X] T002 Preserve canonical Jira input in `spec.md` (Input) and `specs/217-surface-hierarchy-liquidgl/spec.md`
 
 ## Phase 2: Foundational
 

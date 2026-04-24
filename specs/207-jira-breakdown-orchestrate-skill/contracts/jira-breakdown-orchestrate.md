@@ -50,7 +50,7 @@ Input shape:
   },
   "traceability": {
     "sourceIssueKey": "MM-404",
-    "sourceBriefRef": "docs/tmp/jira-orchestration-inputs/MM-404-moonspec-orchestration-input.md"
+    "sourceBriefRef": "spec.md (Input)"
   }
 }
 ```

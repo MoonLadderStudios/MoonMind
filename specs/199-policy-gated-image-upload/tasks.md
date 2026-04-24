@@ -16,7 +16,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-380 orchestration input exists in `docs/tmp/jira-orchestration-inputs/MM-380-moonspec-orchestration-input.md` and is preserved in `specs/199-policy-gated-image-upload/spec.md` (FR-015)
+- [X] T001 Confirm MM-380 orchestration input exists in `spec.md` (Input) and is preserved in `specs/199-policy-gated-image-upload/spec.md` (FR-015)
 - [X] T002 Confirm active feature artifacts exist in `specs/199-policy-gated-image-upload/`: spec, plan, research, data model, contract, quickstart, checklist, and tasks
 
 ## Phase 2: Foundational
@@ -43,7 +43,7 @@
 
 - [X] T009 Add failing integration-style Create page submit test proving local objective and step images upload before create payload submission and produce `task.inputAttachments` and `task.steps[n].inputAttachments` refs in `frontend/src/entrypoints/task-create.test.tsx` (FR-010, FR-011, FR-012, FR-014, SC-005, scenario 6, DESIGN-REQ-021, DESIGN-REQ-025)
 - [X] T010 Add failing integration-style submit-blocking tests for invalid, failed, incomplete, and uploading attachments in create/edit/rerun flows in `frontend/src/entrypoints/task-create.test.tsx` (FR-005, FR-006, FR-013, FR-014, SC-006, scenario 7, DESIGN-REQ-021, DESIGN-REQ-023)
-- [X] T011 Confirm MM-380 traceability appears in feature artifacts and verification inputs in `specs/199-policy-gated-image-upload/spec.md`, `specs/199-policy-gated-image-upload/tasks.md`, and `docs/tmp/jira-orchestration-inputs/MM-380-moonspec-orchestration-input.md` (FR-015)
+- [X] T011 Confirm MM-380 traceability appears in feature artifacts and verification inputs in `specs/199-policy-gated-image-upload/spec.md`, `specs/199-policy-gated-image-upload/tasks.md`, and `spec.md` (Input) (FR-015)
 
 ### Red-First Confirmation
 

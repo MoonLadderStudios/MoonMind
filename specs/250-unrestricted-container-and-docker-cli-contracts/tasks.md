@@ -21,7 +21,7 @@
 
 **Purpose**: Confirm the MM-501 source brief, planning artifacts, and unrestricted-mode repo surfaces before verification work.
 
-- [X] T001 Confirm `docs/tmp/jira-orchestration-inputs/MM-501-moonspec-orchestration-input.md`, `specs/250-unrestricted-container-and-docker-cli-contracts/spec.md`, `plan.md`, `research.md`, `contracts/unrestricted-docker-workload-contract.md`, and `quickstart.md` remain the canonical MM-501 artifact set
+- [X] T001 Confirm `spec.md` (Input), `specs/250-unrestricted-container-and-docker-cli-contracts/spec.md`, `plan.md`, `research.md`, `contracts/unrestricted-docker-workload-contract.md`, and `quickstart.md` remain the canonical MM-501 artifact set
 - [X] T002 Confirm the MM-501 runtime touchpoints in `moonmind/config/settings.py`, `moonmind/schemas/workload_models.py`, `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workflow_docker_mode.py`, `moonmind/workflows/temporal/activity_runtime.py`, `moonmind/workflows/temporal/worker_runtime.py`, and the existing unrestricted-mode test suites
 
 ---
@@ -78,7 +78,7 @@
 - [X] T013 Re-run the focused unit command from T009 after any fallback changes and confirm MM-501 unit evidence is green in `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, `tests/unit/workflows/temporal/test_workload_run_activity.py`, `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, and `tests/unit/config/test_settings.py`
 - [X] T014 Re-run `./tools/test_integration.sh` after any fallback changes and confirm `tests/integration/temporal/test_integration_ci_tool_contract.py` proves unrestricted-mode dispatcher/runtime behavior end to end
 - [X] T015 Compare `docs/ManagedAgents/DockerOutOfDocker.md` sections 11.4, 11.5, and 18.2-18.4 against `moonmind/schemas/workload_models.py`, `moonmind/workloads/docker_launcher.py`, and `contracts/unrestricted-docker-workload-contract.md` to confirm FR-006 and DESIGN-REQ-022 remain aligned
-- [X] T016 Review `docs/tmp/jira-orchestration-inputs/MM-501-moonspec-orchestration-input.md`, `spec.md`, `plan.md`, `research.md`, `contracts/unrestricted-docker-workload-contract.md`, and `quickstart.md` to confirm FR-007 and SC-006 preserve MM-501 and the original Jira preset brief across downstream artifacts
+- [X] T016 Review `spec.md` (Input), `spec.md`, `plan.md`, `research.md`, `contracts/unrestricted-docker-workload-contract.md`, and `quickstart.md` to confirm FR-007 and SC-006 preserve MM-501 and the original Jira preset brief across downstream artifacts
 
 **Checkpoint**: MM-501 is complete when the unrestricted container and Docker CLI contracts are proven at unit and integration boundaries, any exposed verification gap is remediated conservatively, the source-design examples still match runtime behavior, and the canonical artifact set preserves the Jira brief.
 

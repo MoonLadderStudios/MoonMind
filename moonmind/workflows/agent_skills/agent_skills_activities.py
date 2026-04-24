@@ -13,7 +13,6 @@ from moonmind.services.skill_resolution import (
 from typing import Any
 from moonmind.services.skill_materialization import AgentSkillMaterializer
 
-
 class AgentSkillsActivities:
     """Temporal activities for managing agent skill resolution and materialization."""
 

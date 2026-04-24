@@ -68,7 +68,6 @@ _LOCAL_FALLBACK_ALLOWED_SKIP_REASONS: frozenset[str] = frozenset({
 _LOCAL_FALLBACK_MAX_ITEMS = 8
 _LOCAL_FALLBACK_TERMINATE_TIMEOUT_SECONDS = 1.0
 
-
 @dataclass(frozen=True, slots=True)
 class PromptContextResolution:
     """Resolved prompt context augmentation payload."""
@@ -76,7 +75,6 @@ class PromptContextResolution:
     instruction: str
     items_count: int = 0
     artifact_path: Path | None = None
-
 
 class ContextInjectionService:
     """Extracts RAG context and injects it into agent instructions."""

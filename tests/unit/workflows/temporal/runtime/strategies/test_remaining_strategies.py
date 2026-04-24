@@ -19,7 +19,6 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     CodexCliStrategy,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -40,7 +39,6 @@ def _make_profile(
         env_overrides=env_overrides or {},
     )
 
-
 def _make_request(
     *,
     instruction_ref: str | None = None,
@@ -51,11 +49,9 @@ def _make_request(
         parameters=parameters or {},
     )
 
-
 # ---------------------------------------------------------------------------
 # Registry completeness
 # ---------------------------------------------------------------------------
-
 
 class TestAllStrategiesRegistered:
     def test_three_strategies_registered(self) -> None:
@@ -65,11 +61,9 @@ class TestAllStrategiesRegistered:
         expected = {"gemini_cli", "claude_code", "codex_cli"}
         assert set(RUNTIME_STRATEGIES.keys()) == expected
 
-
 # ---------------------------------------------------------------------------
 # ClaudeCodeStrategy
 # ---------------------------------------------------------------------------
-
 
 class TestClaudeCodeProperties:
     def test_runtime_id(self) -> None:
@@ -80,7 +74,6 @@ class TestClaudeCodeProperties:
 
     def test_default_auth_mode(self) -> None:
         assert ClaudeCodeStrategy().default_auth_mode == "api_key"
-
 
 class TestClaudeCodeBuildCommand:
     def test_basic_prompt(self) -> None:
@@ -175,11 +168,9 @@ class TestClaudeCodeBuildCommand:
         assert "--model" in cmd
         assert "claude-sonnet-4-6" in cmd
 
-
 # ---------------------------------------------------------------------------
 # ClaudeCodeStrategy.prepare_workspace
 # ---------------------------------------------------------------------------
-
 
 class TestClaudeCodePrepareWorkspace:
     @pytest.mark.asyncio
@@ -226,11 +217,9 @@ class TestClaudeCodePrepareWorkspace:
         await s.prepare_workspace(tmp_path, request)
         assert not (tmp_path / "CLAUDE.md").exists()
 
-
 # ---------------------------------------------------------------------------
 # CodexCliStrategy
 # ---------------------------------------------------------------------------
-
 
 class TestCodexCliProperties:
     def test_runtime_id(self) -> None:
@@ -315,7 +304,6 @@ class TestCodexCliProperties:
         )
 
         assert observed is None
-
 
 class TestCodexCliBuildCommand:
     def test_basic_prompt(self) -> None:
@@ -423,7 +411,6 @@ class TestCodexCliBuildCommand:
         cmd = s.build_command(profile, request)
         assert cmd == ["codex", "exec", "-m", "qwen/qwen3-coder-plus:free", "Go"]
 
-
 class TestCodexCliShapeEnvironment:
     def test_passes_through_codex_keys(self) -> None:
         s = CodexCliStrategy()
@@ -453,7 +440,6 @@ class TestCodexCliShapeEnvironment:
         with patch("os.environ", {"UNRELATED": "value"}):
             result = s.shape_environment({}, None)
         assert result == {}
-
 
 class TestCodexCliPrepareWorkspace:
     @pytest.mark.asyncio

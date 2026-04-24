@@ -7,7 +7,6 @@
 
 Additional constraints:
 
-
 Selected mode: runtime.
 Default to runtime mode and only use docs mode when explicitly requested.
 If the brief points at an implementation document, treat it as runtime source requirements.
@@ -16,7 +15,7 @@ Source design path (optional): .
 Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
 Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts."
 
-Original brief reference: `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md`.
+Original brief reference: `spec.md` (Input).
 Classification: single-story runtime feature request.
 Resume decision: existing feature directory `specs/230-mission-control-report-presentation` already matched the MM-494 story scope, so this run resumed from the completed artifact set and aligned source traceability instead of regenerating later-stage artifacts.
 
@@ -150,10 +149,10 @@ Needs Clarification
 
 | ID | Source | Requirement | Scope | Mapped Requirements |
 | --- | --- | --- | --- | --- |
-| DESIGN-REQ-005 | `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` | Canonical report presentation MUST remain server-driven through existing `report.primary` artifact selection and must not rely on browser-side inference. | In scope | FR-001, FR-007 |
-| DESIGN-REQ-014 | `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` | Executions with a canonical report MUST surface a report-first panel with related report content before generic artifact inspection. | In scope | FR-002, FR-003 |
-| DESIGN-REQ-015 | `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` | Viewer selection MUST honor `default_read_ref`, `render_hint`, `content_type`, and `metadata.name` or `metadata.title` for the report surface. | In scope | FR-005 |
-| DESIGN-REQ-016 | `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` | Related evidence MUST remain individually addressable, observability surfaces MUST remain accessible outside the report panel, and the implementation MUST stay on the existing artifact read model. | In scope | FR-003, FR-004, FR-006 |
+| DESIGN-REQ-005 | `spec.md` (Input) | Canonical report presentation MUST remain server-driven through existing `report.primary` artifact selection and must not rely on browser-side inference. | In scope | FR-001, FR-007 |
+| DESIGN-REQ-014 | `spec.md` (Input) | Executions with a canonical report MUST surface a report-first panel with related report content before generic artifact inspection. | In scope | FR-002, FR-003 |
+| DESIGN-REQ-015 | `spec.md` (Input) | Viewer selection MUST honor `default_read_ref`, `render_hint`, `content_type`, and `metadata.name` or `metadata.title` for the report surface. | In scope | FR-005 |
+| DESIGN-REQ-016 | `spec.md` (Input) | Related evidence MUST remain individually addressable, observability surfaces MUST remain accessible outside the report panel, and the implementation MUST stay on the existing artifact read model. | In scope | FR-003, FR-004, FR-006 |
 
 ## Requirements *(mandatory)*
 

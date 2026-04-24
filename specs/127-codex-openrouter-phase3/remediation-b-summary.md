@@ -13,7 +13,7 @@
 | `specs/127-codex-openrouter-phase3/spec.md` | Resolved OQ-004 (OAuthProviderSpec out of scope), narrowed FR-010 to REST API only, added rate_limit_policy type decision, added OAuthProviderSpec to out-of-scope section |
 | `specs/127-codex-openrouter-phase3/plan.md` | Added "Fields retained as-is" table to AD-002, added owner_user_id UUID coercion note, added metadata consumer audit step to adapter cleanup, added DB row credential_source verification to Risk Mitigation |
 | `specs/127-codex-openrouter-phase3/tasks.md` | Fixed T006 dependency (None -> T001), removed T002 from T005 dependency, added same-file conflict note for T003/T004, added unknown fields test to T004, added edge case coverage audit and DB integrity check to T007, updated dependency graph and execution order |
-| `docs/tmp/remaining-work/127-codex-openrouter-phase3.md` | Created new migration tracker per Constitution Principle XII |
+| `specs/127-codex-openrouter-phase3/spec.md` | Created new migration tracker per Constitution Principle XII |
 
 ---
 
@@ -50,7 +50,7 @@
 
 | ID | Source | Summary | Status |
 |----|--------|---------|--------|
-| docs MEDIUM-01 | Constitution XII | Created migration tracker at docs/tmp/remaining-work/127-codex-openrouter-phase3.md. | Done |
+| docs MEDIUM-01 | Constitution XII | Created migration tracker at specs/127-codex-openrouter-phase3/spec.md | Done |
 
 ---
 

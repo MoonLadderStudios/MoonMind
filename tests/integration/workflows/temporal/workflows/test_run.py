@@ -41,7 +41,6 @@ INTEGRATION_MERGE_PR_CALLS: list[Dict[str, Any]] = []
 PROPOSAL_GENERATE_CALLS: list[Dict[str, Any]] = []
 PROPOSAL_SUBMIT_CALLS: list[Dict[str, Any]] = []
 
-
 def _trusted_search_attributes() -> TypedSearchAttributes:
     return TypedSearchAttributes(
         [
@@ -55,7 +54,6 @@ def _trusted_search_attributes() -> TypedSearchAttributes:
             ),
         ]
     )
-
 
 async def _register_test_search_attributes(
     env: WorkflowEnvironment,
@@ -75,7 +73,6 @@ async def _register_test_search_attributes(
         )
     )
 
-
 async def _wait_for_condition(
     predicate,
     *,
@@ -90,7 +87,6 @@ async def _wait_for_condition(
             raise AssertionError("Timed out waiting for test condition")
         await asyncio.sleep(poll_interval_seconds)
 
-
 @activity.defn(name="plan.generate")
 async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
     PLAN_GENERATE_CALLS.append(args)
@@ -103,7 +99,6 @@ async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
             # Fallback for tests that may not provide full execution_ref
             assert "_plan_generate" in args["idempotency_key"]
     return {"plan_ref": "artifact://plan/123"}
-
 
 @activity.defn(name="artifact.read")
 async def mock_artifact_read(args: Dict[str, Any]) -> bytes:
@@ -156,7 +151,6 @@ async def mock_artifact_read(args: Dict[str, Any]) -> bytes:
     }
     return json.dumps(payload).encode("utf-8")
 
-
 @activity.defn(name="mm.skill.execute")
 async def mock_skill_execute(args: Dict[str, Any]) -> Dict[str, Any]:
     SKILL_EXECUTE_CALLS.append(args)
@@ -171,7 +165,6 @@ async def mock_skill_execute(args: Dict[str, Any]) -> Dict[str, Any]:
             assert "_execute" in args["idempotency_key"]
     return {"status": "COMPLETED", "outputs": {}}
 
-
 @activity.defn(name="mm.skill.execute")
 async def mock_skill_execute_failed(args: Dict[str, Any]) -> Dict[str, Any]:
     SKILL_EXECUTE_CALLS.append(args)
@@ -180,7 +173,6 @@ async def mock_skill_execute_failed(args: Dict[str, Any]) -> Dict[str, Any]:
         "outputs": {"error": "forced skill failure"},
         "progress": {"details": "forced skill failure"},
     }
-
 
 @activity.defn(name="mm.skill.execute")
 async def mock_skill_execute_no_commits(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -193,18 +185,15 @@ async def mock_skill_execute_no_commits(args: Dict[str, Any]) -> Dict[str, Any]:
         },
     }
 
-
 @activity.defn(name="sandbox.run_command")
 async def mock_sandbox_command(args: Dict[str, Any]) -> Dict[str, Any]:
     SANDBOX_COMMAND_CALLS.append(args)
     return {"exit_code": 0, "stdout": "executing", "stderr": ""}
 
-
 @activity.defn(name="integration.jules.start")
 async def mock_integration_start(args: Dict[str, Any]) -> Dict[str, Any]:
     INTEGRATION_START_CALLS.append(args)
     return {"external_id": "corr-123"}
-
 
 @activity.defn(name="integration.jules.status")
 async def mock_integration_status(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -213,18 +202,15 @@ async def mock_integration_status(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"normalized_status": "running"}
     return {"normalized_status": "completed"}
 
-
 @activity.defn(name="integration.jules.fetch_result")
 async def mock_integration_fetch_result(args: Dict[str, Any]) -> Dict[str, Any]:
     INTEGRATION_FETCH_RESULT_CALLS.append(args)
     return {"external_url": "https://github.com/moonladder/moonmind/pull/999"}
 
-
 @activity.defn(name="repo.merge_pr")
 async def mock_integration_merge_pr(args: Dict[str, Any]) -> Dict[str, Any]:
     INTEGRATION_MERGE_PR_CALLS.append(args)
     return {"merged": True}
-
 
 @activity.defn(name="proposal.generate")
 async def mock_proposal_generate(args: Dict[str, Any]) -> list[Dict[str, Any]]:
@@ -244,12 +230,10 @@ async def mock_proposal_generate(args: Dict[str, Any]) -> list[Dict[str, Any]]:
         }
     ]
 
-
 @activity.defn(name="proposal.generate")
 async def mock_proposal_generate_empty(args: Dict[str, Any]) -> list[Dict[str, Any]]:
     PROPOSAL_GENERATE_CALLS.append(args)
     return []
-
 
 @activity.defn(name="proposal.submit")
 async def mock_proposal_submit(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -260,7 +244,6 @@ async def mock_proposal_submit(args: Dict[str, Any]) -> Dict[str, Any]:
         "submitted_count": len(candidates),
         "errors": [],
     }
-
 
 class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:

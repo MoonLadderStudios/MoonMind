@@ -12,7 +12,7 @@
 - FR-004, DESIGN-REQ-003: strict Pydantic v2 model validation.
 - FR-005, DESIGN-REQ-007: approved schema homes.
 - FR-006, DESIGN-REQ-008: named fields and explicit compatibility escape hatches.
-- FR-007, DESIGN-REQ-021: docs/tmp implementation tracking.
+- FR-007, DESIGN-REQ-021: feature-spec implementation tracking.
 - FR-008: no Temporal name renames.
 
 ## Phase 1: Setup
@@ -41,7 +41,7 @@
 
 - [X] T007 Implement strict boundary inventory schema models in `moonmind/schemas/temporal_boundary_models.py` (FR-002, FR-003, FR-004)
 - [X] T008 Implement deterministic MM-327 boundary inventory in `moonmind/workflows/temporal/boundary_inventory.py` (FR-001, FR-002, FR-003, FR-005, FR-006, FR-008)
-- [X] T009 Add docs/tmp migration tracker for compatibility-sensitive and incomplete boundary modeling in `docs/tmp/177-TemporalBoundaryModels.md` (FR-007, SC-004)
+- [X] T009 Add a migration tracker for compatibility-sensitive and incomplete boundary modeling in `specs/177-temporal-boundary-models/research.md` (FR-007, SC-004)
 - [X] T010 Run focused unit and integration boundary tests and validate the single story until they pass in `tests/unit/schemas/test_temporal_boundary_models.py`, `tests/unit/workflows/temporal/test_boundary_inventory.py`, and `tests/integration/temporal/test_temporal_boundary_inventory_contract.py` (SC-001, SC-002, SC-003)
 
 ## Phase 4: Polish And Verification
@@ -61,12 +61,12 @@
 ## Parallel Opportunities
 
 - T003 and T004 can be drafted in parallel because they touch different test files.
-- T007 and T009 can be implemented in parallel after failing tests are recorded because they touch production schema and docs/tmp files respectively.
+- T007 and T009 can be implemented in parallel after failing tests are recorded because they touch production schema and feature research artifacts respectively.
 
 ## Implementation Strategy
 
 1. Confirm the tests fail red-first.
 2. Implement only enough schema and inventory code to satisfy MM-327.
 3. Keep all Temporal names unchanged.
-4. Use docs/tmp for migration tracking rather than editing canonical Temporal docs.
+4. Use this feature’s MoonSpec artifacts for migration tracking rather than editing canonical Temporal docs.
 5. Mark tasks complete only after the corresponding files and commands are complete or explicitly blocked.

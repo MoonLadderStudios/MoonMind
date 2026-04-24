@@ -62,7 +62,6 @@ from moonmind.workflows.temporal.artifacts import (
 
 pytestmark = [pytest.mark.asyncio]
 
-
 @asynccontextmanager
 async def temporal_db(tmp_path: Path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_activity_runtime.db"
@@ -76,7 +75,6 @@ async def temporal_db(tmp_path: Path):
         yield session_maker
     finally:
         await engine.dispose()
-
 
 def _registry_payload() -> dict:
     return {
@@ -115,7 +113,6 @@ def _registry_payload() -> dict:
         ]
     }
 
-
 def _plan_payload(*, registry_artifact_id: str, registry_digest: str) -> dict:
     return {
         "plan_version": "1.0",
@@ -137,7 +134,6 @@ def _plan_payload(*, registry_artifact_id: str, registry_digest: str) -> dict:
         ],
         "edges": [],
     }
-
 
 class _FakeJulesClient:
     def __init__(
@@ -177,7 +173,6 @@ class _FakeJulesClient:
     async def aclose(self) -> None:
         self.closed = True
 
-
 async def test_artifact_activity_create_returns_ref_and_upload_descriptor(
     tmp_path: Path,
 ):
@@ -196,7 +191,6 @@ async def test_artifact_activity_create_returns_ref_and_upload_descriptor(
 
             assert artifact_ref.artifact_id.startswith("art_")
             assert upload.mode == "single_put"
-
 
 async def test_artifact_activity_create_maps_legacy_name_to_metadata(
     tmp_path: Path,
@@ -222,7 +216,6 @@ async def test_artifact_activity_create_maps_legacy_name_to_metadata(
 
             assert artifact.metadata_json["name"] == "reports/run_summary.json"
             assert artifact.metadata_json["artifact_kind"] == "summary"
-
 
 async def test_artifact_create_binding_accepts_legacy_name_payload(
     tmp_path: Path,
@@ -264,7 +257,6 @@ async def test_artifact_create_binding_accepts_legacy_name_payload(
 
             assert artifact.metadata_json["name"] == "reports/run_summary.json"
             assert artifact.metadata_json["artifact_kind"] == "summary"
-
 
 async def test_artifact_publish_report_bundle_binding_routes_to_artifacts_queue(
     tmp_path: Path,
@@ -319,7 +311,6 @@ async def test_artifact_publish_report_bundle_binding_routes_to_artifacts_queue(
             assert result["report_bundle_v"] == 1
             assert result["primary_report_ref"]["artifact_id"].startswith("art_")
 
-
 async def test_plan_validate_accepts_temporal_registry_artifact_ids(tmp_path: Path):
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -373,7 +364,6 @@ async def test_plan_validate_accepts_temporal_registry_artifact_ids(tmp_path: Pa
 
             assert b'"plan_version": "1.0"' in payload
 
-
 async def test_plan_generate_rejects_placeholder_registry_refs(tmp_path: Path):
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -424,7 +414,6 @@ async def test_plan_generate_rejects_placeholder_registry_refs(tmp_path: Path):
                         },
                     },
                 )
-
 
 async def test_plan_generate_legacy_payload_replay(tmp_path: Path):
     """
@@ -484,7 +473,6 @@ async def test_plan_generate_legacy_payload_replay(tmp_path: Path):
                 result = await planner.plan_generate(legacy_payload) # type: ignore
                 assert result.plan_ref.artifact_ref_v == 1
 
-
 async def test_default_skill_registry_payload_excludes_auto_when_explicit_skill_selected():
     """When an explicit skill is selected, 'auto' (the placeholder) must not appear in the registry."""
     payload = _default_skill_registry_payload(
@@ -509,7 +497,6 @@ async def test_default_skill_registry_payload_excludes_auto_when_explicit_skill_
     assert ("auto", "1.0") not in keyset
     assert ("pr-resolver", "1.0") in keyset
 
-
 async def test_default_skill_registry_payload_auto_placeholder_filtered():
     """When 'auto' is the only (placeholder) skill, it must not appear in the registry."""
     payload = _default_skill_registry_payload(
@@ -532,7 +519,6 @@ async def test_default_skill_registry_payload_auto_placeholder_filtered():
     # 'auto' is a placeholder and must not appear in the registry at all
     assert ("auto", "1.0") not in keyset
 
-
 @pytest.mark.parametrize(
     "skill_name", ["jira-issue-creator", "jira-pr-verify", "jira-verify"]
 )
@@ -552,7 +538,6 @@ async def test_default_skill_registry_payload_excludes_agent_only_jira_skill(
     )
     skills = payload.get("skills")
     assert skills == []
-
 
 async def test_default_skill_registry_payload_uses_dood_tool_definitions():
     payload = _default_skill_registry_payload(
@@ -591,7 +576,6 @@ async def test_default_skill_registry_payload_uses_dood_tool_definitions():
         tools["container.run_workload"]["executor"]["activity_type"]
         == "mm.tool.execute"
     )
-
 
 async def test_default_skill_registry_payload_uses_curated_pentest_tool_definition():
     payload = _default_skill_registry_payload(
@@ -729,7 +713,6 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
     ]
     assert parsed[0].executor.activity_type == "security.pentest.execute"
 
-
 async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_fleet():
     bindings = build_activity_bindings(
         build_default_activity_catalog(),
@@ -746,7 +729,6 @@ async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_f
     assert binding.handler.__temporal_activity_definition.name == (
         "security.pentest.execute"
     )
-
 
 def _approved_pentest_scope() -> dict[str, object]:
     now = datetime.now(timezone.utc)
@@ -772,7 +754,6 @@ def _approved_pentest_scope() -> dict[str, object]:
         "metadata": {"jira": "MM-470"},
     }
 
-
 def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
     request: dict[str, object] = {
         "task_run_id": "run-123",
@@ -793,7 +774,6 @@ def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
     request.update(overrides)
     return {"request": request}
 
-
 async def test_security_pentest_execute_fails_closed_before_runner_without_scope():
     activities = TemporalAgentRuntimeActivities()
 
@@ -807,7 +787,6 @@ async def test_security_pentest_execute_fails_closed_before_runner_without_scope
     assert "missing_approved_scope" in message
     assert "runner is not implemented" not in message
 
-
 async def test_security_pentest_execute_denies_without_retry_when_workflow_docker_disabled():
     activities = TemporalAgentRuntimeActivities(workflow_docker_mode="disabled")
 
@@ -820,7 +799,6 @@ async def test_security_pentest_execute_denies_without_retry_when_workflow_docke
     assert exc_info.value.type == "docker_workflows_disabled"
     assert exc_info.value.non_retryable is True
 
-
 async def test_security_pentest_execute_reaches_launch_plan_after_scope_validation():
     activities = TemporalAgentRuntimeActivities()
 
@@ -828,7 +806,6 @@ async def test_security_pentest_execute_reaches_launch_plan_after_scope_validati
 
     assert result["status"] == "launch_plan_ready"
     assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
-
 
 async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_validation():
     activities = TemporalAgentRuntimeActivities()
@@ -846,7 +823,6 @@ async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_val
     assert launch_plan["devices"] == []
     assert launch_plan["labels"]["moonmind.tool_name"] == "security.pentest.run"
     assert launch_plan["labels"]["moonmind.operation_mode"] == "validate_hypothesis"
-
 
 async def test_security_pentest_execute_includes_secret_safe_provider_preparation():
     activities = TemporalAgentRuntimeActivities()
@@ -881,7 +857,6 @@ async def test_security_pentest_execute_includes_secret_safe_provider_preparatio
     assert result["provider_lease"]["lease_required"] is True
     assert "sk-" not in str(result)
 
-
 async def test_security_pentest_execute_filters_provider_runtime_state():
     activities = TemporalAgentRuntimeActivities()
 
@@ -900,7 +875,6 @@ async def test_security_pentest_execute_filters_provider_runtime_state():
 
     assert result["provider_profile"]["profile_id"] == "pentestgpt_openrouter_default"
     assert result["provider_lease"]["profile_id"] == "pentestgpt_openrouter_default"
-
 
 async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
     activities = TemporalAgentRuntimeActivities()
@@ -922,7 +896,6 @@ async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
     assert result["provider_lease"]["release_required"] is True
     assert "OPENROUTER_API_KEY" not in str(result["provider_cooldown"])
     assert "token" not in str(result).lower()
-
 
 async def test_security_pentest_execute_includes_instruction_materialization_metadata():
     activities = TemporalAgentRuntimeActivities()
@@ -963,7 +936,6 @@ async def test_security_pentest_execute_includes_instruction_materialization_met
     assert "Objective:" not in str(result["launch_plan"]["labels"])
     assert "make connect" not in str(result).lower()
     assert "docker attach" not in str(result).lower()
-
 
 async def test_security_pentest_execute_includes_publication_metadata_without_session_artifacts():
     activities = TemporalAgentRuntimeActivities()
@@ -1031,7 +1003,6 @@ async def test_security_pentest_execute_includes_publication_metadata_without_se
     assert "terminal_control" not in str(live_logs)
     assert "docker attach" not in str(result).lower()
 
-
 async def test_security_pentest_execute_coerces_string_publication_flags():
     activities = TemporalAgentRuntimeActivities()
 
@@ -1050,7 +1021,6 @@ async def test_security_pentest_execute_coerces_string_publication_flags():
         "output.provider_snapshot",
         "output.logs",
     ]
-
 
 async def test_security_pentest_execute_sources_publication_payload_from_nested_request():
     activities = TemporalAgentRuntimeActivities()
@@ -1088,7 +1058,6 @@ async def test_security_pentest_execute_sources_publication_payload_from_nested_
     assert [item["finding_id"] for item in findings] == ["nested-finding"]
     assert "output.provider_snapshot" not in artifact_names
 
-
 async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_without_network_approval():
     activities = TemporalAgentRuntimeActivities()
 
@@ -1108,7 +1077,6 @@ async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_witho
     assert "PERMISSION_DENIED" in message
     assert "network_attachment_required" in message
     assert "launch_plan_ready" not in message
-
 
 async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(
     tmp_path: Path,
@@ -1158,14 +1126,12 @@ async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(
             assert plan_payload["nodes"][0]["tool"]["type"] == "agent_runtime"
             assert registry_payload == {"skills": []}
 
-
 async def test_default_registry_payload_uses_extended_timeouts_for_pr_resolver():
     payload = _default_registry_skill_payload(name="pr-resolver", version="1.0")
     policies = payload.get("policies", {})
     timeouts = policies.get("timeouts", {})
     assert timeouts.get("start_to_close_seconds") == 7200
     assert timeouts.get("schedule_to_close_seconds") == 7500
-
 
 async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
     tmp_path: Path,
@@ -1212,7 +1178,6 @@ async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
 
             assert result.status == "COMPLETED"
             assert result.outputs["ok"] is True
-
 
 async def test_skill_execute_uses_bound_artifact_service_when_not_passed(
     tmp_path: Path,
@@ -1261,7 +1226,6 @@ async def test_skill_execute_uses_bound_artifact_service_when_not_passed(
             assert result.status == "COMPLETED"
             assert result.outputs["ok"] is True
 
-
 async def test_artifact_read_invalid_ref_failures_surface_cleanly(tmp_path: Path):
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -1283,7 +1247,6 @@ async def test_artifact_read_invalid_ref_failures_surface_cleanly(tmp_path: Path
                 await activities.artifact_read(
                     {"artifact_ref": "art:sha256:dummy", "principal": "user-1"}
                 )
-
 
 async def test_sandbox_run_command_writes_diagnostics_artifact(tmp_path: Path):
     async with temporal_db(tmp_path) as session_maker:
@@ -1320,7 +1283,6 @@ async def test_sandbox_run_command_writes_diagnostics_artifact(tmp_path: Path):
             )
             assert b"hello sandbox" in payload
 
-
 async def test_sandbox_rejects_workspace_outside_sandbox_root(tmp_path: Path):
     activities = TemporalSandboxActivities(workspace_root=tmp_path / "workspaces")
     outside_workspace = tmp_path / "outside"
@@ -1331,7 +1293,6 @@ async def test_sandbox_rejects_workspace_outside_sandbox_root(tmp_path: Path):
             workspace_ref=outside_workspace,
             cmd=("pwd",),
         )
-
 
 async def test_sandbox_checkout_rejects_local_path_outside_workspace_root(
     tmp_path: Path,
@@ -1348,7 +1309,6 @@ async def test_sandbox_checkout_rejects_local_path_outside_workspace_root(
             repo_ref=source,
             idempotency_key="checkout-outside",
         )
-
 
 async def test_sandbox_checkout_repo_clones_github_slug_and_revision(
     tmp_path: Path,
@@ -1387,7 +1347,6 @@ async def test_sandbox_checkout_repo_clones_github_slug_and_revision(
     ]
     assert recorded_commands[1] == ["git", "checkout", "main"]
 
-
 async def test_shared_envelope_helpers_build_compact_runtime_contracts():
     invocation = build_activity_invocation_envelope(
         correlation_id="corr-1",
@@ -1422,7 +1381,6 @@ async def test_shared_envelope_helpers_build_compact_runtime_contracts():
     assert result.to_payload()["output_refs"] == ["art_01HJ4M3Y7RM4C5S2P3Q8G6T7V9"]
     assert summary.activity_type == "sandbox.run_command"
     assert summary.idempotency_key_hash != "idem-1"
-
 
 async def test_sandbox_checkout_apply_patch_and_run_tests(tmp_path: Path):
     async with temporal_db(tmp_path) as session_maker:
@@ -1484,7 +1442,6 @@ async def test_sandbox_checkout_apply_patch_and_run_tests(tmp_path: Path):
             )
             assert b'"exit_code": 0' in payload
 
-
 async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path):
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -1524,7 +1481,6 @@ async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path
                 binding.handler.__name__ == "artifact_lifecycle_sweep"
                 for binding in bindings
             )
-
 
 async def test_build_activity_bindings_artifact_read_accepts_request_mapping(
     tmp_path: Path,
@@ -1571,7 +1527,6 @@ async def test_build_activity_bindings_artifact_read_accepts_request_mapping(
             )
 
             assert payload == b'{"ok": true}'
-
 
 async def test_build_activity_bindings_artifact_handlers_preserve_typed_request_signature(
     tmp_path: Path,
@@ -1627,7 +1582,6 @@ async def test_build_activity_bindings_artifact_handlers_preserve_typed_request_
             assert write_handler_hints["request"] == write_method_hints["request"]
             assert write_handler_hints.get("return") == write_method_hints.get("return")
 
-
 async def test_build_activity_bindings_artifact_read_accepts_serialized_ref_mapping(
     tmp_path: Path,
 ):
@@ -1681,7 +1635,6 @@ async def test_build_activity_bindings_artifact_read_accepts_serialized_ref_mapp
 
             assert payload == b'{"ok": true}'
 
-
 async def test_build_activity_bindings_artifact_write_complete_accepts_legacy_payload_mapping(
     tmp_path: Path,
 ):
@@ -1727,7 +1680,6 @@ async def test_build_activity_bindings_artifact_write_complete_accepts_legacy_pa
 
             assert stored_ref.artifact_id == artifact.artifact_id
             assert payload == b'{"ok": true}'
-
 
 async def test_build_activity_bindings_injected_skill_handler_uses_request_mapping(
     tmp_path: Path,
@@ -1777,7 +1729,6 @@ async def test_build_activity_bindings_injected_skill_handler_uses_request_mappi
 
             assert result["invocationId"] == "node-1"
             assert result["principal"] == "user-1"
-
 
 async def test_build_activity_bindings_mm_tool_execute_handler_supports_keyword_payload(
     tmp_path: Path,
@@ -1849,7 +1800,6 @@ async def test_build_activity_bindings_mm_tool_execute_handler_supports_keyword_
             assert captured_context["workflow_id"] == "wf-1"
             assert captured_context["idempotency_key"] == "wf-1_n1_execute"
 
-
 async def test_build_activity_bindings_does_not_mutate_sandbox_method_signatures(
     tmp_path: Path,
 ):
@@ -1885,7 +1835,6 @@ async def test_build_activity_bindings_does_not_mutate_sandbox_method_signatures
 
             assert result.exit_code == 0
 
-
 async def test_sandbox_run_command_env_allows_unsetting_parent_values(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1903,7 +1852,6 @@ async def test_sandbox_run_command_env_allows_unsetting_parent_values(
     )
 
     assert result.exit_code == 0
-
 
 async def test_build_activity_bindings_requires_selected_family_implementation(
     tmp_path: Path,
@@ -1925,7 +1873,6 @@ async def test_build_activity_bindings_requires_selected_family_implementation(
                     artifact_activities=TemporalArtifactActivities(service),
                     fleets=(SANDBOX_FLEET,),
                 )
-
 
 async def test_build_activity_bindings_resolves_agent_runtime_fleet(
     tmp_path: Path,
@@ -1968,7 +1915,6 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
             assert "agent_skill.resolve" in bound_types
             assert "agent_skill.materialize" in bound_types
             assert "agent_skill.build_prompt_index" in bound_types
-
 
 async def test_agent_runtime_send_turn_disables_catalog_retries(
     tmp_path: Path,

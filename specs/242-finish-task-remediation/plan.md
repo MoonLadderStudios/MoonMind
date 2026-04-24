@@ -28,15 +28,15 @@ Implement MM-483 in runtime mode by completing the remaining Task Remediation de
 
 ## Technical Context
 
-**Language/Version**: Python 3.12; TypeScript/React for Mission Control if UI behavior changes  
-**Primary Dependencies**: Pydantic v2, SQLAlchemy async ORM, FastAPI, Temporal Python SDK, existing Temporal artifact and remediation services, React/Vitest  
-**Storage**: Existing `execution_remediation_links`, Temporal execution records, artifact metadata/content store, and existing control/summary projections; no new persistent table planned unless durable lock/ledger cannot reuse existing records  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and targeted router/UI unit commands as files change  
-**Integration Testing**: `./tools/test_integration.sh` when artifact lifecycle, API routes, or compose-backed runtime behavior changes  
-**Target Platform**: Linux server / Docker Compose deployment  
-**Project Type**: FastAPI control plane plus Temporal workflow/service boundary and Mission Control UI  
-**Performance Goals**: Remediation metadata remains compact; logs, snapshots, and evidence bodies stay behind artifact refs and out of workflow history  
-**Constraints**: Runtime mode; preserve MM-483 traceability; no raw host/Docker/SQL/storage/secret access; compatibility-sensitive Temporal shapes require explicit compatibility or cutover evidence  
+**Language/Version**: Python 3.12; TypeScript/React for Mission Control if UI behavior changes 
+**Primary Dependencies**: Pydantic v2, SQLAlchemy async ORM, FastAPI, Temporal Python SDK, existing Temporal artifact and remediation services, React/Vitest 
+**Storage**: Existing `execution_remediation_links`, Temporal execution records, artifact metadata/content store, and existing control/summary projections; no new persistent table planned unless durable lock/ledger cannot reuse existing records 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and targeted router/UI unit commands as files change 
+**Integration Testing**: `./tools/test_integration.sh` when artifact lifecycle, API routes, or compose-backed runtime behavior changes 
+**Target Platform**: Linux server / Docker Compose deployment 
+**Project Type**: FastAPI control plane plus Temporal workflow/service boundary and Mission Control UI 
+**Performance Goals**: Remediation metadata remains compact; logs, snapshots, and evidence bodies stay behind artifact refs and out of workflow history 
+**Constraints**: Runtime mode; preserve MM-483 traceability; no raw host/Docker/SQL/storage/secret access; compatibility-sensitive Temporal shapes require explicit compatibility or cutover evidence 
 **Scale/Scope**: One remediation run targets one logical execution and one pinned run snapshot, with bounded action attempts and compact read-model summaries
 
 ## Constitution Check
@@ -50,7 +50,7 @@ Implement MM-483 in runtime mode by completing the remaining Task Remediation de
 - VII. Runtime Configurability: PASS. Policy-gated self-healing and action policies remain explicit runtime configuration.
 - VIII. Modular Architecture: PASS. Work stays at remediation service, adapter, API, and UI boundaries.
 - IX. Resilient by Default: PASS. Locking, idempotency, degraded outcomes, cancellation, and continuation are explicit.
-- XII. Canonical Docs vs Tmp: PASS. Jira input remains under `docs/tmp`; canonical docs remain desired state.
+- XII. Canonical Docs vs Tmp: PASS. Jira input remains under `local-only handoffs`; canonical docs remain desired state.
 - XIII. Pre-release Compatibility Policy: PASS. Superseded legacy action aliases must be removed rather than kept as compatibility shims.
 
 ## Project Structure
@@ -65,9 +65,9 @@ specs/242-finish-task-remediation/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── remediation-runtime.md
+│ └── remediation-runtime.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 

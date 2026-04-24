@@ -3,7 +3,7 @@
 **Feature Branch**: `172-register-oauth-backed-codex-provider-profiles`  
 **Created**: 2026-04-15  
 **Status**: Implemented  
-**Input**: MM-332: Register OAuth-backed Codex provider profiles. As an operator, I can enroll or repair Codex OAuth credentials into a durable auth volume and have MoonMind verify and register the resulting OAuth-backed Provider Profile without treating the auth volume as task state or an artifact. Source: `docs/ManagedAgents/OAuthTerminal.md` sections 1, 3.1, 4, 6, and 8. Coverage IDs: DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-014, DESIGN-REQ-017. Breakdown Story ID: STORY-001. Breakdown JSON: `docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthtermina-74125184/stories.json`.
+**Input**: MM-332: Register OAuth-backed Codex provider profiles. As an operator, I can enroll or repair Codex OAuth credentials into a durable auth volume and have MoonMind verify and register the resulting OAuth-backed Provider Profile without treating the auth volume as task state or an artifact. Source: `docs/ManagedAgents/OAuthTerminal.md` sections 1, 3.1, 4, 6, and 8. Coverage IDs: DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-014, DESIGN-REQ-017. Breakdown Story ID: STORY-001. Breakdown JSON: `artifacts/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthtermina-74125184/stories.json`.
 
 ## User Story
 

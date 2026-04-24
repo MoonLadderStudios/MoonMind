@@ -25,15 +25,15 @@ Plan MM-496 as a real runtime implementation story with a bounded first slice: a
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 backend/runtime; existing TypeScript/React consumers remain downstream but are not the primary implementation surface for this slice  
-**Primary Dependencies**: FastAPI, Pydantic v2, SQLAlchemy async ORM, existing Temporal artifact service/helpers  
-**Storage**: Existing temporal artifact metadata tables and configured artifact store; no new persistent storage  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/temporal/test_report_workflow_rollout.py`  
-**Integration Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/contract/test_temporal_execution_api.py` for the execution-detail API boundary; `./tools/test_integration.sh` only if implementation crosses into compose-backed persistence or serialization behavior beyond the existing contract test surface  
-**Target Platform**: MoonMind API service execution detail route backed by Temporal execution records and artifact linkage  
-**Project Type**: Backend runtime/API story with contract verification  
-**Performance Goals**: Reuse bounded report projection helpers and keep execution detail reads compact; avoid unbounded artifact hydration or extra storage indirection  
-**Constraints**: No second report storage model, no raw artifact payloads in execution detail, preserve artifact authorization behavior, keep endpoint defer decision explicit, preserve MM-496 traceability  
+**Language/Version**: Python 3.12 backend/runtime; existing TypeScript/React consumers remain downstream but are not the primary implementation surface for this slice 
+**Primary Dependencies**: FastAPI, Pydantic v2, SQLAlchemy async ORM, existing Temporal artifact service/helpers 
+**Storage**: Existing temporal artifact metadata tables and configured artifact store; no new persistent storage 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/temporal/test_report_workflow_rollout.py` 
+**Integration Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/contract/test_temporal_execution_api.py` for the execution-detail API boundary; `./tools/test_integration.sh` only if implementation crosses into compose-backed persistence or serialization behavior beyond the existing contract test surface 
+**Target Platform**: MoonMind API service execution detail route backed by Temporal execution records and artifact linkage 
+**Project Type**: Backend runtime/API story with contract verification 
+**Performance Goals**: Reuse bounded report projection helpers and keep execution detail reads compact; avoid unbounded artifact hydration or extra storage indirection 
+**Constraints**: No second report storage model, no raw artifact payloads in execution detail, preserve artifact authorization behavior, keep endpoint defer decision explicit, preserve MM-496 traceability 
 **Scale/Scope**: One story covering report-aware execution detail exposure for canonical reports
 
 ## Constitution Check
@@ -51,7 +51,7 @@ Plan MM-496 as a real runtime implementation story with a bounded first slice: a
 - IX. Resilient by Default: PASS - projection data remains bounded, deterministic, and artifact-backed.
 - X. Facilitate Continuous Improvement: PASS - later verification will capture the explicit endpoint defer decision and any remaining drift.
 - XI. Spec-Driven Development: PASS - MM-496 is preserved through spec, plan, and later tasks/verification.
-- XII. Canonical Documentation Separation: PASS - Jira/orchestration input remains under `docs/tmp`, while this feature directory captures the selected runtime slice.
+- XII. Canonical Documentation Separation: PASS - Jira/orchestration input remains under `local-only handoffs`, while this feature directory captures the selected runtime slice.
 - XIII. Pre-release Compatibility Policy: PASS - no compatibility aliasing or hidden semantic transforms are introduced.
 
 ## Project Structure
@@ -66,7 +66,7 @@ specs/248-report-aware-execution-projections/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── execution-report-projection-contract.md
+│ └── execution-report-projection-contract.md
 └── tasks.md
 ```
 

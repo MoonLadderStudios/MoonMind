@@ -7,7 +7,6 @@ from moonmind.workflows.temporal.workflows.manifest_ingest import (
     MoonMindManifestIngestWorkflow,
 )
 
-
 @pytest.mark.asyncio
 async def test_manifest_ingest_workflow_returns_compiled_refs(
     monkeypatch: pytest.MonkeyPatch,
@@ -49,14 +48,12 @@ async def test_manifest_ingest_workflow_returns_compiled_refs(
     assert "nodes" not in calls[1][1]
     assert calls[1][1]["plan_ref"] == "art_plan_1"
 
-
 @pytest.mark.asyncio
 async def test_manifest_ingest_workflow_requires_manifest_ref() -> None:
     workflow = MoonMindManifestIngestWorkflow()
 
     with pytest.raises(exceptions.ApplicationError, match="manifest_ref is required"):
         await workflow.run({})
-
 
 @pytest.mark.asyncio
 async def test_manifest_ingest_workflow_accepts_dict_summary_result(

@@ -17,7 +17,6 @@ from moonmind.summarization import summarize_text_gemini, update_summaries
 configure_logging()
 logger = logging.getLogger(__name__)
 
-
 if __name__ == "__main__":
     logger.info("Summarizer job starting.")
 

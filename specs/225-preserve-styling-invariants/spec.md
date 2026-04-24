@@ -3,7 +3,7 @@
 **Feature Branch**: `225-preserve-styling-invariants`
 **Created**: 2026-04-22
 **Status**: Implemented
-**Input**: Trusted Jira preset brief for MM-430 from `docs/tmp/jira-orchestration-inputs/MM-430-moonspec-orchestration-input.md`. Summary: "Preserve Mission Control styling source and build invariants." Source design: `docs/UI/MissionControlDesignSystem.md`, sections 1 and 13.
+**Input**: Trusted Jira preset brief for MM-430 from `spec.md` (Input). Summary: "Preserve Mission Control styling source and build invariants." Source design: `docs/UI/MissionControlDesignSystem.md`, sections 1 and 13.
 
 ## Original Jira Preset Brief
 

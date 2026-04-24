@@ -37,18 +37,14 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_SCHEDULER_MAX_BACKFILL = 3
 
-
 class RecurringTaskValidationError(ValueError):
     """Raised when recurring task inputs are invalid."""
-
 
 class RecurringTaskNotFoundError(RuntimeError):
     """Raised when a recurring definition does not exist."""
 
-
 class RecurringTaskAuthorizationError(RuntimeError):
     """Raised when a caller does not have access to a recurring definition."""
-
 
 @dataclass(frozen=True, slots=True)
 class RecurringPolicy:
@@ -59,14 +55,12 @@ class RecurringPolicy:
     misfire_grace_seconds: int = 900
     jitter_seconds: int = 0
 
-
 def _json_object(value: object, *, field_name: str) -> dict[str, Any]:
     if value is None:
         return {}
     if isinstance(value, Mapping):
         return dict(value)
     raise RecurringTaskValidationError(f"{field_name} must be a JSON object")
-
 
 def _clean_text(
     value: object, *, field_name: str, required: bool = False
@@ -78,7 +72,6 @@ def _clean_text(
         return None
     return text
 
-
 def _normalize_scope_type(value: object) -> RecurringTaskScopeType:
     raw = str(value or "").strip().lower() or RecurringTaskScopeType.PERSONAL.value
     try:
@@ -88,13 +81,11 @@ def _normalize_scope_type(value: object) -> RecurringTaskScopeType:
             "scopeType must be one of: personal, global"
         ) from exc
 
-
 def _normalize_schedule_type(value: object) -> str:
     raw = str(value or "").strip().lower() or "cron"
     if raw != "cron":
         raise RecurringTaskValidationError("scheduleType must be 'cron'")
     return raw
-
 
 def _normalize_policy(
     policy_payload: Mapping[str, Any] | None,
@@ -165,7 +156,6 @@ def _normalize_policy(
         jitter_seconds=jitter_seconds,
     )
 
-
 def _overlap_mode_from_temporal(overlap: object | None) -> str:
     if overlap is None:
         return "skip"
@@ -176,7 +166,6 @@ def _overlap_mode_from_temporal(overlap: object | None) -> str:
         "BUFFER_ONE": "buffer_one",
         "CANCEL_OTHER": "cancel_previous",
     }.get(raw, "skip")
-
 
 def _catchup_mode_from_temporal_window(catchup_window: object | None) -> str:
     if catchup_window is None:
@@ -190,7 +179,6 @@ def _catchup_mode_from_temporal_window(catchup_window: object | None) -> str:
     if secs <= timedelta(minutes=15).total_seconds():
         return "last"
     return "all"
-
 
 def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
     target = dict(target_payload)
@@ -265,12 +253,10 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
     target["kind"] = kind
     return target
 
-
 def _coerce_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
-
 
 class RecurringTasksService:
     """CRUD and dispatch helpers for recurring definitions."""

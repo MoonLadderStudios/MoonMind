@@ -9,15 +9,15 @@ Implement MM-365 by adding a Create page merge automation option that is availab
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control, Python 3.12 for existing request/workflow contracts  
-**Primary Dependencies**: React state and form controls, existing task creation endpoint, existing `MoonMind.Run` merge automation request parsing, Vitest, pytest  
-**Storage**: No new persistent storage; merge automation remains an optional task creation payload field  
-**Unit Testing**: Vitest through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`; existing Python unit suite through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`  
-**Integration Testing**: Hermetic integration runner `./tools/test_integration.sh` remains available; no new compose service required for this UI request-shape story  
-**Target Platform**: Mission Control browser UI submitting to the existing FastAPI/Temporal create endpoint  
-**Project Type**: Web UI with existing backend workflow contract  
-**Performance Goals**: No additional network requests; merge automation visibility/state updates happen as local form state changes  
-**Constraints**: Keep resolver-style tasks forced to `publish.mode=none`; preserve `publishMode=pr` and `task.publish.mode=pr`; do not change Jira Orchestrate preset behavior; do not introduce direct auto-merge semantics  
+**Language/Version**: TypeScript/React for Mission Control, Python 3.12 for existing request/workflow contracts 
+**Primary Dependencies**: React state and form controls, existing task creation endpoint, existing `MoonMind.Run` merge automation request parsing, Vitest, pytest 
+**Storage**: No new persistent storage; merge automation remains an optional task creation payload field 
+**Unit Testing**: Vitest through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`; existing Python unit suite through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` 
+**Integration Testing**: Hermetic integration runner `./tools/test_integration.sh` remains available; no new compose service required for this UI request-shape story 
+**Target Platform**: Mission Control browser UI submitting to the existing FastAPI/Temporal create endpoint 
+**Project Type**: Web UI with existing backend workflow contract 
+**Performance Goals**: No additional network requests; merge automation visibility/state updates happen as local form state changes 
+**Constraints**: Keep resolver-style tasks forced to `publish.mode=none`; preserve `publishMode=pr` and `task.publish.mode=pr`; do not change Jira Orchestrate preset behavior; do not introduce direct auto-merge semantics 
 **Scale/Scope**: One Create page control and request-shape path for a single task submission
 
 ## Constitution Check
@@ -33,7 +33,7 @@ Implement MM-365 by adding a Create page merge automation option that is availab
 - IX. Resilient by Default: PASS. Stale enabled state is cleared when the option becomes unavailable.
 - X. Continuous Improvement: PASS. Verification evidence will be recorded in `verification.md`.
 - XI. Spec-Driven Development: PASS. Runtime changes follow this one-story spec.
-- XII. Canonical Documentation Separation: PASS. Canonical Create page behavior is documented in `docs/UI/CreatePage.md`; migration artifacts stay under `specs/` and `docs/tmp`.
+- XII. Canonical Documentation Separation: PASS. Canonical Create page behavior is documented in `docs/UI/CreatePage.md`; migration artifacts stay under `specs/` and `local-only handoffs`.
 - XIII. Pre-Release Compatibility Policy: PASS. No aliases or compatibility transforms are introduced; the existing supported `mergeAutomation` field is submitted directly.
 
 ## Project Structure
@@ -48,7 +48,7 @@ specs/193-create-page-merge-automation/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── create-page-merge-automation.md
+│ └── create-page-merge-automation.md
 ├── tasks.md
 └── verification.md
 ```

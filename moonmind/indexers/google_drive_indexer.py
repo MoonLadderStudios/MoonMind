@@ -6,7 +6,6 @@ from llama_index.core import Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.readers.google import GoogleDriveReader
 
-
 class GoogleDriveIndexer:
     def __init__(
         self,

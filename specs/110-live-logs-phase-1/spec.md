@@ -3,24 +3,24 @@
 **Feature Branch**: `110-live-logs-phase-1`  
 **Created**: 2026-03-28  
 **Status**: Draft  
-**Input**: User description: "Fully implement Phase 1 from docs/tmp/009-LiveLogsPlan.md"
+**Input**: User description: "Fully implement Phase 1 from docs/ManagedAgents/LiveLogs.md"
 
 ## Source Document Requirements
 
-- **DOC-REQ-001**: Update the managed launcher to always start subprocesses with piped `stdout` and `stderr`. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-002**: Remove any requirement that managed runs be wrapped in `tmate` or similar terminal relays for visibility. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-003**: Ensure the supervisor drains `stdout` and `stderr` concurrently and continuously. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-004**: Preserve raw stream fidelity; do not normalize subprocess output into framework logs before persistence. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-005**: Implement or finalize spool/buffer handling for long-running streams (64KB chunks). Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-006**: Write durable `stdout` artifacts for every managed run. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-007**: Write durable `stderr` artifacts for every managed run. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-008**: Write `diagnostics.json` artifacts for every managed run. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-009**: Record artifact refs and summary metadata when the run ends. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-010**: Capture and persist exit code, failure class, timestamps, and run summary fields needed by the UI. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-011**: Ensure artifact generation succeeds even when the frontend never connects. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-012**: Ensure supervisor heartbeat and timeout handling integrate cleanly with log capture. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-013**: Add tests for successful runs, failed runs, timed-out runs, and abrupt process termination. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
-- **DOC-REQ-014**: Add tests for high-volume log output and interleaved stdout/stderr. Source: `docs/tmp/009-LiveLogsPlan.md#Phase 1`
+- **DOC-REQ-001**: Update the managed launcher to always start subprocesses with piped `stdout` and `stderr`. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-002**: Remove any requirement that managed runs be wrapped in `tmate` or similar terminal relays for visibility. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-003**: Ensure the supervisor drains `stdout` and `stderr` concurrently and continuously. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-004**: Preserve raw stream fidelity; do not normalize subprocess output into framework logs before persistence. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-005**: Implement or finalize spool/buffer handling for long-running streams (64KB chunks). Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-006**: Write durable `stdout` artifacts for every managed run. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-007**: Write durable `stderr` artifacts for every managed run. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-008**: Write `diagnostics.json` artifacts for every managed run. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-009**: Record artifact refs and summary metadata when the run ends. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-010**: Capture and persist exit code, failure class, timestamps, and run summary fields needed by the UI. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-011**: Ensure artifact generation succeeds even when the frontend never connects. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-012**: Ensure supervisor heartbeat and timeout handling integrate cleanly with log capture. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-013**: Add tests for successful runs, failed runs, timed-out runs, and abrupt process termination. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
+- **DOC-REQ-014**: Add tests for high-volume log output and interleaved stdout/stderr. Source: `docs/ManagedAgents/LiveLogs.md#Phase 1`
 
 ## User Scenarios & Testing *(mandatory)*
 

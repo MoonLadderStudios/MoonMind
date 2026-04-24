@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from moonmind.workflows.skills.tool_plan_contracts import (
     DEFAULT_SKIP_TOOL_TYPES,
     PlanPolicy,
@@ -30,7 +29,6 @@ _MINIMAL_PLAN = {
     ],
     "edges": [],
 }
-
 
 class TestPlanPolicyApprovalPolicy:
     def test_default_plan_policy_has_none_approval_policy(self):
@@ -61,7 +59,6 @@ class TestPlanPolicyApprovalPolicy:
         payload = policy.to_payload()
         assert "approval_policy" in payload
         assert payload["approval_policy"]["enabled"] is True
-
 
 class TestParsePlanDefinitionApprovalPolicy:
     def test_parse_without_approval_policy_returns_none(self):

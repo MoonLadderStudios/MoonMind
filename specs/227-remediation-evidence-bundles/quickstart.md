@@ -13,7 +13,7 @@ Expected result:
 ## Traceability Check
 
 ```bash
-rg -n "MM-452|DESIGN-REQ-006|DESIGN-REQ-007|DESIGN-REQ-008|DESIGN-REQ-009|DESIGN-REQ-022|DESIGN-REQ-023|prepare_action_request" specs/227-remediation-evidence-bundles docs/tmp/jira-orchestration-inputs/MM-452-moonspec-orchestration-input.md moonmind/workflows/temporal/remediation_tools.py tests/unit/workflows/temporal/test_remediation_context.py
+rg -n "MM-452|DESIGN-REQ-006|DESIGN-REQ-007|DESIGN-REQ-008|DESIGN-REQ-009|DESIGN-REQ-022|DESIGN-REQ-023|prepare_action_request" specs/227-remediation-evidence-bundles moonmind/workflows/temporal/remediation_tools.py tests/unit/workflows/temporal/test_remediation_context.py
 ```
 
 Expected result:

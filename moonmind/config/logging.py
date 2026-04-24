@@ -29,7 +29,6 @@ _RESERVED_LOG_RECORD_FIELDS = {
     "taskName",
 }
 
-
 class StructuredLogFormatter(logging.Formatter):
     """JSON formatter that preserves extra fields for log aggregation."""
 
@@ -70,7 +69,6 @@ class StructuredLogFormatter(logging.Formatter):
             payload["extra"] = extras
 
         return json.dumps(payload, default=str)
-
 
 def configure_logging(
     level: str = "INFO",

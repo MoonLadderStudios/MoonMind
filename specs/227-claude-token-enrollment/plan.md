@@ -37,15 +37,15 @@ Add a focused Claude manual token enrollment drawer to the existing Settings Pro
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 remains present but is not expected in this story  
-**Primary Dependencies**: React, TanStack Query, existing Settings entrypoint, Vitest, Testing Library  
-**Storage**: No new persistent storage in this story; token persistence is represented by a manual-auth request boundary that returns secret-free readiness metadata  
-**Unit Testing**: `npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx` for focused iteration; final unit verification through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`  
-**Integration Testing**: UI integration-style coverage in `ProviderProfilesManager.test.tsx` for drawer interaction, mocked manual-auth request shape, and Codex OAuth no-call regression; no compose-backed service integration is required for this frontend-focused story  
-**Target Platform**: Mission Control browser UI served by FastAPI  
-**Project Type**: Web UI  
-**Performance Goals**: Provider profile rows render without extra requests; manual-auth request occurs only after explicit token submission  
-**Constraints**: Do not expose token values in status, errors, notices, logs, or artifacts; do not describe Claude enrollment as terminal OAuth; do not invoke Codex OAuth session APIs for Claude; preserve existing Codex behavior  
+**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 remains present but is not expected in this story 
+**Primary Dependencies**: React, TanStack Query, existing Settings entrypoint, Vitest, Testing Library 
+**Storage**: No new persistent storage in this story; token persistence is represented by a manual-auth request boundary that returns secret-free readiness metadata 
+**Unit Testing**: `npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx` for focused iteration; final unit verification through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` 
+**Integration Testing**: UI integration-style coverage in `ProviderProfilesManager.test.tsx` for drawer interaction, mocked manual-auth request shape, and Codex OAuth no-call regression; no compose-backed service integration is required for this frontend-focused story 
+**Target Platform**: Mission Control browser UI served by FastAPI 
+**Project Type**: Web UI 
+**Performance Goals**: Provider profile rows render without extra requests; manual-auth request occurs only after explicit token submission 
+**Constraints**: Do not expose token values in status, errors, notices, logs, or artifacts; do not describe Claude enrollment as terminal OAuth; do not invoke Codex OAuth session APIs for Claude; preserve existing Codex behavior 
 **Scale/Scope**: One Settings provider profile table component, focused tests, and MoonSpec artifacts
 
 ## Constitution Check
@@ -63,7 +63,7 @@ Add a focused Claude manual token enrollment drawer to the existing Settings Pro
 - IX. Resilient by Default: PASS. Empty token submission is blocked and failure output is redacted.
 - X. Continuous Improvement: PASS. Evidence is captured in MoonSpec artifacts and tests.
 - XI. Spec-Driven Development: PASS. Implementation proceeds from this single-story spec.
-- XII. Canonical Documentation Separation: PASS. Planning and migration notes remain under `specs/`/`docs/tmp`; canonical docs are not rewritten for this frontend slice.
+- XII. Canonical Documentation Separation: PASS. Planning and migration notes remain under `specs/`/`local-only handoffs`; canonical docs are not rewritten for this frontend slice.
 - XIII. Pre-Release Velocity: PASS. No compatibility aliases or old/new behavior shims are introduced.
 
 ## Project Structure
@@ -78,7 +78,7 @@ specs/227-claude-token-enrollment/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── claude-manual-enrollment.md
+│ └── claude-manual-enrollment.md
 └── tasks.md
 ```
 
@@ -89,7 +89,6 @@ frontend/src/components/settings/
 ├── ProviderProfilesManager.tsx
 └── ProviderProfilesManager.test.tsx
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-446-moonspec-orchestration-input.md
 ```
 

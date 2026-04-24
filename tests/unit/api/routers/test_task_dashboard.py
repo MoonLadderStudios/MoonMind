@@ -26,7 +26,6 @@ from api_service.api.routers.task_dashboard import (
     router,
 )
 
-
 class _BootPayloadParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -50,13 +49,11 @@ class _BootPayloadParser(HTMLParser):
         if tag == "script":
             self._capturing = False
 
-
 def _extract_boot_payload(response_text: str) -> dict[str, object]:
     parser = _BootPayloadParser()
     parser.feed(response_text)
     assert parser.payload_parts
     return json.loads("".join(parser.payload_parts))
-
 
 def _write_dashboard_test_manifest(root: Path) -> Path:
     dist_root = root / "dist"
@@ -87,7 +84,6 @@ def _write_dashboard_test_manifest(root: Path) -> Path:
     manifest_path = manifest_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     return manifest_path
-
 
 @contextmanager
 def _client_with_mock_service(
@@ -137,12 +133,10 @@ def _client_with_mock_service(
 
     app.dependency_overrides.clear()
 
-
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     with _client_with_mock_service() as (test_client, _mock_service):
         yield test_client
-
 
 def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("list")
@@ -162,7 +156,6 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert not _is_allowed_path("workers")
     assert not _is_allowed_path("secrets")
 
-
 def test_allowed_path_helper_rejects_unknown_routes() -> None:
     assert not _is_allowed_path("")
     assert not _is_allowed_path("queue/new/extra")
@@ -170,13 +163,11 @@ def test_allowed_path_helper_rejects_unknown_routes() -> None:
     assert not _is_allowed_path("queue/<script>alert(1)</script>")
     assert not _is_allowed_path("queue/not allowed")
 
-
 def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
     response = client.get("/tasks", follow_redirects=False)
 
     assert response.status_code == 307
     assert response.headers["location"] == "/tasks/list"
-
 
 def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
     for path in (
@@ -216,13 +207,11 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
 
-
 def test_mission_control_logo_asset_exists() -> None:
     asset_path = Path("api_service/static/task_dashboard/moonmindlogo.webp")
 
     assert asset_path.read_bytes().startswith(b"RIFF")
     assert asset_path.stat().st_size < 25_000
-
 
 def test_task_create_route_uses_canonical_boot_payload(client: TestClient) -> None:
     """GET /tasks/new renders the task-create shell with server runtime config."""
@@ -240,7 +229,6 @@ def test_task_create_route_uses_canonical_boot_payload(client: TestClient) -> No
         "/api/"
     )
 
-
 def test_oauth_terminal_route_uses_terminal_boot_payload(client: TestClient) -> None:
     response = client.get("/oauth-terminal?session_id=oas_route_shell")
 
@@ -252,7 +240,6 @@ def test_oauth_terminal_route_uses_terminal_boot_payload(client: TestClient) -> 
     assert boot_payload["initialData"]["dashboardConfig"]["initialPath"] == "/oauth-terminal"
     assert boot_payload["initialData"]["layout"]["dataWidePanel"] is True
 
-
 def test_alias_routes_redirect_to_canonical_paths(client: TestClient) -> None:
     """GET /tasks/create and /tasks/tasks-list must return 307 redirects to canonical routes."""
     create_resp = client.get("/tasks/create", follow_redirects=False)
@@ -263,7 +250,6 @@ def test_alias_routes_redirect_to_canonical_paths(client: TestClient) -> None:
     assert tasks_list_resp.status_code == 307
     assert tasks_list_resp.headers["location"] == "/tasks/list"
 
-
 def test_legacy_manifest_submit_route_redirects_to_unified_manifests_page(
     client: TestClient,
 ) -> None:
@@ -271,7 +257,6 @@ def test_legacy_manifest_submit_route_redirects_to_unified_manifests_page(
 
     assert response.status_code == 307
     assert response.headers["location"] == "/tasks/manifests"
-
 
 def test_legacy_manifest_submit_route_openapi_documents_redirect(
     client: TestClient,
@@ -284,7 +269,6 @@ def test_legacy_manifest_submit_route_openapi_documents_redirect(
     assert "200" not in route["responses"]
     assert "application/json" not in route["responses"]["307"].get("content", {})
 
-
 def test_navigation_exposes_single_manifest_destination(client: TestClient) -> None:
     response = client.get("/tasks/manifests")
 
@@ -292,7 +276,6 @@ def test_navigation_exposes_single_manifest_destination(client: TestClient) -> N
     assert 'href="/tasks/manifests"' in response.text
     assert "Manifest Submit" not in response.text
     assert 'href="/tasks/manifests/new"' not in response.text
-
 
 def test_react_shell_wraps_navigation_in_centered_masthead_slot(
     client: TestClient,
@@ -311,14 +294,12 @@ def test_react_shell_wraps_navigation_in_centered_masthead_slot(
             title_meta_marker
         )
 
-
 def test_trailing_slash_alias_routes_return_404_not_detail_page(client: TestClient) -> None:
     """Trailing-slash variants /tasks/create/ and /tasks/tasks-list/ must not render a detail shell."""
     for path in ("/tasks/create/", "/tasks/tasks-list/"):
         response = client.get(path)
         assert response.status_code == 404
         assert response.json()["detail"]["code"] == "dashboard_route_not_found"
-
 
 def test_react_shell_uses_vite_dev_server_assets_when_configured(
     monkeypatch: pytest.MonkeyPatch,
@@ -332,7 +313,6 @@ def test_react_shell_uses_vite_dev_server_assets_when_configured(
     assert response.text.count('src="http://127.0.0.1:5173/@vite/client"') == 1
     assert 'src="http://127.0.0.1:5173/entrypoints/mission-control.tsx"' in response.text
     assert "/static/task_dashboard/dist/assets/" not in response.text
-
 
 def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
@@ -349,7 +329,6 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         assert 'type="module"' in response.text
         assert "/static/task_dashboard/dist/assets/" in response.text
 
-
 def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
     for path in ("/tasks/list", "/tasks/proposals"):
         response = client.get(path)
@@ -360,7 +339,6 @@ def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
         assert response.status_code == 200
         assert '"dataWidePanel":false' in response.text
 
-
 def test_legacy_settings_subroutes_redirect_to_unified_settings(client: TestClient) -> None:
     workers = client.get("/tasks/workers", follow_redirects=False)
     assert workers.status_code == 307
@@ -370,7 +348,6 @@ def test_legacy_settings_subroutes_redirect_to_unified_settings(client: TestClie
     assert secrets.status_code == 307
     assert secrets.headers["location"] == "/tasks/settings?section=providers-secrets"
 
-
 def test_react_tasks_list_and_detail_boot_include_dashboard_config(client: TestClient) -> None:
     response = client.get("/tasks/list")
     assert response.status_code == 200
@@ -378,7 +355,6 @@ def test_react_tasks_list_and_detail_boot_include_dashboard_config(client: TestC
     detail = client.get(f"/tasks/{uuid4()}")
     assert detail.status_code == 200
     assert "dashboardConfig" in detail.text
-
 
 def test_react_shell_renders_build_metadata_with_accurate_labels(
     monkeypatch: pytest.MonkeyPatch,
@@ -394,7 +370,6 @@ def test_react_shell_renders_build_metadata_with_accurate_labels(
     assert "MoonMind</span>" not in response.text
     assert 'title="Codex CLI version"' not in response.text
 
-
 def test_react_shell_places_operator_metadata_in_title_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -409,7 +384,6 @@ def test_react_shell_places_operator_metadata_in_title_row(
     assert "v20260408.1703" in response.text
     assert 'class="masthead-meta"' not in response.text
 
-
 def test_react_shell_hides_title_row_metadata_when_build_id_is_not_configured(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -423,20 +397,17 @@ def test_react_shell_hides_title_row_metadata_when_build_id_is_not_configured(
     assert response.status_code == 200
     assert 'class="masthead-title-meta"' not in response.text
 
-
 def test_legacy_system_dashboard_route_returns_404(client: TestClient) -> None:
     response = client.get("/tasks/system")
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "dashboard_route_not_found"
 
-
 def test_removed_new_schedule_route_returns_404(client: TestClient) -> None:
     response = client.get("/tasks/schedules/new")
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "dashboard_route_not_found"
-
 
 def test_invalid_multi_segment_routes_return_404(client: TestClient) -> None:
     for path in (
@@ -447,13 +418,11 @@ def test_invalid_multi_segment_routes_return_404(client: TestClient) -> None:
         assert response.status_code == 404
         assert response.json()["detail"]["code"] == "dashboard_route_not_found"
 
-
 def test_temporal_source_root_is_not_exposed(client: TestClient) -> None:
     response = client.get("/tasks/temporal")
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "dashboard_route_not_found"
-
 
 def test_temporal_source_subroutes_return_404_until_first_class_source_exists(
     client: TestClient,
@@ -465,7 +434,6 @@ def test_temporal_source_subroutes_return_404_until_first_class_source_exists(
         response = client.get(path)
         assert response.status_code == 404
         assert response.json()["detail"]["code"] == "dashboard_route_not_found"
-
 
 def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     response = client.get("/tasks/not-a-valid-dashboard-path/extra")
@@ -479,7 +447,6 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
         "/tasks/proposals, /tasks/manifests, "
         "/tasks/schedules, /tasks/skills, or /tasks/settings."
     )
-
 
 def test_skills_api_returns_available_skill_ids(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -501,7 +468,6 @@ def test_skills_api_returns_available_skill_ids(
             {"id": "speckit-orchestrate", "markdown": None},
         ],
     }
-
 
 def test_skills_api_include_content_reads_legacy_skill_markdown(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -533,9 +499,6 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
         {"id": "speckit-orchestrate", "markdown": skill_markdown},
     ]
 
-
-
-
 def test_create_dashboard_skill_success(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -557,7 +520,6 @@ def test_create_dashboard_skill_success(
     assert skill_file.is_file()
     assert skill_file.read_text(encoding="utf-8") == payload["markdown"]
 
-
 def test_create_dashboard_skill_invalid_name(client: TestClient) -> None:
     payload = {
         "name": "../MyNewSkill",
@@ -567,7 +529,6 @@ def test_create_dashboard_skill_invalid_name(client: TestClient) -> None:
 
     assert response.status_code == 400
     assert "Invalid skill name" in response.json()["detail"]
-
 
 def test_create_dashboard_skill_already_exists(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -589,14 +550,12 @@ def test_create_dashboard_skill_already_exists(
     assert response.status_code == 409
     assert "already exists locally" in response.json()["detail"]
 
-
 def _skill_zip(entries: dict[str, str]) -> bytes:
     payload = BytesIO()
     with zipfile.ZipFile(payload, "w") as archive:
         for name, content in entries.items():
             archive.writestr(name, content)
     return payload.getvalue()
-
 
 VALID_SKILL_MARKDOWN = """---
 name: zip-skill
@@ -606,7 +565,6 @@ description: Uploaded from a zip.
 
 Use this bundle.
 """
-
 
 def test_upload_dashboard_skill_zip_saves_valid_bundle(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -635,7 +593,6 @@ def test_upload_dashboard_skill_zip_saves_valid_bundle(
     assert (tmp_path / "zip-skill" / "scripts" / "check.sh").is_file()
     assert (tmp_path / "zip-skill" / "references" / "context.md").is_file()
     assert not list(tmp_path.glob(".skill-upload-*"))
-
 
 def test_skill_import_api_saves_valid_bundle_with_result_metadata(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -677,7 +634,6 @@ def test_skill_import_api_saves_valid_bundle_with_result_metadata(
     assert (tmp_path / "zip-skill" / "assets" / "icon.txt").is_file()
     assert (tmp_path / "zip-skill" / "notes.txt").is_file()
 
-
 def test_skill_import_api_rejects_missing_frontmatter(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -700,7 +656,6 @@ def test_skill_import_api_rejects_missing_frontmatter(
     assert response.status_code == 400
     assert "YAML frontmatter" in response.json()["detail"]
     assert not (tmp_path / "zip-skill").exists()
-
 
 @pytest.mark.parametrize("opening_delimiter", ["----", "---yaml"])
 def test_skill_import_api_rejects_malformed_frontmatter_opening_delimiter(
@@ -738,7 +693,6 @@ description: Uploaded from a zip.
     assert "YAML frontmatter" in response.json()["detail"]
     assert not (tmp_path / "zip-skill").exists()
 
-
 def test_skill_import_api_rejects_manifest_name_mismatch(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -771,7 +725,6 @@ description: Wrong parent.
     assert "must match the parent directory" in response.json()["detail"]
     assert not (tmp_path / "zip-skill").exists()
 
-
 def test_skill_import_api_rejects_existing_skill_by_default(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -796,7 +749,6 @@ def test_skill_import_api_rejects_existing_skill_by_default(
 
     assert response.status_code == 409
     assert "already exists locally" in response.json()["detail"]
-
 
 def test_skill_import_api_new_version_does_not_overwrite_without_versioned_storage(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -831,7 +783,6 @@ description: Original skill.
     assert "versioned skill storage" in response.json()["detail"]
     assert (skill_dir / "SKILL.md").read_text(encoding="utf-8") == original_markdown
 
-
 def test_upload_dashboard_skill_zip_rejects_invalid_root_skill_filename(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -854,7 +805,6 @@ def test_upload_dashboard_skill_zip_rejects_invalid_root_skill_filename(
     assert response.status_code == 400
     assert "one skill directory" in response.json()["detail"]
     assert not list(tmp_path.iterdir())
-
 
 def test_upload_dashboard_skill_zip_rejects_invalid_top_level_directory(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -879,7 +829,6 @@ def test_upload_dashboard_skill_zip_rejects_invalid_top_level_directory(
     assert "Invalid skill name" in response.json()["detail"]
     assert not list(tmp_path.iterdir())
 
-
 def test_upload_dashboard_skill_zip_rejects_missing_skill_markdown(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -902,7 +851,6 @@ def test_upload_dashboard_skill_zip_rejects_missing_skill_markdown(
     assert response.status_code == 400
     assert "SKILL.md" in response.json()["detail"]
     assert not (tmp_path / "broken").exists()
-
 
 def test_upload_dashboard_skill_zip_rejects_path_traversal(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

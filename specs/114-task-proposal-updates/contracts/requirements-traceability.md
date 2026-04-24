@@ -1,6 +1,6 @@
 # Requirements Traceability
 
-This document traces normative source requirements (`DOC-REQ-*`) from `docs/tmp/015-TaskProposalSystemPlan.md` directly into the planned implementation surfaces and corresponding validation strategies.
+This document traces normative source requirements (`DOC-REQ-*`) from `docs/Tasks/TaskProposalSystem.md` directly into the planned implementation surfaces and corresponding validation strategies.
 
 | Requirement ID | Mapped Functional Requirement | Planned Implementation Surface | Validation Strategy |
 | --- | --- | --- | --- |

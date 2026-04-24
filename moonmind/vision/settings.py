@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from moonmind.config.settings import settings
 
-
 @dataclass(frozen=True)
 class VisionConfig:
     """Resolved configuration snapshot for rendering attachment context."""
@@ -16,7 +15,6 @@ class VisionConfig:
     model: str
     max_tokens: int
     ocr_enabled: bool
-
 
 def get_vision_config() -> VisionConfig:
     """Return the current vision configuration derived from settings."""

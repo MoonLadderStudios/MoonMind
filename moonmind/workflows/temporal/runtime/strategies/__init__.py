@@ -44,7 +44,6 @@ All three managed runtimes are registered.  The launcher and adapter
 delegate fully to strategies — no ``if/elif`` branching remains.
 """
 
-
 def get_strategy(runtime_id: str) -> ManagedRuntimeStrategy | None:
     """Look up a registered strategy by *runtime_id*.
 

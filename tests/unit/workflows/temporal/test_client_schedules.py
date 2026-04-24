@@ -29,14 +29,12 @@ from moonmind.workflows.temporal.schedule_errors import (
 _TEST_UUID = UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
 _SCHEDULE_ID = f"mm-schedule:{_TEST_UUID}"
 
-
 def _make_adapter(client: Any) -> TemporalClientAdapter:
     """Create an adapter with a pre-injected mock client and worker topology."""
     adapter = TemporalClientAdapter(client=client)
     # Pre-set task queue so _get_task_queue() doesn't require settings
     adapter._workflow_topology = SimpleNamespace(task_queues=["mm.workflow"])
     return adapter
-
 
 def _mock_schedule_handle(*, describe_side_effect: Exception | None = None) -> MagicMock:
     """Build a mock ScheduleHandle with async methods."""
@@ -52,11 +50,9 @@ def _mock_schedule_handle(*, describe_side_effect: Exception | None = None) -> M
     handle.update = AsyncMock()
     return handle
 
-
 # ---------------------------------------------------------------------------
 # T010: create_schedule
 # ---------------------------------------------------------------------------
-
 
 class TestCreateSchedule:
     """DOC-REQ-001: create Temporal Schedule via SDK."""
@@ -120,7 +116,6 @@ class TestCreateSchedule:
 
         schedule_arg = mock_client.create_schedule.call_args[0][1]
         assert schedule_arg.policy.catchup_window == timedelta(days=365)
-
 
 class TestManagedSessionReconcileSchedule:
     @pytest.mark.asyncio
@@ -263,11 +258,9 @@ class TestManagedSessionReconcileSchedule:
                 workflow_type="MoonMind.Run",
             )
 
-
 # ---------------------------------------------------------------------------
 # T016: describe, update, pause, unpause, trigger, delete
 # ---------------------------------------------------------------------------
-
 
 class TestUpdateSchedule:
     """DOC-REQ-002: update schedule."""
@@ -354,7 +347,6 @@ class TestUpdateSchedule:
         assert updated_schedule.state.paused is True
         assert updated_schedule.state.note == "Original note"
 
-
 class TestDescribeSchedule:
     """DOC-REQ-002: describe schedule."""
 
@@ -383,7 +375,6 @@ class TestDescribeSchedule:
         with pytest.raises(ScheduleNotFoundError):
             await adapter.describe_schedule(definition_id=_TEST_UUID)
 
-
 class TestPauseSchedule:
     """DOC-REQ-002: pause schedule."""
 
@@ -396,7 +387,6 @@ class TestPauseSchedule:
         adapter = _make_adapter(mock_client)
         await adapter.pause_schedule(definition_id=_TEST_UUID)
         handle.pause.assert_awaited_once()
-
 
 class TestUnpauseSchedule:
     """DOC-REQ-002: unpause schedule."""
@@ -411,7 +401,6 @@ class TestUnpauseSchedule:
         await adapter.unpause_schedule(definition_id=_TEST_UUID)
         handle.unpause.assert_awaited_once()
 
-
 class TestTriggerSchedule:
     """DOC-REQ-002: trigger schedule."""
 
@@ -424,7 +413,6 @@ class TestTriggerSchedule:
         adapter = _make_adapter(mock_client)
         await adapter.trigger_schedule(definition_id=_TEST_UUID)
         handle.trigger.assert_awaited_once()
-
 
 class TestDeleteSchedule:
     """DOC-REQ-002: delete schedule."""
@@ -439,11 +427,9 @@ class TestDeleteSchedule:
         await adapter.delete_schedule(definition_id=_TEST_UUID)
         handle.delete.assert_awaited_once()
 
-
 # ---------------------------------------------------------------------------
 # T017: SDK error wrapping
 # ---------------------------------------------------------------------------
-
 
 class TestErrorWrapping:
     """DOC-REQ-007: adapter wraps SDK exceptions."""

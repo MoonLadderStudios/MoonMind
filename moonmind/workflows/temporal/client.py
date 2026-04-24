@@ -43,7 +43,6 @@ MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE = (
     "mm-operational:managed-session-reconcile:{{.ScheduleTime}}"
 )
 
-
 def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
     """Check whether *exc* is a Temporal ``RPCError`` with the given gRPC status.
 
@@ -60,7 +59,6 @@ def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
         pass  # gRPC/Temporal SDK not available; fall through to string match
     # Fallback: string match on the exception message.
     return status_name.lower().replace("_", " ") in str(exc).lower()
-
 
 def _build_typed_search_attributes(
     search_attributes: Mapping[str, Any] | None,
@@ -109,14 +107,12 @@ def _build_typed_search_attributes(
 
     return TypedSearchAttributes(pairs)
 
-
 @dataclass(frozen=True, slots=True)
 class WorkflowStartResult:
     """Result of starting a Temporal workflow."""
 
     workflow_id: str
     run_id: str
-
 
 async def get_temporal_client(address: str, namespace: str) -> Client:
     """Connect to and return a Temporal client."""
@@ -127,7 +123,6 @@ async def get_temporal_client(address: str, namespace: str) -> Client:
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
     )
 
-
 async def fetch_workflow_execution(
     client: Client, workflow_id: str
 ) -> WorkflowExecutionDescription:
@@ -135,7 +130,6 @@ async def fetch_workflow_execution(
 
     handle = client.get_workflow_handle(workflow_id)
     return await handle.describe()
-
 
 async def query_workflow(
     client: Client,
@@ -149,7 +143,6 @@ async def query_workflow(
     if arg is None:
         return await handle.query(query_name)
     return await handle.query(query_name, arg)
-
 
 class TemporalClientAdapter:
     """Adapter for communicating with the Temporal server."""
@@ -788,7 +781,6 @@ class TemporalClientAdapter:
                 f"Failed to delete schedule: {exc}"
             ) from exc
 
-
 class TemporalExecutionCreatorProtocol(Protocol):
     """Protocol for the execution service used by manifest child scheduling."""
 
@@ -810,7 +802,6 @@ class TemporalExecutionCreatorProtocol(Protocol):
     ) -> TemporalExecutionRecord:
         pass
 
-
 @dataclass(frozen=True, slots=True)
 class ManifestChildWorkflowStart:
     """Child workflow metadata captured for one scheduled manifest node."""
@@ -820,7 +811,6 @@ class ManifestChildWorkflowStart:
     run_id: str
     workflow_type: str
     parent_close_policy: str = MANIFEST_CHILD_PARENT_CLOSE_POLICY
-
 
 def build_manifest_child_parameters(
     *,
@@ -843,7 +833,6 @@ def build_manifest_child_parameters(
         },
         "parentClosePolicy": MANIFEST_CHILD_PARENT_CLOSE_POLICY,
     }
-
 
 async def start_manifest_child_runs(
     *,

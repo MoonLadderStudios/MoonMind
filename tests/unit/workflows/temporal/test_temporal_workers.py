@@ -42,7 +42,6 @@ from moonmind.workflows.temporal.workers import (
     list_registered_workflow_types,
 )
 
-
 async def _artifact_service(
     tmp_path: Path,
 ) -> tuple[TemporalArtifactService, AsyncSession, Any]:
@@ -60,7 +59,6 @@ async def _artifact_service(
         session,
         engine,
     )
-
 
 def test_build_all_worker_topologies_covers_canonical_fleets():
     topologies = {
@@ -89,7 +87,6 @@ def test_build_all_worker_topologies_covers_canonical_fleets():
     assert "mm.skill.execute" in topologies[SANDBOX_FLEET].activity_types
     assert "mm.skill.execute" in topologies[INTEGRATIONS_FLEET].activity_types
 
-
 def test_registered_workflow_types_include_manifest_ingest():
     assert list_registered_workflow_types() == (
         "MoonMind.Run",
@@ -101,7 +98,6 @@ def test_registered_workflow_types_include_manifest_ingest():
         "MoonMind.OAuthSession",
         "MoonMind.MergeAutomation",
     )
-
 
 def test_describe_configured_worker_uses_temporal_worker_fleet_override():
     temporal_settings = settings.temporal.model_copy(
@@ -124,7 +120,6 @@ def test_describe_configured_worker_uses_temporal_worker_fleet_override():
         "docker_workload",
     )
 
-
 def test_agent_runtime_topology_exposes_docker_workload_capability():
     topology = describe_configured_worker(
         temporal_settings=settings.temporal.model_copy(
@@ -136,7 +131,6 @@ def test_agent_runtime_topology_exposes_docker_workload_capability():
     assert "workload.run" in topology.activity_types
     assert "oauth_session.start_auth_runner" in topology.activity_types
     assert "oauth_session.verify_volume" in topology.activity_types
-
 
 def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: Path):
     async def _run() -> None:
@@ -185,7 +179,6 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
 
     asyncio.run(_run())
 
-
 def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fleet(
     tmp_path: Path,
 ):
@@ -226,7 +219,6 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
             await engine.dispose()
 
     asyncio.run(_run())
-
 
 def test_build_worker_activity_bindings_registers_workload_run_on_agent_runtime_fleet(
     tmp_path: Path,

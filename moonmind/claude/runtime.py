@@ -15,7 +15,6 @@ CLAUDE_RUNTIME_DISABLED_MESSAGE = (
 )
 """Canonical error text for disabled Claude runtime (ANTHROPIC/CLAUDE API key missing)."""
 
-
 @dataclass(frozen=True, slots=True)
 class RuntimeGateState:
     """Represents whether Claude runtime is enabled plus context for diagnostics."""
@@ -24,10 +23,8 @@ class RuntimeGateState:
     source_env: str | None
     error_message: str
 
-
 def _clean_value(value: object | None) -> str:
     return str(value or "").strip()
-
 
 def resolve_anthropic_api_key(
     *, api_key: str | None = None, env: Mapping[str, Any] | None = None
@@ -44,7 +41,6 @@ def resolve_anthropic_api_key(
         if candidate:
             return candidate
     return ""
-
 
 def build_runtime_gate_state(
     *,
@@ -72,14 +68,12 @@ def build_runtime_gate_state(
         enabled=True, source_env="unconditional", error_message=error_message
     )
 
-
 def is_claude_runtime_enabled(
     *, api_key: str | None = None, env: Mapping[str, Any] | None = None
 ) -> bool:
     """Return whether Claude runtime should be enabled based on API key presence."""
 
     return True
-
 
 __all__ = [
     "CLAUDE_API_KEY_ENV_ALIASES",

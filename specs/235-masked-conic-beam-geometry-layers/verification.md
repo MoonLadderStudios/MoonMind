@@ -1,11 +1,11 @@
 # MoonSpec Verification Report
 
-**Feature**: Masked Conic Beam Geometry and Layers  
-**Spec**: `/work/agent_jobs/mm:ecb337ff-772b-438e-8edb-938377b33a28/repo/specs/235-masked-conic-beam-geometry-layers/spec.md`  
-**Original Request Source**: `spec.md` Input and canonical Jira brief `docs/tmp/jira-orchestration-inputs/MM-466-moonspec-orchestration-input.md`  
-**Jira issue**: MM-466  
-**Verdict**: FULLY_IMPLEMENTED  
-**Confidence**: HIGH  
+**Feature**: Masked Conic Beam Geometry and Layers 
+**Spec**: `/work/agent_jobs/mm:ecb337ff-772b-438e-8edb-938377b33a28/repo/specs/235-masked-conic-beam-geometry-layers/spec.md` 
+**Original Request Source**: `spec.md` Input and canonical Jira brief `spec.md` (Input) 
+**Jira issue**: MM-466 
+**Verdict**: FULLY_IMPLEMENTED 
+**Confidence**: HIGH 
 **Date**: 2026-04-22
 
 ## Test Results
@@ -54,7 +54,7 @@
 | DESIGN-REQ-006 | beam footprint tests | VERIFIED | Transparent majority, tail, head, and fade composition are covered. |
 | DESIGN-REQ-011 | content separation tests | VERIFIED | Declarative pseudostructure and content readability are covered. |
 | Constitution XI | `spec.md`, `plan.md`, `tasks.md`, `verification.md` | VERIFIED | Work followed Moon Spec artifacts and preserved traceability. |
-| Constitution XII | docs/tmp and specs artifacts | VERIFIED | Canonical docs were not converted into migration checklists. |
+| Constitution XII | local-only handoffs and specs artifacts | VERIFIED | Canonical docs were not converted into migration checklists. |
 
 ## Original Request Alignment
 

@@ -43,11 +43,9 @@ mock_user_instance = User(
     hashed_password="fake",
 )
 
-
 # This function will be used to override the get_current_user dependency
 def direct_override_get_current_user():
     return mock_user_instance
-
 
 # Mock get_user_api_key
 async def mock_get_user_api_key_logic(user: User, provider: str, db_session):
@@ -64,7 +62,6 @@ async def mock_get_user_api_key_logic(user: User, provider: str, db_session):
     # If provider is None or any other unhandled case:
     return None
 
-
 mock_user_api_key_dependency = AsyncMock(side_effect=mock_get_user_api_key_logic)
 
 # Mock database session
@@ -73,7 +70,6 @@ mock_db_session = AsyncMock()
 # Mock other app state dependencies
 mock_vector_index_dependency = MagicMock()
 mock_llama_settings_dependency = MagicMock()
-
 
 # Override dependencies in the app
 app.dependency_overrides[get_current_user] = (
@@ -95,13 +91,11 @@ original_model_cache_refresh_interval = getattr(
     settings, "model_cache_refresh_interval", 3600
 )
 
-
 def setup_module(module):
     """setup any state specific to the execution of the given module."""
     # Ensure model_cache is patched for all tests in this module if needed globally
     # Or patch it specifically within each test/fixture where it's used.
     pass
-
 
 def teardown_module(module):
     """teardown any state that was previously setup with a setup_module
@@ -111,7 +105,6 @@ def teardown_module(module):
     settings.google.google_api_key = original_google_api_key
     settings.model_cache_refresh_interval = original_model_cache_refresh_interval
     # patch.stopall() # Avoid stopping all patches if some are managed by pytest-mock or context managers
-
 
 @pytest.fixture(autouse=True)
 def force_auth_provider_disabled_for_tests(monkeypatch):
@@ -125,7 +118,6 @@ def force_auth_provider_disabled_for_tests(monkeypatch):
     monkeypatch.setattr(settings_in_chat_router.oidc, "AUTH_PROVIDER", "disabled")
     yield
 
-
 @pytest.fixture(autouse=True)  # Apply to all tests in this module
 def cleanup_singleton_cache():
     # This fixture ensures that the ModelCache singleton is reset before each test.
@@ -133,7 +125,6 @@ def cleanup_singleton_cache():
     with patch("moonmind.models_cache.ModelCache._instance", None):
         yield  # Test runs here
     # No explicit teardown needed here as the patch resets _instance for the next test's setup phase.
-
 
 @pytest.fixture
 def chat_request_openai_model():
@@ -144,7 +135,6 @@ def chat_request_openai_model():
         temperature=0.7,
     )
 
-
 @pytest.fixture
 def chat_request_google_model():
     return ChatCompletionRequest(
@@ -154,14 +144,12 @@ def chat_request_google_model():
         temperature=0.7,
     )
 
-
 @pytest.fixture
 def chat_request_unknown_model():
     return ChatCompletionRequest(
         model="unknown-model-123",
         messages=[Message(role="user", content="Hello Unknown")],
     )
-
 
 @pytest.fixture
 def mock_openai_chat_response():
@@ -209,7 +197,6 @@ def mock_openai_chat_response():
     mock_response.system_fingerprint = None
     return mock_response
 
-
 @pytest.fixture
 def mock_google_chat_response():
     mock_part = MagicMock()
@@ -221,7 +208,6 @@ def mock_google_chat_response():
     mock_response = MagicMock()
     mock_response.candidates = [mock_candidate]
     return mock_response
-
 
 # Test with model_cache integration
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
@@ -264,7 +250,6 @@ def test_chat_completions_openai_via_cache(
     mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
     mock_client_instance.chat.completions.create.assert_called_once()
 
-
 # Test with model_cache integration and corrected path
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
@@ -301,7 +286,6 @@ def test_chat_completions_endpoint_success_corrected_path(
     mock_get_provider.assert_called_once_with(chat_request_openai_model.model)
     mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
     mock_client_instance.chat.completions.create.assert_called_once()
-
 
 @patch("google.generativeai.configure")
 @patch("api_service.api.routers.chat.get_google_model")
@@ -351,7 +335,6 @@ def test_chat_completions_google_via_cache(
     mock_google_chat_model_instance.generate_content.assert_called_once()
     # No mock_is_enabled_google to assert anymore
 
-
 # Refined Google Error Handling Tests
 @patch("google.generativeai.configure")
 @patch("api_service.api.routers.chat.get_google_model")  # CORRECTED TARGET
@@ -381,7 +364,6 @@ def test_chat_completions_google_value_error_invalid_role(
     assert response.status_code == 400
     json_response = response.json()
     assert "Role or turn order error with Gemini API" in json_response["detail"]
-
 
 @patch("google.generativeai.configure")
 @patch("api_service.api.routers.chat.get_google_model")  # CORRECTED TARGET
@@ -414,7 +396,6 @@ def test_chat_completions_google_value_error_other_argument(
     json_response = response.json()
     assert f"Google Gemini API error: {error_message}" in json_response["detail"]
 
-
 # Cache behavior for unknown models
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
 @patch(
@@ -435,7 +416,6 @@ def test_chat_completions_model_not_found_initial_and_after_refresh(
     )
     mock_refresh_sync.assert_called_once()  # Ensure refresh was attempted
     assert mock_get_provider.call_count == 2
-
 
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.model_cache.refresh_models_sync")
@@ -465,7 +445,6 @@ def test_chat_completions_model_found_after_refresh_openai(
     assert mock_get_provider.call_count == 2
     # mock_acreate.assert_called_once() # This would be called if retry was fully implemented and led to a 200
 
-
 # API Key Checks (still relevant with cache)
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
@@ -482,7 +461,6 @@ def test_chat_completions_openai_no_api_key_with_cache(
     assert response.status_code == 400
     assert "Provide a key" in response.json()["detail"]
 
-
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 def test_chat_completions_google_no_api_key_with_cache(
@@ -497,7 +475,6 @@ def test_chat_completions_google_no_api_key_with_cache(
     response = client.post("/completions", json=chat_request_google_model.model_dump())
     assert response.status_code == 400
     assert "Provide a key" in response.json()["detail"]
-
 
 # General API errors after successful routing by cache
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
@@ -527,7 +504,6 @@ def test_chat_completions_openai_api_error_with_cache(
         in response.json()["detail"]  # This error message comes from the handler
     )
     mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
-
 
 @patch("google.generativeai.configure")
 @patch("api_service.api.routers.chat.get_google_model")  # CORRECTED TARGET
@@ -560,7 +536,6 @@ def test_chat_completions_google_api_error_with_cache(
         in response.json()["detail"]
     )
 
-
 # Test fixtures for provider enablement tests
 @pytest.fixture
 def chat_request_no_model():
@@ -571,7 +546,6 @@ def chat_request_no_model():
         temperature=0.7,
     )
 
-
 @pytest.fixture
 def chat_request_ollama_model():
     return ChatCompletionRequest(
@@ -580,7 +554,6 @@ def chat_request_ollama_model():
         max_tokens=50,
         temperature=0.7,
     )
-
 
 # Tests for provider enablement functionality
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
@@ -604,7 +577,6 @@ def test_chat_completions_openai_provider_disabled(
     # The error message comes from handle_openai_request in chat.py
     assert "OpenAI provider is disabled on the server." in json_response["detail"]
 
-
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
 # Removed patch for get_user_api_key
 def test_chat_completions_google_provider_disabled(
@@ -626,7 +598,6 @@ def test_chat_completions_google_provider_disabled(
     # The error message comes from handle_google_request in chat.py
     assert "Google provider is disabled on the server." in json_response["detail"]
 
-
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
 @patch("moonmind.factories.ollama_factory.chat_with_ollama", new_callable=AsyncMock)
 def test_chat_completions_ollama_provider_disabled(
@@ -642,7 +613,6 @@ def test_chat_completions_ollama_provider_disabled(
     json_response = response.json()
     # The error message comes from handle_ollama_request in chat.py
     assert "Ollama provider is disabled or not available." in json_response["detail"]
-
 
 # Test default model functionality
 @patch("api_service.api.routers.chat.model_cache.get_model_provider")
@@ -687,7 +657,6 @@ def test_chat_completions_uses_default_model(
     mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
     mock_client_instance.chat.completions.create.assert_called_once()
 
-
 # Test Ollama integration
 @pytest.fixture
 def mock_ollama_chat_response():
@@ -698,7 +667,6 @@ def mock_ollama_chat_response():
         },
         "done": True,
     }
-
 
 @patch(
     "moonmind.factories.ollama_factory.list_ollama_models", new_callable=AsyncMock
@@ -735,7 +703,6 @@ def test_chat_completions_ollama_success(
     )
     mock_router_chat_with_ollama.assert_called_once()
 
-
 @patch(
     "moonmind.factories.ollama_factory.list_ollama_models", new_callable=AsyncMock
 )  # Outermost
@@ -764,7 +731,6 @@ def test_chat_completions_ollama_api_error(
     assert response.status_code == 500
     json_response = response.json()
     assert "Ollama API error: Ollama connection error" in json_response["detail"]
-
 
 @patch(
     "moonmind.factories.ollama_factory.list_ollama_models", new_callable=AsyncMock

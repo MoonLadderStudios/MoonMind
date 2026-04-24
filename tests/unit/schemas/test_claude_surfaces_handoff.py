@@ -15,9 +15,7 @@ from moonmind.schemas import (
     classify_claude_execution_security_mode,
 )
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def _session(**overrides: object) -> ClaudeManagedSession:
     payload: dict[str, object] = {
@@ -32,7 +30,6 @@ def _session(**overrides: object) -> ClaudeManagedSession:
     }
     payload.update(overrides)
     return ClaudeManagedSession(**payload)
-
 
 def test_session_allows_one_primary_surface_and_multiple_projections() -> None:
     session = _session().with_surface_binding(
@@ -75,7 +72,6 @@ def test_session_allows_one_primary_surface_and_multiple_projections() -> None:
             updated_at=NOW,
         )
 
-
 def test_primary_binding_kind_must_match_session_primary_surface() -> None:
     with pytest.raises(ValidationError, match="primarySurface"):
         _session(
@@ -89,7 +85,6 @@ def test_primary_binding_kind_must_match_session_primary_surface() -> None:
                 ),
             ),
         )
-
 
 def test_primary_binding_update_preserves_primary_invariants() -> None:
     session = _session().with_surface_binding(
@@ -118,7 +113,6 @@ def test_primary_binding_update_preserves_primary_invariants() -> None:
             interactive=True,
             updated_at=NOW,
         )
-
 
 def test_surface_connection_updates_do_not_fail_session() -> None:
     session = _session().with_remote_projection(
@@ -156,7 +150,6 @@ def test_surface_connection_updates_do_not_fail_session() -> None:
             updated_at=NOW,
         )
 
-
 def test_resume_on_different_surface_preserves_identity_without_handoff() -> None:
     session = _session().with_surface_binding(
         surface_id="surface-terminal",
@@ -181,7 +174,6 @@ def test_resume_on_different_surface_preserves_identity_without_handoff() -> Non
         [b.projection_mode for b in resumed.surface_bindings].count("primary") == 1
     )
     assert resumed.surface_bindings[-1].surface_id == "surface-desktop"
-
 
 def test_cloud_handoff_carries_bounded_seed_refs_and_security_mode() -> None:
     source = _session()
@@ -237,11 +229,9 @@ def test_cloud_handoff_carries_bounded_seed_refs_and_security_mode() -> None:
             seed_artifact_refs=("artifact://" + "x" * 2_000,),
         )
 
-
 def test_handoff_lineage_fields_require_handoff_projection() -> None:
     with pytest.raises(ValidationError, match="handoff lineage fields"):
         _session(handoffFromSessionId="claude-session-source")
-
 
 def test_surface_binding_rejects_unsupported_values() -> None:
     with pytest.raises(ValidationError):
@@ -252,7 +242,6 @@ def test_surface_binding_rejects_unsupported_values() -> None:
             connectionState="connected",
             interactive=True,
         )
-
 
 @pytest.mark.parametrize(
     "event_name",
@@ -268,7 +257,6 @@ def test_surface_binding_rejects_unsupported_values() -> None:
 )
 def test_surface_lifecycle_event_names_are_documented(event_name: str) -> None:
     assert event_name in CLAUDE_SURFACE_LIFECYCLE_EVENT_NAMES
-
 
 def test_surface_lifecycle_event_validates_surface_and_handoff_shapes() -> None:
     attached = ClaudeSurfaceLifecycleEvent(

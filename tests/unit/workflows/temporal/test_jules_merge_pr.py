@@ -7,14 +7,11 @@ import pytest
 from moonmind.workflows.adapters.github_service import MergePRResult
 from moonmind.workflows.adapters.jules_client import JulesClient
 
-
 pytestmark = [pytest.mark.asyncio]
-
 
 # ---------------------------------------------------------------------------
 # JulesClient.merge_pull_request
 # ---------------------------------------------------------------------------
-
 
 async def test_merge_pull_request_rejects_invalid_url():
     """Non-GitHub PR URLs should return merged=False without calling the API."""
@@ -23,7 +20,6 @@ async def test_merge_pull_request_rejects_invalid_url():
     assert isinstance(result, MergePRResult)
     assert result.merged is False
     assert "Could not parse" in result.summary
-
 
 async def test_merge_pull_request_requires_github_token(monkeypatch):
     """Without GITHUB_TOKEN, the method should report an error instead of crashing."""
@@ -34,7 +30,6 @@ async def test_merge_pull_request_requires_github_token(monkeypatch):
     )
     assert result.merged is False
     assert "GITHUB_TOKEN" in result.summary
-
 
 async def test_merge_pull_request_success(monkeypatch):
     """When the GitHub API returns 200, we should see merged=True with the SHA."""
@@ -58,7 +53,6 @@ async def test_merge_pull_request_success(monkeypatch):
     assert result.merge_sha == "abc123def456"
     assert "owner/repo#42" in result.summary
 
-
 async def test_merge_pull_request_http_error(monkeypatch):
     """When the GitHub API returns an error status, merged=False with details."""
     import httpx
@@ -81,11 +75,9 @@ async def test_merge_pull_request_http_error(monkeypatch):
     assert result.merged is False
     assert "405" in result.summary
 
-
 # ---------------------------------------------------------------------------
 # JulesClient.update_pull_request_base
 # ---------------------------------------------------------------------------
-
 
 async def test_update_pull_request_base_rejects_invalid_url():
     """Non-GitHub PR URLs should fail without calling the API."""
@@ -97,7 +89,6 @@ async def test_update_pull_request_base_rejects_invalid_url():
     assert ok is False
     assert "Could not parse" in summary
 
-
 async def test_update_pull_request_base_requires_github_token(monkeypatch):
     """Without GITHUB_TOKEN, the method should report an error."""
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
@@ -108,7 +99,6 @@ async def test_update_pull_request_base_requires_github_token(monkeypatch):
     )
     assert ok is False
     assert "GITHUB_TOKEN" in summary
-
 
 async def test_update_pull_request_base_success(monkeypatch):
     """When the GitHub API returns 200, ok should be True."""
@@ -131,7 +121,6 @@ async def test_update_pull_request_base_success(monkeypatch):
     )
     assert ok is True
     assert "develop" in summary
-
 
 async def test_update_pull_request_base_http_error(monkeypatch):
     """When the GitHub API returns an error, ok should be False."""

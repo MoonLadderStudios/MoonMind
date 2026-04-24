@@ -11,7 +11,6 @@ from moonmind.rag.context_injection import ContextInjectionService
 from moonmind.rag.context_pack import ContextItem, ContextPack
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
-
 class FakePopen:
     def __init__(self, lines: list[str], *, returncode: int = 0) -> None:
         self.stdout = io.StringIO("".join(lines))
@@ -42,7 +41,6 @@ class FakePopen:
         self.killed = True
         self.returncode = -9
 
-
 @pytest.fixture
 def mock_request() -> AgentExecutionRequest:
     return AgentExecutionRequest(
@@ -54,7 +52,6 @@ def mock_request() -> AgentExecutionRequest:
         instructionRef="Original instruction",
         parameters={"repository": "test-repo"},
     )
-
 
 @pytest.mark.asyncio
 async def test_inject_context_disabled(mock_request: AgentExecutionRequest, tmp_path) -> None:
@@ -69,7 +66,6 @@ async def test_inject_context_disabled(mock_request: AgentExecutionRequest, tmp_
     assert result.items_count == 0
     assert result.artifact_path is None
     assert mock_request.instruction_ref == "Original instruction"
-
 
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
@@ -99,7 +95,6 @@ async def test_inject_context_enabled_with_items(
     assert "Original instruction" in result.instruction
     assert mock_request.instruction_ref == result.instruction
 
-
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
 async def test_inject_context_no_items(
@@ -124,7 +119,6 @@ async def test_inject_context_no_items(
     assert result.items_count == 0
     assert result.instruction == "Original instruction"
     assert mock_request.instruction_ref == "Original instruction"
-
 
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.subprocess.Popen")
@@ -162,7 +156,6 @@ async def test_inject_context_uses_local_fallback_when_retrieval_fails(
     assert "providerProfile is rendered in the details panel" in result.instruction
     assert mock_request.instruction_ref == result.instruction
 
-
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService._build_local_fallback_pack")
 @patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
@@ -185,7 +178,6 @@ async def test_inject_context_skips_local_fallback_for_explicit_disable_reason(
     assert result.items_count == 0
     assert result.artifact_path is None
 
-
 @patch("moonmind.rag.context_injection.subprocess.Popen")
 def test_build_local_fallback_pack_stops_after_max_items(mock_popen, tmp_path) -> None:
     service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})
@@ -204,7 +196,6 @@ def test_build_local_fallback_pack_stops_after_max_items(mock_popen, tmp_path) -
     assert len(pack.items) == 8
     assert process.terminated
 
-
 def test_parse_rg_match_line_normalizes_absolute_source(tmp_path) -> None:
     source, line_number, snippet = ContextInjectionService._parse_rg_match_line(
         f"{tmp_path / 'docs' / 'guide.md'}:14:matched text",
@@ -214,7 +205,6 @@ def test_parse_rg_match_line_normalizes_absolute_source(tmp_path) -> None:
     assert source == "docs/guide.md"
     assert line_number == 14
     assert snippet == "matched text"
-
 
 def test_extract_query_terms_keeps_domain_words() -> None:
     terms = ContextInjectionService._extract_query_terms(

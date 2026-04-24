@@ -5,7 +5,6 @@ from pydantic import BaseModel
 
 from api_service.db.models import ManagedAgentRateLimitPolicy, OAuthSessionStatus
 
-
 class ProviderProfileSummary(BaseModel):
     profile_id: str
     runtime_id: str
@@ -17,7 +16,6 @@ class ProviderProfileSummary(BaseModel):
     enabled: bool
     is_default: bool
     rate_limit_policy: str
-
 
 class CreateOAuthSessionRequest(BaseModel):
     runtime_id: str
@@ -31,7 +29,6 @@ class CreateOAuthSessionRequest(BaseModel):
     cooldown_after_429_seconds: int = 900
     rate_limit_policy: ManagedAgentRateLimitPolicy = ManagedAgentRateLimitPolicy.BACKOFF
 
-
 class OAuthSessionResponse(BaseModel):
     session_id: str
     runtime_id: str
@@ -44,7 +41,6 @@ class OAuthSessionResponse(BaseModel):
     failure_reason: Optional[str] = None
     created_at: Optional[datetime] = None
     profile_summary: Optional[ProviderProfileSummary] = None
-
 
 class OAuthTerminalAttachResponse(BaseModel):
     session_id: str

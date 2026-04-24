@@ -9,7 +9,6 @@ from moonmind.jules.status import (
     normalize_jules_status,
 )
 
-
 class TestNormalizeJulesStatus:
     """Verify every documented status category maps correctly."""
 

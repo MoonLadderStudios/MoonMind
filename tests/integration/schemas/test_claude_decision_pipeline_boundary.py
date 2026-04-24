@@ -15,9 +15,7 @@ from moonmind.schemas.managed_session_models import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def test_claude_decision_boundary_preserves_stage_order_and_hook_audit() -> None:
     decisions = [

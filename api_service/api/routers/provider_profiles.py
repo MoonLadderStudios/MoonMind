@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
 _claude_manual_validation_client: httpx.AsyncClient | None = None
 
-
 def validate_secret_refs_helper(value: dict[str, str] | None) -> dict[str, str] | None:
     if not value:
         return value
@@ -46,11 +45,9 @@ def validate_secret_refs_helper(value: dict[str, str] | None) -> dict[str, str] 
             raise ValueError(f"Invalid secret reference {v!r} for key {k!r}: {e}")
     return value
 
-
 # ---------------------------------------------------------------------------
 # Request / Response schemas
 # ---------------------------------------------------------------------------
-
 
 class ProviderProfileCreate(BaseModel):
     profile_id: str = Field(..., max_length=128)
@@ -112,7 +109,6 @@ class ProviderProfileCreate(BaseModel):
             volume_mount_path_field_name="volume_mount_path",
         )
         return self
-
 
 class ProviderProfileUpdate(BaseModel):
     provider_id: Optional[str] = Field(default=None, max_length=64)
@@ -194,11 +190,9 @@ class ProviderProfileResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
-
 class ClaudeManualAuthCommitRequest(BaseModel):
     token: str = Field(..., min_length=1, max_length=8192)
     account_label: Optional[str] = None
-
 
 class ClaudeManualAuthReadiness(BaseModel):
     connected: bool
@@ -207,7 +201,6 @@ class ClaudeManualAuthReadiness(BaseModel):
     launch_ready: bool
     failure_reason: Optional[str] = None
 
-
 class ClaudeManualAuthCommitResponse(BaseModel):
     status: str
     status_label: str
@@ -215,11 +208,9 @@ class ClaudeManualAuthCommitResponse(BaseModel):
     profile_id: str
     secret_ref: str
 
-
 # ---------------------------------------------------------------------------
 # Dependency: DB session
 # ---------------------------------------------------------------------------
-
 
 def _get_session() -> Any:
     """Return the session dependency. Resolved at import-time from the app."""
@@ -227,11 +218,9 @@ def _get_session() -> Any:
 
     return get_async_session
 
-
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
-
 
 @router.get("", response_model=list[ProviderProfileResponse])
 async def list_profiles(
@@ -255,7 +244,6 @@ async def list_profiles(
     rows = result.scalars().all()
     return [_row_to_dict(r) for r in rows if _can_view_profile(r, current_user)]
 
-
 @router.get("/{profile_id}", response_model=ProviderProfileResponse)
 async def get_profile(
     profile_id: str,
@@ -271,7 +259,6 @@ async def get_profile(
             detail="Not authorized to view this provider profile.",
         )
     return _row_to_dict(row)
-
 
 @router.post("", response_model=ProviderProfileResponse, status_code=201)
 async def create_profile(
@@ -326,7 +313,6 @@ async def create_profile(
 
     return _row_to_dict(profile)
 
-
 @router.patch("/{profile_id}", response_model=ProviderProfileResponse)
 async def update_profile(
     profile_id: str,
@@ -364,7 +350,6 @@ async def update_profile(
     await session.refresh(profile)
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
     return _row_to_dict(profile)
-
 
 @router.post(
     "/{profile_id}/manual-auth/commit",
@@ -466,7 +451,6 @@ async def commit_claude_manual_auth(
         },
     }
 
-
 @router.post("/{profile_id}/oauth/validate")
 async def validate_claude_oauth_profile(
     profile_id: str,
@@ -545,7 +529,6 @@ async def validate_claude_oauth_profile(
         else None,
     }
 
-
 @router.post("/{profile_id}/oauth/disconnect")
 async def disconnect_claude_oauth_profile(
     profile_id: str,
@@ -583,7 +566,6 @@ async def disconnect_claude_oauth_profile(
         "profile_id": profile.profile_id,
     }
 
-
 @router.delete("/{profile_id}", status_code=204)
 async def delete_profile(
     profile_id: str,
@@ -601,11 +583,9 @@ async def delete_profile(
     await session.commit()
     await sync_provider_profile_manager(session=session, runtime_id=runtime_id)
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 def _user_id(user: Any) -> str | None:
     raw = getattr(user, "id", None)
@@ -613,14 +593,12 @@ def _user_id(user: Any) -> str | None:
         return None
     return str(raw)
 
-
 def _can_view_profile(row: ManagedAgentProviderProfile, user: Any) -> bool:
     user_id = _user_id(user)
     if user_id is None or bool(getattr(user, "is_superuser", False)):
         return True
     owner_id = row.owner_user_id
     return owner_id is None or str(owner_id) == user_id
-
 
 def _require_profile_management(row: ManagedAgentProviderProfile, user: Any) -> None:
     user_id = _user_id(user)
@@ -633,7 +611,6 @@ def _require_profile_management(row: ManagedAgentProviderProfile, user: Any) -> 
         status_code=403,
         detail="Not authorized to manage this provider profile.",
     )
-
 
 def _validate_codex_oauth_profile_row(row: ManagedAgentProviderProfile) -> None:
     try:
@@ -655,7 +632,6 @@ def _validate_codex_oauth_profile_row(row: ManagedAgentProviderProfile) -> None:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-
 def _require_claude_anthropic_profile(row: ManagedAgentProviderProfile) -> None:
     if row.runtime_id != "claude_code" or row.provider_id != "anthropic":
         raise HTTPException(
@@ -663,14 +639,12 @@ def _require_claude_anthropic_profile(row: ManagedAgentProviderProfile) -> None:
             detail="Manual Claude auth is only supported for claude_code Anthropic profiles.",
         )
 
-
 def _claude_auth_actions_for_profile(row: ManagedAgentProviderProfile) -> list[str]:
     actions = ["use_api_key"]
     if row.volume_ref or row.volume_mount_path:
         actions.insert(0, "connect_oauth")
         actions.extend(["validate_oauth", "disconnect_oauth"])
     return actions
-
 
 def _update_claude_auth_behavior(
     row: ManagedAgentProviderProfile,
@@ -691,10 +665,8 @@ def _update_claude_auth_behavior(
     )
     row.command_behavior = behavior
 
-
 def _looks_like_claude_manual_token(token: str) -> bool:
     return token.startswith("sk-ant-") and len(token) >= 12
-
 
 def _claude_manual_secret_slug(profile_id: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", profile_id.lower()).strip("-")
@@ -702,7 +674,6 @@ def _claude_manual_secret_slug(profile_id: str) -> str:
         normalized = "claude-anthropic"
     digest = hashlib.sha256(profile_id.encode("utf-8")).hexdigest()[:16]
     return f"{normalized}-{digest}-token"
-
 
 async def _upsert_managed_secret(
     *,
@@ -728,7 +699,6 @@ async def _upsert_managed_secret(
     secret.details = {**(secret.details or {}), **details}
     secret.updated_at = datetime.now(UTC)
     return secret
-
 
 async def validate_claude_manual_token(token: str) -> None:
     headers = {
@@ -758,7 +728,6 @@ async def validate_claude_manual_token(token: str) -> None:
             detail="Claude token validation failed.",
         )
 
-
 def _get_claude_manual_validation_client() -> httpx.AsyncClient:
     global _claude_manual_validation_client
     if (
@@ -767,7 +736,6 @@ def _get_claude_manual_validation_client() -> httpx.AsyncClient:
     ):
         _claude_manual_validation_client = httpx.AsyncClient(timeout=10.0)
     return _claude_manual_validation_client
-
 
 def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
     payload = {
@@ -805,7 +773,6 @@ def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
         payload[key] = redact_sensitive_payload(payload[key])
     payload["file_templates"] = redact_profile_file_templates(payload["file_templates"])
     return payload
-
 
 from api_service.services.provider_profile_service import (
     normalize_runtime_default_profile,

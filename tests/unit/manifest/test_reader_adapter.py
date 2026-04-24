@@ -15,11 +15,9 @@ from moonmind.manifest.reader_adapter import (
     registered_types,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
 
 class MockReader:
     """A minimal ReaderAdapter implementation for testing."""
@@ -37,7 +35,6 @@ class MockReader:
     def state(self) -> Dict[str, Any]:
         return {"cursor": "abc123"}
 
-
 class IncompleteMockReader:
     """Missing the state() method — should NOT satisfy the protocol."""
 
@@ -47,7 +44,6 @@ class IncompleteMockReader:
     def fetch(self) -> Iterator[Tuple[str, Dict[str, Any]]]:
         yield ("text", {})
 
-
 @pytest.fixture(autouse=True)
 def _clean_registry():
     """Reset the adapter registry before each test."""
@@ -55,11 +51,9 @@ def _clean_registry():
     yield
     _reset_registry()
 
-
 # ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
-
 
 class TestProtocol:
     def test_mock_reader_satisfies_protocol(self):
@@ -70,11 +64,9 @@ class TestProtocol:
         reader = IncompleteMockReader()
         assert not isinstance(reader, ReaderAdapter)
 
-
 # ---------------------------------------------------------------------------
 # PlanResult
 # ---------------------------------------------------------------------------
-
 
 class TestPlanResult:
     def test_defaults(self):
@@ -88,11 +80,9 @@ class TestPlanResult:
         assert "docs=10" in repr(pr)
         assert "bytes=1024" in repr(pr)
 
-
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
-
 
 class TestRegistry:
     def test_register_and_get(self):
@@ -119,11 +109,9 @@ class TestRegistry:
         _reset_registry()
         assert registered_types() == []
 
-
 # ---------------------------------------------------------------------------
 # Adapter usage
 # ---------------------------------------------------------------------------
-
 
 class TestAdapterUsage:
     def test_plan_returns_result(self):

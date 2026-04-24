@@ -51,7 +51,7 @@ Test implications: none beyond final verify.
 ## FR-011 and SC-006 Traceability
 
 Decision: partial; preserve MM-492 through downstream artifacts and final verification.
-Evidence: `spec.md` and `docs/tmp/jira-orchestration-inputs/MM-492-moonspec-orchestration-input.md` already preserve the Jira issue key and original brief.
+Evidence: `spec.md` and `spec.md` (Input) already preserve the Jira issue key and original brief.
 Rationale: Traceability is partly satisfied but still needs plan/tasks/verification continuity.
 Alternatives considered: Treat spec-only traceability as complete. Rejected because the story explicitly requires downstream preservation.
 Test implications: traceability review during later tasks and final verification.

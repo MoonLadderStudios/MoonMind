@@ -6,9 +6,7 @@ module as part of the single-substrate migration.
 
 from __future__ import annotations
 
-
 class ManifestContractError(ValueError):
     """Raised when manifest payloads violate the contract."""
-
 
 __all__ = ["ManifestContractError"]

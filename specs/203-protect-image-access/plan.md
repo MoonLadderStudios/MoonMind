@@ -9,15 +9,15 @@ MM-374 requires image byte access and image-derived text handling to stay inside
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 for artifact, worker, vision, and task-contract boundaries; TypeScript/React for Mission Control image link behavior  
-**Primary Dependencies**: FastAPI, Pydantic v2, SQLAlchemy async fixtures, Temporal artifact service, React, Vitest, existing Codex worker helpers, existing vision service  
-**Storage**: Existing Temporal artifact metadata and artifact store; workspace-local `.moonmind/attachments_manifest.json` and `.moonmind/vision/*`; no new persistent storage  
-**Unit Testing**: `./tools/test_unit.sh tests/unit/workflows/temporal/test_artifact_authorization.py tests/unit/workflows/tasks/test_task_contract.py tests/unit/agents/codex_worker/test_worker.py` and focused Vitest via `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx`  
-**Integration Testing**: `./tools/test_integration.sh` for required `integration_ci` coverage when Docker is available; focused vision context integration via `pytest tests/integration/vision/test_context_artifacts.py -q` if local dependencies allow  
-**Target Platform**: MoonMind API service, Mission Control browser UI, managed worker containers, and per-run workspaces  
-**Project Type**: Web control plane plus Python workflow/runtime services  
-**Performance Goals**: Security checks and prompt warning rendering add no extra artifact-list requests and remain linear in prepared attachment count  
-**Constraints**: Do not expose durable credentials to browsers; do not introduce direct Jira/provider/object-store browser routes; do not trust extracted image text as instructions; preserve attachment refs exactly; no live Jira sync; preserve MM-374 traceability  
+**Language/Version**: Python 3.12 for artifact, worker, vision, and task-contract boundaries; TypeScript/React for Mission Control image link behavior 
+**Primary Dependencies**: FastAPI, Pydantic v2, SQLAlchemy async fixtures, Temporal artifact service, React, Vitest, existing Codex worker helpers, existing vision service 
+**Storage**: Existing Temporal artifact metadata and artifact store; workspace-local `.moonmind/attachments_manifest.json` and `.moonmind/vision/*`; no new persistent storage 
+**Unit Testing**: `./tools/test_unit.sh tests/unit/workflows/temporal/test_artifact_authorization.py tests/unit/workflows/tasks/test_task_contract.py tests/unit/agents/codex_worker/test_worker.py` and focused Vitest via `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx` 
+**Integration Testing**: `./tools/test_integration.sh` for required `integration_ci` coverage when Docker is available; focused vision context integration via `pytest tests/integration/vision/test_context_artifacts.py -q` if local dependencies allow 
+**Target Platform**: MoonMind API service, Mission Control browser UI, managed worker containers, and per-run workspaces 
+**Project Type**: Web control plane plus Python workflow/runtime services 
+**Performance Goals**: Security checks and prompt warning rendering add no extra artifact-list requests and remain linear in prepared attachment count 
+**Constraints**: Do not expose durable credentials to browsers; do not introduce direct Jira/provider/object-store browser routes; do not trust extracted image text as instructions; preserve attachment refs exactly; no live Jira sync; preserve MM-374 traceability 
 **Scale/Scope**: One independently testable security boundary story spanning existing image artifact access and runtime context handling
 
 ## Constitution Check
@@ -35,7 +35,7 @@ MM-374 requires image byte access and image-derived text handling to stay inside
 - IX. Resilient by Default: PASS. Unsupported or ambiguous attachment refs fail visibly or remain ungrouped instead of being rewritten.
 - X. Facilitate Continuous Improvement: PASS. Verification evidence maps each security boundary to tests.
 - XI. Spec-Driven Development: PASS. Artifacts preserve MM-374 and source design mappings before implementation.
-- XII. Canonical Documentation Separates Desired State from Migration Backlog: PASS. Canonical docs remain desired-state; implementation state lives in `specs/` and `docs/tmp/`.
+- XII. Canonical Documentation Separates Desired State from Migration Backlog: PASS. Canonical docs remain desired-state; implementation state lives in `specs/` and `local-only handoffs`.
 - XIII. Pre-release Compatibility Policy: PASS. No compatibility transforms or aliases are introduced.
 
 ## Project Structure
@@ -50,10 +50,10 @@ specs/203-protect-image-access/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── image-access-boundaries.md
+│ └── image-access-boundaries.md
 ├── tasks.md
 └── checklists/
-    └── requirements.md
+ └── requirements.md
 ```
 
 ### Source Code (repository root)
@@ -61,14 +61,14 @@ specs/203-protect-image-access/
 ```text
 moonmind/
 ├── agents/codex_worker/
-│   └── worker.py
+│ └── worker.py
 ├── vision/
-│   └── service.py
+│ └── service.py
 └── workflows/
-    ├── tasks/
-    │   └── task_contract.py
-    └── temporal/
-        └── artifacts.py
+ ├── tasks/
+ │ └── task_contract.py
+ └── temporal/
+ └── artifacts.py
 
 api_service/api/routers/
 └── temporal_artifacts.py
@@ -79,11 +79,11 @@ frontend/src/entrypoints/
 
 tests/
 ├── integration/vision/
-│   └── test_context_artifacts.py
+│ └── test_context_artifacts.py
 └── unit/
-    ├── agents/codex_worker/test_worker.py
-    ├── workflows/tasks/test_task_contract.py
-    └── workflows/temporal/test_artifact_authorization.py
+ ├── agents/codex_worker/test_worker.py
+ ├── workflows/tasks/test_task_contract.py
+ └── workflows/temporal/test_artifact_authorization.py
 ```
 
 **Structure Decision**: Keep behavior in the existing boundaries: artifact service authorization for byte access, Mission Control route selection for browser links, worker prepare for service-side materialization, `VisionService` for image-derived context text, and Codex worker prompt composition for runtime injection.

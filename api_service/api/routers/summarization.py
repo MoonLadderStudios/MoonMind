@@ -4,10 +4,8 @@ from urllib.parse import urlparse, urlunparse
 
 from pydantic import BaseModel, Field, HttpUrl
 
-
 class SummaryType(str, Enum):
     README = "readme"
-
 
 class RepositorySummarizationRequest(BaseModel):
     repo_url: HttpUrl
@@ -18,11 +16,9 @@ class RepositorySummarizationRequest(BaseModel):
         default=None, description="The language model to use for generation."
     )
 
-
 class RepositorySummarizationResponse(BaseModel):
     summary_content: str
     summary_type: SummaryType
-
 
 # Imports for helper functions and upcoming endpoint
 import logging
@@ -34,7 +30,6 @@ from api_service.services.profile_service import ProfileService
 
 logger = logging.getLogger(__name__)
 profile_service = ProfileService()
-
 
 async def get_user_github_token(user: User, db: AsyncSession) -> Optional[str]:
     """
@@ -53,7 +48,6 @@ async def get_user_github_token(user: User, db: AsyncSession) -> Optional[str]:
 
     logger.warning(f"No GitHub token configured for user {user.id}.")
     return None
-
 
 async def get_user_llm_api_key(
     user: User, provider: str, db: AsyncSession
@@ -89,7 +83,6 @@ async def get_user_llm_api_key(
     )
     return None
 
-
 def sanitize_repo_url(repo_url: str) -> str:
     """Redact URL credentials before logging or returning errors."""
     parsed = urlparse(repo_url)
@@ -99,7 +92,6 @@ def sanitize_repo_url(repo_url: str) -> str:
     host = parsed.netloc.rsplit("@", 1)[1]
     sanitized_netloc = f"***REDACTED***@{host}"
     return urlunparse(parsed._replace(netloc=sanitized_netloc))
-
 
 def redact_sensitive_git_error(
     error_message: str,
@@ -114,7 +106,6 @@ def redact_sensitive_git_error(
     if github_token:
         sanitized_error = sanitized_error.replace(github_token, "***REDACTED***")
     return sanitized_error
-
 
 import os
 import tempfile
@@ -146,7 +137,6 @@ except Exception as exc:  # pragma: no cover - optional dependency
     logging.getLogger(__name__).warning("ReadmeAiGenerator unavailable: %s", exc)
 
 router = APIRouter()
-
 
 @router.post("/repository", response_model=RepositorySummarizationResponse)
 async def summarize_repository(

@@ -14,11 +14,9 @@ from moonmind.workflows.adapters.github_service import (
     PullRequestReadinessResult,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 def _mock_response(status_code: int, json_body: dict) -> httpx.Response:
     """Build a mock httpx response."""
@@ -28,7 +26,6 @@ def _mock_response(status_code: int, json_body: dict) -> httpx.Response:
         request=httpx.Request("POST", "https://api.github.com/test"),
     )
 
-
 def _mock_get_response(status_code: int, json_body: dict | list) -> httpx.Response:
     """Build a mock httpx GET response."""
     return httpx.Response(
@@ -37,11 +34,9 @@ def _mock_get_response(status_code: int, json_body: dict | list) -> httpx.Respon
         request=httpx.Request("GET", "https://api.github.com/test"),
     )
 
-
 # ---------------------------------------------------------------------------
 # create_pull_request
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_create_pr_success(monkeypatch):
@@ -72,7 +67,6 @@ async def test_create_pr_success(monkeypatch):
     assert result.url == "https://github.com/o/r/pull/42"
     assert result.head_sha == "abc123"
 
-
 @pytest.mark.asyncio
 async def test_create_pr_missing_token(monkeypatch):
     """Missing GITHUB_TOKEN should return created=False gracefully."""
@@ -86,7 +80,6 @@ async def test_create_pr_missing_token(monkeypatch):
     assert isinstance(result, CreatePRResult)
     assert result.created is False
     assert "GitHub auth is not configured" in result.summary
-
 
 @pytest.mark.asyncio
 async def test_create_pr_uses_secret_ref_when_env_missing(monkeypatch):
@@ -131,7 +124,6 @@ async def test_create_pr_uses_secret_ref_when_env_missing(monkeypatch):
     _, kwargs = mock_client.post.call_args
     assert kwargs["headers"]["Authorization"] == "Bearer resolved-gh-token"
 
-
 @pytest.mark.asyncio
 async def test_create_pr_http_error(monkeypatch):
     """HTTP 422 from GitHub should return created=False."""
@@ -154,11 +146,9 @@ async def test_create_pr_http_error(monkeypatch):
     assert result.created is False
     assert "422" in result.summary
 
-
 # ---------------------------------------------------------------------------
 # merge_pull_request
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_merge_pr_success(monkeypatch):
@@ -182,7 +172,6 @@ async def test_merge_pr_success(monkeypatch):
     assert result.merged is True
     assert result.merge_sha == "abc123"
 
-
 @pytest.mark.asyncio
 async def test_merge_pr_invalid_url():
     """Non-GitHub URL should return merged=False."""
@@ -191,7 +180,6 @@ async def test_merge_pr_invalid_url():
 
     assert result.merged is False
     assert "Could not parse" in result.summary
-
 
 @pytest.mark.asyncio
 async def test_merge_pr_missing_token(monkeypatch):
@@ -206,26 +194,21 @@ async def test_merge_pr_missing_token(monkeypatch):
     assert result.merged is False
     assert "GitHub auth is not configured" in result.summary
 
-
 # ---------------------------------------------------------------------------
 # parse_github_pr_url
 # ---------------------------------------------------------------------------
-
 
 def test_parse_valid_url():
     assert GitHubService.parse_github_pr_url(
         "https://github.com/owner/repo/pull/42"
     ) == ("owner", "repo", "42")
 
-
 def test_parse_invalid_url():
     assert GitHubService.parse_github_pr_url("https://example.com/foo") is None
-
 
 # ---------------------------------------------------------------------------
 # evaluate_pull_request_readiness
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_waits_for_running_checks(monkeypatch):
@@ -265,7 +248,6 @@ async def test_evaluate_pull_request_readiness_waits_for_running_checks(monkeypa
     assert result.checks_complete is False
     assert result.blockers[0]["kind"] == "checks_running"
 
-
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_opens_after_checks_and_review(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
@@ -304,7 +286,6 @@ async def test_evaluate_pull_request_readiness_opens_after_checks_and_review(mon
     assert result.blockers == []
     assert result.checks_passing is True
     assert result.automated_review_complete is True
-
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_ignores_empty_combined_status_pending_when_checks_pass(
@@ -346,7 +327,6 @@ async def test_evaluate_pull_request_readiness_ignores_empty_combined_status_pen
     assert result.checks_passing is True
     assert result.blockers == []
 
-
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_respects_failed_combined_status_without_check_runs(
     monkeypatch,
@@ -379,7 +359,6 @@ async def test_evaluate_pull_request_readiness_respects_failed_combined_status_w
     assert result.checks_complete is True
     assert result.checks_passing is False
     assert result.blockers == []
-
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_treats_commented_automated_review_as_complete(
@@ -429,7 +408,6 @@ async def test_evaluate_pull_request_readiness_treats_commented_automated_review
     assert result.ready is True
     assert result.automated_review_complete is True
     assert result.blockers == []
-
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_treats_codex_thumbs_up_reaction_as_complete(
@@ -484,7 +462,6 @@ async def test_evaluate_pull_request_readiness_treats_codex_thumbs_up_reaction_a
     assert result.automated_review_complete is True
     assert result.blockers == []
 
-
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_ignores_non_codex_thumbs_up_reaction(
     monkeypatch,
@@ -537,7 +514,6 @@ async def test_evaluate_pull_request_readiness_ignores_non_codex_thumbs_up_react
     assert result.ready is False
     assert result.automated_review_complete is False
     assert result.blockers[0]["kind"] == "automated_review_pending"
-
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_checks_paginated_codex_reactions(
@@ -608,7 +584,6 @@ async def test_evaluate_pull_request_readiness_checks_paginated_codex_reactions(
     assert result.automated_review_complete is True
     assert result.blockers == []
 
-
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_waits_for_human_commented_review(
     monkeypatch,
@@ -659,7 +634,6 @@ async def test_evaluate_pull_request_readiness_waits_for_human_commented_review(
     assert result.automated_review_complete is False
     assert result.blockers[0]["kind"] == "automated_review_pending"
 
-
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_reports_merged_closed_pr(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
@@ -691,7 +665,6 @@ async def test_evaluate_pull_request_readiness_reports_merged_closed_pr(monkeypa
     assert result.head_sha == "def456"
     assert result.blockers == []
     mock_client.get.assert_called_once()
-
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_blocks_changes_requested_review(monkeypatch):

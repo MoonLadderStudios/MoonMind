@@ -17,7 +17,7 @@ Use `./tools/test_integration.sh` for the full hermetic `integration_ci` suite w
 ## Traceability Validation
 
 ```bash
-rg -n "MM-495|DESIGN-REQ-011|DESIGN-REQ-017|DESIGN-REQ-018" specs/231-sensitive-report-access-retention docs/tmp/jira-orchestration-inputs/MM-495-moonspec-orchestration-input.md
+rg -n "MM-495|DESIGN-REQ-011|DESIGN-REQ-017|DESIGN-REQ-018" specs/231-sensitive-report-access-retention
 ```
 
 ## Expected Results

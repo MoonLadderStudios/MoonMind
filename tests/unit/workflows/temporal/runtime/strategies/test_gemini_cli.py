@@ -28,7 +28,6 @@ def _make_profile(
         runtime_id=runtime_id,
     )
 
-
 def _make_request(
     *,
     instruction_ref: str | None = None,
@@ -39,11 +38,9 @@ def _make_request(
         parameters=parameters or {},
     )
 
-
 # ---------------------------------------------------------------------------
 # Registry tests (DOC-REQ-002 / FR-004)
 # ---------------------------------------------------------------------------
-
 
 class TestRegistry:
     def test_gemini_cli_registered(self) -> None:
@@ -57,11 +54,9 @@ class TestRegistry:
     def test_get_strategy_missing_returns_none(self) -> None:
         assert get_strategy("unknown_runtime") is None
 
-
 # ---------------------------------------------------------------------------
 # GeminiCliStrategy property tests (DOC-REQ-003 / FR-005)
 # ---------------------------------------------------------------------------
-
 
 class TestGeminiCliProperties:
     def test_runtime_id(self) -> None:
@@ -76,11 +71,9 @@ class TestGeminiCliProperties:
         s = GeminiCliStrategy()
         assert s.default_auth_mode == "api_key"
 
-
 # ---------------------------------------------------------------------------
 # build_command tests (DOC-REQ-003 validation)
 # ---------------------------------------------------------------------------
-
 
 class TestGeminiCliBuildCommand:
     """Verify strategy produces identical output to the legacy elif block."""
@@ -187,11 +180,9 @@ class TestGeminiCliBuildCommand:
             "--yolo", "--prompt", "Test",
         ]
 
-
 # ---------------------------------------------------------------------------
 # shape_environment tests (DOC-REQ-006 / FR-006)
 # ---------------------------------------------------------------------------
-
 
 class TestGeminiCliShapeEnvironment:
     def test_passes_through_gemini_keys(self) -> None:
@@ -233,11 +224,9 @@ class TestGeminiCliShapeEnvironment:
             
         assert result == {}
 
-
 # ---------------------------------------------------------------------------
 # Launcher delegation / fallthrough tests (DOC-REQ-004 / FR-007)
 # ---------------------------------------------------------------------------
-
 
 class TestLauncherDelegation:
     """Verify the launcher's build_command delegates correctly."""

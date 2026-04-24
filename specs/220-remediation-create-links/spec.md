@@ -3,12 +3,12 @@
 **Feature Branch**: `220-remediation-create-links`
 **Created**: 2026-04-21
 **Status**: Draft
-**Input**: Jira Orchestrate for MM-431 using `docs/tmp/jira-orchestration-inputs/MM-431-moonspec-orchestration-input.md` as the canonical MoonSpec orchestration input.
+**Input**: Jira Orchestrate for MM-431 using `spec.md` (Input) as the canonical MoonSpec orchestration input.
 
 Source story: STORY-001.
 Source summary: Accept remediation create requests and persist target links.
 Source Jira issue: MM-431.
-Original brief reference: `docs/tmp/jira-orchestration-inputs/MM-431-moonspec-orchestration-input.md`.
+Original brief reference: `spec.md` (Input).
 
 Use the existing Jira Orchestrate workflow for this Jira issue. Do not run implementation inline inside the breakdown task.
 

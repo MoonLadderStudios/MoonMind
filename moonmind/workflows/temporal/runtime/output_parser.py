@@ -44,7 +44,6 @@ class ParsedOutput:
     rate_limited: bool = False
     has_structured_output: bool = False
 
-
 class RuntimeOutputParser(ABC):
     """Protocol for parsing runtime-specific structured output."""
 
@@ -55,7 +54,6 @@ class RuntimeOutputParser(ABC):
     @abstractmethod
     def parse_stream_chunk(self, chunk: str) -> list[dict]:
         """Parse a chunk of streamed text and extract structured events."""
-
 
 class PlainTextOutputParser(RuntimeOutputParser):
     """Default parser that treats output as plain text.
@@ -86,7 +84,6 @@ class PlainTextOutputParser(RuntimeOutputParser):
     def parse_stream_chunk(self, chunk: str) -> list[dict]:
         return []
 
-
 def _extract_matching_lines(
     markers: tuple[str, ...],
     *texts: str,
@@ -104,14 +101,12 @@ def _extract_matching_lines(
                 matches.append(stripped)
     return matches
 
-
 def _last_nonempty_line(text: str) -> str | None:
     for line in reversed(text.splitlines()):
         stripped = line.strip()
         if stripped:
             return stripped
     return None
-
 
 class CodexCliOutputParser(PlainTextOutputParser):
     """Plain-text parser with Codex-specific managed-runtime blocker detection."""
@@ -146,7 +141,6 @@ class CodexCliOutputParser(PlainTextOutputParser):
             rate_limited=base.rate_limited,
             has_structured_output=base.has_structured_output,
         )
-
 
 class GeminiCliOutputParser(PlainTextOutputParser):
     """Plain-text parser with Gemini-specific 429/capacity detection."""
@@ -191,7 +185,6 @@ class GeminiCliOutputParser(PlainTextOutputParser):
                 }
             )
         return events
-
 
 class NdjsonOutputParser(RuntimeOutputParser):
     """Parser for Cursor CLI's NDJSON (``--output-format stream-json``) output.

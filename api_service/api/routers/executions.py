@@ -131,7 +131,6 @@ _GITHUB_PULL_REQUEST_PATH_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-
 class RemediationApprovalStateModel(BaseModel):
     requestId: str | None = None
     actionKind: str | None = None
@@ -143,7 +142,6 @@ class RemediationApprovalStateModel(BaseModel):
     decisionAt: datetime | None = None
     canDecide: bool = False
     auditRef: str | None = None
-
 
 class RemediationLinkSummaryModel(BaseModel):
     remediationWorkflowId: str
@@ -162,16 +160,13 @@ class RemediationLinkSummaryModel(BaseModel):
     createdAt: datetime
     updatedAt: datetime
 
-
 class RemediationLinksResponseModel(BaseModel):
     direction: str
     items: list[RemediationLinkSummaryModel]
 
-
 class RemediationApprovalDecisionRequest(BaseModel):
     decision: str
     comment: str | None = None
-
 
 class RemediationApprovalDecisionResponse(BaseModel):
     accepted: bool
@@ -193,13 +188,11 @@ _TASK_INPUT_SNAPSHOT_CONTENT_TYPE = (
 _TASK_INPUT_SNAPSHOT_LINK_TYPE = "input.original_snapshot"
 _TASK_INPUT_SNAPSHOT_VERSION = 1
 
-
 def _bounded_metric_tag(value: object | None, *, fallback: str = "unknown") -> str:
     normalized = str(value or "").strip()
     if not normalized:
         return fallback
     return re.sub(r"[^a-zA-Z0-9_.-]", "_", normalized)[:80] or fallback
-
 
 def _emit_task_editing_metric(
     event: str,
@@ -231,37 +224,30 @@ def _emit_task_editing_metric(
     except Exception:
         return
 
-
 def _enum_value(value: object | None) -> str | None:
     if value is None:
         return None
     return getattr(value, "value", value)
 
-
 @lru_cache(maxsize=1)
 def get_temporal_client_adapter() -> TemporalClientAdapter:
     return TemporalClientAdapter()
-
 
 async def get_temporal_client(
     adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
 ) -> Client:
     return await adapter.get_client()
 
-
 def _is_execution_admin(user: User | None) -> bool:
     return bool(user and getattr(user, "is_superuser", False))
-
 
 def _owner_id(user: User | None) -> str | None:
     value = getattr(user, "id", None)
     return str(value) if value is not None else None
 
-
 def _canonicalize_execution_identifier(raw_identifier: str) -> tuple[str, bool]:
     canonical = TemporalExecutionRecord.canonicalize_identifier(raw_identifier)
     return canonical, canonical != raw_identifier
-
 
 def _mark_execution_alias_usage(
     response: Response, *, raw_identifier: str, canonical_identifier: str
@@ -271,7 +257,6 @@ def _mark_execution_alias_usage(
     response.headers["Deprecation"] = "true"
     response.headers["X-MoonMind-Canonical-WorkflowId"] = canonical_identifier
     response.headers["X-MoonMind-Deprecated-Identifier"] = raw_identifier
-
 
 def _compatibility_refreshed_at(record, now: datetime | None = None) -> datetime:
     refreshed_at = (
@@ -287,10 +272,8 @@ def _compatibility_refreshed_at(record, now: datetime | None = None) -> datetime
         return refreshed_at
     return refreshed_at.replace(tzinfo=UTC)
 
-
 def _manifest_attr(manifest_status, field: str, default=None):
     return getattr(manifest_status, field, default) if manifest_status else default
-
 
 def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
     owner_type = str(search_attributes.get("mm_owner_type") or "").strip().lower()
@@ -298,7 +281,6 @@ def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
         return owner_type
     owner_id = str(record.owner_id or "").strip().lower()
     return "system" if owner_id == "system" or not owner_id else "user"
-
 
 def _coerce_temporal_scalar(value: object | None) -> str:
     if isinstance(value, (list, tuple)):
@@ -313,7 +295,6 @@ def _coerce_temporal_scalar(value: object | None) -> str:
         return ""
     return str(value).strip()
 
-
 def _dedupe_non_blank(items: list[str]) -> list[str]:
     deduped: list[str] = []
     seen: set[str] = set()
@@ -324,7 +305,6 @@ def _dedupe_non_blank(items: list[str]) -> list[str]:
         seen.add(normalized)
         deduped.append(normalized)
     return deduped
-
 
 def _skill_selector_names(raw: object | None) -> list[str] | None:
     if isinstance(raw, list):
@@ -344,7 +324,6 @@ def _skill_selector_names(raw: object | None) -> list[str] | None:
             else:
                 names.append(_coerce_temporal_scalar(item))
     return _dedupe_non_blank(names) or None
-
 
 def _task_template_primary_skill_name(task_payload: Mapping[str, Any]) -> str | None:
     task_template = task_payload.get("taskTemplate") or task_payload.get(
@@ -374,26 +353,22 @@ def _task_template_primary_skill_name(task_payload: Mapping[str, Any]) -> str | 
 
     return None
 
-
 def _first_mapping(*candidates: object | None) -> Mapping[str, Any]:
     for candidate in candidates:
         if isinstance(candidate, Mapping):
             return candidate
     return {}
 
-
 def _coerce_skill_bool(value: object | None) -> bool | None:
     if isinstance(value, bool):
         return value
     return None
-
 
 def _mapping_value(raw: Mapping[str, Any], *keys: str) -> object | None:
     for key in keys:
         if key in raw:
             return raw[key]
     return None
-
 
 def _selected_skill_versions(raw: object | None) -> list[ExecutionSkillVersionSummaryModel]:
     if not isinstance(raw, list):
@@ -441,7 +416,6 @@ def _selected_skill_versions(raw: object | None) -> list[ExecutionSkillVersionSu
         )
     return versions
 
-
 def _skill_provenance_from_versions(
     versions: list[ExecutionSkillVersionSummaryModel],
 ) -> list[ExecutionSkillProvenanceModel]:
@@ -457,7 +431,6 @@ def _skill_provenance_from_versions(
             )
         )
     return provenance
-
 
 def _skill_source_provenance(
     raw: object | None,
@@ -509,7 +482,6 @@ def _skill_source_provenance(
         provenance.append(entry)
     return provenance
 
-
 def _projection_diagnostic(raw: object | None) -> ExecutionProjectionDiagnosticModel | None:
     if not isinstance(raw, Mapping):
         return None
@@ -539,7 +511,6 @@ def _projection_diagnostic(raw: object | None) -> ExecutionProjectionDiagnosticM
     ):
         return diagnostic
     return None
-
 
 def _skill_lifecycle_intent(
     *,
@@ -586,7 +557,6 @@ def _skill_lifecycle_intent(
         resolutionMode=resolution_mode,
         explanation=explanation,
     )
-
 
 def _skill_runtime_evidence(
     *,
@@ -692,7 +662,6 @@ def _skill_runtime_evidence(
         lifecycleIntent=lifecycle_intent,
     )
 
-
 def _normalize_entry_value(value: object | None) -> str | None:
     candidate = _coerce_temporal_scalar(value).lower()
     if not candidate:
@@ -710,7 +679,6 @@ def _normalize_entry_value(value: object | None) -> str | None:
                 return first
     return None
 
-
 def _normalize_github_pull_request_url(value: object | None) -> str | None:
     candidate = _coerce_temporal_scalar(value)
     if not candidate:
@@ -725,7 +693,6 @@ def _normalize_github_pull_request_url(value: object | None) -> str | None:
     if not _GITHUB_PULL_REQUEST_PATH_PATTERN.fullmatch(normalized_path):
         return None
     return f"https://github.com{normalized_path}"
-
 
 def _extract_execution_pr_url(
     memo: Mapping[str, object],
@@ -744,7 +711,6 @@ def _extract_execution_pr_url(
             return normalized
     return None
 
-
 def _resolve_execution_entry(record, search_attributes: dict[str, object]) -> str:
     entry = _normalize_entry_value(search_attributes.get("mm_entry"))
     if entry:
@@ -760,7 +726,6 @@ def _resolve_execution_entry(record, search_attributes: dict[str, object]) -> st
     if workflow_type.endswith("manifestingest"):
         return "manifest"
     return "run"
-
 
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
@@ -784,7 +749,6 @@ async def _get_service(
             settings.temporal.manifest_continue_as_new_phase_threshold
         ),
     )
-
 
 def _ensure_actions_enabled() -> None:
     """FastAPI dependency: raise 403 when Temporal execution actions are disabled."""
@@ -813,7 +777,6 @@ def _ensure_submit_enabled() -> None:
             },
         )
 
-
 def _derive_full_task_instructions(task_payload: Mapping[str, Any]) -> str | None:
     sections: list[str] = []
     task_instructions = str(task_payload.get("instructions") or "").strip()
@@ -838,7 +801,6 @@ def _derive_full_task_instructions(task_payload: Mapping[str, Any]) -> str | Non
         return "\n\n".join(sections)
     return None
 
-
 def _normalize_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -851,7 +813,6 @@ def _normalize_string_list(value: Any) -> list[str]:
         seen.add(candidate)
         normalized.append(candidate)
     return normalized
-
 
 def _normalize_merge_automation_visibility_payload(
     payload: Any,
@@ -902,7 +863,6 @@ def _normalize_merge_automation_visibility_payload(
             exc_info=True,
         )
         return None
-
 
 def _serialize_execution(
     record, *, include_artifact_refs: bool = True, user: Optional["User"] = None
@@ -1356,7 +1316,6 @@ async def _enrich_execution_dependencies(
         }
     )
 
-
 async def _resolver_child_observability(
     *,
     temporal_client: Client,
@@ -1401,7 +1360,6 @@ async def _resolver_child_observability(
         status=child_status,
         detailHref=f"/tasks/{quote(workflow_id, safe='')}?source=temporal",
     )
-
 
 async def _enrich_execution_merge_automation(
     execution: ExecutionModel,
@@ -1454,7 +1412,6 @@ async def _enrich_execution_merge_automation(
 
     return execution.model_copy(update={"merge_automation": normalized})
 
-
 def _build_execution_artifact_ref_model(artifact: Any) -> ArtifactRefModel:
     compact_ref = build_artifact_ref(artifact)
     return ArtifactRefModel(
@@ -1467,13 +1424,11 @@ def _build_execution_artifact_ref_model(artifact: Any) -> ArtifactRefModel:
         diagnostics=None,
     )
 
-
 def _select_complete_execution_artifact(artifacts: list[Any]) -> Any | None:
     for artifact in artifacts:
         if getattr(artifact, "status", None) is TemporalArtifactStatus.COMPLETE:
             return artifact
     return None
-
 
 async def _hydrate_execution_report_projection(
     execution: ExecutionModel,
@@ -1567,7 +1522,6 @@ async def _hydrate_execution_report_projection(
         )
         return execution
 
-
 async def _hydrate_provider_profile_metadata(
     execution: ExecutionModel, session: AsyncSession | None
 ) -> ExecutionModel:
@@ -1594,13 +1548,11 @@ async def _hydrate_provider_profile_metadata(
         }
     )
 
-
 def _managed_run_store_root() -> str:
     return os.path.join(
         os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
         "managed_runs",
     )
-
 
 def _resolve_task_run_ids_from_managed_store(
     workflow_ids: tuple[str, ...]
@@ -1630,7 +1582,6 @@ def _resolve_task_run_ids_from_managed_store(
         if run_id:
             resolved[workflow_id] = run_id
     return resolved
-
 
 async def _enrich_step_ledger_task_run_refs(payload: Any) -> Any:
     if not isinstance(payload, Mapping):
@@ -1724,7 +1675,6 @@ async def _enrich_step_ledger_task_run_refs(payload: Any) -> Any:
     enriched_payload["steps"] = enriched_steps
     return enriched_payload
 
-
 async def _load_execution_progress(
     *,
     temporal_client: Client,
@@ -1762,7 +1712,6 @@ async def _load_execution_progress(
             exc_info=True,
         )
         return None, None
-
 
 async def _load_execution_step_ledger(
     *,
@@ -1808,7 +1757,6 @@ async def _load_execution_step_ledger(
                 "message": "Execution step ledger query returned an invalid payload.",
             },
         ) from exc
-
 
 def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     raw_state = str(record.state.value).strip().lower()
@@ -1920,7 +1868,6 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         disabled_reasons=disabled_reasons,
     )
 
-
 def _build_debug_fields(
     *,
     record,
@@ -1943,7 +1890,6 @@ def _build_debug_fields(
         attention_required=attention_required,
     )
 
-
 def _coerce_artifact_ref(value: Any) -> str | None:
     if value is None:
         return None
@@ -1956,7 +1902,6 @@ def _coerce_artifact_ref(value: Any) -> str | None:
             if candidate:
                 return candidate
     return None
-
 
 def _parse_intervention_audit_entries(
     memo: Mapping[str, object],
@@ -1990,7 +1935,6 @@ def _parse_intervention_audit_entries(
         )
     return entries
 
-
 def _invalid_task_request(message: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -1999,7 +1943,6 @@ def _invalid_task_request(message: str) -> HTTPException:
             "message": message,
         },
     )
-
 
 def _validation_error_code(message: str) -> str:
     if message.startswith("Dependency not found:"):
@@ -2018,7 +1961,6 @@ def _validation_error_code(message: str) -> str:
         return "dependency_limit_exceeded"
     return "invalid_execution_request"
 
-
 def _coerce_string_list(value: Any, *, field_name: str) -> list[str]:
     if value is None:
         return []
@@ -2036,10 +1978,8 @@ def _coerce_string_list(value: Any, *, field_name: str) -> list[str]:
             normalized.append(candidate)
     return normalized
 
-
 def _coerce_mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
-
 
 def _coerce_step_count(value: Any) -> int:
     if value is None:
@@ -2048,16 +1988,13 @@ def _coerce_step_count(value: Any) -> int:
         raise _invalid_task_request("payload.task.steps must be a JSON array.")
     return len(value)
 
-
 _ATTACHMENT_REF_KEYS = frozenset(
     {"artifactId", "filename", "contentType", "sizeBytes"}
 )
 _FORBIDDEN_ATTACHMENT_CONTENT_TYPES = frozenset({"image/svg+xml"})
 
-
 def _normalized_attachment_content_type(value: object) -> str:
     return str(value or "").split(";", 1)[0].strip().lower()
-
 
 def _allowed_attachment_content_types() -> set[str]:
     configured = {
@@ -2067,7 +2004,6 @@ def _allowed_attachment_content_types() -> set[str]:
     configured.discard("")
     configured.difference_update(_FORBIDDEN_ATTACHMENT_CONTENT_TYPES)
     return configured or {"image/png", "image/jpeg", "image/webp"}
-
 
 def _normalize_attachment_ref(raw: Any, *, field_name: str) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
@@ -2114,7 +2050,6 @@ def _normalize_attachment_ref(raw: Any, *, field_name: str) -> dict[str, Any]:
         "sizeBytes": size_bytes,
     }
 
-
 def _normalize_attachment_ref_list(raw: Any, *, field_name: str) -> list[dict[str, Any]]:
     if raw is None:
         return []
@@ -2124,7 +2059,6 @@ def _normalize_attachment_ref_list(raw: Any, *, field_name: str) -> list[dict[st
         _normalize_attachment_ref(item, field_name=f"{field_name}[{index}]")
         for index, item in enumerate(raw)
     ]
-
 
 async def _validate_and_collect_task_input_attachments(
     *,
@@ -2242,7 +2176,6 @@ async def _validate_and_collect_task_input_attachments(
 
     return objective_refs, step_refs, attachment_index
 
-
 def _normalize_task_skill_selectors(
     raw: Any, *, field_name: str
 ) -> dict[str, Any] | None:
@@ -2258,7 +2191,6 @@ def _normalize_task_skill_selectors(
     except (TaskContractError, ValidationError, ValueError) as exc:
         raise _invalid_task_request(str(exc)) from exc
 
-
 def _normalize_task_proposal_policy(raw: Any) -> dict[str, Any] | None:
     if raw is None:
         return None
@@ -2271,7 +2203,6 @@ def _normalize_task_proposal_policy(raw: Any) -> dict[str, Any] | None:
         )
     except (TaskContractError, ValidationError, ValueError) as exc:
         raise _invalid_task_request(str(exc)) from exc
-
 
 def _normalize_task_input_attachments(
     raw: Any, *, field_name: str
@@ -2292,7 +2223,6 @@ def _normalize_task_input_attachments(
             raise _invalid_task_request(f"{field_name}[{index}]: {exc}") from exc
         normalized.append(attachment)
     return normalized
-
 
 def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
     raw_steps = task_payload.get("steps")
@@ -2401,7 +2331,6 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     return normalized_steps
 
-
 def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
     publish_payload = _coerce_mapping(raw_publish)
     if not publish_payload:
@@ -2434,7 +2363,6 @@ def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
         normalized["prBaseBranch"] = normalized["baseBranch"]
     return normalized
 
-
 def _task_publish_skill_id(
     task_payload: Mapping[str, Any],
     normalized_tool: Mapping[str, Any] | None,
@@ -2446,7 +2374,6 @@ def _task_publish_skill_id(
     skill_payload = _coerce_mapping(task_payload.get("skill"))
     return skill_payload.get("id") or skill_payload.get("name")
 
-
 def _first_present_publish_mode(
     *candidates: tuple[Mapping[str, Any], str],
 ) -> object | None:
@@ -2454,7 +2381,6 @@ def _first_present_publish_mode(
         if key in source and source[key] is not None:
             return source[key]
     return None
-
 
 def _resolve_task_publish_payload(
     *,
@@ -2491,10 +2417,8 @@ def _resolve_task_publish_payload(
     resolved["mode"] = publish_mode
     return resolved
 
-
 def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, Any]:
     return _coerce_mapping(raw_merge_automation)
-
 
 def _merge_automation_selected_from_parameters(
     parameters: Mapping[str, Any],
@@ -2516,7 +2440,6 @@ def _merge_automation_selected_from_parameters(
         and _coerce_bool(candidate.get("enabled"), default=False)
         for candidate in candidates
     )
-
 
 def _normalize_story_output_payload(raw_story_output: Any) -> dict[str, Any]:
     story_output = _coerce_mapping(raw_story_output)
@@ -2558,7 +2481,6 @@ def _normalize_story_output_payload(raw_story_output: Any) -> dict[str, Any]:
 
     return normalized
 
-
 def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
     tool_payload = (
         task_payload.get("tool") if isinstance(task_payload.get("tool"), dict) else {}
@@ -2594,7 +2516,6 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(inline_inputs, dict) and inline_inputs:
         normalized["inputs"] = dict(inline_inputs)
     return normalized
-
 
 def _validate_task_runtime_requirements(
     *,
@@ -2638,7 +2559,6 @@ def _validate_task_runtime_requirements(
         "pr-resolver task requires payload.task.instructions, payload.task.inputs.pr, "
         "or payload.task.git.startingBranch."
     )
-
 
 def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
     explicit = str(task_payload.get("title") or "").strip()
@@ -2687,7 +2607,6 @@ def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
         return None
     return first_line[:_MAX_TASK_TITLE_LENGTH]
 
-
 def _derive_task_summary(
     task_payload: dict[str, Any], input_artifact_ref: str | None
 ) -> str:
@@ -2712,14 +2631,12 @@ def _derive_task_summary(
         return f"Task instructions stored in artifact {input_artifact_ref}."
     return "Execution initialized."
 
-
 def _task_input_snapshot_ref_from_memo(
     memo: Mapping[str, Any],
 ) -> str | None:
     value = memo.get("task_input_snapshot_ref") or memo.get("taskInputSnapshotRef")
     candidate = str(value or "").strip()
     return candidate or None
-
 
 def _task_input_snapshot_descriptor_from_record(
     record,
@@ -2766,7 +2683,6 @@ def _task_input_snapshot_descriptor_from_record(
         fallbackEvidenceRefs=fallback_refs,
     )
 
-
 def _build_original_task_input_snapshot_payload(
     *,
     source_kind: str,
@@ -2802,7 +2718,6 @@ def _build_original_task_input_snapshot_payload(
         },
     }
 
-
 def _derive_task_snapshot_shape(task_payload: Mapping[str, Any]) -> str:
     instructions = str(task_payload.get("instructions") or "").strip()
     steps = task_payload.get("steps")
@@ -2819,7 +2734,6 @@ def _derive_task_snapshot_shape(task_payload: Mapping[str, Any]) -> str:
     ):
         return "skill_only"
     return "inline_instructions"
-
 
 def _snapshot_source_payload_from_parameters(
     parameters: Mapping[str, Any],
@@ -2840,7 +2754,6 @@ def _snapshot_source_payload_from_parameters(
         ),
     }
     return payload, task
-
 
 async def _persist_original_task_input_snapshot(
     *,
@@ -2929,7 +2842,6 @@ async def _persist_original_task_input_snapshot(
             target_record.artifact_refs = refs
     return completed.artifact_id
 
-
 async def _persist_original_task_input_snapshot_from_parameters(
     *,
     session: AsyncSession,
@@ -2960,7 +2872,6 @@ async def _persist_original_task_input_snapshot_from_parameters(
         source_workflow_id=source_workflow_id,
         source_run_id=source_run_id,
     )
-
 
 async def _attach_input_attachment_artifacts_to_execution(
     *,
@@ -3007,7 +2918,6 @@ async def _attach_input_attachment_artifacts_to_execution(
     if changed_refs:
         record.artifact_refs = existing_refs
     await session.flush()
-
 
 async def _create_execution_from_task_request(
     *,
@@ -3346,7 +3256,6 @@ async def _create_execution_from_task_request(
     execution = _serialize_execution(record, user=user)
     return execution
 
-
 async def _create_execution_from_manifest_request(
     *,
     request: CreateJobRequest,
@@ -3401,7 +3310,6 @@ async def _create_execution_from_manifest_request(
         ) from exc
 
     return _serialize_execution(record, user=user)
-
 
 async def _get_owned_execution(
     *,
@@ -3483,7 +3391,6 @@ async def _get_owned_execution(
 
     return record
 
-
 def _compute_schedule_delay(
     scheduled_for: datetime,
 ) -> timedelta:
@@ -3503,7 +3410,6 @@ def _compute_schedule_delay(
         )
     return delay
 
-
 def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
     """Transform a task request payload into a RecurringTasksService target.
 
@@ -3517,7 +3423,6 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
             "payload": request_payload,
         },
     }
-
 
 async def _handle_recurring_schedule(
     *,
@@ -3551,7 +3456,6 @@ async def _handle_recurring_schedule(
         redirectPath=f"/tasks/schedules/{definition.id}",
     )
 
-
 class _ScheduleRouteResult:
     """Result of ``_resolve_schedule_routing``."""
 
@@ -3567,7 +3471,6 @@ class _ScheduleRouteResult:
         self.start_delay = start_delay
         self.scheduled_for = scheduled_for
         self.recurring_response = recurring_response
-
 
 async def _resolve_schedule_routing(
     schedule: ScheduleParameters | None,
@@ -3620,7 +3523,6 @@ async def _resolve_schedule_routing(
         )
 
     return _ScheduleRouteResult()
-
 
 @router.post(
     "/{workflow_id}/remediation",
@@ -3712,7 +3614,6 @@ async def create_remediation_execution(
         session=session,
     )
 
-
 def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryModel:
     authority_mode = str(getattr(link, "authority_mode", "") or "")
     status_value = str(getattr(link, "status", "") or "")
@@ -3749,10 +3650,8 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         updatedAt=getattr(link, "updated_at", None),
     )
 
-
 def _remediation_approval_request_id(remediation_workflow_id: str) -> str:
     return f"{remediation_workflow_id}:approval"
-
 
 @router.get(
     "/{workflow_id}/remediations",
@@ -3783,7 +3682,6 @@ async def list_execution_remediations(
         direction=direction,
         items=[_serialize_remediation_link_summary(link) for link in links],
     )
-
 
 @router.post(
     "/{workflow_id}/remediation/approvals/{request_id}",
@@ -3822,7 +3720,6 @@ async def record_remediation_approval_decision(
             },
         ) from exc
     return RemediationApprovalDecisionResponse.model_validate(result)
-
 
 @router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_execution(
@@ -3910,7 +3807,6 @@ async def create_execution(
         await session.refresh(record)
 
     return _serialize_execution(record, user=user)
-
 
 @router.get("", response_model=ExecutionListResponse)
 async def list_executions(
@@ -4140,7 +4036,6 @@ async def list_executions(
         ),
     )
 
-
 @router.get("/{workflow_id}/steps", response_model=StepLedgerSnapshotModel)
 async def describe_execution_steps(
     workflow_id: str,
@@ -4174,7 +4069,6 @@ async def describe_execution_steps(
         temporal_client=temporal_client,
         workflow_id=canonical_workflow_id,
     )
-
 
 @router.get("/{workflow_id}", response_model=ExecutionModel)
 async def describe_execution(
@@ -4277,7 +4171,6 @@ async def describe_execution(
         if task_run_id:
             execution = execution.model_copy(update={"task_run_id": task_run_id})
     return execution
-
 
 @router.post(
     "/{workflow_id}/update",
@@ -4427,7 +4320,6 @@ async def update_execution(
         ),
     )
 
-
 @router.get(
     "/{workflow_id}/manifest-status",
     response_model=ManifestStatusSnapshotModel,
@@ -4448,7 +4340,6 @@ async def describe_manifest_status(
                 "message": str(exc),
             },
         ) from exc
-
 
 @router.get(
     "/{workflow_id}/manifest-nodes",
@@ -4478,7 +4369,6 @@ async def list_manifest_node_page(
                 "message": str(exc),
             },
         ) from exc
-
 
 @router.post(
     "/{workflow_id}/integration",
@@ -4519,7 +4409,6 @@ async def configure_integration_monitoring(
 
     return _serialize_execution(record, user=user)
 
-
 @router.post(
     "/{workflow_id}/integration/poll",
     response_model=ExecutionModel,
@@ -4555,7 +4444,6 @@ async def record_integration_poll(
         ) from exc
 
     return _serialize_execution(record, user=user)
-
 
 @router.post(
     "/{workflow_id}/signal",
@@ -4597,7 +4485,6 @@ async def signal_execution(
         )
     return _serialize_execution(record, user=user)
 
-
 @router.post(
     "/{workflow_id}/cancel",
     response_model=ExecutionModel,
@@ -4634,7 +4521,6 @@ async def cancel_execution(
             canonical_identifier=canonical_workflow_id,
         )
     return _serialize_execution(record, user=user)
-
 
 @router.post(
     "/{workflow_id}/reschedule",
@@ -4690,7 +4576,6 @@ async def reschedule_execution(
         await service._session.refresh(record)
 
     return _serialize_execution(record, user=user)
-
 
 @router.post(
     "/{workflow_id}/rerun",
@@ -4779,6 +4664,5 @@ async def rerun_execution(
     if snapshot_ref:
         await session.commit()
     return execution
-
 
 __all__ = ["router"]

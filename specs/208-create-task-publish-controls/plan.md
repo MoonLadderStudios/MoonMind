@@ -63,7 +63,7 @@ This table records the pre-implementation repository state used to generate `tas
 - IX. Resilient by Default: PASS. Invalid combined selections are cleared instead of silently submitting stale merge automation.
 - X. Continuous Improvement: PASS. Verification evidence will be recorded in feature artifacts.
 - XI. Spec-Driven Development: PASS. Runtime changes follow this one-story Moon Spec.
-- XII. Canonical Documentation Separation: PASS. Desired-state docs stay declarative; implementation notes remain in `specs/` and `docs/tmp/`.
+- XII. Canonical Documentation Separation: PASS. Desired-state docs stay declarative; implementation notes remain in `specs/` and `local-only handoffs`.
 - XIII. Pre-Release Compatibility Policy: PASS. No compatibility alias or backend enum is introduced.
 
 ## Project Structure
@@ -78,7 +78,7 @@ specs/208-create-task-publish-controls/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── create-page-publish-controls.md
+│ └── create-page-publish-controls.md
 ├── tasks.md
 └── verification.md
 ```
@@ -93,7 +93,6 @@ frontend/src/entrypoints/
 docs/UI/
 └── CreatePage.md
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-412-moonspec-orchestration-input.md
 ```
 

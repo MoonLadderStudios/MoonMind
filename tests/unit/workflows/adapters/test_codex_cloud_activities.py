@@ -15,7 +15,6 @@ from moonmind.schemas.agent_runtime_models import (
 
 pytestmark = [pytest.mark.asyncio]
 
-
 def _mock_env():
     """Return env vars that satisfy the Codex Cloud runtime gate."""
     return {
@@ -23,7 +22,6 @@ def _mock_env():
         "CODEX_CLOUD_API_URL": "https://codex.test",
         "CODEX_CLOUD_API_KEY": "test-key-codex",
     }
-
 
 def _request() -> AgentExecutionRequest:
     return AgentExecutionRequest(
@@ -39,11 +37,9 @@ def _request() -> AgentExecutionRequest:
         },
     )
 
-
 # ---------------------------------------------------------------------------
 # Activity tests
 # ---------------------------------------------------------------------------
-
 
 async def test_codex_cloud_start_activity_calls_adapter():
     """integration.codex_cloud.start should build adapter and call start()."""
@@ -75,7 +71,6 @@ async def test_codex_cloud_start_activity_calls_adapter():
     assert result.run_id == "cc-run-1"
     mock_adapter.start.assert_awaited_once()
 
-
 async def test_codex_cloud_status_activity_calls_adapter():
     """integration.codex_cloud.status should build adapter and call status()."""
 
@@ -105,7 +100,6 @@ async def test_codex_cloud_status_activity_calls_adapter():
     assert result.status == "running"
     mock_adapter.status.assert_awaited_once_with("cc-run-1")
 
-
 async def test_codex_cloud_fetch_result_activity_calls_adapter():
     """integration.codex_cloud.fetch_result should build adapter and call fetch_result()."""
 
@@ -128,7 +122,6 @@ async def test_codex_cloud_fetch_result_activity_calls_adapter():
 
     assert result.summary == "Codex Cloud completed"
     mock_adapter.fetch_result.assert_awaited_once_with("cc-run-1")
-
 
 async def test_codex_cloud_cancel_activity_calls_adapter():
     """integration.codex_cloud.cancel should build adapter and call cancel()."""
@@ -159,11 +152,9 @@ async def test_codex_cloud_cancel_activity_calls_adapter():
     assert result.metadata.get("cancelAccepted") is True
     mock_adapter.cancel.assert_awaited_once_with("cc-run-1")
 
-
 # ---------------------------------------------------------------------------
 # Gate test
 # ---------------------------------------------------------------------------
-
 
 async def test_build_adapter_raises_when_disabled():
     """_build_adapter should raise RuntimeError when Codex Cloud is not enabled."""

@@ -11,7 +11,6 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
 )
 
-
 class AgentAdapter(Protocol):
     """Provider-neutral lifecycle interface for true agent runtimes."""
 
@@ -26,6 +25,5 @@ class AgentAdapter(Protocol):
 
     async def cancel(self, run_id: str) -> AgentRunStatus:
         """Cancel one run and return normalized post-cancel status."""
-
 
 __all__ = ["AgentAdapter"]

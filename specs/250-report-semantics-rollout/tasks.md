@@ -95,7 +95,7 @@
 
 - [X] T018 Reran the focused unit command from T013 until MM-497 verification passed for FR-001 through FR-005, SC-001 through SC-005, and DESIGN-REQ-021/023/024
 - [X] T019 Reran the execution API contract command from T014 until MM-497 boundary verification passed for FR-003, SC-003, and DESIGN-REQ-021
-- [X] T020 Ran `rg -n "MM-497|DESIGN-REQ-021|DESIGN-REQ-023|DESIGN-REQ-024|report\.primary|output\.primary|report_type|auto-pinning|projection timing|export semantics|evidence grouping|multi-step" specs/250-report-semantics-rollout docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md docs/Artifacts/ReportArtifacts.md` to verify traceability and deferred-decision preservation (FR-006, FR-007, SC-006, SC-007)
+- [X] T020 Ran `rg -n "MM-497|DESIGN-REQ-021|DESIGN-REQ-023|DESIGN-REQ-024|report\.primary|output\.primary|report_type|auto-pinning|projection timing|export semantics|evidence grouping|multi-step" specs/250-report-semantics-rollout docs/Artifacts/ReportArtifacts.md` to verify traceability and deferred-decision preservation (FR-006, FR-007, SC-006, SC-007)
 - [X] T021 Hermetic integration escalation was not required because MM-497 remained a verification-first story and no fallback implementation crossed the artifact persistence, activity publication, or compose-backed API serialization boundary
 
 **Checkpoint**: MM-497 rollout behavior is verified against the current repo, and any code changes made were limited to the smallest contract-preserving fix required by failed verification.

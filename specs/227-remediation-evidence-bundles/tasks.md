@@ -7,11 +7,11 @@
 
 ## Source Traceability
 
-MM-452 is preserved in `docs/tmp/jira-orchestration-inputs/MM-452-moonspec-orchestration-input.md` and `spec.md`. Tasks cover FR-001 through FR-012, SC-001 through SC-007, and DESIGN-REQ-006 through DESIGN-REQ-009, DESIGN-REQ-022, and DESIGN-REQ-023.
+MM-452 is preserved in `spec.md` (Input) and `spec.md`. Tasks cover FR-001 through FR-012, SC-001 through SC-007, and DESIGN-REQ-006 through DESIGN-REQ-009, DESIGN-REQ-022, and DESIGN-REQ-023.
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-452 source input and classify it as a single-story runtime request in `docs/tmp/jira-orchestration-inputs/MM-452-moonspec-orchestration-input.md` and `specs/227-remediation-evidence-bundles/spec.md`.
+- [X] T001 Confirm MM-452 source input and classify it as a single-story runtime request in `spec.md` (Input) and `specs/227-remediation-evidence-bundles/spec.md`.
 - [X] T002 Inspect adjacent completed MoonSpec artifacts `specs/221-remediation-context-artifacts` and `specs/222-remediation-evidence-tools` before planning new work.
 - [X] T003 Review source design sections 5.3, 6, and 9 in `docs/Tasks/TaskRemediation.md`.
 

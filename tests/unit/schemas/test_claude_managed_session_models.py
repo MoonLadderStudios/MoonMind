@@ -18,9 +18,7 @@ from moonmind.schemas.managed_session_models import (
     ClaudeSurfaceBinding,
 )
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def _session_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
@@ -35,7 +33,6 @@ def _session_payload(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
-
 
 @pytest.mark.parametrize(
     ("execution_owner", "primary_surface", "projection_mode", "created_by"),
@@ -69,7 +66,6 @@ def test_claude_managed_session_validates_documented_core_shapes(
     assert session.projection_mode == projection_mode
     assert session.created_by == created_by
 
-
 def test_remote_projection_preserves_session_identity_and_execution_owner() -> None:
     session = ClaudeManagedSession(**_session_payload())
     updated_at = datetime(2026, 4, 16, 0, 1, tzinfo=UTC)
@@ -89,7 +85,6 @@ def test_remote_projection_preserves_session_identity_and_execution_owner() -> N
     assert projected.surface_bindings[-1].projection_mode == "remote_projection"
     assert session.surface_bindings == ()
 
-
 def test_remote_projection_deep_copies_mutable_session_fields() -> None:
     session = ClaudeManagedSession(
         **_session_payload(extensions={"metadata": {"source": "local"}})
@@ -105,7 +100,6 @@ def test_remote_projection_deep_copies_mutable_session_fields() -> None:
 
     assert session.extensions == {"metadata": {"source": "local"}}
     assert projected.extensions == {"metadata": {"source": "remote"}}
-
 
 def test_cloud_handoff_creates_distinct_cloud_session_with_lineage() -> None:
     source = ClaudeManagedSession(**_session_payload())
@@ -123,7 +117,6 @@ def test_cloud_handoff_creates_distinct_cloud_session_with_lineage() -> None:
     assert destination.handoff_from_session_id == source.session_id
     assert source.execution_owner == "local_process"
 
-
 def test_cloud_handoff_requires_distinct_destination_session() -> None:
     source = ClaudeManagedSession(**_session_payload())
 
@@ -134,7 +127,6 @@ def test_cloud_handoff_requires_distinct_destination_session() -> None:
             created_by="user",
             created_at=NOW,
         )
-
 
 @pytest.mark.parametrize(
     ("model", "payload", "field", "bad_value"),
@@ -191,7 +183,6 @@ def test_claude_lifecycle_fields_reject_undocumented_values(
     with pytest.raises(ValidationError):
         model(**payload)
 
-
 @pytest.mark.parametrize(
     "payload_key",
     ["threadId", "thread_id", "childThread", "child_thread"],
@@ -202,7 +193,6 @@ def test_claude_session_rejects_codex_thread_aliases(payload_key: str) -> None:
 
     with pytest.raises(ValidationError):
         ClaudeManagedSession(**payload)
-
 
 def test_claude_records_use_session_id_aliases_on_wire() -> None:
     turn = ClaudeManagedTurn(
@@ -227,7 +217,6 @@ def test_claude_records_use_session_id_aliases_on_wire() -> None:
     assert "threadId" not in turn.model_dump(by_alias=True)
     assert "childThread" not in work_item.model_dump(by_alias=True)
 
-
 def test_claude_session_lifecycle_datetimes_are_utc_aware() -> None:
     naive_created = datetime(2026, 4, 16, 0, 0)
     naive_updated = datetime(2026, 4, 16, 0, 1)
@@ -245,7 +234,6 @@ def test_claude_session_lifecycle_datetimes_are_utc_aware() -> None:
     assert session.updated_at == naive_updated.replace(tzinfo=UTC)
     assert session.ended_at == naive_ended.replace(tzinfo=UTC)
 
-
 def test_claude_turn_lifecycle_datetimes_are_utc_aware() -> None:
     naive_started = datetime(2026, 4, 16, 0, 0)
     naive_completed = datetime(2026, 4, 16, 0, 1)
@@ -261,7 +249,6 @@ def test_claude_turn_lifecycle_datetimes_are_utc_aware() -> None:
 
     assert turn.started_at == naive_started.replace(tzinfo=UTC)
     assert turn.completed_at == naive_completed.replace(tzinfo=UTC)
-
 
 def test_claude_work_item_lifecycle_datetimes_are_utc_aware() -> None:
     naive_started = datetime(2026, 4, 16, 0, 0)
@@ -280,7 +267,6 @@ def test_claude_work_item_lifecycle_datetimes_are_utc_aware() -> None:
 
     assert work_item.started_at == naive_started.replace(tzinfo=UTC)
     assert work_item.ended_at == naive_ended.replace(tzinfo=UTC)
-
 
 def test_claude_work_item_hook_event_names_require_hook_call_kind() -> None:
     hook_work_item = ClaudeManagedWorkItem(
@@ -308,7 +294,6 @@ def test_claude_work_item_hook_event_names_require_hook_call_kind() -> None:
             startedAt=NOW,
         )
 
-
 def _decision_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "decisionId": "decision-1",
@@ -324,7 +309,6 @@ def _decision_payload(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
-
 
 def test_claude_decision_stage_order_matches_documented_pipeline() -> None:
     assert CLAUDE_DECISION_STAGE_ORDER == (
@@ -364,7 +348,6 @@ def test_claude_decision_stage_order_matches_documented_pipeline() -> None:
         CLAUDE_DECISION_STAGE_ORDER
     )
 
-
 def test_claude_decision_event_names_match_documented_events() -> None:
     assert CLAUDE_DECISION_EVENT_NAMES == (
         "decision.proposed",
@@ -389,7 +372,6 @@ def test_claude_decision_event_names_match_documented_events() -> None:
         )
         assert decision.event_name == event_name
 
-
 def test_claude_decision_point_uses_canonical_wire_shape() -> None:
     decision = ClaudeDecisionPoint(**_decision_payload(workItemId="item-1"))
 
@@ -402,7 +384,6 @@ def test_claude_decision_point_uses_canonical_wire_shape() -> None:
     assert wire["originStage"] == "permission_rules"
     assert "threadId" not in wire
     assert "childThread" not in wire
-
 
 @pytest.mark.parametrize(
     ("field", "value"),
@@ -419,7 +400,6 @@ def test_claude_decision_point_rejects_unknown_vocabulary(
 ) -> None:
     with pytest.raises(ValidationError):
         ClaudeDecisionPoint(**_decision_payload(**{field: value}))
-
 
 def test_policy_decision_records_first_match_provenance() -> None:
     decision = ClaudeDecisionPoint(
@@ -441,7 +421,6 @@ def test_policy_decision_records_first_match_provenance() -> None:
     assert decision.metadata["rulePrecedence"] == ("deny", "ask", "allow")
     assert decision.metadata["winningRuleId"] == "ask-sensitive-network"
     assert decision.metadata["firstMatch"] is True
-
 
 def test_protected_path_decision_cannot_be_auto_allowed() -> None:
     decision = ClaudeDecisionPoint.protected_path(
@@ -468,7 +447,6 @@ def test_protected_path_decision_cannot_be_auto_allowed() -> None:
             created_at=NOW,
         )
 
-
 def test_protected_path_guard_requires_protected_path_provenance() -> None:
     with pytest.raises(ValueError, match="protected_path provenance"):
         ClaudeDecisionPoint(
@@ -481,7 +459,6 @@ def test_protected_path_guard_requires_protected_path_provenance() -> None:
                 eventName="decision.denied",
             )
         )
-
 
 def test_sandbox_substitution_is_distinct_from_explicit_allow_rule() -> None:
     sandboxed = ClaudeDecisionPoint(
@@ -513,7 +490,6 @@ def test_sandbox_substitution_is_distinct_from_explicit_allow_rule() -> None:
         by_alias=True
     )
 
-
 def test_classifier_decision_is_distinct_from_user_and_policy_outcomes() -> None:
     decision = ClaudeDecisionPoint.classifier(
         decision_id="decision-classifier",
@@ -529,7 +505,6 @@ def test_classifier_decision_is_distinct_from_user_and_policy_outcomes() -> None
     assert decision.provenance_source == "classifier"
     assert decision.provenance_source not in {"user", "policy"}
     assert decision.event_name == "decision.asked"
-
 
 def test_headless_resolution_accepts_only_deny_or_defer() -> None:
     denied = ClaudeDecisionPoint.headless_resolution(
@@ -562,7 +537,6 @@ def test_headless_resolution_accepts_only_deny_or_defer() -> None:
             created_at=NOW,
         )
 
-
 def test_hook_tightened_decision_records_hook_provenance() -> None:
     decision = ClaudeDecisionPoint.hook_tightened(
         decision_id="decision-hook",
@@ -590,7 +564,6 @@ def test_hook_tightened_decision_records_hook_provenance() -> None:
             created_at=NOW,
         )
 
-
 def test_claude_hook_audit_validates_documented_fields() -> None:
     audit = ClaudeHookAudit(
         auditId="audit-1",
@@ -614,7 +587,6 @@ def test_claude_hook_audit_validates_documented_fields() -> None:
     assert wire["matcher"] == "Bash(*)"
     assert wire["outcome"] == "ask"
     assert wire["auditData"] == {"reason": "sensitive command"}
-
 
 @pytest.mark.parametrize(
     ("field", "value"),

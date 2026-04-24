@@ -1,10 +1,10 @@
 # MoonMind Run History and Rerun Semantics
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-RunHistoryAndRerunSemantics.md`](../tmp/remaining-work/Temporal-RunHistoryAndRerunSemantics.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
-**Status:** Draft  
-**Owner:** MoonMind Platform  
-**Last updated:** 2026-04-04  
+**Status:** Draft 
+**Owner:** MoonMind Platform 
+**Last updated:** 2026-04-04 
 **Audience:** backend, dashboard, workflow authors, API owners
 
 ## 1. Purpose
@@ -199,8 +199,8 @@ Rules:
 After Continue-As-New for rerun:
 
 - `MoonMind.Run` restarts in:
-  - `planning` when no `plan_ref` is present
-  - `executing` when a `plan_ref` is already available
+ - `planning` when no `plan_ref` is present
+ - `executing` when a `plan_ref` is already available
 - `MoonMind.ManifestIngest` restarts in `executing`
 
 This state transition makes rerun behavior explicit for UI copy and downstream automation.
@@ -336,7 +336,7 @@ For Temporal-backed executions: **`workflowId`** is the canonical detail identit
 
 ## 13. Related documents and backlog
 
-Aligns with `SourceOfTruthAndProjectionModel`, `VisibilityAndUiQueryModel`, `TaskExecutionCompatibilityModel`, and `MissionControlArchitecture`. Optional follow-ups (rerun counters in UI, ops-only history endpoints, URL stability under CAN, tests) are in [`docs/tmp/remaining-work/Temporal-RunHistoryAndRerunSemantics.md`](../tmp/remaining-work/Temporal-RunHistoryAndRerunSemantics.md).
+Aligns with `SourceOfTruthAndProjectionModel`, `VisibilityAndUiQueryModel`, `TaskExecutionCompatibilityModel`, and `MissionControlArchitecture`. Optional follow-ups (rerun counters in UI, ops-only history endpoints, URL stability under CAN, tests) are in .
 
 ## 14. Summary
 

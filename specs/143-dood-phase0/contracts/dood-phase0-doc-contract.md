@@ -9,7 +9,7 @@ Define the exact documentation assertions that Phase 0 must lock before Phase 1 
 1. `docs/ManagedAgents/DockerOutOfDocker.md`
 2. `docs/ManagedAgents/CodexCliManagedSessions.md`
 3. `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
-4. `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`
+4. `docs/ManagedAgents/DockerOutOfDocker.md`
 
 ## Required assertions
 
@@ -38,8 +38,8 @@ Define the exact documentation assertions that Phase 0 must lock before Phase 1 
 
 ### Tracker presence
 
-- The canonical DooD doc must link to `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`.
-- `docs/tmp/remaining-work/README.md` must list the same tracker.
+- The canonical DooD doc must link to `docs/ManagedAgents/DockerOutOfDocker.md`.
+- `docs/ManagedAgents/DockerOutOfDocker.md` must list the same tracker.
 
 ## Validation surface
 

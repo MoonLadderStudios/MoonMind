@@ -1,6 +1,6 @@
 # Implementation Plan: Merge Outcome Propagation
 
-**Branch**: `mm-353-a310aab7` | **Date**: 2026-04-16 | **Spec**: [spec.md](./spec.md)  
+**Branch**: `mm-353-a310aab7` | **Date**: 2026-04-16 | **Spec**: [spec.md](./spec.md) 
 **Input**: Single-story feature specification from `/specs/188-merge-outcome-propagation/spec.md`
 
 ## Summary
@@ -9,15 +9,15 @@ Implement MM-353 by making parent-owned merge automation outcome handling determ
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Temporal Python SDK, Pydantic v2, existing MoonMind workflow/activity catalog, parent-owned `MoonMind.MergeAutomation`, resolver child `MoonMind.Run`  
-**Storage**: Existing Temporal workflow history, Search Attributes, Memo, compact workflow state, and existing execution/projection records; no new persistent database tables planned  
-**Unit Testing**: `pytest` via `./tools/test_unit.sh` with focused targets during iteration  
-**Integration Testing**: Workflow-boundary tests under `tests/unit/workflows/temporal/workflows/`; hermetic integration validation via `./tools/test_integration.sh` when compose services are available  
-**Target Platform**: Linux worker containers and local Docker Compose Temporal deployment  
-**Project Type**: Temporal-backed orchestration service with dependency projection and managed runtime child workflows  
-**Performance Goals**: Outcome mapping remains constant-time, summaries remain compact, and cancellation propagation does not add polling loops or large workflow payloads  
-**Constraints**: Workflow code must remain deterministic; cancellation must use Temporal child workflow cancellation semantics; unsupported merge automation status values must fail fast; dependency satisfaction must stay tied to original parent workflow terminal success; no compatibility aliases for internal status values  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: Temporal Python SDK, Pydantic v2, existing MoonMind workflow/activity catalog, parent-owned `MoonMind.MergeAutomation`, resolver child `MoonMind.Run` 
+**Storage**: Existing Temporal workflow history, Search Attributes, Memo, compact workflow state, and existing execution/projection records; no new persistent database tables planned 
+**Unit Testing**: `pytest` via `./tools/test_unit.sh` with focused targets during iteration 
+**Integration Testing**: Workflow-boundary tests under `tests/unit/workflows/temporal/workflows/`; hermetic integration validation via `./tools/test_integration.sh` when compose services are available 
+**Target Platform**: Linux worker containers and local Docker Compose Temporal deployment 
+**Project Type**: Temporal-backed orchestration service with dependency projection and managed runtime child workflows 
+**Performance Goals**: Outcome mapping remains constant-time, summaries remain compact, and cancellation propagation does not add polling loops or large workflow payloads 
+**Constraints**: Workflow code must remain deterministic; cancellation must use Temporal child workflow cancellation semantics; unsupported merge automation status values must fail fast; dependency satisfaction must stay tied to original parent workflow terminal success; no compatibility aliases for internal status values 
 **Scale/Scope**: One parent `MoonMind.Run` awaiting one parent-owned merge automation child, with merge automation optionally supervising one active resolver child at cancellation time
 
 ## Constitution Check
@@ -35,7 +35,7 @@ Implement MM-353 by making parent-owned merge automation outcome handling determ
 - **IX. Resilient by Default**: PASS. Deterministic non-success handling and cancellation propagation improve unattended execution.
 - **X. Facilitate Continuous Improvement**: PASS. Operator-readable outcomes remain available for failed, canceled, unsupported-status, and cleanup-incomplete cases.
 - **XI. Spec-Driven Development Is the Source of Truth**: PASS. This plan follows `specs/188-merge-outcome-propagation/spec.md` and preserves MM-353 traceability.
-- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Implementation notes stay under `specs/` and `docs/tmp/`; canonical docs are not rewritten.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Implementation notes stay under `specs/` and `local-only handoffs`; canonical docs are not rewritten.
 - **XIII. Pre-Release Compatibility Policy**: PASS. Unsupported internal statuses fail deterministically rather than being translated through compatibility aliases.
 
 ## Project Structure
@@ -49,9 +49,9 @@ specs/188-merge-outcome-propagation/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── merge-outcome-propagation.md
+│ └── merge-outcome-propagation.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 
@@ -60,19 +60,19 @@ specs/188-merge-outcome-propagation/
 ```text
 moonmind/
 └── workflows/
-    └── temporal/
-        └── workflows/
-            ├── run.py                      # Parent merge automation status mapping, cancellation outcome handling
-            └── merge_automation.py         # Merge automation canceled status and active resolver cancellation semantics
+ └── temporal/
+ └── workflows/
+ ├── run.py # Parent merge automation status mapping, cancellation outcome handling
+ └── merge_automation.py # Merge automation canceled status and active resolver cancellation semantics
 
 tests/
 └── unit/
-    └── workflows/
-        └── temporal/
-            ├── test_run_parent_owned_merge_automation.py
-            └── workflows/
-                ├── test_run_parent_owned_merge_automation_boundary.py
-                └── test_merge_automation_temporal.py
+ └── workflows/
+ └── temporal/
+ ├── test_run_parent_owned_merge_automation.py
+ └── workflows/
+ ├── test_run_parent_owned_merge_automation_boundary.py
+ └── test_merge_automation_temporal.py
 ```
 
 **Structure Decision**: Keep the story inside the existing Temporal workflow boundary. Parent outcome mapping belongs in `MoonMindRunWorkflow`; merge automation cancellation semantics belong in `MoonMindMergeAutomationWorkflow`; dependency satisfaction remains covered by existing dependency signal behavior plus focused parent outcome tests.

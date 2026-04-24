@@ -10,7 +10,6 @@ Use the Jira preset brief for MM-488 as the canonical Moon Spec orchestration in
 
 Additional constraints:
 
-
 Selected mode: runtime.
 Default to runtime mode and only use docs mode when explicitly requested.
 If the brief points at an implementation document, treat it as runtime source requirements.
@@ -20,7 +19,7 @@ Classify the input as a single-story feature request, broad technical or declara
 Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts.
 ```
 
-**Canonical Jira Brief**: `docs/tmp/jira-orchestration-inputs/MM-488-moonspec-orchestration-input.md`
+**Canonical Jira Brief**: `spec.md` (Input)
 
 ## Original Jira Preset Brief
 

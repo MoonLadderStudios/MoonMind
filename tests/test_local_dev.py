@@ -6,7 +6,6 @@ from pathlib import Path
 
 import yaml
 
-
 def test_docker_compose_has_temporal_worker_auto_start_configured():
     """Verify that temporal workers are configured to start by default without sleeping."""
     compose_path = Path("docker-compose.yaml")
@@ -46,7 +45,6 @@ def test_docker_compose_has_temporal_worker_auto_start_configured():
             "sleep" not in command_var
         ), f"Worker '{fleet}' must not be configured to sleep. Found: {command_var}"
 
-
 def test_api_service_mounts_agent_runtime_workspace_volume():
     """Mission Control observability must read managed-run records from agent_workspaces."""
     compose_path = Path("docker-compose.yaml")
@@ -77,7 +75,6 @@ def test_api_service_mounts_agent_runtime_workspace_volume():
     assert (
         found_mount
     ), "api service must mount agent_workspaces at /work/agent_jobs so observability APIs can read managed-run records"
-
 
 def test_agent_workspaces_init_avoids_recursive_permission_repair():
     """Workspace init should only normalize hot directories, not recurse the whole volume."""

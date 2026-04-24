@@ -14,18 +14,15 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
 )
 
-
 # ---------------------------------------------------------------------------
 # agent_runtime_publish_artifacts
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_publish_artifacts_returns_none_result_unchanged():
     activities = TemporalAgentRuntimeActivities()
     result = await activities.agent_runtime_publish_artifacts(None)
     assert result is None
-
 
 @pytest.mark.asyncio
 async def test_publish_artifacts_no_service_returns_unchanged():
@@ -34,7 +31,6 @@ async def test_publish_artifacts_no_service_returns_unchanged():
     result = await activities.agent_runtime_publish_artifacts(input_result)
     assert isinstance(result, AgentRunResult)
     assert result.summary == "done"
-
 
 @pytest.mark.asyncio
 async def test_publish_artifacts_writes_summary_artifact():
@@ -82,7 +78,6 @@ async def test_publish_artifacts_writes_summary_artifact():
         link_type="output.agent_result",
     )
 
-
 @pytest.mark.asyncio
 async def test_publish_artifacts_handles_write_failure_gracefully():
     mock_service = MagicMock()
@@ -100,11 +95,9 @@ async def test_publish_artifacts_handles_write_failure_gracefully():
     assert isinstance(result, AgentRunResult)
     assert result.summary == "test"
 
-
 class _OAuthPayloadModel(BaseModel):
     session_id: str
     runtime_id: str
-
 
 @pytest.mark.asyncio
 async def test_oauth_session_start_auth_runner_coerces_pydantic_request_payload():
@@ -122,7 +115,6 @@ async def test_oauth_session_start_auth_runner_coerces_pydantic_request_payload(
     mock_start.assert_awaited_once_with(
         {"session_id": "oas_123", "runtime_id": "codex_cli"}
     )
-
 
 @pytest.mark.asyncio
 async def test_publish_artifacts_handles_input_reference_write_failure_gracefully():
@@ -142,7 +134,6 @@ async def test_publish_artifacts_handles_input_reference_write_failure_gracefull
     assert isinstance(result, AgentRunResult)
     assert result.summary == "Completed successfully"
     assert result.metadata == {"instructionRef": "artifact:instructions"}
-
 
 @pytest.mark.asyncio
 async def test_publish_artifacts_writes_managed_session_input_reference_artifacts():
@@ -179,7 +170,6 @@ async def test_publish_artifacts_writes_managed_session_input_reference_artifact
         "output.agent_result",
     ]
 
-
 @pytest.mark.asyncio
 async def test_publish_artifacts_handles_object_without_metadata_mapping():
     activities = TemporalAgentRuntimeActivities(artifact_service=MagicMock())
@@ -200,11 +190,9 @@ async def test_publish_artifacts_handles_object_without_metadata_mapping():
     assert input_result.diagnostics_ref == "art-result"
     assert not hasattr(input_result, "metadata")
 
-
 # ---------------------------------------------------------------------------
 # agent_runtime_cancel
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_cancel_delegates_to_supervisor_for_managed():
@@ -216,7 +204,6 @@ async def test_cancel_delegates_to_supervisor_for_managed():
 
     mock_supervisor.cancel.assert_awaited_once_with("run-1")
 
-
 @pytest.mark.asyncio
 async def test_cancel_handles_supervisor_error_gracefully():
     mock_supervisor = MagicMock()
@@ -227,7 +214,6 @@ async def test_cancel_handles_supervisor_error_gracefully():
     await activities.agent_runtime_cancel({"agent_kind": "managed", "run_id": "run-2"})
 
     mock_supervisor.cancel.assert_awaited_once_with("run-2")
-
 
 @pytest.mark.asyncio
 async def test_cancel_cleanup_failures_do_not_raise():
@@ -248,7 +234,6 @@ async def test_cancel_cleanup_failures_do_not_raise():
     mock_supervisor.cancel.assert_awaited_once_with("run-2")
     mock_launcher.cleanup_run_support.assert_awaited_once_with("run-2")
 
-
 @pytest.mark.asyncio
 async def test_cancel_without_supervisor_updates_store():
     mock_store = MagicMock()
@@ -261,13 +246,11 @@ async def test_cancel_without_supervisor_updates_store():
     assert call_args.args[0] == "run-3"
     assert call_args.args[1] == "canceled"
 
-
 @pytest.mark.asyncio
 async def test_cancel_handles_external_kind_gracefully():
     activities = TemporalAgentRuntimeActivities()
     # Should not raise — just logs a warning
     await activities.agent_runtime_cancel({"agent_kind": "external", "run_id": "run-4"})
-
 
 @pytest.mark.asyncio
 async def test_cancel_handles_unknown_kind_gracefully():
@@ -277,7 +260,6 @@ async def test_cancel_handles_unknown_kind_gracefully():
     result = await activities.agent_runtime_cancel({"agent_kind": "unknown", "run_id": "run-5"})
     assert isinstance(result, AgentRunStatus)
     assert result.status == "canceled"
-
 
 @pytest.mark.asyncio
 async def test_cancel_handles_tuple_request():
@@ -289,7 +271,6 @@ async def test_cancel_handles_tuple_request():
 
     mock_supervisor.cancel.assert_awaited_once_with("run-6")
 
-
 @pytest.mark.asyncio
 async def test_cancel_handles_none_request():
     from moonmind.schemas.agent_runtime_models import AgentRunStatus
@@ -298,7 +279,6 @@ async def test_cancel_handles_none_request():
     result = await activities.agent_runtime_cancel(None)
     assert isinstance(result, AgentRunStatus)
     assert result.status == "canceled"
-
 
 @pytest.mark.asyncio
 async def test_agent_runtime_launch_binds_workflow_id_to_task_run_before_launch():
@@ -344,7 +324,6 @@ async def test_agent_runtime_launch_binds_workflow_id_to_task_run_before_launch(
     )
     assert result == {"status": "launching"}
 
-
 @pytest.mark.asyncio
 async def test_agent_runtime_launch_accepts_legacy_file_templates_payload():
     launch_record = SimpleNamespace(model_dump=lambda mode="json": {"status": "launching"})
@@ -386,7 +365,6 @@ async def test_agent_runtime_launch_accepts_legacy_file_templates_payload():
     profile = mock_launcher.launch.await_args.kwargs["profile"]
     assert profile.file_templates[0].path == "{{runtime_support_dir}}/codex-home/config.toml"
     assert profile.file_templates[0].content_template == 'model = "qwen"\n'
-
 
 @pytest.mark.asyncio
 async def test_agent_runtime_launch_defers_support_cleanup_until_fetch_result():
@@ -443,7 +421,6 @@ async def test_agent_runtime_launch_defers_support_cleanup_until_fetch_result():
         deferred_cleanup_paths=["/tmp/cleanup.file"],
     )
     mock_launcher.cleanup_run_support.assert_not_awaited()
-
 
 @pytest.mark.asyncio
 async def test_agent_runtime_launch_cleans_deferred_support_when_supervisor_fails():

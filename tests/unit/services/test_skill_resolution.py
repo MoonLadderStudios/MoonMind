@@ -14,9 +14,7 @@ from moonmind.services.skill_resolution import (
     DeploymentSkillLoader,
 )
 
-
 pytestmark = [pytest.mark.asyncio]
-
 
 async def test_resolver_can_resolve_empty_selector():
     resolver = AgentSkillResolver()
@@ -27,7 +25,6 @@ async def test_resolver_can_resolve_empty_selector():
     
     assert result.snapshot_id == "snap-123"
     assert result.skills == []
-
 
 async def test_resolver_resolves_built_in_skills():
     loader = BuiltInSkillLoader()
@@ -173,7 +170,6 @@ async def test_resolver_ignores_repo_skills_when_no_workspace():
     result = await resolver.resolve(selector, context)
     assert len(result.skills) == 0
 
-
 async def test_resolver_filters_repo_skills_when_not_allowed(tmp_path):
     skills_dir = tmp_path / ".agents" / "skills"
     skill_dir = skills_dir / "repo_skill"
@@ -192,7 +188,6 @@ async def test_resolver_filters_repo_skills_when_not_allowed(tmp_path):
 
     assert result.skills == []
     assert result.policy_summary["repo_skills_allowed"] is False
-
 
 async def test_resolver_resolves_repo_skills_when_allowed(tmp_path):
     skills_dir = tmp_path / ".agents" / "skills"
@@ -215,7 +210,6 @@ async def test_resolver_resolves_repo_skills_when_allowed(tmp_path):
     assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.REPO
     assert result.policy_summary["repo_skills_allowed"] is True
 
-
 async def test_resolver_policy_summary_reports_repo_and_local_policy():
     resolver = AgentSkillResolver(loaders=[])
     context = SkillResolutionContext(
@@ -229,7 +223,6 @@ async def test_resolver_policy_summary_reports_repo_and_local_policy():
 
     assert result.policy_summary["repo_skills_allowed"] is False
     assert result.policy_summary["local_skills_allowed"] is True
-
 
 async def test_repo_skill_loader_scans_fs(tmp_path):
     loader = RepoSkillLoader()
@@ -340,7 +333,6 @@ async def test_resolver_respects_precedence():
     assert len(result.skills) == 1
     # Deployment overrides built-in
     assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.DEPLOYMENT
-
 
 async def test_resolver_rejects_collisions_within_source():
     class CollisionLoader(BuiltInSkillLoader):

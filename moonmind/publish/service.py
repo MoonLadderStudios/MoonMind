@@ -13,7 +13,6 @@ from moonmind.publish.sanitization import (
     sanitize_publish_subject,
 )
 
-
 class CommandResult(Protocol):
     """Protocol for a command result with stdout."""
 
@@ -21,12 +20,10 @@ class CommandResult(Protocol):
     def stdout(self) -> str:
         pass
 
-
 CommandRunner = Callable[
     ...,
     Awaitable[CommandResult],
 ]
-
 
 class PublishService:
     """Service to publish changes to Git branches or Pull Requests."""

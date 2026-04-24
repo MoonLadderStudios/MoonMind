@@ -65,7 +65,7 @@ When invoked after `moonspec-breakdown` or when the request references story bre
 - Treat missing source document references as a hard blocker, not as an optional warning.
 - Do not create or rename `spec.md`.
 - If Jira issue creation succeeds, return Jira keys/URLs and do not request another output format.
-- If Jira is not configured, required Jira fields are missing, or issue creation fails, report the exact blocker and the existing `docs/tmp/story-breakdowns/...` output instead of fabricating Jira success.
+- If Jira is not configured, required Jira fields are missing, or issue creation fails, report the exact blocker and the existing `artifacts/story-breakdowns/...` output instead of fabricating Jira success.
 - The fallback file must not be named `spec.md`.
 
 5. Return the result.

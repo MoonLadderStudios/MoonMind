@@ -9,14 +9,14 @@ Harden Docker-backed workload tools so MoonMind can treat DooD as a safe runtime
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 runtime, Pydantic v2 schemas, TypeScript/Vitest only if UI surfaces are touched  
-**Primary Dependencies**: Existing MoonMind workload modules, Temporal activity runtime, Docker CLI through the configured Docker proxy, pytest/pytest-asyncio  
-**Storage**: Existing workflow artifacts and bounded result metadata; no new database tables planned  
-**Testing**: `./tools/test_unit.sh` for final unit verification, targeted `pytest tests/unit/workloads ...` for iteration  
-**Target Platform**: Linux Docker Compose worker deployment with Docker-capable `agent_runtime` fleet  
-**Project Type**: Single backend/runtime project with existing API/dashboard projection surfaces  
-**Performance Goals**: Deny invalid workload requests before container launch; capacity checks must be constant-time in the local worker process; cleanup must scan only MoonMind workload-labeled containers  
-**Constraints**: Fail closed for missing profile/capability/policy, do not leak secrets in diagnostics, do not give managed session containers Docker authority, keep workload identity separate from session identity  
+**Language/Version**: Python 3.12 runtime, Pydantic v2 schemas, TypeScript/Vitest only if UI surfaces are touched 
+**Primary Dependencies**: Existing MoonMind workload modules, Temporal activity runtime, Docker CLI through the configured Docker proxy, pytest/pytest-asyncio 
+**Storage**: Existing workflow artifacts and bounded result metadata; no new database tables planned 
+**Testing**: `./tools/test_unit.sh` for final unit verification, targeted `pytest tests/unit/workloads ...` for iteration 
+**Target Platform**: Linux Docker Compose worker deployment with Docker-capable `agent_runtime` fleet 
+**Project Type**: Single backend/runtime project with existing API/dashboard projection surfaces 
+**Performance Goals**: Deny invalid workload requests before container launch; capacity checks must be constant-time in the local worker process; cleanup must scan only MoonMind workload-labeled containers 
+**Constraints**: Fail closed for missing profile/capability/policy, do not leak secrets in diagnostics, do not give managed session containers Docker authority, keep workload identity separate from session identity 
 **Scale/Scope**: One-shot workload containers only; per-profile and per-fleet limits bound heavy jobs such as Unreal workloads; bounded helper containers remain out of scope
 
 ## Constitution Check
@@ -36,7 +36,7 @@ Harden Docker-backed workload tools so MoonMind can treat DooD as a safe runtime
 | IX. Resilient by Default | PASS | Adds timeout/cancel cleanup support, orphan sweeping, and explicit denial metadata. |
 | X. Continuous Improvement | PASS | Denial and cleanup diagnostics make failures reviewable and actionable. |
 | XI. Spec-Driven Development | PASS | This plan follows the current feature spec and requires validation tests. |
-| XII. Canonical Docs vs Tmp | PASS | Runtime work is primary; temporary tracking stays under `docs/tmp` if touched. |
+| XII. Canonical Docs vs Tmp | PASS | Runtime work is primary; temporary tracking stays under `local-only handoffs` if touched. |
 | XIII. Delete, Don't Deprecate | PASS | No compatibility aliases or fallback semantics are introduced for internal workload contracts. |
 
 ## Project Structure
@@ -50,7 +50,7 @@ specs/158-dood-phase5-hardening/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── workload-hardening-contract.schema.json
+│ └── workload-hardening-contract.schema.json
 └── tasks.md
 ```
 
@@ -59,31 +59,31 @@ specs/158-dood-phase5-hardening/
 ```text
 moonmind/
 ├── schemas/
-│   └── workload_models.py
+│ └── workload_models.py
 ├── workloads/
-│   ├── __init__.py
-│   ├── docker_launcher.py
-│   ├── registry.py
-│   └── tool_bridge.py
+│ ├── __init__.py
+│ ├── docker_launcher.py
+│ ├── registry.py
+│ └── tool_bridge.py
 └── workflows/
-    └── temporal/
-        ├── activity_catalog.py
-        ├── activity_runtime.py
-        ├── worker_runtime.py
-        └── workers.py
+ └── temporal/
+ ├── activity_catalog.py
+ ├── activity_runtime.py
+ ├── worker_runtime.py
+ └── workers.py
 
 tests/
 └── unit/
-    ├── workloads/
-    │   ├── test_docker_workload_launcher.py
-    │   ├── test_workload_contract.py
-    │   └── test_workload_tool_bridge.py
-    └── workflows/
-        └── temporal/
-            ├── test_activity_catalog.py
-            ├── test_temporal_worker_runtime.py
-            ├── test_temporal_workers.py
-            └── test_workload_run_activity.py
+ ├── workloads/
+ │ ├── test_docker_workload_launcher.py
+ │ ├── test_workload_contract.py
+ │ └── test_workload_tool_bridge.py
+ └── workflows/
+ └── temporal/
+ ├── test_activity_catalog.py
+ ├── test_temporal_worker_runtime.py
+ ├── test_temporal_workers.py
+ └── test_workload_run_activity.py
 ```
 
 **Structure Decision**: Use the existing workload runtime module boundaries. Workload contract and policy validation stay in schemas/registry, Docker process behavior stays in the launcher, tool-path errors stay in the tool bridge, and fleet capability bootstrap stays in Temporal worker runtime/topology.

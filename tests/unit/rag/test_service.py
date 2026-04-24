@@ -7,7 +7,6 @@ import pytest
 from moonmind.rag.service import ContextRetrievalService, RetrievalBudgetExceededError
 from moonmind.rag.settings import RagRuntimeSettings
 
-
 def _settings(**overrides: object) -> RagRuntimeSettings:
     defaults = dict(
         qdrant_url=None,
@@ -35,13 +34,11 @@ def _settings(**overrides: object) -> RagRuntimeSettings:
     defaults.update(overrides)
     return RagRuntimeSettings(**defaults)
 
-
 def test_normalize_budgets_extracts_valid_integers() -> None:
     result = ContextRetrievalService._normalize_budgets(
         {"tokens": 500, "latency_ms": "800", "extra": "ignored"}
     )
     assert result == {"tokens": 500, "latency_ms": 800}
-
 
 def test_normalize_budgets_skips_invalid_values() -> None:
     result = ContextRetrievalService._normalize_budgets(
@@ -49,10 +46,8 @@ def test_normalize_budgets_skips_invalid_values() -> None:
     )
     assert result == {}
 
-
 def test_normalize_budgets_handles_empty() -> None:
     assert ContextRetrievalService._normalize_budgets({}) == {}
-
 
 def test_enforce_token_budget_raises_when_exceeded() -> None:
     settings = _settings(overlay_chunk_chars=1200)
@@ -67,7 +62,6 @@ def test_enforce_token_budget_raises_when_exceeded() -> None:
             budgets={"tokens": 10},
         )
 
-
 def test_enforce_token_budget_passes_when_within_limits() -> None:
     settings = _settings(overlay_chunk_chars=100)
     service = ContextRetrievalService(
@@ -80,7 +74,6 @@ def test_enforce_token_budget_passes_when_within_limits() -> None:
         top_k=1,
         budgets={"tokens": 10000},
     )
-
 
 def test_enforce_token_budget_noop_without_budget() -> None:
     settings = _settings()
@@ -95,23 +88,19 @@ def test_enforce_token_budget_noop_without_budget() -> None:
         budgets={},
     )
 
-
 def test_retrieval_budget_error_has_budget_type() -> None:
     error = RetrievalBudgetExceededError("Too slow", budget_type="latency_ms")
     assert error.budget_type == "latency_ms"
     assert "Too slow" in str(error)
-
 
 def test_resolved_transport_prefers_explicit() -> None:
     settings = _settings(retrieval_gateway_url="http://gw:8000")
     assert settings.resolved_transport("direct") == "direct"
     assert settings.resolved_transport("gateway") == "gateway"
 
-
 def test_resolved_transport_defaults_to_gateway_when_url_set() -> None:
     settings = _settings(retrieval_gateway_url="http://gw:8000")
     assert settings.resolved_transport(None) == "gateway"
-
 
 def test_resolved_transport_defaults_to_direct_when_no_url() -> None:
     settings = _settings(retrieval_gateway_url=None)

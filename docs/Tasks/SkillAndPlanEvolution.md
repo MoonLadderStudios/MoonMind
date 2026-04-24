@@ -1,6 +1,6 @@
 # Skill & Plan Design Evolution (MoonMind & Temporal)
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Tasks-SkillAndPlanEvolution.md`](../tmp/remaining-work/Tasks-SkillAndPlanEvolution.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 **Executive Summary:** The MoonMind system uses **tools** and **plans** atop Temporal to manage agent tasks. A *Tool* (`ToolDefinition`) is a named capability with input/output schemas, execution bindings, retries, etc. (not a workflow). A *Plan* is a DAG of tool invocations (Steps) with explicit dependencies and policies. This design leverages Temporal's deterministic workflows (orchestration) vs activities (side-effects). The codebase has completed a rename from `Skill*` to `Tool*` for Temporal contract objects; the term "Skill" is now reserved for agent instruction bundles (`.agents/skills/SKILL.md` files).
 
@@ -58,36 +58,36 @@ MoonMind currently uses **Skill** and **Plan**. Comparable systems use varied te
 
 - **Plan Execution (Workflow):** Write the Plan Executor as a Temporal Workflow (`MoonMind.Run`). Pseudocode:
 
-  ```python
-  @workflow.defn
-  async def RunPlanWorkflow(ctx, plan_ref: ArtifactRef):
-      plan = await activities.load_plan(plan_ref)
-      validate_plan_structure(plan)
-      ready = find_ready_nodes(plan)
-      running = {}
-      while not all_nodes_done(plan):
-          for node in ready:
-              if len(running) < plan.policy.max_concurrency:
-                  running[node.id] = workflow.execute_activity(
-                      tool_dispatcher,
-                      node.tool.name, node.tool.version, node.inputs,
-                      timeouts=node.options.timeouts_override,
-                      retry_options=node.options.retries_override,
-                  )
-          done, _ = await workflow.wait_any(running.values())
-          for node_id, fut in running.items():
-              if fut in done:
-                  result = await fut
-                  store_result(node_id, result)
-                  update_progress_metrics(node_id, result)
-                  running.pop(node_id)
-                  for succ in plan.dependents(node_id):
-                      if deps_satisfied(succ):
-                          ready.add(succ)
-                  break
-      return summarize_execution()
-  ```
-  (A **Dispatcher Activity** `mm.tool.execute` routes to the actual tool implementation based on worker capability).
+ ```python
+ @workflow.defn
+ async def RunPlanWorkflow(ctx, plan_ref: ArtifactRef):
+ plan = await activities.load_plan(plan_ref)
+ validate_plan_structure(plan)
+ ready = find_ready_nodes(plan)
+ running = {}
+ while not all_nodes_done(plan):
+ for node in ready:
+ if len(running) < plan.policy.max_concurrency:
+ running[node.id] = workflow.execute_activity(
+ tool_dispatcher,
+ node.tool.name, node.tool.version, node.inputs,
+ timeouts=node.options.timeouts_override,
+ retry_options=node.options.retries_override,
+ )
+ done, _ = await workflow.wait_any(running.values())
+ for node_id, fut in running.items():
+ if fut in done:
+ result = await fut
+ store_result(node_id, result)
+ update_progress_metrics(node_id, result)
+ running.pop(node_id)
+ for succ in plan.dependents(node_id):
+ if deps_satisfied(succ):
+ ready.add(succ)
+ break
+ return summarize_execution()
+ ```
+ (A **Dispatcher Activity** `mm.tool.execute` routes to the actual tool implementation based on worker capability).
 
 - **Activity Design:** Each tool invocation becomes one Activity. The default activity type (`mm.tool.execute`) handles generic invocation: it looks up the `ToolDefinition` (from the snapshot), validates inputs, performs the operation (LLM, API call, etc.), writes any artifacts, and returns a `ToolResult` (status, outputs, artifact refs). For special cases, some tools may bind to custom activity types (e.g. `artifact.read`, `integration.github.call`) for isolation. Activities must catch exceptions and wrap them into our `ToolFailure` format (error code, message) to inform retry policies. Use idempotency keys inside Activities to avoid duplicate side-effects.
 
@@ -130,35 +130,35 @@ Two dispatch paths exist for plan nodes:
 
 ## Engineering roadmap
 
-The platform converges on a **registry-backed tool set**, **`plan.validate`**, a **deterministic interpreter** in `MoonMind.Run`, **`mm.tool.execute` dispatch**, **progress queries**, **metrics**, and **role-aware security**. Sequencing and gap list: [`docs/tmp/remaining-work/Tasks-SkillAndPlanEvolution.md`](../tmp/remaining-work/Tasks-SkillAndPlanEvolution.md).
+The platform converges on a **registry-backed tool set**, **`plan.validate`**, a **deterministic interpreter** in `MoonMind.Run`, **`mm.tool.execute` dispatch**, **progress queries**, **metrics**, and **role-aware security**. Sequencing and gap list: .
 
 ## Diagram: Plan Execution (Mermaid)
 ```mermaid
 flowchart LR
-  subgraph Workflow["MoonMind Workflow (system)"]
-    A[Load Plan Artifact] --> B[Validate Plan Activity]
-    B --> C{Plan Valid?}
-    C -- No --> E[Fail Workflow]
-    C -- Yes --> D[Compute Ready Nodes]
-    D -->|Node n1 ready| A1["ExecuteActivity: Tool:n1"]
-    D -->|Node n2 ready| A2["ExecuteActivity: Tool:n2"]
-    A1 --> F1[ToolResult n1]
-    A2 --> F2[ToolResult n2]
-    F1 & F2 --> U{"Update Results & Progress"}
-    U --> D
-    U -->|All done| G[Generate Summary Artifact]
-  end
+ subgraph Workflow["MoonMind Workflow (system)"]
+ A[Load Plan Artifact] --> B[Validate Plan Activity]
+ B --> C{Plan Valid?}
+ C -- No --> E[Fail Workflow]
+ C -- Yes --> D[Compute Ready Nodes]
+ D -->|Node n1 ready| A1["ExecuteActivity: Tool:n1"]
+ D -->|Node n2 ready| A2["ExecuteActivity: Tool:n2"]
+ A1 --> F1[ToolResult n1]
+ A2 --> F2[ToolResult n2]
+ F1 & F2 --> U{"Update Results & Progress"}
+ U --> D
+ U -->|All done| G[Generate Summary Artifact]
+ end
 
-  subgraph Activities["Worker Fleet"]
-    A1 -->|calls| X1[("ToolDefinition for n1")]
-    A2 -->|calls| X2[("ToolDefinition for n2")]
-    X1 -->|runs| Y1["LLM/API/Tool"]
-    X2 -->|runs| Y2["LLM/API/Tool"]
-    Y1 --> Z1[Output Artifacts + JSON]
-    Y2 --> Z2[Output Artifacts + JSON]
-    Z1 -->|return| F1
-    Z2 -->|return| F2
-  end
+ subgraph Activities["Worker Fleet"]
+ A1 -->|calls| X1[("ToolDefinition for n1")]
+ A2 -->|calls| X2[("ToolDefinition for n2")]
+ X1 -->|runs| Y1["LLM/API/Tool"]
+ X2 -->|runs| Y2["LLM/API/Tool"]
+ Y1 --> Z1[Output Artifacts + JSON]
+ Y2 --> Z2[Output Artifacts + JSON]
+ Z1 -->|return| F1
+ Z2 -->|return| F2
+ end
 ```
 This illustrates the workflow reading a plan, validating it, then in rounds scheduling ready nodes (activities). Each activity uses a ToolDefinition to invoke the actual work (LLM or integration), producing a `ToolResult` that the workflow collects.
 

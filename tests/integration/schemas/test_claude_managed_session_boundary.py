@@ -10,9 +10,7 @@ from moonmind.schemas.managed_session_models import ClaudeManagedSession
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def _session(**overrides: object) -> ClaudeManagedSession:
     payload: dict[str, object] = {
@@ -27,7 +25,6 @@ def _session(**overrides: object) -> ClaudeManagedSession:
     }
     payload.update(overrides)
     return ClaudeManagedSession(**payload)
-
 
 def test_claude_session_boundary_supports_documented_story_shapes() -> None:
     local = _session(sessionId="local-1", primarySurface="terminal")

@@ -7,7 +7,7 @@
 
 ## Source Document Requirements
 
-Source: `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/UI/MissionControlArchitecture.md`, `docs/tmp/remaining-work/UI-MissionControlArchitecture.md`, `docs/Tasks/TaskRunsApi.md`, `docs/UI/MissionControlStyleGuide.md`
+Source: `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Tasks/TaskRunsApi.md`, `docs/UI/MissionControlStyleGuide.md`
 
 | ID | Source Section | Requirement Summary |
 | --- | --- | --- |

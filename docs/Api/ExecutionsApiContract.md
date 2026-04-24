@@ -1,13 +1,13 @@
 # Executions API Contract
 
-**Project:** MoonMind  
-**Doc type:** API contract  
-**Status:** Draft  
-**Owner:** MoonMind Platform  
-**Last updated:** 2026-04-04 (UTC)  
+**Project:** MoonMind 
+**Doc type:** API contract 
+**Status:** Draft 
+**Owner:** MoonMind Platform 
+**Last updated:** 2026-04-04 (UTC) 
 **Audience:** backend, dashboard, integrations
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Api-ExecutionsApiContract.md`](../tmp/remaining-work/Api-ExecutionsApiContract.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 ---
 
@@ -365,36 +365,36 @@ Example:
 
 ```json
 {
-  "namespace": "moonmind",
-  "workflowId": "mm:3cf79b7f-0fc2-4ab4-a0f8-f2d8a65d8c4a",
-  "runId": "84ee7f53-06c5-49e5-9f56-bb42f5d79f33",
-  "workflowType": "MoonMind.Run",
-  "state": "initializing",
-  "temporalStatus": "running",
-  "closeStatus": null,
-  "taskRunId": null,
-  "progress": {
-    "total": 0,
-    "pending": 0,
-    "running": 0,
-    "succeeded": 0,
-    "failed": 0,
-    "currentStepTitle": null
-  },
-  "searchAttributes": {
-    "mm_owner_id": "<user-id>",
-    "mm_state": "initializing",
-    "mm_updated_at": "2026-03-06T12:00:00Z",
-    "mm_entry": "run"
-  },
-  "memo": {
-    "title": "Run",
-    "summary": "Execution initialized."
-  },
-  "artifactRefs": [],
-  "startedAt": "2026-03-06T12:00:00Z",
-  "updatedAt": "2026-03-06T12:00:00Z",
-  "closedAt": null
+ "namespace": "moonmind",
+ "workflowId": "mm:3cf79b7f-0fc2-4ab4-a0f8-f2d8a65d8c4a",
+ "runId": "84ee7f53-06c5-49e5-9f56-bb42f5d79f33",
+ "workflowType": "MoonMind.Run",
+ "state": "initializing",
+ "temporalStatus": "running",
+ "closeStatus": null,
+ "taskRunId": null,
+ "progress": {
+ "total": 0,
+ "pending": 0,
+ "running": 0,
+ "succeeded": 0,
+ "failed": 0,
+ "currentStepTitle": null
+ },
+ "searchAttributes": {
+ "mm_owner_id": "<user-id>",
+ "mm_state": "initializing",
+ "mm_updated_at": "2026-03-06T12:00:00Z",
+ "mm_entry": "run"
+ },
+ "memo": {
+ "title": "Run",
+ "summary": "Execution initialized."
+ },
+ "artifactRefs": [],
+ "startedAt": "2026-03-06T12:00:00Z",
+ "updatedAt": "2026-03-06T12:00:00Z",
+ "closedAt": null
 }
 ```
 
@@ -473,34 +473,34 @@ Example:
 
 ```json
 {
-  "items": [
-    {
-      "namespace": "moonmind",
-      "workflowId": "mm:3cf79b7f-0fc2-4ab4-a0f8-f2d8a65d8c4a",
-      "runId": "84ee7f53-06c5-49e5-9f56-bb42f5d79f33",
-      "workflowType": "MoonMind.Run",
-      "state": "executing",
-      "temporalStatus": "running",
-      "closeStatus": null,
-      "searchAttributes": {
-        "mm_owner_id": "<user-id>",
-        "mm_state": "executing",
-        "mm_updated_at": "2026-03-06T12:05:00Z",
-        "mm_entry": "run"
-      },
-      "memo": {
-        "title": "Refactor proposal",
-        "summary": "Execution resumed."
-      },
-      "artifactRefs": ["artifact://input/123"],
-      "startedAt": "2026-03-06T12:00:00Z",
-      "updatedAt": "2026-03-06T12:05:00Z",
-      "closedAt": null
-    }
-  ],
-  "nextPageToken": null,
-  "count": 1,
-  "countMode": "exact"
+ "items": [
+ {
+ "namespace": "moonmind",
+ "workflowId": "mm:3cf79b7f-0fc2-4ab4-a0f8-f2d8a65d8c4a",
+ "runId": "84ee7f53-06c5-49e5-9f56-bb42f5d79f33",
+ "workflowType": "MoonMind.Run",
+ "state": "executing",
+ "temporalStatus": "running",
+ "closeStatus": null,
+ "searchAttributes": {
+ "mm_owner_id": "<user-id>",
+ "mm_state": "executing",
+ "mm_updated_at": "2026-03-06T12:05:00Z",
+ "mm_entry": "run"
+ },
+ "memo": {
+ "title": "Refactor proposal",
+ "summary": "Execution resumed."
+ },
+ "artifactRefs": ["artifact://input/123"],
+ "startedAt": "2026-03-06T12:00:00Z",
+ "updatedAt": "2026-03-06T12:05:00Z",
+ "closedAt": null
+ }
+ ],
+ "nextPageToken": null,
+ "count": 1,
+ "countMode": "exact"
 }
 ```
 
@@ -553,41 +553,41 @@ Representative response:
 
 ```json
 {
-  "workflowId": "mm:3cf79b7f-0fc2-4ab4-a0f8-f2d8a65d8c4a",
-  "runId": "84ee7f53-06c5-49e5-9f56-bb42f5d79f33",
-  "runScope": "latest",
-  "steps": [
-    {
-      "logicalStepId": "run-tests",
-      "order": 4,
-      "title": "Run test suite",
-      "tool": { "type": "skill", "name": "repo.run_tests", "version": "1" },
-      "dependsOn": ["apply-patch"],
-      "status": "running",
-      "waitingReason": null,
-      "attentionRequired": false,
-      "attempt": 1,
-      "startedAt": "2026-04-04T18:10:00Z",
-      "updatedAt": "2026-04-04T18:11:15Z",
-      "summary": "Executing tests in sandbox",
-      "checks": [],
-      "refs": {
-        "childWorkflowId": null,
-        "childRunId": null,
-        "taskRunId": null
-      },
-      "artifacts": {
-        "outputSummary": null,
-        "outputPrimary": null,
-        "runtimeStdout": null,
-        "runtimeStderr": null,
-        "runtimeMergedLogs": null,
-        "runtimeDiagnostics": null,
-        "providerSnapshot": null
-      },
-      "lastError": null
-    }
-  ]
+ "workflowId": "mm:3cf79b7f-0fc2-4ab4-a0f8-f2d8a65d8c4a",
+ "runId": "84ee7f53-06c5-49e5-9f56-bb42f5d79f33",
+ "runScope": "latest",
+ "steps": [
+ {
+ "logicalStepId": "run-tests",
+ "order": 4,
+ "title": "Run test suite",
+ "tool": { "type": "skill", "name": "repo.run_tests", "version": "1" },
+ "dependsOn": ["apply-patch"],
+ "status": "running",
+ "waitingReason": null,
+ "attentionRequired": false,
+ "attempt": 1,
+ "startedAt": "2026-04-04T18:10:00Z",
+ "updatedAt": "2026-04-04T18:11:15Z",
+ "summary": "Executing tests in sandbox",
+ "checks": [],
+ "refs": {
+ "childWorkflowId": null,
+ "childRunId": null,
+ "taskRunId": null
+ },
+ "artifacts": {
+ "outputSummary": null,
+ "outputPrimary": null,
+ "runtimeStdout": null,
+ "runtimeStderr": null,
+ "runtimeMergedLogs": null,
+ "runtimeDiagnostics": null,
+ "providerSnapshot": null
+ },
+ "lastError": null
+ }
+ ]
 }
 ```
 
@@ -726,9 +726,9 @@ Example:
 
 ```json
 {
-  "accepted": true,
-  "applied": "next_safe_point",
-  "message": "Update accepted and will be applied at the next safe point."
+ "accepted": true,
+ "applied": "next_safe_point",
+ "message": "Update accepted and will be applied at the next safe point."
 }
 ```
 
@@ -900,10 +900,10 @@ When the router raises a structured domain error, the response body uses this sh
 
 ```json
 {
-  "detail": {
-    "code": "some_error_code",
-    "message": "Human-readable explanation"
-  }
+ "detail": {
+ "code": "some_error_code",
+ "message": "Human-readable explanation"
+ }
 }
 ```
 

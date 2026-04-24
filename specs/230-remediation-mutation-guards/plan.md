@@ -55,15 +55,15 @@ Implement MM-455 by extending the existing remediation action authority boundary
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: SQLAlchemy async ORM, existing Temporal execution/remediation services, dataclasses, existing redaction helpers  
-**Storage**: Existing `execution_remediation_links` rows plus in-service guard state for lock and ledger decisions in this slice; no new persistent table  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`  
-**Integration Testing**: Service-boundary tests in `tests/unit/workflows/temporal/test_remediation_context.py` using async DB fixtures; no provider credentials or compose-backed integration required for this slice  
-**Target Platform**: Linux server / Docker Compose deployment  
-**Project Type**: FastAPI control plane plus Temporal workflow service boundary  
-**Performance Goals**: Guard evaluation is bounded to in-memory policy/ledger checks plus existing remediation-link and target-health reads  
-**Constraints**: Runtime mode; preserve MM-455 traceability; no raw host, Docker daemon, arbitrary SQL, secret read, storage-key, or redaction bypass; do not add persistent storage in this story  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: SQLAlchemy async ORM, existing Temporal execution/remediation services, dataclasses, existing redaction helpers 
+**Storage**: Existing `execution_remediation_links` rows plus in-service guard state for lock and ledger decisions in this slice; no new persistent table 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` 
+**Integration Testing**: Service-boundary tests in `tests/unit/workflows/temporal/test_remediation_context.py` using async DB fixtures; no provider credentials or compose-backed integration required for this slice 
+**Target Platform**: Linux server / Docker Compose deployment 
+**Project Type**: FastAPI control plane plus Temporal workflow service boundary 
+**Performance Goals**: Guard evaluation is bounded to in-memory policy/ledger checks plus existing remediation-link and target-health reads 
+**Constraints**: Runtime mode; preserve MM-455 traceability; no raw host, Docker daemon, arbitrary SQL, secret read, storage-key, or redaction bypass; do not add persistent storage in this story 
 **Scale/Scope**: One remediation execution linked to one target execution; one side-effecting action request guard decision at a time, with deterministic duplicate and lock behavior
 
 ## Constitution Check
@@ -79,7 +79,7 @@ Implement MM-455 by extending the existing remediation action authority boundary
 - IX. Resilient by Default: PASS. Locks, idempotency, budgets, and freshness checks directly reduce duplicate or stale side effects.
 - X. Continuous Improvement: PASS. Bounded reasons and serialized outputs make guard outcomes auditable.
 - XI. Spec-Driven Development: PASS. This plan follows the MM-455 one-story spec.
-- XII. Canonical Documentation Separation: PASS. Canonical docs remain desired-state; temporary Jira input remains under `docs/tmp`.
+- XII. Canonical Documentation Separation: PASS. Canonical docs remain desired-state; temporary Jira input remains under `local-only handoffs`.
 - XIII. Pre-release Compatibility Policy: PASS. No compatibility alias layer is introduced.
 
 ## Project Structure
@@ -94,9 +94,9 @@ specs/230-remediation-mutation-guards/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── remediation-mutation-guards.md
+│ └── remediation-mutation-guards.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 

@@ -13,7 +13,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-320 canonical input exists at `docs/tmp/jira-orchestration-inputs/MM-320-moonspec-orchestration-input.md` and active spec artifacts are under `specs/201-managed-github-secret-materialization` (SC-006).
+- [X] T001 Confirm MM-320 canonical input exists at `spec.md` (Input) and active spec artifacts are under `specs/201-managed-github-secret-materialization` (SC-006).
 - [X] T002 Classify input as single-story runtime feature request and preserve the Jira key in `spec.md` (SC-006).
 
 ## Phase 2: Story - Managed GitHub Secret Materialization
@@ -49,6 +49,6 @@
 
 ## Phase 3: Verification
 
-- [X] T014 Run `rg -n "MM-320|githubCredential|GITHUB_TOKEN|GITHUB_PAT|SecretRef" specs/201-managed-github-secret-materialization docs/tmp/jira-orchestration-inputs/MM-320-moonspec-orchestration-input.md` (SC-006).
+- [X] T014 Run `rg -n "MM-320|githubCredential|GITHUB_TOKEN|GITHUB_PAT|SecretRef" specs/201-managed-github-secret-materialization` (SC-006).
 - [X] T015 Run full `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` or document exact blocker.
 - [X] T016 Run `/moonspec-verify` and record final verification evidence in `verification.md`.

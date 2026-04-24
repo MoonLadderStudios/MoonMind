@@ -18,14 +18,12 @@ SkillResult = ToolResult
 SkillRegistrySnapshot = ToolRegistrySnapshot
 SkillExecutor = Callable[[SkillInvocation], SkillResult | Awaitable[SkillResult]]
 
-
 class PlanExecutionError(RuntimeError):
     """Raised when plan execution cannot proceed."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
-
 
 @dataclass(frozen=True, slots=True)
 class PlanProgress:
@@ -72,7 +70,6 @@ class PlanProgress:
             "updated_at": self.updated_at,
         }
 
-
 @dataclass(frozen=True, slots=True)
 class PlanExecutionSummary:
     """Aggregated terminal result of a plan execution."""
@@ -105,7 +102,6 @@ class PlanExecutionSummary:
             "progress_artifact_ref": self.progress_artifact_ref,
             "summary_artifact_ref": self.summary_artifact_ref,
         }
-
 
 @dataclass(slots=True)
 class PlanInterpreter:
@@ -489,7 +485,6 @@ class PlanInterpreter:
             summary_artifact_ref=summary_artifact_ref,
         )
 
-
 def create_validated_interpreter(
     *,
     plan: Any,
@@ -508,7 +503,6 @@ def create_validated_interpreter(
         artifact_store=artifact_store,
         write_progress_artifact=write_progress_artifact,
     )
-
 
 def validate_then_execute(
     *,
@@ -531,7 +525,6 @@ def validate_then_execute(
     except PlanValidationError as exc:
         raise PlanExecutionError("validation_failed", str(exc)) from exc
     return interpreter.run()
-
 
 __all__ = [
     "PlanExecutionError",

@@ -48,10 +48,8 @@ _RESERVED_INPUT_ATTACHMENT_PREFIXES = (
 )
 _NORMALIZED_RESERVED_INPUT_ATTACHMENT_PREFIXES: frozenset[str]
 
-
 class TemporalArtifactError(Exception):
     """Base class for Temporal artifact service errors."""
-
 
 class TemporalArtifactNotFoundError(TemporalArtifactError):
     """Raised when a requested artifact does not exist."""
@@ -60,18 +58,14 @@ class TemporalArtifactNotFoundError(TemporalArtifactError):
         super().__init__(f"Artifact {artifact_id} was not found")
         self.artifact_id = artifact_id
 
-
 class TemporalArtifactStateError(TemporalArtifactError):
     """Raised when an operation is invalid for current artifact state."""
-
 
 class TemporalArtifactValidationError(TemporalArtifactError):
     """Raised when an artifact request is malformed or exceeds policy."""
 
-
 class TemporalArtifactAuthorizationError(TemporalArtifactError):
     """Raised when principal is not permitted to access an artifact."""
-
 
 def _is_retryable_single_put_read_error(exc: Exception) -> bool:
     if isinstance(exc, (FileNotFoundError, KeyError)):
@@ -80,7 +74,6 @@ def _is_retryable_single_put_read_error(exc: Exception) -> bool:
         code = str(exc.response.get("Error", {}).get("Code", ""))
         return code in _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES
     return False
-
 
 @dataclass(slots=True, frozen=True)
 class ExecutionRef:
@@ -94,7 +87,6 @@ class ExecutionRef:
     created_by_activity_type: str | None = None
     created_by_worker: str | None = None
 
-
 @dataclass(slots=True, frozen=True)
 class ArtifactRef:
     """Canonical ArtifactRef payload passed to workflows/activities."""
@@ -105,7 +97,6 @@ class ArtifactRef:
     size_bytes: int | None
     content_type: str | None
     encryption: str
-
 
 @dataclass(slots=True, frozen=True)
 class ArtifactUploadDescriptor:
@@ -118,7 +109,6 @@ class ArtifactUploadDescriptor:
     max_size_bytes: int
     required_headers: dict[str, str]
 
-
 @dataclass(slots=True, frozen=True)
 class ArtifactUploadPartDescriptor:
     """Presigned one-part multipart upload descriptor."""
@@ -128,7 +118,6 @@ class ArtifactUploadPartDescriptor:
     expires_at: datetime
     required_headers: dict[str, str]
 
-
 @dataclass(slots=True, frozen=True)
 class ArtifactReadPolicy:
     """Resolved read policy metadata for UI-safe reads."""
@@ -136,7 +125,6 @@ class ArtifactReadPolicy:
     raw_access_allowed: bool
     preview_artifact_ref: ArtifactRef | None
     default_read_ref: ArtifactRef
-
 
 @dataclass(slots=True, frozen=True)
 class LifecycleSweepSummary:
@@ -147,11 +135,9 @@ class LifecycleSweepSummary:
     soft_deleted_count: int
     hard_deleted_count: int
 
-
 @dataclass(slots=True, frozen=True)
 class _StorageLifecycleConfig:
     hard_delete_after: timedelta
-
 
 def _encode_base32(value: int, length: int) -> str:
     chars = ["0"] * length
@@ -159,7 +145,6 @@ def _encode_base32(value: int, length: int) -> str:
         chars[idx] = _CROCKFORD_BASE32[value & 0x1F]
         value >>= 5
     return "".join(chars)
-
 
 def generate_artifact_id(now: datetime | None = None) -> str:
     """Return an opaque ``art_<ULID>`` identifier."""
@@ -170,7 +155,6 @@ def generate_artifact_id(now: datetime | None = None) -> str:
     ulid_value = (timestamp_bits << 80) | random_bits
     ulid = _encode_base32(ulid_value, 26)
     return f"art_{ulid}"
-
 
 def _validate_sha256(value: str | None) -> str | None:
     if value is None:
@@ -183,7 +167,6 @@ def _validate_sha256(value: str | None) -> str | None:
             "sha256 must be a 64-character hex string"
         )
     return normalized
-
 
 def _derive_retention(
     explicit: db_models.TemporalArtifactRetentionClass | None,
@@ -210,7 +193,6 @@ def _derive_retention(
         return db_models.TemporalArtifactRetentionClass.STANDARD
     return db_models.TemporalArtifactRetentionClass.STANDARD
 
-
 def _strongest_retention_class(
     values: Iterable[db_models.TemporalArtifactRetentionClass],
 ) -> db_models.TemporalArtifactRetentionClass:
@@ -226,10 +208,8 @@ def _strongest_retention_class(
         default=db_models.TemporalArtifactRetentionClass.STANDARD,
     )
 
-
 def _normalized_content_type(value: object | None) -> str:
     return str(value or "").split(";", 1)[0].strip().lower()
-
 
 def _allowed_input_attachment_content_types() -> set[str]:
     configured = {
@@ -240,12 +220,10 @@ def _allowed_input_attachment_content_types() -> set[str]:
     configured.discard("image/svg+xml")
     return configured or {"image/png", "image/jpeg", "image/webp"}
 
-
 def _is_task_input_attachment_metadata(metadata: Mapping[str, Any]) -> bool:
     source = str(metadata.get("source") or "").strip().lower()
     attachment_kind = str(metadata.get("attachmentKind") or "").strip().lower()
     return source in _TASK_INPUT_ATTACHMENT_SOURCES or attachment_kind == "input"
-
 
 def _normalize_reserved_input_attachment_path(raw_path: str) -> str:
     path = raw_path.strip().replace("\\", "/").lower()
@@ -266,12 +244,10 @@ def _normalize_reserved_input_attachment_path(raw_path: str) -> str:
         normalized = f"{normalized}/"
     return normalized
 
-
 _NORMALIZED_RESERVED_INPUT_ATTACHMENT_PREFIXES = frozenset(
     _normalize_reserved_input_attachment_path(prefix)
     for prefix in _RESERVED_INPUT_ATTACHMENT_PREFIXES
 )
-
 
 def _assert_not_reserved_input_attachment_metadata(
     metadata: Mapping[str, Any] | None,
@@ -301,7 +277,6 @@ def _assert_not_reserved_input_attachment_metadata(
                 "worker artifact uploads may not target the reserved input attachment namespace"
             )
 
-
 def _validate_image_attachment_payload(
     *,
     content_type: str | None,
@@ -326,7 +301,6 @@ def _validate_image_attachment_payload(
     ):
         raise TemporalArtifactValidationError("image/webp signature validation failed")
 
-
 def _requires_image_payload_validation(
     *, content_type: str | None, metadata: Mapping[str, Any] | None
 ) -> bool:
@@ -334,7 +308,6 @@ def _requires_image_payload_validation(
     return _is_task_input_attachment_metadata(metadata or {}) or normalized.startswith(
         "image/"
     )
-
 
 def _expires_at_for_retention(
     retention_class: db_models.TemporalArtifactRetentionClass,
@@ -348,7 +321,6 @@ def _expires_at_for_retention(
         return now + timedelta(days=180)
     return now + timedelta(days=30)
 
-
 def build_artifact_ref(artifact: db_models.TemporalArtifact) -> ArtifactRef:
     """Map DB metadata to ArtifactRef contract."""
 
@@ -360,7 +332,6 @@ def build_artifact_ref(artifact: db_models.TemporalArtifact) -> ArtifactRef:
         content_type=artifact.content_type,
         encryption=artifact.encryption.value,
     )
-
 
 class TemporalArtifactStore:
     """Storage adapter contract for artifact bytes."""
@@ -449,7 +420,6 @@ class TemporalArtifactStore:
     ) -> str:
         raise NotImplementedError
 
-
 class LocalTemporalArtifactStore(TemporalArtifactStore):
     """Filesystem-backed blob store for local development fallback mode."""
 
@@ -523,7 +493,6 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
     ) -> str:
         _ = storage_key, expires_in_seconds, download_filename
         return ""
-
 
 class S3TemporalArtifactStore(TemporalArtifactStore):
     """S3-compatible store adapter used by MinIO-first local/dev runtime."""
@@ -776,8 +745,6 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             )
         )
 
-
-
 class TemporalArtifactRepository:
     """Persistence helper for Temporal artifacts and execution links."""
 
@@ -1014,7 +981,6 @@ class TemporalArtifactRepository:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
-
 
 class TemporalArtifactService:
     """Service implementing Temporal artifact semantics for local/dev runtime."""
@@ -2320,7 +2286,6 @@ class TemporalArtifactService:
         )
         ref = build_artifact_ref(completed)
         return {"artifact_ref_v": ref.artifact_ref_v, "artifact_id": ref.artifact_id}
-
 
 class TemporalArtifactActivities:
     """Activity-friendly facade used by Temporal workflow/activity code."""

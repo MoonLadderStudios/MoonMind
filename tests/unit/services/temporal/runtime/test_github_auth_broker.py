@@ -13,7 +13,6 @@ from moonmind.workflows.temporal.runtime.github_auth_broker import (
     run_gh_wrapper,
 )
 
-
 @pytest.mark.asyncio
 async def test_github_auth_broker_serves_token_and_cleans_socket():
     manager = GitHubAuthBrokerManager()
@@ -37,7 +36,6 @@ async def test_github_auth_broker_serves_token_and_cleans_socket():
     await manager.stop("run-1")
 
     assert not Path(socket_path).exists()
-
 
 def test_run_gh_wrapper_clears_ambient_gh_token(
     monkeypatch: pytest.MonkeyPatch,
@@ -75,7 +73,6 @@ def test_run_gh_wrapper_clears_ambient_gh_token(
     assert isinstance(env, dict)
     assert env["GITHUB_TOKEN"] == "broker-issued-token"
     assert "GH_TOKEN" not in env
-
 
 def test_run_gh_wrapper_resolves_real_gh_after_wrapper_path(
     monkeypatch: pytest.MonkeyPatch,

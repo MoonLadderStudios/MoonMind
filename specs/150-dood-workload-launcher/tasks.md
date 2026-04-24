@@ -34,4 +34,4 @@
 
 - [X] T014 Run focused unit tests for workload launcher and routing with `./tools/test_unit.sh --python-only tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_workload_run_activity.py`.
 - [X] T015 Run full unit test suite with `./tools/test_unit.sh`.
-- [X] T016 Update `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md` to mark Phase 2 complete.
+- [X] T016 Update `docs/ManagedAgents/DockerOutOfDocker.md` to mark Phase 2 complete.

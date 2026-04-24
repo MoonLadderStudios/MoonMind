@@ -3,7 +3,7 @@
 ## Story Classification
 
 Decision: Treat MM-500 as a single-story runtime verification-first feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-500-moonspec-orchestration-input.md`; `specs/249-profile-backed-workload-contracts/spec.md`.
+Evidence: `spec.md` (Input); `specs/249-profile-backed-workload-contracts/spec.md`.
 Rationale: The Jira preset brief defines one independently testable runtime outcome: profile-backed workload and helper tools stay on approved runner profiles rather than widening into arbitrary raw container inputs.
 Alternatives considered: Broad design breakdown was rejected because the Jira brief already selects one bounded story.
 Test implications: Unit tests plus at least one hermetic integration boundary are required because the story touches dispatcher/runtime execution behavior.
@@ -59,7 +59,7 @@ Test implications: Preserve deterministic-denial integration coverage.
 ## FR-007 Traceability
 
 Decision: implemented_verified.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-500-moonspec-orchestration-input.md`; `specs/249-profile-backed-workload-contracts/spec.md`; `plan.md`; `research.md`; `contracts/profile-backed-workload-contract.md`; `quickstart.md`; `tasks.md`.
+Evidence: `spec.md` (Input); `specs/249-profile-backed-workload-contracts/spec.md`; `plan.md`; `research.md`; `contracts/profile-backed-workload-contract.md`; `quickstart.md`; `tasks.md`.
 Rationale: The feature-local MoonSpec artifact set now preserves MM-500 and the original Jira preset brief for downstream work and verification.
 Alternatives considered: Preserve the Jira key only in the source brief. Rejected because the story explicitly requires downstream traceability.
 Test implications: Final traceability review only.

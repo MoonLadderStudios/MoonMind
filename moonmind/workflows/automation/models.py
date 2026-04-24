@@ -45,12 +45,10 @@ from api_service.db.models import (
 
 _MUTABLE_JSON = MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql"))
 
-
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     """Return enum member values so SQLAlchemy stores lowercase labels."""
 
     return [member.value for member in enum_cls]
-
 
 class CodexAuthVolumeStatus(str, enum.Enum):
     """Health states for persisted Codex authentication volumes."""
@@ -59,14 +57,12 @@ class CodexAuthVolumeStatus(str, enum.Enum):
     NEEDS_AUTH = "needs_auth"
     ERROR = "error"
 
-
 class CodexWorkerShardStatus(str, enum.Enum):
     """Lifecycle states for Codex-focused workers."""
 
     ACTIVE = "active"
     DRAINING = "draining"
     OFFLINE = "offline"
-
 
 @dataclass(slots=True)
 class CredentialAuditResult:
@@ -83,7 +79,6 @@ class CredentialAuditResult:
             self.codex_status is CodexCredentialStatus.VALID
             and self.github_status is GitHubCredentialStatus.VALID
         )
-
 
 class CodexAuthVolume(Base):
     """Persistent Codex authentication volume mapped to a worker shard."""
@@ -133,7 +128,6 @@ class CodexAuthVolume(Base):
         primaryjoin="CodexAuthVolume.name == WorkflowRun.codex_volume",
     )
 
-
 class CodexWorkerShard(Base):
     """Worker dedicated to Codex tasks and its routing metadata."""
 
@@ -182,7 +176,6 @@ class CodexWorkerShard(Base):
         primaryjoin="CodexWorkerShard.queue_name == WorkflowRun.codex_queue",
     )
 
-
 class AutomationRunStatus(str, enum.Enum):
     """Lifecycle states for workflow automation runs."""
 
@@ -191,7 +184,6 @@ class AutomationRunStatus(str, enum.Enum):
     SUCCEEDED = "completed"
     FAILED = "failed"
     NO_CHANGES = "no_changes"
-
 
 class AutomationPhase(str, enum.Enum):
     """Phases executed during the workflow automation pipeline."""
@@ -214,7 +206,6 @@ class AutomationPhase(str, enum.Enum):
     OPEN_PR = "open_pr"
     CLEANUP = "cleanup"
 
-
 class AutomationTaskStatus(str, enum.Enum):
     """Per-phase task status values for workflow automation."""
 
@@ -225,7 +216,6 @@ class AutomationTaskStatus(str, enum.Enum):
     SKIPPED = "skipped"
     RETRYING = "retrying"
 
-
 class AutomationArtifactType(str, enum.Enum):
     """Artifact classifications produced by workflow automation."""
 
@@ -235,7 +225,6 @@ class AutomationArtifactType(str, enum.Enum):
     COMMIT_STATUS = "commit_status"
     METRICS_SNAPSHOT = "metrics_snapshot"
     ENVIRONMENT_INFO = "environment_info"
-
 
 class AutomationRun(Base):
     """Represents a workflow automation execution."""
@@ -306,7 +295,6 @@ class AutomationRun(Base):
             uselist=False,
         )
     )
-
 
 class AutomationTaskState(Base):
     """State captured for each automation phase attempt."""
@@ -449,7 +437,6 @@ class AutomationTaskState(Base):
             "shadowModeRequested": shadow_mode_bool,
         }
 
-
 class AutomationArtifact(Base):
     """Artifacts emitted during automation (logs, diffs, metrics snapshots)."""
 
@@ -511,7 +498,6 @@ class AutomationArtifact(Base):
         "AutomationTaskState", back_populates="artifacts"
     )
 
-
 class AutomationAgentConfiguration(Base):
     """Snapshot of the agent configuration used for a run."""
 
@@ -537,7 +523,6 @@ class AutomationAgentConfiguration(Base):
     run: Mapped[AutomationRun] = relationship(
         "AutomationRun", back_populates="agent_configuration"
     )
-
 
 __all__ = [
     "WorkflowRun",

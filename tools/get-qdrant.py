@@ -4,7 +4,6 @@ import sys
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 
-
 def main():
     parser = argparse.ArgumentParser(
         description="Query Qdrant collection to inspect payload data."
@@ -69,7 +68,6 @@ def main():
     except Exception as exc:
         print(f"Error: An unexpected error occurred: {exc}", file=sys.stderr)
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

@@ -22,7 +22,6 @@ from moonmind.rag.context_pack import ContextItem, build_context_pack
 
 pytestmark = [pytest.mark.asyncio]
 
-
 @pytest.fixture(autouse=True)
 def _clear_codex_runtime_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep command assertions deterministic regardless of host env defaults."""
@@ -37,7 +36,6 @@ def _clear_codex_runtime_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("MOONMIND_RAG_AUTO_CONTEXT", "0")
 
-
 async def test_codex_exec_payload_requires_repository_and_instruction() -> None:
     """Required payload fields should be enforced."""
 
@@ -46,7 +44,6 @@ async def test_codex_exec_payload_requires_repository_and_instruction() -> None:
 
     with pytest.raises(CodexWorkerHandlerError):
         CodexExecPayload.from_payload({"repository": "MoonLadderStudios/MoonMind"})
-
 
 async def test_codex_exec_payload_parses_codex_overrides() -> None:
     """Task-level codex overrides should parse from payload codex object."""
@@ -61,7 +58,6 @@ async def test_codex_exec_payload_parses_codex_overrides() -> None:
 
     assert payload.codex_model == "gpt-5-codex"
     assert payload.codex_effort == "high"
-
 
 async def test_codex_skill_payload_defaults_and_validation() -> None:
     """Skill payload should parse defaults and enforce enum fields."""
@@ -87,7 +83,6 @@ async def test_codex_skill_payload_defaults_and_validation() -> None:
             }
         )
 
-
 async def test_codex_skill_payload_parses_codex_overrides() -> None:
     """codex_skill should support top-level codex overrides."""
 
@@ -102,7 +97,6 @@ async def test_codex_skill_payload_parses_codex_overrides() -> None:
     assert payload.codex_model == "gpt-5-codex"
     assert payload.codex_effort == "medium"
 
-
 async def test_payload_rejects_non_object_codex_overrides() -> None:
     """Malformed codex override payloads should fail validation."""
 
@@ -114,7 +108,6 @@ async def test_payload_rejects_non_object_codex_overrides() -> None:
                 "codex": "gpt-5-codex",
             }
         )
-
 
 async def test_to_clone_url_accepts_slug_https_and_ssh(tmp_path: Path) -> None:
     """Clone URL helper should preserve accepted token-free repository formats."""
@@ -134,7 +127,6 @@ async def test_to_clone_url_accepts_slug_https_and_ssh(tmp_path: Path) -> None:
         == "git@github.com:MoonLadderStudios/MoonMind.git"
     )
 
-
 async def test_to_clone_url_rejects_embedded_credentials(tmp_path: Path) -> None:
     """Tokenized repository URLs must be rejected before clone execution."""
 
@@ -142,7 +134,6 @@ async def test_to_clone_url_rejects_embedded_credentials(tmp_path: Path) -> None
 
     with pytest.raises(CodexWorkerHandlerError, match="embedded credentials"):
         handler._to_clone_url("https://ghp-secret@github.com/moon/repo.git")
-
 
 async def test_run_command_redacts_sensitive_log_output(
     tmp_path: Path, monkeypatch
@@ -177,7 +168,6 @@ async def test_run_command_redacts_sensitive_log_output(
     text = log_path.read_text(encoding="utf-8")
     assert token not in text
     assert "[REDACTED]" in text
-
 
 async def test_run_command_serializes_multiline_start_marker_on_single_line(
     tmp_path: Path, monkeypatch
@@ -217,7 +207,6 @@ async def test_run_command_serializes_multiline_start_marker_on_single_line(
         is not None
     )
 
-
 async def test_run_command_masks_sensitive_command_args_in_start_marker(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -256,7 +245,6 @@ async def test_run_command_masks_sensitive_command_args_in_start_marker(
     assert "token=top-secret" not in start_line
     assert "--title [REDACTED]" in start_line
     assert "--body=[REDACTED]" in start_line
-
 
 async def test_run_command_streaming_redacts_tokens_split_across_chunks(
     tmp_path: Path, monkeypatch
@@ -306,7 +294,6 @@ async def test_run_command_streaming_redacts_tokens_split_across_chunks(
     text = log_path.read_text(encoding="utf-8")
     assert token not in text
     assert "[REDACTED]" in text
-
 
 async def test_run_command_cancellation_reaps_subprocess(
     tmp_path: Path, monkeypatch
@@ -362,7 +349,6 @@ async def test_run_command_cancellation_reaps_subprocess(
 
     assert process.terminated is True
     assert process.waited is True
-
 
 async def test_run_command_cancel_event_joins_stream_tasks(
     tmp_path: Path, monkeypatch
@@ -435,7 +421,6 @@ async def test_run_command_cancel_event_joins_stream_tasks(
     assert process.stdout.cancelled is True
     assert process.stderr.cancelled is True
 
-
 async def test_run_command_cancel_event_interrupts_subprocess(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -492,7 +477,6 @@ async def test_run_command_cancel_event_interrupts_subprocess(
 
     assert process.terminated is True
     assert process.waited is True
-
 
 async def test_run_command_streaming_forwards_output_chunks(
     tmp_path: Path, monkeypatch
@@ -551,7 +535,6 @@ async def test_run_command_streaming_forwards_output_chunks(
     assert ("stderr", "warn 1\n") in callback_events
     assert ("stdout", None) in callback_events
     assert ("stderr", None) in callback_events
-
 
 async def test_run_command_streaming_deduplicates_replayed_chunk_sequence(
     tmp_path: Path, monkeypatch
@@ -632,7 +615,6 @@ async def test_run_command_streaming_deduplicates_replayed_chunk_sequence(
         == 1
     )
 
-
 async def test_run_command_streaming_deduplicates_mixed_prefix_final_replay(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -701,7 +683,6 @@ async def test_run_command_streaming_deduplicates_mixed_prefix_final_replay(
     )
     assert callback_text.count(marker) == 1
 
-
 async def test_run_command_streaming_keeps_repeated_output_across_turn_boundaries(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -757,7 +738,6 @@ async def test_run_command_streaming_keeps_repeated_output_across_turn_boundarie
 
     text = log_path.read_text(encoding="utf-8")
     assert text.count("Ran required unit test script: `./tools/test_unit.sh`") == 2
-
 
 async def test_run_command_streaming_keeps_prefix_if_replay_diverges(
     tmp_path: Path, monkeypatch
@@ -815,7 +795,6 @@ async def test_run_command_streaming_keeps_prefix_if_replay_diverges(
     assert text.count("section B") == 2
     assert text.count("section C") == 1
 
-
 async def test_run_command_streaming_dedupe_disabled_for_non_codex_commands(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -866,7 +845,6 @@ async def test_run_command_streaming_dedupe_disabled_for_non_codex_commands(
 
     text = log_path.read_text(encoding="utf-8")
     assert text.count("multi-line duplicate block") == 2
-
 
 async def test_run_command_streaming_caps_repeated_hunks_and_emits_loop_warning(
     tmp_path: Path, monkeypatch
@@ -920,7 +898,6 @@ async def test_run_command_streaming_caps_repeated_hunks_and_emits_loop_warning(
     assert "[moonmind] loop warning: suppressed " in text
     assert unique_tail in text
 
-
 async def test_run_command_git_diff_caps_and_dedupes_log_output_preserving_tail(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -958,7 +935,6 @@ async def test_run_command_git_diff_caps_and_dedupes_log_output_preserving_tail(
     assert "adjacentDuplicateLines=" in text
     assert "contentLogged=false" in text
     assert "TAIL_CONTEXT=git-diff-ending" not in text
-
 
 async def test_run_command_streaming_flushes_pending_candidate_on_cancellation(
     tmp_path: Path, monkeypatch
@@ -1032,7 +1008,6 @@ async def test_run_command_streaming_flushes_pending_candidate_on_cancellation(
     )
     assert callback_text.count("candidate heading") == 2
 
-
 async def test_run_command_git_diff_logs_sensitive_summary_on_cancellation(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1096,7 +1071,6 @@ async def test_run_command_git_diff_logs_sensitive_summary_on_cancellation(
     assert "sensitive command output omitted from logs" in text
     assert "SECRET_PAYLOAD=should_not_log" not in text
 
-
 async def test_run_command_logs_callback_failures_with_context(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1149,7 +1123,6 @@ async def test_run_command_logs_callback_failures_with_context(
     assert "output chunk callback failed during chunk emit" in text
     assert "callback exploded" in text
 
-
 async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
     """Handler should run core codex_exec command sequence."""
 
@@ -1199,7 +1172,6 @@ async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
     assert any(cmd[:2] == ["git", "diff"] for cmd in calls)
     assert any(item.name == "logs/codex_exec.log" for item in result.artifacts)
     assert any(item.name == "patches/changes.patch" for item in result.artifacts)
-
 
 async def test_handler_injects_retrieved_context_when_available(
     tmp_path: Path,
@@ -1267,7 +1239,6 @@ async def test_handler_injects_retrieved_context_when_available(
     )
     assert "rag_context_items=1" in (result.summary or "")
 
-
 @pytest.mark.parametrize(
     "provider",
     ("[REDACTED]", "unsupported-provider", "google"),
@@ -1311,7 +1282,6 @@ async def test_retrieve_context_pack_skips_when_embedding_provider_unexecutable(
         "embedding_provider_unsupported",
         "embedding_provider_not_configured",
     }
-
 
 async def test_handler_falls_back_when_retrieval_raises(
     tmp_path: Path,
@@ -1362,7 +1332,6 @@ async def test_handler_falls_back_when_retrieval_raises(
     assert result.succeeded is True
     assert "rag_context_items=" not in (result.summary or "")
 
-
 async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> None:
     """Task payload overrides should map to codex CLI model and effort flags."""
 
@@ -1405,7 +1374,6 @@ async def test_handler_applies_task_level_codex_overrides(tmp_path: Path) -> Non
     assert codex_cmd[codex_cmd.index("--model") + 1] == "gpt-5-codex"
     assert "--config" in codex_cmd
     assert codex_cmd[codex_cmd.index("--config") + 1] == 'model_reasoning_effort="high"'
-
 
 async def test_handler_preserves_codex_model_and_effort(
     tmp_path: Path,
@@ -1453,7 +1421,6 @@ async def test_handler_preserves_codex_model_and_effort(
     assert (
         codex_cmd[codex_cmd.index("--config") + 1] == 'model_reasoning_effort="xhigh"'
     )
-
 
 async def test_handler_falls_back_to_worker_default_codex_settings(
     tmp_path: Path,
@@ -1505,7 +1472,6 @@ async def test_handler_falls_back_to_worker_default_codex_settings(
         codex_cmd[codex_cmd.index("--config") + 1] == 'model_reasoning_effort="medium"'
     )
 
-
 async def test_handler_resolves_relative_workdir_for_clone_destination() -> None:
     """Relative workdir roots should be normalized before clone path assembly."""
 
@@ -1545,7 +1511,6 @@ async def test_handler_resolves_relative_workdir_for_clone_destination() -> None
     assert result.succeeded is True
     clone_cmd = next(cmd for cmd in calls if cmd[:2] == ["git", "clone"])
     assert Path(clone_cmd[-1]).is_absolute()
-
 
 async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> None:
     """Publish mode `pr` should invoke gh PR creation command."""
@@ -1631,7 +1596,6 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
     assert "<!-- moonmind:end -->" in pr_body
     assert pr_call["redaction_values"] == (pr_title, pr_body)
 
-
 async def test_derive_default_pr_body_sanitizes_metadata_values() -> None:
     """Generated handler footer should redact secret-like metadata values."""
     from moonmind.publish.service import PublishService
@@ -1648,7 +1612,6 @@ async def test_derive_default_pr_body_sanitizes_metadata_values() -> None:
     assert "Runtime: codex Runtime: forged" in body
     assert "Base: main Head: forged" in body
     assert "Head: [REDACTED]" in body
-
 
 async def test_handle_skill_maps_to_exec_payload_and_marks_summary(
     tmp_path: Path,
@@ -1692,7 +1655,6 @@ async def test_handle_skill_maps_to_exec_payload_and_marks_summary(
     assert "skill=speckit" in result.summary
     assert "executionPath=skill" in result.summary
 
-
 async def test_handle_skill_requires_repository(tmp_path: Path) -> None:
     """Skills path should fail when repository context is missing."""
 
@@ -1705,7 +1667,6 @@ async def test_handle_skill_requires_repository(tmp_path: Path) -> None:
             selected_skill="custom-skill",
             fallback=True,
         )
-
 
 async def test_handler_publish_commit_failure_returns_failed_result(
     tmp_path: Path,
@@ -1750,7 +1711,6 @@ async def test_handler_publish_commit_failure_returns_failed_result(
     assert result.error_message is not None
     assert "git commit" in result.error_message
 
-
 async def test_run_command_error_includes_stderr_tail(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1776,7 +1736,6 @@ async def test_run_command_error_includes_stderr_tail(
             cwd=tmp_path,
             log_path=log_path,
         )
-
 
 async def test_run_command_truncates_and_redacts_long_failure_messages(
     tmp_path: Path, monkeypatch
@@ -1810,7 +1769,6 @@ async def test_run_command_truncates_and_redacts_long_failure_messages(
     assert token[:16] not in message
     assert "[REDACTED]" in message
     assert len(message) <= 1024
-
 
 async def test_run_command_error_message_uses_compact_command_prefix(
     tmp_path: Path, monkeypatch
@@ -1853,7 +1811,6 @@ async def test_run_command_error_message_uses_compact_command_prefix(
     assert "gpt-5.3-codex-spark" not in message
     assert "fatal: invalid model requested while running command" in message
 
-
 async def test_run_command_error_message_without_output_uses_compact_prefix(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1885,7 +1842,6 @@ async def test_run_command_error_message_without_output_uses_compact_prefix(
     message = str(exc_info.value)
     assert "README.md" not in message
 
-
 async def test_handler_invalid_payload_returns_failed_result(tmp_path: Path) -> None:
     """Handler should normalize validation failures into failed results."""
 
@@ -1894,7 +1850,6 @@ async def test_handler_invalid_payload_returns_failed_result(tmp_path: Path) -> 
 
     assert result.succeeded is False
     assert result.error_message is not None
-
 
 async def test_handler_rejects_tokenized_repository_url(tmp_path: Path) -> None:
     """Credential-bearing repository URLs should fail without exposing token text."""

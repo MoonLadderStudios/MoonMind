@@ -11,7 +11,7 @@ Expected result: matches show proposal invariants, payload examples, default pro
 ## Source Traceability Check
 
 ```bash
-rg -n "MM-388|DESIGN-REQ-015|DESIGN-REQ-019|DESIGN-REQ-023|DESIGN-REQ-025|DESIGN-REQ-026" specs/202-document-proposal-promotion docs/tmp/jira-orchestration-inputs/MM-388-moonspec-orchestration-input.md
+rg -n "MM-388|DESIGN-REQ-015|DESIGN-REQ-019|DESIGN-REQ-023|DESIGN-REQ-025|DESIGN-REQ-026" specs/202-document-proposal-promotion
 ```
 
 Expected result: all source IDs and the Jira issue key remain visible in MoonSpec artifacts and the canonical orchestration input.

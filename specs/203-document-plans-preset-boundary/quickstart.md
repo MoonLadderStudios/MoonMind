@@ -2,10 +2,10 @@
 
 ## Focused Documentation Contract Check
 
-Run after updating `docs/tmp/101-PlansOverview.md`:
+Run after updating `docs/MoonMindRoadmap.md`:
 
 ```bash
-rg -n "control plane|PlanDefinition|flattened execution graphs|TaskPresetsSystem|SkillAndPlanContracts" docs/tmp/101-PlansOverview.md
+rg -n "control plane|PlanDefinition|flattened execution graphs|TaskPresetsSystem|SkillAndPlanContracts" docs/MoonMindRoadmap.md
 ```
 
 Expected result:
@@ -17,15 +17,15 @@ Expected result:
 ## No Canonical Migration Checklist Check
 
 ```bash
-! rg -n "MM-389|Document plans overview preset boundary|preset boundary" docs --glob '!docs/tmp/**'
+! rg -n "MM-389|Document plans overview preset boundary|preset boundary" docs --glob '!artifacts/**'
 ```
 
-Expected result: no canonical docs outside `docs/tmp/` contain a new MM-389 migration checklist or story-specific backlog entry.
+Expected result: no canonical docs outside `local-only handoffs` contain a new MM-389 migration checklist or story-specific backlog entry.
 
 ## Source Traceability Check
 
 ```bash
-rg -n "MM-389|DESIGN-REQ-001|DESIGN-REQ-020|DESIGN-REQ-024|DESIGN-REQ-025|DESIGN-REQ-026" specs/203-document-plans-preset-boundary docs/tmp/jira-orchestration-inputs/MM-389-moonspec-orchestration-input.md
+rg -n "MM-389|DESIGN-REQ-001|DESIGN-REQ-020|DESIGN-REQ-024|DESIGN-REQ-025|DESIGN-REQ-026" specs/203-document-plans-preset-boundary
 ```
 
 Expected result: MM-389 and all in-scope source design requirements are present in MoonSpec artifacts.
@@ -56,6 +56,6 @@ Run final verification against the active feature:
 
 Expected result:
 - The preserved MM-389 Jira preset brief is the canonical input.
-- `docs/tmp/101-PlansOverview.md` satisfies FR-001 through FR-008.
+- `docs/MoonMindRoadmap.md` satisfies FR-001 through FR-008.
 - MoonSpec artifacts preserve MM-389 for FR-009.
 - Verification records any environment blockers for full unit or integration commands.

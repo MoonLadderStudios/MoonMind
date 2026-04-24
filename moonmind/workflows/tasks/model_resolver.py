@@ -36,7 +36,6 @@ _MODEL_SOURCE_PROFILE_DEFAULT = "provider_profile_default"
 _MODEL_SOURCE_RUNTIME_DEFAULT = "runtime_default"
 _MODEL_SOURCE_NONE = "none"
 
-
 def resolve_effective_model(
     *,
     runtime_id: str | None,

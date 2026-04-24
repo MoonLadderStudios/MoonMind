@@ -16,9 +16,7 @@ from moonmind.schemas.managed_session_models import (
     compact_claude_context_snapshot,
 )
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 @pytest.mark.parametrize(
     "kind",
@@ -58,7 +56,6 @@ def test_startup_context_source_kinds_are_documented_and_valid(kind: str) -> Non
     assert segment.kind == kind
     assert segment.loaded_at == "startup"
 
-
 @pytest.mark.parametrize(
     "kind",
     [
@@ -86,7 +83,6 @@ def test_on_demand_context_source_kinds_are_documented_and_valid(kind: str) -> N
     assert segment.kind == kind
     assert segment.loaded_at == "on_demand"
 
-
 def test_unknown_context_source_kind_is_rejected() -> None:
     with pytest.raises(ValidationError):
         ClaudeContextSegment(
@@ -97,7 +93,6 @@ def test_unknown_context_source_kind_is_rejected() -> None:
             reinjectionPolicy="always",
             guidanceRole="neutral",
         )
-
 
 def test_reinjection_policy_is_required_and_defaults_match_design() -> None:
     assert claude_default_reinjection_policy("system_prompt") == "always"
@@ -116,7 +111,6 @@ def test_reinjection_policy_is_required_and_defaults_match_design() -> None:
             loadedAt="startup",
             guidanceRole="neutral",
         )
-
 
 @pytest.mark.parametrize(
     "kind",
@@ -141,7 +135,6 @@ def test_guidance_and_memory_sources_cannot_be_enforcement(kind: str) -> None:
             guidanceRole="enforcement",
         )
 
-
 def test_context_segment_rejects_large_payload_metadata() -> None:
     with pytest.raises(ValidationError):
         ClaudeContextSegment(
@@ -153,7 +146,6 @@ def test_context_segment_rejects_large_payload_metadata() -> None:
             guidanceRole="neutral",
             metadata={"content": "x" * 100_000},
         )
-
 
 def test_compaction_creates_new_epoch_without_mutating_original_snapshot() -> None:
     original = ClaudeContextSnapshot(
@@ -218,7 +210,6 @@ def test_compaction_creates_new_epoch_without_mutating_original_snapshot() -> No
         "work.compaction.started",
         "work.compaction.completed",
     )
-
 
 def test_compaction_deep_copies_retained_segment_metadata() -> None:
     original = ClaudeContextSnapshot(

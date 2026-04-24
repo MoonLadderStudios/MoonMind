@@ -27,11 +27,9 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
-
 # NOTE: This test uses the Temporal time-skipping test server and is not
 # suitable for the required integration_ci suite.
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
-
 
 @workflow.defn(name="MoonMind.ProviderProfileManager")
 class MockProviderProfileManager:
@@ -86,7 +84,6 @@ class MockProviderProfileManager:
                 await handle.signal("slot_assigned", {"profile_id": profile_id})
         return {}
 
-
 @workflow.defn(name="DummyCodexSessionWorkflow")
 class DummyCodexSessionWorkflow:
     def __init__(self) -> None:
@@ -118,13 +115,11 @@ class DummyCodexSessionWorkflow:
         await workflow.wait_condition(lambda: self._shutdown)
         return dict(self._status)
 
-
 @_activity.defn(name="agent_runtime.publish_artifacts")
 async def mock_publish_artifacts(
     result: AgentRunResult | None = None,
 ) -> AgentRunResult | None:
     return result
-
 
 @_activity.defn(name="agent_runtime.cancel")
 async def mock_cancel(request: dict[str, Any]) -> dict[str, Any]:
@@ -134,7 +129,6 @@ async def mock_cancel(request: dict[str, Any]) -> dict[str, Any]:
         "agentId": request.get("agent_id", "codex"),
         "status": "canceled",
     }
-
 
 @_activity.defn(name="provider_profile.list")
 async def mock_provider_profile_list(request: dict[str, Any]) -> dict[str, Any]:
@@ -161,7 +155,6 @@ async def mock_provider_profile_list(request: dict[str, Any]) -> dict[str, Any]:
         ]
     }
 
-
 @_activity.defn(name="provider_profile.ensure_manager")
 async def mock_provider_profile_ensure_manager(
     request: dict[str, Any],
@@ -171,7 +164,6 @@ async def mock_provider_profile_ensure_manager(
         "workflow_id": f"provider-profile-manager:{request.get('runtime_id', 'codex_cli')}",
     }
 
-
 @_activity.defn(name="provider_profile.reset_manager")
 async def mock_provider_profile_reset_manager(
     request: dict[str, Any],
@@ -180,7 +172,6 @@ async def mock_provider_profile_reset_manager(
         "reset": True,
         "workflow_id": f"provider-profile-manager:{request.get('runtime_id', 'codex_cli')}",
     }
-
 
 class FakeCodexSessionController:
     async def launch_session(self, request: Any) -> CodexManagedSessionHandle:
@@ -246,7 +237,6 @@ class FakeCodexSessionController:
             latestControlEventRef=None,
             metadata=dict(request.metadata),
         )
-
 
 async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without_turn_reference(
     monkeypatch: pytest.MonkeyPatch,

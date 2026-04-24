@@ -7,7 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 if TYPE_CHECKING:
     pass
 
-
 class CreateJobRequest(BaseModel):
     """Request body for queue job creation (compatibility shim)."""
 
@@ -36,7 +35,6 @@ class UserProfileBaseSchema(BaseModel):
         alias="anthropic_api_key_encrypted",
     )
 
-
 class UserProfileRead(
     UserProfileBaseSchema
 ):  # Renamed UserProfileSchema to UserProfileRead
@@ -46,7 +44,6 @@ class UserProfileRead(
     # Configuration for ORM mode is inherited
     # google_api_key and openai_api_key are inherited from UserProfileBaseSchema
     # and will be present in this schema, suitable for internal use or when keys are needed.
-
 
 # New schema for sanitized output, excluding sensitive API keys.
 class UserProfileReadSanitized(BaseModel):
@@ -58,19 +55,16 @@ class UserProfileReadSanitized(BaseModel):
     openai_api_key_set: bool = False
     anthropic_api_key_set: bool = False
 
-
 class UserProfileUpdate(UserProfileBaseSchema):
     # Inherits fields from UserProfileBaseSchema, e.g., google_api_key
     # No additional fields needed for update beyond what's in base, unless specified
     pass
-
 
 # UserProfileCreateSchema remains as is, it was already defined and seems okay.
 class UserProfileCreateSchema(UserProfileBaseSchema):
     # This schema might be used if creation requires specific fields or is different from update.
     # For now, it's similar to UserProfileBaseSchema.
     pass
-
 
 class ApiKeyStatus(BaseModel):
     """Schema for displaying API key status."""
@@ -81,7 +75,6 @@ class ApiKeyStatus(BaseModel):
     # anthropic_api_key_set: bool = False # Example for other keys
     # Add other keys as needed
 
-
 class ManifestStateModel(BaseModel):
     """Manifest checkpoint state metadata."""
 
@@ -89,7 +82,6 @@ class ManifestStateModel(BaseModel):
 
     state_json: dict[str, Any] | None = Field(None, alias="stateJson")
     state_updated_at: datetime | None = Field(None, alias="stateUpdatedAt")
-
 
 class ManifestRunMetadataModel(BaseModel):
     """Last run summary for a manifest registry entry."""
@@ -111,7 +103,6 @@ class ManifestRunMetadataModel(BaseModel):
     started_at: Optional[datetime] = Field(None, alias="startedAt")
     finished_at: Optional[datetime] = Field(None, alias="finishedAt")
 
-
 class ManifestSummaryModel(BaseModel):
     """List item representing one manifest registry entry."""
 
@@ -128,7 +119,6 @@ class ManifestSummaryModel(BaseModel):
     last_run_status: Optional[str] = Field(None, alias="lastRunStatus")
     state_updated_at: Optional[datetime] = Field(None, alias="stateUpdatedAt")
 
-
 class ManifestDetailModel(BaseModel):
     """Detail response for one manifest registry entry."""
 
@@ -142,7 +132,6 @@ class ManifestDetailModel(BaseModel):
     last_run: Optional[ManifestRunMetadataModel] = Field(None, alias="lastRun")
     state: ManifestStateModel = Field(default_factory=ManifestStateModel, alias="state")
 
-
 class ManifestListResponse(BaseModel):
     """Envelope for manifest list responses."""
 
@@ -150,14 +139,12 @@ class ManifestListResponse(BaseModel):
 
     items: list[ManifestSummaryModel] = Field(default_factory=list, alias="items")
 
-
 class ManifestUpsertRequest(BaseModel):
     """Request payload for manifest upsert."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     content: str = Field(..., alias="content", min_length=1)
-
 
 class ManifestRunOptions(BaseModel):
     """Optional queue overrides for manifest runs."""
@@ -184,7 +171,6 @@ class ManifestRunOptions(BaseModel):
         if self.max_docs is not None:
             payload["maxDocs"] = self.max_docs
         return payload
-
 
 class ManifestRunRequest(BaseModel):
     """Request payload for registry-backed manifest runs."""
@@ -222,7 +208,6 @@ class ManifestRunRequest(BaseModel):
             raise ValueError("maxConcurrency must be between 1 and 500 when provided")
         return value
 
-
 class ManifestStateUpdateRequest(BaseModel):
     """Request payload for manifest state callback updates."""
 
@@ -233,7 +218,6 @@ class ManifestStateUpdateRequest(BaseModel):
     last_run_status: Optional[str] = Field(None, alias="lastRunStatus")
     last_run_started_at: Optional[datetime] = Field(None, alias="lastRunStartedAt")
     last_run_finished_at: Optional[datetime] = Field(None, alias="lastRunFinishedAt")
-
 
 class ManifestRunQueueMetadata(BaseModel):
     """Returned queue metadata after submitting a manifest run."""
@@ -246,7 +230,6 @@ class ManifestRunQueueMetadata(BaseModel):
     )
     manifest_hash: Optional[str] = Field(None, alias="manifestHash")
 
-
 class ManifestRunResponse(BaseModel):
     """Response payload when submitting registry manifest runs."""
 
@@ -256,7 +239,6 @@ class ManifestRunResponse(BaseModel):
     job_id: Optional[uuid.UUID] = Field(None, alias="jobId")
     queue: Optional[ManifestRunQueueMetadata] = Field(None, alias="queue")
     execution: Optional[ManifestRunMetadataModel] = Field(None, alias="execution")
-
 
 class QueueSystemMetadataModel(BaseModel):
     """Serialized worker pause metadata shared by claim + heartbeat responses."""
@@ -293,7 +275,6 @@ class QueueSystemMetadataModel(BaseModel):
             updated_at=metadata.updated_at,
         )
 
-
 class WorkerPauseMetricsModel(BaseModel):
     """Queued/running counters returned by the worker pause API."""
 
@@ -304,7 +285,6 @@ class WorkerPauseMetricsModel(BaseModel):
     stale_running: int = Field(..., alias="staleRunning", ge=0)
     is_drained: bool = Field(..., alias="isDrained")
     metrics_source: str = Field("legacy", alias="metricsSource")
-
 
 class WorkerPauseAuditEventModel(BaseModel):
     """Append-only audit entry surfaced by the worker pause API."""
@@ -318,7 +298,6 @@ class WorkerPauseAuditEventModel(BaseModel):
     actor_user_id: Optional[uuid.UUID] = Field(None, alias="actorUserId")
     created_at: datetime = Field(..., alias="createdAt")
 
-
 class WorkerPauseAuditListModel(BaseModel):
     """Audit wrapper returned by the worker pause API."""
 
@@ -327,7 +306,6 @@ class WorkerPauseAuditListModel(BaseModel):
     latest: list[WorkerPauseAuditEventModel] = Field(
         default_factory=list, alias="latest"
     )
-
 
 class WorkerPauseSnapshotResponse(BaseModel):
     """Response envelope for GET/POST /api/system/worker-pause."""
@@ -340,7 +318,6 @@ class WorkerPauseSnapshotResponse(BaseModel):
         default_factory=WorkerPauseAuditListModel, alias="audit"
     )
     signal_status: Optional[str] = Field(None, alias="signalStatus")
-
 
 class TaskTemplateInputSchema(BaseModel):
     """Input definition used by task template versions."""
@@ -356,7 +333,6 @@ class TaskTemplateInputSchema(BaseModel):
     default: Any = None
     options: list[str] = Field(default_factory=list)
 
-
 class TaskTemplateStepSkillSchema(BaseModel):
     """Skill payload attached to a template step."""
 
@@ -367,7 +343,6 @@ class TaskTemplateStepSkillSchema(BaseModel):
     required_capabilities: list[str] = Field(
         default_factory=list, alias="requiredCapabilities"
     )
-
 
 class TaskTemplateStepBlueprintSchema(BaseModel):
     """Template step blueprint definition."""
@@ -384,7 +359,6 @@ class TaskTemplateStepBlueprintSchema(BaseModel):
     input_mapping: dict[str, Any] = Field(default_factory=dict, alias="inputMapping")
     skill: Optional[TaskTemplateStepSkillSchema] = None
     annotations: dict[str, Any] = Field(default_factory=dict)
-
 
 class TaskTemplateSummarySchema(BaseModel):
     """List response model for task templates."""
@@ -406,14 +380,12 @@ class TaskTemplateSummarySchema(BaseModel):
     )
     release_status: str = Field("draft", alias="releaseStatus")
 
-
 class TaskTemplateListResponseSchema(BaseModel):
     """Envelope for template list responses."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     items: list[TaskTemplateSummarySchema] = Field(default_factory=list)
-
 
 class TaskTemplateResponseSchema(TaskTemplateSummarySchema):
     """Detail response model for one template version."""
@@ -423,7 +395,6 @@ class TaskTemplateResponseSchema(TaskTemplateSummarySchema):
     annotations: dict[str, Any] = Field(default_factory=dict)
     reviewed_by: Optional[str] = Field(None, alias="reviewedBy")
     reviewed_at: Optional[str] = Field(None, alias="reviewedAt")
-
 
 class TaskTemplateCreateRequestSchema(BaseModel):
     """Request model for creating templates."""
@@ -443,14 +414,12 @@ class TaskTemplateCreateRequestSchema(BaseModel):
         default_factory=list, alias="requiredCapabilities"
     )
 
-
 class TaskTemplateExpandOptionsSchema(BaseModel):
     """Optional expansion flags."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     enforce_step_limit: bool = Field(True, alias="enforceStepLimit")
-
 
 class TaskTemplateExpandRequestSchema(BaseModel):
     """Request model for template expansion."""
@@ -464,7 +433,6 @@ class TaskTemplateExpandRequestSchema(BaseModel):
         default_factory=TaskTemplateExpandOptionsSchema
     )
 
-
 class TaskTemplateAppliedMetadataSchema(BaseModel):
     """Audit metadata describing one template application."""
 
@@ -475,7 +443,6 @@ class TaskTemplateAppliedMetadataSchema(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     step_ids: list[str] = Field(default_factory=list, alias="stepIds")
     applied_at: Optional[str] = Field(None, alias="appliedAt")
-
 
 class TaskTemplateExpandResponseSchema(BaseModel):
     """Response model for expanded template step payloads."""
@@ -489,7 +456,6 @@ class TaskTemplateExpandResponseSchema(BaseModel):
     )
     capabilities: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
-
 
 class TaskTemplateSaveFromTaskRequestSchema(BaseModel):
     """Request model for creating templates from draft task steps."""
@@ -508,7 +474,6 @@ class TaskTemplateSaveFromTaskRequestSchema(BaseModel):
     )
     tags: list[str] = Field(default_factory=list)
 
-
 class TaskTemplateReviewRequestSchema(BaseModel):
     """Review workflow request for release status transitions."""
 
@@ -518,7 +483,6 @@ class TaskTemplateReviewRequestSchema(BaseModel):
         ..., alias="releaseStatus"
     )
 
-
 class TaskTemplateFavoriteRequestSchema(BaseModel):
     """Favorite toggle payload."""
 
@@ -526,7 +490,6 @@ class TaskTemplateFavoriteRequestSchema(BaseModel):
 
     scope: Literal["global", "personal"]
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
-
 
 class SecretCreateRequest(BaseModel):
     """Request body to create a new secret."""
@@ -537,7 +500,6 @@ class SecretCreateRequest(BaseModel):
     plaintext: str = Field(..., min_length=1, description="The raw secret value to be encrypted")
     details: Optional[dict[str, Any]] = Field(default_factory=dict, description="Optional metadata")
 
-
 class SecretUpdateRequest(BaseModel):
     """Request body to update an existing secret."""
 
@@ -545,14 +507,12 @@ class SecretUpdateRequest(BaseModel):
 
     plaintext: str = Field(..., min_length=1, description="The new raw secret value to be encrypted")
 
-
 class SecretStatusUpdateRequest(BaseModel):
     """Request body to change secret status."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     status: Literal["active", "disabled"] = Field(..., description="New status for the secret")
-
 
 class SecretMetadataResponse(BaseModel):
     """Safe metadata representation of a secret, explicitly excluding ciphertext."""
@@ -565,14 +525,12 @@ class SecretMetadataResponse(BaseModel):
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
 
-
 class SecretListResponse(BaseModel):
     """Envelope for list of secret metadata."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     items: list[SecretMetadataResponse] = Field(default_factory=list)
-
 
 class AgentSkillSummaryResponse(BaseModel):
     """List item representing an agent skill definition."""
@@ -585,7 +543,6 @@ class AgentSkillSummaryResponse(BaseModel):
     latest_version: Optional[str] = Field(None, alias="latestVersion")
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
 
-
 class AgentSkillVersionResponse(BaseModel):
     """Detail response for a specific skill version."""
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
@@ -596,7 +553,6 @@ class AgentSkillVersionResponse(BaseModel):
     content_digest: str = Field(..., alias="contentDigest")
     created_at: datetime = Field(..., alias="createdAt")
 
-
 class AgentSkillCreateRequest(BaseModel):
     """Request payload for creating a new agent skill definition."""
     model_config = ConfigDict(populate_by_name=True)
@@ -606,7 +562,6 @@ class AgentSkillCreateRequest(BaseModel):
     description: Optional[str] = None
     author: Optional[str] = None
 
-
 class AgentSkillVersionCreateRequest(BaseModel):
     """Request payload for pushing a new immutable version to an agent skill."""
     model_config = ConfigDict(populate_by_name=True)
@@ -615,13 +570,11 @@ class AgentSkillVersionCreateRequest(BaseModel):
     format: Optional[Literal["markdown", "bundle"]] = Field("markdown")
     content: str = Field(..., description="The raw skill content to base the version on")
 
-
 class SkillSetEntryResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
     skill_slug: str = Field(..., alias="skillSlug")
     version_constraint: Optional[str] = Field(None, alias="versionConstraint")
-
 
 class SkillSetSummaryResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
@@ -630,10 +583,8 @@ class SkillSetSummaryResponse(BaseModel):
     title: str
     description: Optional[str] = None
 
-
 class SkillSetDetailResponse(SkillSetSummaryResponse):
     entries: list[SkillSetEntryResponse] = Field(default_factory=list)
-
 
 class SkillSetCreateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -641,7 +592,6 @@ class SkillSetCreateRequest(BaseModel):
     slug: str
     title: str
     description: Optional[str] = None
-
 
 __all__ = [
     "UserProfileBaseSchema",

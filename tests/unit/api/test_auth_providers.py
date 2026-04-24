@@ -9,7 +9,6 @@ from api_service.auth_providers import get_default_user_from_db
 from api_service.db.models import User
 from moonmind.config.settings import settings
 
-
 @pytest.mark.asyncio
 async def test_get_default_user_happy_path(monkeypatch):
     user_id = str(uuid.uuid4())
@@ -29,7 +28,6 @@ async def test_get_default_user_happy_path(monkeypatch):
 
     assert result.id == uuid.UUID(user_id)
     mock_session.get.assert_called_once_with(User, uuid.UUID(user_id))
-
 
 @pytest.mark.asyncio
 async def test_get_default_user_invalid_id(monkeypatch):

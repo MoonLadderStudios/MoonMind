@@ -101,20 +101,17 @@ _DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
     ),
 }
 
-
 class CreateSkillRequest(BaseModel):
     """Payload for creating a new skill via the dashboard."""
 
     name: str = Field(..., description="The name of the new skill")
     markdown: str = Field(..., description="The markdown content of the new skill")
 
-
 class DashboardSkillOption(BaseModel):
     """Serializable skill option exposed to dashboard clients."""
 
     id: str = Field(description="Skill identifier")
     markdown: str | None = Field(None, description="Markdown content of the skill, if requested")
-
 
 class DashboardSkillListResponse(BaseModel):
     """Dashboard response containing available skill options."""
@@ -124,7 +121,6 @@ class DashboardSkillListResponse(BaseModel):
         default_factory=list, alias="legacyItems"
     )
 
-
 class DashboardBranchOption(BaseModel):
     """Serializable Git branch option exposed to dashboard clients."""
 
@@ -132,20 +128,17 @@ class DashboardBranchOption(BaseModel):
     label: str = Field(description="Display label")
     source: str = Field(description="Branch option source")
 
-
 class DashboardBranchListResponse(BaseModel):
     """Dashboard response containing branch options for one repository."""
 
     items: list[DashboardBranchOption] = Field(default_factory=list)
     error: str | None = Field(None)
 
-
 class _ValidatedSkillZip(BaseModel):
     skill_name: str
     description: str
     root_prefix: str | None = None
     manifest_path: PurePosixPath
-
 
 class SkillImportResponse(BaseModel):
     """Skill import result returned by the canonical upload contract."""
@@ -159,7 +152,6 @@ class SkillImportResponse(BaseModel):
     description: str
     warnings: list[dict[str, str]] = Field(default_factory=list)
 
-
 class DashboardTaskSourceResponse(BaseModel):
     """Canonical source metadata for a unified dashboard task id."""
 
@@ -168,7 +160,6 @@ class DashboardTaskSourceResponse(BaseModel):
     source_label: str = Field(..., alias="sourceLabel")
     detail_path: str = Field(..., alias="detailPath")
 
-
 class TaskSourceResolutionResponse(BaseModel):
     """Canonical source lookup for unified `/tasks/{taskId}` resolution."""
 
@@ -176,7 +167,6 @@ class TaskSourceResolutionResponse(BaseModel):
     source: Literal["temporal"] = Field(..., alias="source")
     entry: str | None = Field(None, alias="entry")
     workflow_id: str | None = Field(None, alias="workflowId")
-
 
 def _is_dynamic_detail(path: str, source: str) -> bool:
     parts = path.split("/")
@@ -187,7 +177,6 @@ def _is_dynamic_detail(path: str, source: str) -> bool:
         and parts[1].lower() != "new"
     )
 
-
 def _is_safe_detail_segment(segment: str) -> bool:
     text = segment.strip()
     if not text:
@@ -196,10 +185,8 @@ def _is_safe_detail_segment(segment: str) -> bool:
         return False
     return _SAFE_DETAIL_SEGMENT.fullmatch(text) is not None
 
-
 def _is_temporal_task_id(path: str) -> bool:
     return path.startswith("mm:") and _is_safe_detail_segment(path)
-
 
 def _parse_task_uuid(task_id: str) -> UUID | None:
     try:
@@ -207,10 +194,8 @@ def _parse_task_uuid(task_id: str) -> UUID | None:
     except (TypeError, ValueError):
         return None
 
-
 def _is_execution_admin(user: User | None) -> bool:
     return bool(user and getattr(user, "is_superuser", False))
-
 
 def _is_allowed_path(path: str) -> bool:
     if not path:
@@ -234,13 +219,11 @@ def _is_allowed_path(path: str) -> bool:
         )
     )
 
-
 def _raise_dashboard_route_not_found() -> None:
     raise HTTPException(
         status_code=404,
         detail=_DASHBOARD_ROUTE_NOT_FOUND_DETAIL,
     )
-
 
 def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
     """Return auth dependencies so tests can override them consistently."""
@@ -263,7 +246,6 @@ def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
         dependencies.append(get_current_user())
     return dependencies
 
-
 async def _get_temporal_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TemporalExecutionService:
@@ -277,7 +259,6 @@ async def _get_temporal_service(
             settings.temporal.manifest_continue_as_new_phase_threshold
         ),
     )
-
 
 def _mission_control_ui_error_response(page: str, detail: str) -> HTMLResponse:
     """503 HTML when Vite assets are missing or incomplete (never a silent blank shell)."""
@@ -298,13 +279,11 @@ def _mission_control_ui_error_response(page: str, detail: str) -> HTMLResponse:
 </html>"""
     return HTMLResponse(status_code=503, content=body, media_type="text/html")
 
-
 def _vite_assets_or_error(page: str) -> HTMLResponse | str:
     try:
         return ui_assets("mission-control")
     except MissionControlUIAssetsError as exc:
         return _mission_control_ui_error_response(page, str(exc))
-
 
 def _render_react_page(
     request: Request,
@@ -342,16 +321,13 @@ def _render_react_page(
         },
     )
 
-
 def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
     mode = (info.external_attr >> 16) & 0o170000
     return mode == stat.S_IFLNK
 
-
 def _is_unsupported_zip_file_type(info: zipfile.ZipInfo) -> bool:
     mode = (info.external_attr >> 16) & 0o170000
     return mode not in {0, stat.S_IFREG}
-
 
 def _normalize_zip_member(name: str) -> PurePosixPath:
     if "\\" in name:
@@ -370,10 +346,8 @@ def _normalize_zip_member(name: str) -> PurePosixPath:
         raise HTTPException(status_code=400, detail="Skill zip contains an empty path.")
     return PurePosixPath(*parts)
 
-
 def _is_ignored_zip_member(path: PurePosixPath) -> bool:
     return "__MACOSX" in path.parts or path.name == ".DS_Store"
-
 
 def _validate_imported_skill_name(skill_name: str) -> str:
     try:
@@ -389,7 +363,6 @@ def _validate_imported_skill_name(skill_name: str) -> str:
             ),
         )
     return normalized
-
 
 def _parse_skill_manifest_metadata(markdown: str, parent_name: str) -> tuple[str, str]:
     lines = markdown.splitlines()
@@ -443,7 +416,6 @@ def _parse_skill_manifest_metadata(markdown: str, parent_name: str) -> tuple[str
             detail="Skill manifest name must match the parent directory.",
         )
     return skill_name, raw_description.strip()
-
 
 def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkillZip:
     if not payload:
@@ -551,7 +523,6 @@ def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkill
             manifest_path=manifest_path,
         )
 
-
 def _write_skill_zip(
     skill_dir: Path,
     payload: bytes,
@@ -604,7 +575,6 @@ def _write_skill_zip(
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
 
-
 def _build_skill_import_response(
     payload: bytes,
     validated: _ValidatedSkillZip,
@@ -621,7 +591,6 @@ def _build_skill_import_response(
         warnings=[],
     )
 
-
 async def _import_skill_zip(
     file: UploadFile,
     collision_policy: Literal["reject", "new_version"],
@@ -637,7 +606,6 @@ async def _import_skill_zip(
         collision_policy=collision_policy,
     )
     return _build_skill_import_response(payload, validated)
-
 
 @router.get("/tasks/secrets")
 async def task_secrets_route(
@@ -656,7 +624,6 @@ async def task_dashboard_root(
 
     return RedirectResponse(url="/tasks/list")
 
-
 @router.get("/tasks/proposals", response_class=HTMLResponse)
 async def task_proposals_route(
     request: Request,
@@ -664,7 +631,6 @@ async def task_proposals_route(
 ) -> HTMLResponse:
     """Serve the React-powered proposals page."""
     return _render_react_page(request, "proposals", "/tasks/proposals", data_wide_panel=True)
-
 
 @router.get("/tasks/schedules", response_class=HTMLResponse)
 async def task_schedules_route(
@@ -674,7 +640,6 @@ async def task_schedules_route(
     """Serve the React-powered schedules page."""
     return _render_react_page(request, "schedules", "/tasks/schedules")
 
-
 @router.get("/tasks/manifests", response_class=HTMLResponse)
 async def task_manifests_route(
     request: Request,
@@ -683,7 +648,6 @@ async def task_manifests_route(
     """Serve the React-powered manifests page."""
     return _render_react_page(request, "manifests", "/tasks/manifests")
 
-
 @router.get("/tasks/manifests/new", status_code=307, response_class=RedirectResponse)
 async def task_manifest_submit_route(
     request: Request,
@@ -691,7 +655,6 @@ async def task_manifest_submit_route(
 ) -> RedirectResponse:
     """Redirect the legacy manifest submit route into the unified manifests page."""
     return RedirectResponse(url="/tasks/manifests", status_code=307)
-
 
 @router.get("/tasks/list", response_class=HTMLResponse)
 async def task_list_route(
@@ -708,7 +671,6 @@ async def task_list_route(
         data_wide_panel=True,
     )
 
-
 @router.get("/tasks/tasks-list")
 async def task_tasks_list_route(
     request: Request,
@@ -717,7 +679,6 @@ async def task_tasks_list_route(
     """Redirect the legacy tasks-list alias into the canonical list route."""
     return RedirectResponse(url="/tasks/list", status_code=307)
 
-
 @router.get("/tasks/workers")
 async def task_workers_route(
     request: Request,
@@ -725,7 +686,6 @@ async def task_workers_route(
 ) -> RedirectResponse:
     """Redirect the legacy workers page into unified settings."""
     return RedirectResponse(url="/tasks/settings?section=operations", status_code=307)
-
 
 @router.get("/tasks/settings", response_class=HTMLResponse)
 async def task_settings_route(
@@ -748,7 +708,6 @@ async def task_settings_route(
         initial_data=initial_data,
     )
 
-
 @router.get("/oauth-terminal", response_class=HTMLResponse)
 async def oauth_terminal_route(
     request: Request,
@@ -765,7 +724,6 @@ async def oauth_terminal_route(
         data_wide_panel=True,
     )
 
-
 @router.get("/tasks/new", response_class=HTMLResponse)
 async def task_create_route(
     request: Request,
@@ -780,7 +738,6 @@ async def task_create_route(
         initial_data={"dashboardConfig": build_runtime_config(current_path)},
     )
 
-
 @router.get("/tasks/create")
 async def task_create_alias_route(
     request: Request,
@@ -789,7 +746,6 @@ async def task_create_alias_route(
     """Redirect the legacy create alias into the canonical create route."""
     return RedirectResponse(url="/tasks/new", status_code=307)
 
-
 @router.get("/tasks/skills", response_class=HTMLResponse)
 async def task_skills_route(
     request: Request,
@@ -797,7 +753,6 @@ async def task_skills_route(
 ) -> HTMLResponse:
     """Serve the React-powered skills page."""
     return _render_react_page(request, "skills", "/tasks/skills")
-
 
 @router.get("/tasks/{dashboard_path:path}", response_class=HTMLResponse)
 async def task_dashboard_route(
@@ -818,7 +773,6 @@ async def task_dashboard_route(
         detail_path,
         initial_data={"dashboardConfig": build_runtime_config(detail_path)},
     )
-
 
 @router.get("/api/tasks/skills", response_model=DashboardSkillListResponse)
 async def list_dashboard_skills(
@@ -849,7 +803,6 @@ async def list_dashboard_skills(
         legacyItems=legacy_items,
     )
 
-
 @router.get("/api/github/branches", response_model=DashboardBranchListResponse)
 async def list_dashboard_github_branches(
     repository: str = Query(..., min_length=1),
@@ -859,7 +812,6 @@ async def list_dashboard_github_branches(
 
     payload = build_repository_branch_options(repository)
     return DashboardBranchListResponse(**payload)
-
 
 @router.post(
     "/api/tasks/skills",
@@ -891,7 +843,6 @@ async def create_dashboard_skill(
 
     return {"status": "success"}
 
-
 @router.post(
     "/api/skills/imports",
     status_code=201,
@@ -906,7 +857,6 @@ async def create_skill_import(
 
     return await _import_skill_zip(file, collision_policy)
 
-
 @router.post(
     "/api/tasks/skills/upload",
     status_code=201,
@@ -920,7 +870,6 @@ async def upload_dashboard_skill_zip(
     result = await _import_skill_zip(file, "reject")
 
     return {"status": "success", "skill": result.name}
-
 
 __all__ = [
     "router",

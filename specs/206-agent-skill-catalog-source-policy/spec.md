@@ -70,7 +70,7 @@ Dependencies
 - Jira link metadata at fetch time indicates MM-405 is blocked by MM-406.
 ```
 
-**Canonical Jira Brief**: `docs/tmp/jira-orchestration-inputs/MM-405-moonspec-orchestration-input.md`
+**Canonical Jira Brief**: `spec.md` (Input)
 
 ## Original Jira Preset Brief
 

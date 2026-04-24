@@ -3,7 +3,7 @@
 **Feature Branch**: `111-live-logs-phase-2`  
 **Created**: 2026-03-28  
 **Status**: Draft  
-**Input**: User description: "Fully implement Phase 2 from docs/tmp/009-LiveLogsPlan.md"
+**Input**: User description: "Fully implement Phase 2 from docs/ManagedAgents/LiveLogs.md"
 
 ## Source Document Requirements
 

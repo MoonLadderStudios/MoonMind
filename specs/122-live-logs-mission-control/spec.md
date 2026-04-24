@@ -3,18 +3,18 @@
 **Feature Branch**: `122-live-logs-mission-control`
 **Created**: 2026-04-01
 **Status**: Draft
-**Input**: User description: "Finish implementing docs/tmp/009-LiveLogsPlan.md. Use test-driven development where appropriate. Test like 'long-running streams' should be simulated in the integration tests. When done, the live logs should properly show up in the mission control UI when the updated code is deployed."
+**Input**: User description: "Finish implementing docs/ManagedAgents/LiveLogs.md Use test-driven development where appropriate. Test like 'long-running streams' should be simulated in the integration tests. When done, the live logs should properly show up in the mission control UI when the updated code is deployed."
 
 ## Source Requirements
 
-- **DOC-REQ-001**: Execution detail for a logical workflow must expose `taskRunId` from a durable workflow-to-managed-run binding rather than depending only on a best-effort memo patch. Source: `docs/tmp/009-LiveLogsPlan.md` Workstream A.
-- **DOC-REQ-002**: Managed-run persistence must store the owning workflow binding on the managed run record and only report the binding after the managed run record has been saved successfully. Source: `docs/tmp/009-LiveLogsPlan.md` Workstream A.
-- **DOC-REQ-003**: Mission Control task owners and admins must be able to read `/api/task-runs/*` observability endpoints for runs they are already authorized to view, while cross-owner access is forbidden. Source: `docs/tmp/009-LiveLogsPlan.md` Workstream C.
-- **DOC-REQ-004**: The task detail page must keep polling execution detail while a task is launchable/running and automatically attach the observability panels once `taskRunId` appears. Source: `docs/tmp/009-LiveLogsPlan.md` Workstream B.
-- **DOC-REQ-005**: The task detail page must distinguish "not launched yet", "launch failed / no managed run created", and "binding missing while execution is already running" instead of showing one generic placeholder. Source: `docs/tmp/009-LiveLogsPlan.md` Workstream B.
-- **DOC-REQ-006**: Observability UI panels must surface authorization failures distinctly from "no logs yet". Source: `docs/tmp/009-LiveLogsPlan.md` Workstream C.
-- **DOC-REQ-007**: Add an integration validation path from managed launch to observability APIs using simulated long-running streams. Source: `docs/tmp/009-LiveLogsPlan.md` Workstream D and user request.
-- **DOC-REQ-008**: Add a browser-facing test path that uses the real execution-detail payload shape and delayed `taskRunId` arrival rather than injecting `taskRunId` directly into the component. Source: `docs/tmp/009-LiveLogsPlan.md` Workstream D.
+- **DOC-REQ-001**: Execution detail for a logical workflow must expose `taskRunId` from a durable workflow-to-managed-run binding rather than depending only on a best-effort memo patch. Source: `docs/ManagedAgents/LiveLogs.md` Workstream A.
+- **DOC-REQ-002**: Managed-run persistence must store the owning workflow binding on the managed run record and only report the binding after the managed run record has been saved successfully. Source: `docs/ManagedAgents/LiveLogs.md` Workstream A.
+- **DOC-REQ-003**: Mission Control task owners and admins must be able to read `/api/task-runs/*` observability endpoints for runs they are already authorized to view, while cross-owner access is forbidden. Source: `docs/ManagedAgents/LiveLogs.md` Workstream C.
+- **DOC-REQ-004**: The task detail page must keep polling execution detail while a task is launchable/running and automatically attach the observability panels once `taskRunId` appears. Source: `docs/ManagedAgents/LiveLogs.md` Workstream B.
+- **DOC-REQ-005**: The task detail page must distinguish "not launched yet", "launch failed / no managed run created", and "binding missing while execution is already running" instead of showing one generic placeholder. Source: `docs/ManagedAgents/LiveLogs.md` Workstream B.
+- **DOC-REQ-006**: Observability UI panels must surface authorization failures distinctly from "no logs yet". Source: `docs/ManagedAgents/LiveLogs.md` Workstream C.
+- **DOC-REQ-007**: Add an integration validation path from managed launch to observability APIs using simulated long-running streams. Source: `docs/ManagedAgents/LiveLogs.md` Workstream D and user request.
+- **DOC-REQ-008**: Add a browser-facing test path that uses the real execution-detail payload shape and delayed `taskRunId` arrival rather than injecting `taskRunId` directly into the component. Source: `docs/ManagedAgents/LiveLogs.md` Workstream D.
 
 ## User Scenarios & Testing
 

@@ -7,7 +7,6 @@ import requests
 
 API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000/api")
 
-
 def main():
     print("Starting Temporal E2E test...")
     # 1. Create a task
@@ -100,7 +99,6 @@ def main():
         sys.exit(1)
 
     print("Temporal E2E test completed successfully!")
-
 
 if __name__ == "__main__":
     main()

@@ -3,7 +3,7 @@
 ## Classification
 
 Decision: Single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-477-moonspec-orchestration-input.md` describes one operator-visible Settings behavior: choosing between Claude OAuth and Anthropic API-key credential methods from the Provider Profiles table.
+Evidence: `spec.md` (Input) describes one operator-visible Settings behavior: choosing between Claude OAuth and Anthropic API-key credential methods from the Provider Profiles table.
 Rationale: The request is independently testable through one Settings provider profile row and does not require splitting across backend launch behavior, OAuth backend implementation, or provider profile materialization.
 Alternatives considered: Treating the source design as a broad declarative design was rejected because the Jira brief selected only sections 1, 3.1, 3.2, and 8 for one UI method-selection story.
 Test implications: Unit tests, backend provider-profile route tests, and integration-style UI tests.

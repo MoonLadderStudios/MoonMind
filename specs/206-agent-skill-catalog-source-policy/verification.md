@@ -2,7 +2,7 @@
 
 **Feature**: Agent Skill Catalog and Source Policy  
 **Spec**: `/work/agent_jobs/mm:61d42f2c-add6-4b41-bc47-3287d3b88ad1/repo/specs/206-agent-skill-catalog-source-policy/spec.md`  
-**Original Request Source**: `spec.md` Input and `docs/tmp/jira-orchestration-inputs/MM-405-moonspec-orchestration-input.md`  
+**Original Request Source**: `spec.md` Input and `spec.md` (Input)  
 **Verdict**: ADDITIONAL_WORK_NEEDED  
 **Confidence**: MEDIUM
 
@@ -14,7 +14,7 @@
 | Focused unit plus materialization | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/test_skill_resolution.py tests/unit/api/test_agent_skills_service.py tests/unit/services/test_skill_materialization.py tests/unit/workflows/agent_skills/test_agent_skills_activities.py` | PASS | 29 focused Python tests passed; the runner also executed frontend tests as part of its normal flow. |
 | Full unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | PASS | 3584 Python tests passed, 1 xpassed, 16 subtests passed; frontend suite passed with 10 files and 286 tests. |
 | Integration | `./tools/test_integration.sh` | NOT RUN | Blocked by missing Docker socket: `unix:///var/run/docker.sock` was unavailable in this managed container. |
-| Traceability | `rg -n "MM-405|DESIGN-REQ-001|DESIGN-REQ-002|DESIGN-REQ-003|DESIGN-REQ-004" specs/206-agent-skill-catalog-source-policy docs/tmp/jira-orchestration-inputs/MM-405-moonspec-orchestration-input.md` | PASS | MM-405 and all in-scope source design IDs are preserved. |
+| Traceability | `rg -n "MM-405|DESIGN-REQ-001|DESIGN-REQ-002|DESIGN-REQ-003|DESIGN-REQ-004" specs/206-agent-skill-catalog-source-policy` | PASS | MM-405 and all in-scope source design IDs are preserved. |
 
 ## Requirement Coverage
 

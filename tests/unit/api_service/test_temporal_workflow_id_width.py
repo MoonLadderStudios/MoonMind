@@ -7,7 +7,6 @@ from api_service.db.models import (
     TemporalIntegrationCorrelationRecord,
 )
 
-
 def test_temporal_projection_workflow_ids_accept_child_workflow_ids() -> None:
     assert TemporalExecutionCanonicalRecord.__table__.c.workflow_id.type.length == 255
     assert TemporalExecutionRecord.__table__.c.workflow_id.type.length == 255

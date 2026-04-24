@@ -7,13 +7,11 @@ import pytest
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
-
 def _normalize_payload(payload: Any) -> dict[str, Any]:
     if isinstance(payload, dict):
         return payload
     dump_method = getattr(payload, 'model_dump', getattr(payload, 'dict', None))
     return dump_method() if dump_method else payload
-
 
 def test_initialize_from_payload_captures_input_and_plan_refs(
     monkeypatch: pytest.MonkeyPatch,
@@ -41,7 +39,6 @@ def test_initialize_from_payload_captures_input_and_plan_refs(
     assert plan_ref == "art_plan_1"
     assert workflow._input_ref == "art_input_1"
     assert workflow._plan_ref == "art_plan_1"
-
 
 def test_initialize_from_payload_tracks_declared_dependencies(
     monkeypatch: pytest.MonkeyPatch,
@@ -77,7 +74,6 @@ def test_initialize_from_payload_tracks_declared_dependencies(
     dependencies = captured_memo[-1]["dependencies"]
     assert dependencies["declaredIds"] == ["mm:dep-1", "mm:dep-2"]
     assert dependencies["waited"] is False
-
 
 @pytest.mark.asyncio
 async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
@@ -124,7 +120,6 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
     assert "workflow_id" in payload.execution_ref
     assert resolved == "art_plan_2"
     assert workflow._plan_ref == "art_plan_2"
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_reads_plan_and_dispatches_steps(
@@ -236,7 +231,6 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
     assert captured[5][0] == "mm.skill.execute"
     assert captured[5][1]["registry_snapshot_ref"] == "artifact://registry/1"
 
-
 @pytest.mark.asyncio
 async def test_run_finalizing_stage_writes_dependency_summary_metadata(
     monkeypatch: pytest.MonkeyPatch,
@@ -313,7 +307,6 @@ async def test_run_finalizing_stage_writes_dependency_summary_metadata(
         "failedDependencyId": "mm:dep-2",
         "outcomes": [],
     }
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
@@ -425,7 +418,6 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
     assert captured[5][0] == "mm.tool.execute"
     assert captured[5][1]["registry_snapshot_ref"] == "artifact://registry/1"
 
-
 @pytest.mark.asyncio
 async def test_run_execution_stage_skips_empty_registry_for_agent_runtime_only_plan(
     monkeypatch: pytest.MonkeyPatch,
@@ -534,7 +526,6 @@ async def test_run_execution_stage_skips_empty_registry_for_agent_runtime_only_p
         if activity_type == "artifact.read"
     ]
     assert artifact_reads == ["art_plan_1"]
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_preserves_registry_read_for_unpatched_histories(
@@ -667,7 +658,6 @@ async def test_run_execution_stage_preserves_registry_read_for_unpatched_histori
     ]
     assert artifact_reads == ["art_plan_1", "artifact://registry/empty"]
 
-
 def test_build_agent_execution_request_includes_bundle_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -699,7 +689,6 @@ def test_build_agent_execution_request_includes_bundle_metadata(
     assert moonmind_meta["bundledNodeIds"] == ["node-1", "node-2"]
     assert moonmind_meta["bundleManifestRef"] == "artifact://bundle/1"
     assert moonmind_meta["bundleStrategy"] == "one_shot_jules"
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_status(
@@ -797,7 +786,6 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
             parameters={"repo": "MoonLadderStudios/MoonMind"},
             plan_ref="art_plan_1",
         )
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_continue_mode_keeps_running_after_failed_status(
@@ -911,7 +899,6 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
 
     assert skill_calls == 2
 
-
 @pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
     monkeypatch: pytest.MonkeyPatch,
@@ -1008,7 +995,6 @@ async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
             plan_ref="art_plan_1",
         )
 
-
 @pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_accepts_github_pull_request_url(
     monkeypatch: pytest.MonkeyPatch,
@@ -1102,7 +1088,6 @@ async def test_run_execution_stage_publish_mode_pr_accepts_github_pull_request_u
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
         plan_ref="art_plan_1",
     )
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
@@ -1245,7 +1230,6 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
         "created-head-sha"
     )
 
-
 @pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_defaults_title_from_task_intent(
     monkeypatch: pytest.MonkeyPatch,
@@ -1368,7 +1352,6 @@ async def test_run_execution_stage_publish_mode_pr_defaults_title_from_task_inte
         captured_create_payload["payload"]["body"]
         == "Update callback handler to support edge cases."
     )
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_native_pr(
@@ -1508,7 +1491,6 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
 
     assert captured_create_payload["payload"]["head"] == "actual-pushed-branch"
 
-
 def test_activity_result_failure_message_prefers_stderr_tail_over_progress_details() -> None:
     workflow = MoonMindRunWorkflow()
     message = workflow._activity_result_failure_message(
@@ -1522,7 +1504,6 @@ def test_activity_result_failure_message_prefers_stderr_tail_over_progress_detai
         }
     )
     assert message == "gemini quota exceeded"
-
 
 def test_publish_completion_accepts_jira_output_without_pr_url() -> None:
     workflow = MoonMindRunWorkflow()
@@ -1538,14 +1519,12 @@ def test_publish_completion_accepts_jira_output_without_pr_url() -> None:
     assert reason == "Workflow completed successfully"
     assert failed is False
 
-
 @pytest.mark.parametrize("story_status", ["jira_created", "jira_partial"])
 def test_jira_story_output_status_satisfies_pr_publish(story_status: str) -> None:
     assert MoonMindRunWorkflow._is_successful_jira_story_output(
         mode="jira",
         status=story_status,
     )
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
@@ -1659,7 +1638,6 @@ async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
     )
 
     assert not create_pr_called, "repo.create_pr should not have been called"
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_non_jules_agent_with_session_id_creates_native_pr(
@@ -1794,7 +1772,6 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
         "even when child result metadata contains jules_session_id"
     )
 
-
 @pytest.mark.asyncio
 async def test_run_execution_stage_skips_native_pr_after_push_failure(
     monkeypatch: pytest.MonkeyPatch,
@@ -1918,7 +1895,6 @@ async def test_run_execution_stage_skips_native_pr_after_push_failure(
     assert wf._publish_status == "failed"
     assert wf._publish_reason == "publish failed: working branch 'main' is protected"
 
-
 @pytest.mark.asyncio
 async def test_run_proposals_stage_global_disable_halts_execution(
     monkeypatch: pytest.MonkeyPatch,
@@ -1971,7 +1947,6 @@ async def test_run_proposals_stage_ignores_legacy_fallback_policy(
     
     assert captured_policy is not None
     assert captured_policy == {}
-
 
 @pytest.mark.asyncio
 async def test_run_proposals_stage_uses_task_proposal_policy(
@@ -2029,7 +2004,6 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
     assert "workflow_id" in captured_origin
     assert "temporal_run_id" in captured_origin
     assert "trigger_repo" in captured_origin
-
 
 def test_update_memo_persists_pull_request_url_under_canonical_key(
     monkeypatch: pytest.MonkeyPatch,

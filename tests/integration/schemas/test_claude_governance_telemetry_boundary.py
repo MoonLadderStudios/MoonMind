@@ -10,9 +10,7 @@ from moonmind.schemas import build_claude_governance_telemetry_fixture_flow
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def test_claude_governance_telemetry_boundary_is_payload_light() -> None:
     flow = build_claude_governance_telemetry_fixture_flow(

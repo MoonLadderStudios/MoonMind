@@ -103,7 +103,7 @@
 
 - [X] T022 [US3] Ensure `config/workloads/default-runner-profiles.yaml` defines `unreal_ccache_volume` and `unreal_ubt_volume` as approved cache mounts only
 - [X] T023 [US3] Ensure `moonmind/workloads/docker_launcher.py` treats Unreal report files as declared outputs under `artifactsDir` and never publishes cache contents as durable outputs
-- [X] T024 [US3] Update operator rollout notes for Unreal cache and artifact expectations in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`
+- [X] T024 [US3] Update operator rollout notes for Unreal cache and artifact expectations in `docs/ManagedAgents/DockerOutOfDocker.md`
 
 **Checkpoint**: User Story 3 preserves cache reuse and durable artifact truth independently of real Unreal Engine availability.
 
@@ -117,7 +117,7 @@
 - [X] T026 [P] Run focused workload validation with `pytest tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting -q`
 - [X] T027 Run full unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - [X] T028 Run runtime task scope validation with `SPECIFY_FEATURE=159-dood-unreal-pilot .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
-- [X] T029 Review `git diff --check` and confirm no unrelated changes or secret-like values were introduced in `config/`, `moonmind/`, `tests/`, `docs/tmp/`, or `specs/159-dood-unreal-pilot/`
+- [X] T029 Review `git diff --check` and confirm no unrelated changes or secret-like values were introduced in `config/`, `moonmind/`, `tests/`, `artifacts/`, or `specs/159-dood-unreal-pilot/`
 
 ---
 

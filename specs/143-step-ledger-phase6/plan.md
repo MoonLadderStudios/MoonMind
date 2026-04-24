@@ -5,7 +5,7 @@
 
 ## Summary
 
-Harden latest-run semantics for the step-ledger rollout. The backend will reconcile execution-detail run identity to workflow query truth during projection lag, Mission Control will keep secondary artifact reads aligned to the latest step-ledger run, and the completed step-ledger rollout trackers will be retired from `docs/tmp/remaining-work`.
+Harden latest-run semantics for the step-ledger rollout. The backend will reconcile execution-detail run identity to workflow query truth during projection lag, Mission Control will keep secondary artifact reads aligned to the latest step-ledger run, and the completed step-ledger rollout trackers will be retired from `docs/Temporal/StepLedgerAndProgressModel.md`.
 
 ## Technical Context
 
@@ -57,7 +57,7 @@ tests/unit/api/routers/test_executions.py              # MODIFY: latest-run reco
 tests/contract/test_temporal_execution_api.py          # MODIFY: public-contract latest-run reconciliation coverage
 frontend/src/entrypoints/task-detail.tsx               # MODIFY: keep execution-wide artifact reads aligned to the latest step-ledger run
 frontend/src/entrypoints/task-detail.test.tsx          # MODIFY: browser coverage for latest-run artifact alignment
-docs/tmp/remaining-work/*.md                           # MODIFY: retire completed step-ledger rollout tracker bullets
+docs/Temporal/StepLedgerAndProgressModel.md*.md                           # MODIFY: retire completed step-ledger rollout tracker bullets
 ```
 
 **Structure Decision**: Keep run reconciliation at the workflow-query and router boundary instead of building another projection or compatibility layer. The frontend only consumes the resulting latest-run identity.

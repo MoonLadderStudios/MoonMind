@@ -18,7 +18,7 @@ Expected result:
 ## Source Traceability Check
 
 ```bash
-rg -n "MM-385|DESIGN-REQ-015|DESIGN-REQ-017|DESIGN-REQ-018|DESIGN-REQ-019|DESIGN-REQ-025|DESIGN-REQ-026" specs/198-document-task-snapshot-boundary docs/tmp/jira-orchestration-inputs/MM-385-moonspec-orchestration-input.md
+rg -n "MM-385|DESIGN-REQ-015|DESIGN-REQ-017|DESIGN-REQ-018|DESIGN-REQ-019|DESIGN-REQ-025|DESIGN-REQ-026" specs/198-document-task-snapshot-boundary
 ```
 
 Expected result: MM-385 and all in-scope source design requirements are present in MoonSpec artifacts.

@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.schemas._validation import NonBlankStr, require_non_blank
 
-
 _ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _CONTAINER_NAME_SAFE_PATTERN = re.compile(r"[^a-zA-Z0-9_.-]+")
 _SIZE_PATTERN = re.compile(r"^(?P<value>\d+(?:\.\d+)?)(?P<unit>[kmgt]?i?b?)?$", re.I)
@@ -41,7 +40,6 @@ _SIZE_MULTIPLIERS: dict[str, int] = {
     "tib": 1024**4,
 }
 
-
 WorkloadStatus = Literal[
     "succeeded",
     "failed",
@@ -59,7 +57,6 @@ WorkloadAccessKind = Literal["profile", "unrestricted_container", "unrestricted_
 WorkloadDeviceMode = Literal["none"]
 WorkloadReadinessProbeType = Literal["exec"]
 
-
 def parse_cpu_units(value: str) -> float:
     """Parse a Docker CPU quota-style value for numeric comparison."""
 
@@ -74,7 +71,6 @@ def parse_cpu_units(value: str) -> float:
     if parsed <= 0:
         raise ValueError("cpu must be positive")
     return parsed
-
 
 def parse_size_bytes(value: str) -> int:
     """Parse a Docker size string such as ``512m`` or ``2g``."""
@@ -93,7 +89,6 @@ def parse_size_bytes(value: str) -> int:
         raise ValueError("size must be positive")
     return parsed
 
-
 def workload_container_name(
     *,
     task_run_id: str,
@@ -105,7 +100,6 @@ def workload_container_name(
     task = _sanitize_name_part(task_run_id)
     step = _sanitize_name_part(step_id)
     return f"mm-workload-{task}-{step}-{attempt}"
-
 
 def helper_container_name(
     *,
@@ -119,12 +113,10 @@ def helper_container_name(
     step = _sanitize_name_part(step_id)
     return f"mm-helper-{task}-{step}-{attempt}"
 
-
 def _sanitize_name_part(value: str) -> str:
     normalized = _CONTAINER_NAME_SAFE_PATTERN.sub("-", str(value).strip())
     normalized = normalized.strip("-._")
     return normalized or "unknown"
-
 
 def _normalize_env_name(value: str, *, field_name: str) -> str:
     normalized = require_non_blank(value, field_name=field_name).upper()
@@ -134,13 +126,11 @@ def _normalize_env_name(value: str, *, field_name: str) -> str:
         )
     return normalized
 
-
 def _image_has_tag_or_digest(image: str) -> bool:
     if "@sha256:" in image:
         return True
     last_segment = image.rsplit("/", 1)[-1]
     return ":" in last_segment
-
 
 def _is_safe_absolute_profile_path(value: str) -> bool:
     normalized = posixpath.normpath(value)
@@ -150,7 +140,6 @@ def _is_safe_absolute_profile_path(value: str) -> bool:
         return False
     return normalized != "/var/run/docker.sock" and "docker.sock" not in normalized
 
-
 def _validate_relative_artifact_path(value: str, *, field_name: str) -> str:
     normalized = require_non_blank(value, field_name=field_name).replace("\\", "/")
     normalized = posixpath.normpath(normalized)
@@ -159,7 +148,6 @@ def _validate_relative_artifact_path(value: str, *, field_name: str) -> str:
     if normalized.startswith("/") or normalized == ".." or normalized.startswith("../"):
         raise ValueError(f"{field_name} must stay under artifactsDir")
     return normalized
-
 
 def _validate_declared_output_key(value: str) -> str:
     normalized = require_non_blank(value, field_name="declaredOutputs key")
@@ -172,7 +160,6 @@ def _validate_declared_output_key(value: str) -> str:
             "declaredOutputs key must not override runtime artifact classes"
         )
     return normalized
-
 
 class WorkloadMount(BaseModel):
     """Allowed container mount declaration for a runner profile."""
@@ -198,7 +185,6 @@ class WorkloadMount(BaseModel):
         if not _is_safe_absolute_profile_path(self.target):
             raise ValueError("mount target must be an absolute safe path")
         return self
-
 
 class WorkloadCredentialMount(BaseModel):
     """Explicit credential mount declaration for exceptional workload profiles."""
@@ -226,7 +212,6 @@ class WorkloadCredentialMount(BaseModel):
             raise ValueError("credential mount target must be an absolute safe path")
         return self
 
-
 class UnrestrictedCacheMount(BaseModel):
     """Deployment-approved named-cache mount for unrestricted containers."""
 
@@ -243,7 +228,6 @@ class UnrestrictedCacheMount(BaseModel):
         if not _is_safe_absolute_profile_path(self.target):
             raise ValueError("cacheMounts target must be an absolute safe path")
         return self
-
 
 class WorkloadResourceOverrides(BaseModel):
     """Per-request resource overrides capped by the selected runner profile."""
@@ -266,7 +250,6 @@ class WorkloadResourceOverrides(BaseModel):
             self.shm_size = require_non_blank(self.shm_size, field_name="shmSize")
             parse_size_bytes(self.shm_size)
         return self
-
 
 class RunnerResourceProfile(BaseModel):
     """Default and maximum resources for one runner profile."""
@@ -307,7 +290,6 @@ class RunnerResourceProfile(BaseModel):
                 raise ValueError("shmSize default must not exceed maxShmSize")
         return self
 
-
 class WorkloadCleanupPolicy(BaseModel):
     """Cleanup behavior for a workload container."""
 
@@ -316,14 +298,12 @@ class WorkloadCleanupPolicy(BaseModel):
     remove_container_on_exit: bool = Field(True, alias="removeContainerOnExit")
     kill_grace_seconds: int = Field(30, alias="killGraceSeconds", ge=0)
 
-
 class WorkloadDevicePolicy(BaseModel):
     """Device access policy for Phase 1 runner profiles."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     mode: WorkloadDeviceMode = Field("none", alias="mode")
-
 
 class WorkloadReadinessProbe(BaseModel):
     """Bounded readiness probe for a helper container."""
@@ -343,7 +323,6 @@ class WorkloadReadinessProbe(BaseModel):
             for item in self.command
         )
         return self
-
 
 class RunnerProfile(BaseModel):
     """Deployment-owned workload runner profile."""
@@ -446,7 +425,6 @@ class RunnerProfile(BaseModel):
                 )
         return self
 
-
 class WorkloadOwnershipMetadata(BaseModel):
     """Deterministic ownership labels for a workload request."""
 
@@ -480,7 +458,6 @@ class WorkloadOwnershipMetadata(BaseModel):
         labels["moonmind.workload_access"] = self.workload_access
         labels["moonmind.workflow_docker_mode"] = self.workflow_docker_mode
         return labels
-
 
 class WorkloadRequest(BaseModel):
     """Canonical request payload for one Docker-backed workload."""
@@ -560,7 +537,6 @@ class WorkloadRequest(BaseModel):
             attempt=self.attempt,
         )
 
-
 class UnrestrictedContainerRequest(BaseModel):
     """Canonical unrestricted runtime-container request."""
 
@@ -629,7 +605,6 @@ class UnrestrictedContainerRequest(BaseModel):
     def container_name(self) -> str:
         return workload_container_name(task_run_id=self.task_run_id, step_id=self.step_id, attempt=self.attempt)
 
-
 class UnrestrictedDockerRequest(BaseModel):
     """Canonical unrestricted Docker CLI request."""
 
@@ -687,9 +662,7 @@ class UnrestrictedDockerRequest(BaseModel):
     def container_name(self) -> str:
         return workload_container_name(task_run_id=self.task_run_id, step_id=self.step_id, attempt=self.attempt)
 
-
 AnyWorkloadRequest = WorkloadRequest | UnrestrictedContainerRequest | UnrestrictedDockerRequest
-
 
 def parse_workload_request(value: Any) -> AnyWorkloadRequest:
     if isinstance(value, (WorkloadRequest, UnrestrictedContainerRequest, UnrestrictedDockerRequest)):
@@ -703,7 +676,6 @@ def parse_workload_request(value: Any) -> AnyWorkloadRequest:
         return UnrestrictedDockerRequest.model_validate(value)
     return WorkloadRequest.model_validate(value)
 
-
 class ValidatedWorkloadRequest(BaseModel):
     """Profile-aware validated workload request."""
 
@@ -713,7 +685,6 @@ class ValidatedWorkloadRequest(BaseModel):
     profile: RunnerProfile | None = Field(None, alias="profile")
     ownership: WorkloadOwnershipMetadata = Field(..., alias="ownership")
     container_name: NonBlankStr = Field(..., alias="containerName")
-
 
 class WorkloadResult(BaseModel):
     """Bounded workload execution result metadata."""

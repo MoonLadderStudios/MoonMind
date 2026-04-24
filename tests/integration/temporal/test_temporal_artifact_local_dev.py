@@ -18,7 +18,6 @@ from moonmind.workflows.temporal.artifacts import (
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 @asynccontextmanager
 async def _db(tmp_path: Path):
     url = f"sqlite+aiosqlite:///{tmp_path}/temporal_local_dev_integration.db"
@@ -30,7 +29,6 @@ async def _db(tmp_path: Path):
         yield maker
     finally:
         await engine.dispose()
-
 
 async def test_local_dev_create_upload_complete_list(tmp_path: Path) -> None:
     async with _db(tmp_path) as maker:

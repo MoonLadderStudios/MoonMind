@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 # Sessions older than this are considered stale and eligible for cleanup.
 _DEFAULT_STALE_THRESHOLD_MINUTES = 45
 
-
 @activity.defn(name="oauth_session.cleanup_stale")
 async def oauth_session_cleanup_stale(
     request: Mapping[str, Any] | None = None,

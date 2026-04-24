@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.models import ManagedSecret, SecretStatus
 from api_service.services.secrets import SecretsService
 
-
 @pytest.fixture
 def mock_db_session():
     """Mock an AsyncSession for testing."""
@@ -20,7 +19,6 @@ def mock_db_session():
     session.refresh.side_effect = mock_refresh
     
     return session
-
 
 @pytest.mark.asyncio
 async def test_create_secret(mock_db_session):
@@ -37,7 +35,6 @@ async def test_create_secret(mock_db_session):
     mock_db_session.add.assert_called_once_with(secret)
     mock_db_session.commit.assert_called_once()
     mock_db_session.refresh.assert_called_once_with(secret)
-
 
 @pytest.mark.asyncio
 async def test_update_secret(mock_db_session):
@@ -60,7 +57,6 @@ async def test_update_secret(mock_db_session):
     mock_db_session.commit.assert_called_once()
     mock_db_session.refresh.assert_called_once_with(updated)
 
-
 @pytest.mark.asyncio
 async def test_rotate_secret(mock_db_session):
     slug = "test-secret"
@@ -79,7 +75,6 @@ async def test_rotate_secret(mock_db_session):
     assert rotated.ciphertext == "new-value"
     assert rotated.status == SecretStatus.ROTATED
 
-
 @pytest.mark.asyncio
 async def test_set_status_secret(mock_db_session):
     slug = "test-secret"
@@ -96,7 +91,6 @@ async def test_set_status_secret(mock_db_session):
     disabled = await SecretsService.set_status(mock_db_session, slug, SecretStatus.DISABLED)
     assert disabled.status == SecretStatus.DISABLED
 
-
 @pytest.mark.asyncio
 async def test_get_secret(mock_db_session):
     slug = "test-secret"
@@ -112,7 +106,6 @@ async def test_get_secret(mock_db_session):
     
     fetched = await SecretsService.get_secret(mock_db_session, slug)
     assert fetched == "plntxt"
-
 
 @pytest.mark.asyncio
 async def test_import_from_env(mock_db_session):
@@ -134,7 +127,6 @@ async def test_import_from_env(mock_db_session):
     assert count == 2
     assert mock_db_session.add.call_count == 2
     mock_db_session.commit.assert_called_once()
-
 
 @pytest.mark.asyncio
 async def test_import_from_env_does_not_overwrite_active_by_default(mock_db_session):
@@ -160,7 +152,6 @@ async def test_import_from_env_does_not_overwrite_active_by_default(mock_db_sess
 
     assert count == 0
     assert active_secret.ciphertext == "old-value"
-
 
 @pytest.mark.asyncio
 async def test_import_from_env_can_overwrite_active(mock_db_session):

@@ -3,13 +3,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
 
 def _module_path(module_name: str) -> Path:
     return REPO_ROOT / Path(*module_name.split(".")).with_suffix(".py")
-
 
 def _marker_names_from_node(node: ast.AST) -> set[str]:
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
@@ -31,7 +28,6 @@ def _marker_names_from_node(node: ast.AST) -> set[str]:
         return {node.attr}
 
     return set()
-
 
 def _marker_names(module_name: str) -> set[str]:
     module_ast = ast.parse(_module_path(module_name).read_text(encoding="utf-8"))
@@ -58,7 +54,6 @@ def _marker_names(module_name: str) -> set[str]:
 
     return marker_names
 
-
 def test_pytest_registers_phase1_taxonomy_markers(pytestconfig) -> None:
     registered_markers = {
         marker.split(":", 1)[0].strip() for marker in pytestconfig.getini("markers")
@@ -68,7 +63,6 @@ def test_pytest_registers_phase1_taxonomy_markers(pytestconfig) -> None:
     assert "provider_verification" in registered_markers
     assert "jules" in registered_markers
     assert "requires_credentials" in registered_markers
-
 
 def test_ci_safe_temporal_artifact_and_topology_modules_are_marked_for_integration_ci() -> None:
     expected_modules = (
@@ -84,7 +78,6 @@ def test_ci_safe_temporal_artifact_and_topology_modules_are_marked_for_integrati
         assert "integration_ci" in marker_names
         assert "integration" in marker_names
 
-
 def test_live_jules_suite_is_provider_verification_only() -> None:
     marker_names = _marker_names("tests.provider.jules.test_jules_integration")
 
@@ -94,11 +87,9 @@ def test_live_jules_suite_is_provider_verification_only() -> None:
     assert "integration_ci" not in marker_names
     assert "integration" not in marker_names
 
-
 def test_provider_verification_suite_lives_outside_tests_integration() -> None:
     assert not (REPO_ROOT / "tests" / "integration" / "test_jules_integration.py").exists()
     assert (REPO_ROOT / "tests" / "provider" / "jules" / "test_jules_integration.py").exists()
-
 
 def test_temporal_topology_integration_suite_stays_jules_free() -> None:
     topology_module = (
@@ -108,7 +99,6 @@ def test_temporal_topology_integration_suite_stays_jules_free() -> None:
     assert "integration.jules." not in topology_module
     assert "JulesTaskResponse" not in topology_module
     assert "_FakeJulesClient" not in topology_module
-
 
 def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
     shell_runner = (REPO_ROOT / "tools" / "test_integration.sh").read_text(
@@ -126,7 +116,6 @@ def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
     assert 'pytest tests/provider/jules' in provider_runner
     assert 'integration_ci' in powershell_runner
 
-
 def test_provider_verification_is_not_configured_as_a_github_action() -> None:
     provider_workflow = REPO_ROOT / ".github" / "workflows" / "provider-verification.yml"
     required_workflow = (
@@ -136,7 +125,6 @@ def test_provider_verification_is_not_configured_as_a_github_action() -> None:
     assert not provider_workflow.exists()
     assert "./tools/test_integration.sh" in required_workflow
     assert "./tools/test_jules_provider.sh" not in required_workflow
-
 
 def test_docker_compose_test_runners_provision_the_shared_network() -> None:
     shell_runner = (REPO_ROOT / "tools" / "test_integration.sh").read_text(
@@ -159,7 +147,6 @@ def test_docker_compose_test_runners_provision_the_shared_network() -> None:
     assert 'docker network inspect $networkName' in powershell_runner
     assert 'docker network create $networkName' in powershell_runner
 
-
 def test_phase6_integration_ci_suite_stays_focused_on_highest_risk_seams() -> None:
     """Phase 6: the required integration_ci suite must stay focused on artifacts,
     worker topology, live logs, managed runtime, and compose foundation.
@@ -181,7 +168,6 @@ def test_phase6_integration_ci_suite_stays_focused_on_highest_risk_seams() -> No
     assert "500" in perf_test, (
         "Performance test should use 500 deterministic event count"
     )
-
 
 def test_phase6_artifact_authorization_tests_require_oidc() -> None:
     """Phase 6: artifact authorization tests must toggle AUTH_PROVIDER to

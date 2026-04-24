@@ -50,14 +50,11 @@ _NON_SECRET_REF_KEYS = frozenset(
     }
 )
 
-
 def _is_sensitive_key(key: str) -> bool:
     return bool(_SENSITIVE_KEY_PATTERN.search(key))
 
-
 def _is_non_secret_sentinel(value: str) -> bool:
     return value.strip().casefold() in _NON_SECRET_SENTINEL_VALUES
-
 
 def _secret_variants(secret: str) -> set[str]:
     variants = {secret}
@@ -71,14 +68,12 @@ def _secret_variants(secret: str) -> set[str]:
         pass
     return variants
 
-
 def scrub_github_tokens(text: str) -> str:
     """Scrub common GitHub token-like values from diagnostic text."""
 
     if not text:
         return ""
     return _GITHUB_TOKEN_PATTERN.sub("[REDACTED]", text)
-
 
 def redact_sensitive_text(text: str | None) -> str:
     """Scrub common credential-shaped values from browser/artifact text."""
@@ -91,7 +86,6 @@ def redact_sensitive_text(text: str | None) -> str:
     redacted = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1=[REDACTED]", redacted)
     redacted = _AUTH_PATH_PATTERN.sub("[REDACTED_AUTH_PATH]", redacted)
     return redacted
-
 
 def redact_sensitive_payload(payload: Any, *, key: str | None = None) -> Any:
     """Recursively redact sensitive values while preserving compact refs."""
@@ -127,7 +121,6 @@ def redact_sensitive_payload(payload: Any, *, key: str | None = None) -> Any:
         return tuple(redact_sensitive_payload(item, key=key) for item in payload)
     return payload
 
-
 def redact_profile_file_templates(value: list[Any]) -> list[Any]:
     """Redact provider-profile file templates without exposing template bodies."""
 
@@ -148,7 +141,6 @@ def redact_profile_file_templates(value: list[Any]) -> list[Any]:
                 )
         templates.append(template)
     return templates
-
 
 class SecretRedactor:
     """Utility to scrub sensitive values from log output.
@@ -197,7 +189,6 @@ class SecretRedactor:
 
     def scrub_sequence(self, values: Sequence[str]) -> list[str]:
         return [self.scrub(value) for value in values]
-
 
 __all__ = [
     "SecretRedactor",

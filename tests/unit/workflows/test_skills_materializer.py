@@ -22,7 +22,6 @@ from moonmind.workflows.skills.materializer import (
 )
 from moonmind.workflows.skills.resolver import ResolvedSkill, RunSkillSelection
 
-
 def _make_skill(root: Path, name: str, *, with_metadata: bool = True) -> Path:
     skill_dir = root / name
     skill_dir.mkdir(parents=True)
@@ -33,7 +32,6 @@ def _make_skill(root: Path, name: str, *, with_metadata: bool = True) -> Path:
         )
     (skill_dir / "steps.md").write_text("do work", encoding="utf-8")
     return skill_dir
-
 
 def test_materialize_run_skill_workspace_creates_cache_and_links(tmp_path):
     source_root = tmp_path / "source"
@@ -73,7 +71,6 @@ def test_materialize_run_skill_workspace_creates_cache_and_links(tmp_path):
     assert workspace.skills[0].cache_path.is_dir()
     assert (workspace.skills[0].cache_path / "SKILL.md").is_file()
 
-
 def test_materialize_run_skill_workspace_rejects_hash_mismatch(tmp_path):
     source_root = tmp_path / "source"
     cache_root = tmp_path / "cache"
@@ -102,7 +99,6 @@ def test_materialize_run_skill_workspace_rejects_hash_mismatch(tmp_path):
 
     assert exc.value.code == "hash_mismatch"
 
-
 def test_materialize_run_skill_workspace_requires_skill_md(tmp_path):
     source_root = tmp_path / "source"
     cache_root = tmp_path / "cache"
@@ -130,7 +126,6 @@ def test_materialize_run_skill_workspace_requires_skill_md(tmp_path):
 
     assert exc.value.code == "missing_skill_md"
 
-
 def test_materialize_run_skill_workspace_rejects_duplicate_names(tmp_path):
     source_root = tmp_path / "source"
     cache_root = tmp_path / "cache"
@@ -155,7 +150,6 @@ def test_materialize_run_skill_workspace_rejects_duplicate_names(tmp_path):
         )
 
     assert exc.value.code == "duplicate_skill_name"
-
 
 def test_materialize_run_skill_workspace_does_not_touch_global_codex_config(tmp_path):
     source_root = tmp_path / "source"
@@ -183,7 +177,6 @@ def test_materialize_run_skill_workspace_does_not_touch_global_codex_config(tmp_
     )
 
     assert not global_codex_config.exists()
-
 
 def test_materialize_run_skill_workspace_rejects_incomplete_cache_entry(
     tmp_path, monkeypatch
@@ -224,7 +217,6 @@ def test_materialize_run_skill_workspace_rejects_incomplete_cache_entry(
 
     assert exc.value.code == "cache_entry_incomplete"
 
-
 def test_extract_archive_rejects_zip_path_traversal(tmp_path):
     archive = tmp_path / "malicious.zip"
     destination = tmp_path / "extract"
@@ -237,7 +229,6 @@ def test_extract_archive_rejects_zip_path_traversal(tmp_path):
 
     assert exc.value.code == "unsafe_bundle_member"
     assert not (tmp_path / "evil.txt").exists()
-
 
 def test_extract_archive_rejects_tar_path_traversal(tmp_path):
     archive = tmp_path / "malicious.tar"
@@ -254,7 +245,6 @@ def test_extract_archive_rejects_tar_path_traversal(tmp_path):
     assert exc.value.code == "unsafe_bundle_member"
     assert not (tmp_path / "evil.txt").exists()
 
-
 def test_validate_public_remote_host_rejects_private_ip(monkeypatch):
     monkeypatch.setattr(
         "moonmind.workflows.skills.materializer.socket.getaddrinfo",
@@ -267,7 +257,6 @@ def test_validate_public_remote_host_rejects_private_ip(monkeypatch):
         _validate_public_remote_host("https://example.com/skill.zip")
 
     assert exc.value.code == "bundle_fetch_failed"
-
 
 def test_download_remote_bundle_rejects_ssrf_via_redirect(monkeypatch, tmp_path):
     # Setup mock to first return a valid public IP, then a private IP (for the redirect)
@@ -323,7 +312,6 @@ def test_download_remote_bundle_rejects_ssrf_via_redirect(monkeypatch, tmp_path)
     assert exc.value.code == "bundle_fetch_failed"
     assert "resolves to a non-public address: example.com" in str(exc.value)
 
-
 def test_download_remote_bundle_disables_proxy_usage(monkeypatch, tmp_path):
     handlers: list[object] = []
 
@@ -366,7 +354,6 @@ def test_download_remote_bundle_disables_proxy_usage(monkeypatch, tmp_path):
     assert proxy_handlers[0].proxies == {}
     assert output.read_bytes() == b"bundle-bytes"
 
-
 def test_resolve_source_root_uses_git_clone_end_of_options_separator(
     tmp_path, monkeypatch
 ):
@@ -398,7 +385,6 @@ def test_resolve_source_root_uses_git_clone_end_of_options_separator(
     assert calls
     assert calls[0][:5] == ["git", "clone", "--depth", "1", "--"]
 
-
 def test_resolve_source_root_rejects_git_ext_transport(tmp_path):
     entry = ResolvedSkill(
         skill_name="speckit",
@@ -412,7 +398,6 @@ def test_resolve_source_root_rejects_git_ext_transport(tmp_path):
         _resolve_source_root(entry, tmp_path)
 
     assert exc.value.code == "git_fetch_failed"
-
 
 def test_resolve_source_root_rejects_git_private_host(tmp_path, monkeypatch):
     monkeypatch.setattr(

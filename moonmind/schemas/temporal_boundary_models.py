@@ -6,7 +6,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
 TemporalBoundaryKind = Literal[
     "workflow",
     "activity",
@@ -28,13 +27,11 @@ TemporalBoundaryStatus = Literal[
     "tracking_only",
 ]
 
-
 def _require_non_blank(value: str, *, field_name: str) -> str:
     normalized = value.strip()
     if not normalized:
         raise ValueError(f"{field_name} must not be blank")
     return normalized
-
 
 class TemporalBoundaryModelRef(BaseModel):
     """Reference to a named model that owns a Temporal wire shape."""
@@ -55,7 +52,6 @@ class TemporalBoundaryModelRef(BaseModel):
             field_name="schemaHome",
         )
         return self
-
 
 class TemporalBoundaryContract(BaseModel):
     """One public Temporal boundary and its named typed contract ownership."""
@@ -103,7 +99,6 @@ class TemporalBoundaryContract(BaseModel):
             raise ValueError("rationale is required when responseModel is omitted")
         return self
 
-
 class TemporalBoundaryInventory(BaseModel):
     """Deterministic collection of Temporal boundary contracts for review gates."""
 
@@ -137,7 +132,6 @@ class TemporalBoundaryInventory(BaseModel):
                 )
             seen.add(key)
         return self
-
 
 __all__ = [
     "TemporalBoundaryContract",

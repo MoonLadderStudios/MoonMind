@@ -55,7 +55,7 @@ MM-407 requires managed runtime preparation to project an immutable resolved ski
 - Principle VIII, Modular and Extensible Architecture: PASS. Changes are scoped to `moonmind/services/skill_materialization.py` and boundary tests.
 - Principle IX, Resilient by Default: PASS. Incompatible workspace paths fail before runtime launch with actionable diagnostics.
 - Principle XI, Spec-Driven Development: PASS. Specification, plan, tasks, implementation, and verification artifacts are produced before completion.
-- Principle XII, Canonical Documentation Separates Desired State From Backlog: PASS. Migration notes remain in `docs/tmp` and this runtime work does not rewrite canonical docs.
+- Principle XII, Canonical Documentation Separates Desired State From Backlog: PASS. Migration notes remain in `local-only handoffs` and this runtime work does not rewrite canonical docs.
 - Principle XIII, Pre-Release Compatibility Policy: PASS. No compatibility aliases are introduced; existing internal service semantics are aligned to the canonical path.
 
 ## Project Structure
@@ -70,7 +70,7 @@ specs/208-managed-runtime-skill-projection/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── runtime-skill-projection.md
+│ └── runtime-skill-projection.md
 └── tasks.md
 ```
 
@@ -79,21 +79,21 @@ specs/208-managed-runtime-skill-projection/
 ```text
 moonmind/
 ├── services/
-│   └── skill_materialization.py
+│ └── skill_materialization.py
 ├── workflows/
-│   ├── agent_skills/
-│   │   └── agent_skills_activities.py
-│   └── skills/
-│       └── workspace_links.py
+│ ├── agent_skills/
+│ │ └── agent_skills_activities.py
+│ └── skills/
+│ └── workspace_links.py
 
 tests/
 └── unit/
-    ├── services/
-    │   └── test_skill_materialization.py
-    └── workflows/
-        ├── agent_skills/
-        │   └── test_agent_skills_activities.py
-        └── test_workspace_links.py
+ ├── services/
+ │ └── test_skill_materialization.py
+ └── workflows/
+ ├── agent_skills/
+ │ └── test_agent_skills_activities.py
+ └── test_workspace_links.py
 ```
 
 **Structure Decision**: Keep materialization behavior in the existing service and shared workspace-link helper. Add tests at the service and Temporal activity boundary rather than introducing a new runtime subsystem.

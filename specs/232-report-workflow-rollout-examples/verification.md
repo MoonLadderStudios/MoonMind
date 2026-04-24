@@ -16,7 +16,7 @@ MM-464 is implemented in runtime mode. The implementation adds executable report
 | `pytest tests/unit/workflows/temporal/test_report_workflow_rollout.py -q` | PASS | 5 passed after expected red-first import failure before implementation. |
 | `pytest tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/workflows/temporal/test_artifacts.py -q --tb=short` | PASS | 48 passed; covers new MM-464 helpers plus existing report/generic artifact behavior. |
 | `./tools/test_unit.sh tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/workflows/temporal/test_artifacts.py` | PASS | Python: 48 passed. UI test suite invoked by wrapper: 11 files / 367 tests passed. |
-| `rg -n "MM-464|DESIGN-REQ-003|DESIGN-REQ-007|DESIGN-REQ-019|DESIGN-REQ-020|DESIGN-REQ-021|DESIGN-REQ-022|report_workflow" specs/232-report-workflow-rollout-examples docs/tmp/jira-orchestration-inputs/MM-464-moonspec-orchestration-input.md moonmind/workflows/temporal/report_artifacts.py tests/unit/workflows/temporal/test_report_workflow_rollout.py` | PASS | Traceability present across input, spec artifacts, runtime code, and tests. |
+| `rg -n "MM-464|DESIGN-REQ-003|DESIGN-REQ-007|DESIGN-REQ-019|DESIGN-REQ-020|DESIGN-REQ-021|DESIGN-REQ-022|report_workflow" specs/232-report-workflow-rollout-examples moonmind/workflows/temporal/report_artifacts.py tests/unit/workflows/temporal/test_report_workflow_rollout.py` | PASS | Traceability present across input, spec artifacts, runtime code, and tests. |
 
 ## Requirement Coverage
 

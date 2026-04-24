@@ -15,7 +15,6 @@ from moonmind.config.settings import settings
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 @pytest.mark.asyncio
 async def test_ui_keys_used_in_chat(disabled_env_keys, tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
@@ -82,7 +81,6 @@ async def test_ui_keys_used_in_chat(disabled_env_keys, tmp_path):
             resp = await client.post("/v1/chat/completions", json=payload)
             assert resp.status_code == 200
             mock_ai.assert_called_with(api_key="user-key")
-
 
 @pytest.mark.asyncio
 async def test_keycloak_user_profile_empty(keycloak_mode, tmp_path):

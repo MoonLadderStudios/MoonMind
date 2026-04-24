@@ -12,7 +12,6 @@ from moonmind.workflows.temporal.runtime.terminal_bridge import (
     start_terminal_bridge_container,
 )
 
-
 def test_terminal_bridge_handles_resize_input_output_and_heartbeat() -> None:
     bridge = TerminalBridgeConnection(
         session_id="oas_terminal_frames",
@@ -39,7 +38,6 @@ def test_terminal_bridge_handles_resize_input_output_and_heartbeat() -> None:
     assert list(bridge.output_events) == ["Open browser\n"]
     assert bridge.heartbeat_count == 1
 
-
 def test_terminal_bridge_rejects_malformed_resize_dimensions() -> None:
     bridge = TerminalBridgeConnection(
         session_id="oas_terminal_bad_resize",
@@ -49,7 +47,6 @@ def test_terminal_bridge_rejects_malformed_resize_dimensions() -> None:
 
     with pytest.raises(TerminalBridgeFrameError, match="resize dimensions must be integers"):
         bridge.handle_frame({"type": "resize", "cols": "wide", "rows": 36})
-
 
 def test_terminal_bridge_keeps_bounded_event_metadata() -> None:
     bridge = TerminalBridgeConnection(
@@ -65,7 +62,6 @@ def test_terminal_bridge_keeps_bounded_event_metadata() -> None:
     assert bridge.input_events[0] == "line-44\n"
     assert bridge.input_events[-1] == "line-299\n"
 
-
 def test_terminal_bridge_rejects_generic_exec_frames() -> None:
     bridge = TerminalBridgeConnection(
         session_id="oas_terminal_exec",
@@ -78,7 +74,6 @@ def test_terminal_bridge_rejects_generic_exec_frames() -> None:
 
     with pytest.raises(TerminalBridgeFrameError, match="generic Docker exec"):
         bridge.handle_frame({"type": "task_terminal", "session": "managed"})
-
 
 @pytest.mark.asyncio
 async def test_terminal_bridge_forwards_input_and_resize_to_pty_adapter() -> None:
@@ -107,7 +102,6 @@ async def test_terminal_bridge_forwards_input_and_resize_to_pty_adapter() -> Non
     assert bridge.heartbeat_count == 1
     assert list(bridge.input_events) == ["codex login\n"]
 
-
 @pytest.mark.asyncio
 async def test_terminal_bridge_forwards_claude_auth_code_without_safe_metadata_leak() -> None:
     bridge = TerminalBridgeConnection(
@@ -129,7 +123,6 @@ async def test_terminal_bridge_forwards_claude_auth_code_without_safe_metadata_l
     assert metadata["terminal_input_event_count"] == 1
     assert pasted_code.strip() not in str(metadata)
     assert "authorization-code" not in str(metadata)
-
 
 @pytest.mark.asyncio
 async def test_terminal_bridge_streams_output_without_persisting_raw_output() -> None:
@@ -156,7 +149,6 @@ async def test_terminal_bridge_streams_output_without_persisting_raw_output() ->
     assert bridge.output_event_count == 2
     assert list(bridge.output_events) == []
 
-
 @pytest.mark.asyncio
 async def test_terminal_bridge_streams_output_to_async_callback() -> None:
     bridge = TerminalBridgeConnection(
@@ -176,7 +168,6 @@ async def test_terminal_bridge_streams_output_to_async_callback() -> None:
     assert sent == [b"first", b"second"]
     assert bridge.output_event_count == 2
 
-
 class _FakeProcess:
     def __init__(self, returncode: int = 0, stderr: bytes = b"") -> None:
         self.returncode = returncode
@@ -188,7 +179,6 @@ class _FakeProcess:
 
     def kill(self) -> None:
         self.killed = True
-
 
 @pytest.mark.asyncio
 async def test_start_terminal_bridge_container_uses_provider_bootstrap_command(
@@ -227,7 +217,6 @@ async def test_start_terminal_bridge_container_uses_provider_bootstrap_command(
     assert "sleep 1800" in observed[-1]
     assert observed[-1].count("codex") == 2
     assert observed[-1] != "codex login --device-auth"
-
 
 @pytest.mark.asyncio
 async def test_start_terminal_bridge_container_uses_claude_home_environment(
@@ -268,7 +257,6 @@ async def test_start_terminal_bridge_container_uses_claude_home_environment(
     assert "command -v claude" in observed[-1]
     assert observed[-1] != "claude login"
 
-
 @pytest.mark.asyncio
 async def test_start_terminal_bridge_container_redacts_startup_failures(
     monkeypatch: pytest.MonkeyPatch,
@@ -302,7 +290,6 @@ async def test_start_terminal_bridge_container_redacts_startup_failures(
     assert "hunter2" not in message
     assert "failed" in message
 
-
 @pytest.mark.asyncio
 async def test_start_terminal_bridge_container_uses_configured_runner_user(
     monkeypatch: pytest.MonkeyPatch,
@@ -331,7 +318,6 @@ async def test_start_terminal_bridge_container_uses_configured_runner_user(
 
     assert "--user" in observed
     assert "2001:2001" in observed
-
 
 @pytest.mark.asyncio
 async def test_start_terminal_bridge_container_redacts_claude_auth_paths_in_startup_failures(

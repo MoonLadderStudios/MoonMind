@@ -4,7 +4,6 @@ from llama_index.embeddings.openai import OpenAIEmbedding
 
 from ..config.settings import AppSettings
 
-
 def build_embed_model(
     settings: AppSettings,
     google_api_key: str | None = None,

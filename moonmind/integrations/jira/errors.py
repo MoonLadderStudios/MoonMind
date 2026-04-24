@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 class JiraToolError(RuntimeError):
     """Structured Jira tool error safe for logs and model-visible responses."""
 

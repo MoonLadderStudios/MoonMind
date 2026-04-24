@@ -26,15 +26,15 @@ The existing Mission Control report-presentation implementation already satisfie
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 for API contract regression  
-**Primary Dependencies**: React, TanStack Query, Zod, existing FastAPI artifact routes, Pydantic v2 response models  
-**Storage**: Existing temporal artifact tables and artifact store only; no new persistent storage  
-**Unit Testing**: Focused frontend unit coverage through `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx`; API contract coverage through `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py`; final full unit verification through `./tools/test_unit.sh`  
-**Integration Testing**: Existing required hermetic integration runner `./tools/test_integration.sh`; no compose-backed integration is required for this story because the planned backend coverage is a contract regression over an existing read-only endpoint, but the integration runner remains the escalation path if artifact service behavior changes beyond serialization/query plumbing  
-**Target Platform**: Mission Control browser UI backed by MoonMind API service  
-**Project Type**: Frontend application with existing backend API read model  
-**Performance Goals**: Add one focused latest-report artifact request and reuse the existing artifact list request; avoid client-side sorting over arbitrary artifact collections  
-**Constraints**: Do not fabricate report status locally; do not hide generic artifact or observability surfaces; keep report identity server-driven  
+**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 for API contract regression 
+**Primary Dependencies**: React, TanStack Query, Zod, existing FastAPI artifact routes, Pydantic v2 response models 
+**Storage**: Existing temporal artifact tables and artifact store only; no new persistent storage 
+**Unit Testing**: Focused frontend unit coverage through `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx`; API contract coverage through `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py`; final full unit verification through `./tools/test_unit.sh` 
+**Integration Testing**: Existing required hermetic integration runner `./tools/test_integration.sh`; no compose-backed integration is required for this story because the planned backend coverage is a contract regression over an existing read-only endpoint, but the integration runner remains the escalation path if artifact service behavior changes beyond serialization/query plumbing 
+**Target Platform**: Mission Control browser UI backed by MoonMind API service 
+**Project Type**: Frontend application with existing backend API read model 
+**Performance Goals**: Add one focused latest-report artifact request and reuse the existing artifact list request; avoid client-side sorting over arbitrary artifact collections 
+**Constraints**: Do not fabricate report status locally; do not hide generic artifact or observability surfaces; keep report identity server-driven 
 **Scale/Scope**: One runtime story for task detail report presentation of one execution
 
 ## Constitution Check
@@ -52,7 +52,7 @@ The existing Mission Control report-presentation implementation already satisfie
 - IX. Resilient by Default: PASS. Report identity comes from durable artifact links, not browser heuristics.
 - X. Facilitate Continuous Improvement: PASS. Verification preserves traceable MM-494 evidence for the resumed feature artifacts.
 - XI. Spec-Driven Development: PASS. Spec, plan, tasks, and verification drive work.
-- XII. Canonical Documentation Separation: PASS. Orchestration input remains under `docs/tmp`.
+- XII. Canonical Documentation Separation: PASS. Orchestration input remains under `local-only handoffs`.
 - XIII. Pre-release Compatibility Policy: PASS. No compatibility aliases or internal semantic transforms are introduced.
 
 ## Project Structure
@@ -67,7 +67,7 @@ specs/230-mission-control-report-presentation/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── mission-control-report-presentation.md
+│ └── mission-control-report-presentation.md
 └── tasks.md
 ```
 

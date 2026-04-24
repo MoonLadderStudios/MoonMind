@@ -2,7 +2,7 @@
 
 **Feature**: Claude Browser Terminal Sign-In Ceremony  
 **Spec**: `specs/242-claude-browser-terminal-signin/spec.md`  
-**Original Request Source**: `docs/tmp/jira-orchestration-inputs/MM-479-moonspec-orchestration-input.md`  
+**Original Request Source**: `spec.md` (Input)  
 **Verdict**: FULLY_IMPLEMENTED  
 **Date**: 2026-04-23
 

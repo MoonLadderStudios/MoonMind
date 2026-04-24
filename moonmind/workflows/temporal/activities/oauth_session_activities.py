@@ -34,7 +34,6 @@ from moonmind.workflows.temporal.runtime.providers.registry import (
 
 logger = logging.getLogger(__name__)
 
-
 @activity.defn(name="oauth_session.ensure_volume")
 async def oauth_session_ensure_volume(
     request: Mapping[str, Any],
@@ -77,7 +76,6 @@ async def oauth_session_ensure_volume(
         logger.warning("docker volume create timed out for session %s", session_id)
         return {"session_id": session_id, "volume_ref": volume_ref, "status": "timeout"}
 
-
 @activity.defn(name="oauth_session.start_auth_runner")
 async def oauth_session_start_auth_runner(
     request: Mapping[str, Any],
@@ -115,7 +113,6 @@ async def oauth_session_start_auth_runner(
     bridge_info.setdefault("session_transport", "moonmind_pty_ws")
     
     return bridge_info
-
 
 @activity.defn(name="oauth_session.update_terminal_session")
 async def oauth_session_update_terminal_session(
@@ -171,7 +168,6 @@ async def oauth_session_update_terminal_session(
         "session_transport": session_transport,
     }
 
-
 @activity.defn(name="oauth_session.stop_auth_runner")
 async def oauth_session_stop_auth_runner(
     request: Mapping[str, Any],
@@ -207,7 +203,6 @@ async def oauth_session_stop_auth_runner(
         container_name=container_name,
     )
 
-
 @activity.defn(name="oauth_session.verify_volume")
 async def oauth_session_verify_volume(
     request: Mapping[str, Any],
@@ -232,7 +227,6 @@ async def oauth_session_verify_volume(
     verification["session_id"] = session_id
 
     return verification
-
 
 @activity.defn(name="oauth_session.verify_cli_fingerprint")
 async def oauth_session_verify_cli_fingerprint(
@@ -261,7 +255,6 @@ async def oauth_session_verify_cli_fingerprint(
     verification["fingerprint_verified"] = verification.get("verified", False)
 
     return verification
-
 
 @activity.defn(name="oauth_session.update_status")
 async def oauth_session_update_status(
@@ -309,7 +302,6 @@ async def oauth_session_update_status(
         "Updated session %s status to %s", session_id, new_status_str
     )
     return {"session_id": session_id, "status": new_status_str}
-
 
 @activity.defn(name="oauth_session.register_profile")
 async def oauth_session_register_profile(
@@ -410,7 +402,6 @@ async def oauth_session_register_profile(
 
     logger.info("Registered profile %s for session %s", session_obj.profile_id, session_id)
     return {"session_id": session_id, "profile_id": session_obj.profile_id, "status": "registered"}
-
 
 @activity.defn(name="oauth_session.mark_failed")
 async def oauth_session_mark_failed(

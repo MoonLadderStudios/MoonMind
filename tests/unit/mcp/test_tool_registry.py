@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-
 import base64
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
-
 
 from moonmind.mcp.tool_registry import (
     QueueToolExecutionContext,
@@ -20,7 +18,6 @@ from moonmind.mcp.tool_registry import (
 )
 
 pytestmark = [pytest.mark.asyncio]
-
 
 def _build_job(status: models.AgentJobStatus = models.AgentJobStatus.QUEUED):
     now = datetime.now(UTC)
@@ -50,7 +47,6 @@ def _build_job(status: models.AgentJobStatus = models.AgentJobStatus.QUEUED):
         updated_at=now,
     )
 
-
 def _build_artifact(job_id=None):
     now = datetime.now(UTC)
     return SimpleNamespace(
@@ -64,10 +60,8 @@ def _build_artifact(job_id=None):
         created_at=now,
     )
 
-
 def _build_context(service: SimpleNamespace) -> QueueToolExecutionContext:
     return QueueToolExecutionContext(service=service, user_id=uuid4())
-
 
 def _build_service() -> SimpleNamespace:
     return SimpleNamespace(
@@ -81,7 +75,6 @@ def _build_service() -> SimpleNamespace:
         list_jobs=AsyncMock(),
         upload_artifact=AsyncMock(),
     )
-
 
 def test_list_tools_is_deterministic_and_complete() -> None:
     """Registry discovery should include expected queue tools in deterministic order."""
@@ -97,7 +90,6 @@ def test_list_tools_is_deterministic_and_complete() -> None:
     assert "queue.cancel" in names
     assert "queue.upload_artifact" in names
 
-
 async def test_call_tool_unknown_name_raises() -> None:
     """Unknown tools should raise ToolNotFoundError."""
 
@@ -111,7 +103,6 @@ async def test_call_tool_unknown_name_raises() -> None:
             context=_build_context(service),
         )
 
-
 async def test_call_tool_invalid_arguments_raise_validation() -> None:
     """Invalid argument payloads should raise ToolArgumentsValidationError."""
 
@@ -124,7 +115,6 @@ async def test_call_tool_invalid_arguments_raise_validation() -> None:
             arguments={},
             context=_build_context(service),
         )
-
 
 async def test_queue_list_dispatch_uses_service_and_rest_shape() -> None:
     """queue.list should dispatch to service and return REST-equivalent envelope."""
@@ -143,7 +133,6 @@ async def test_queue_list_dispatch_uses_service_and_rest_shape() -> None:
     assert len(result["items"]) == 1
     assert result["items"][0]["status"] == "queued"
     service.list_jobs.assert_awaited_once()
-
 
 async def test_queue_claim_forwards_worker_capabilities() -> None:
     """queue.claim should forward workerCapabilities to queue service."""
@@ -170,7 +159,6 @@ async def test_queue_claim_forwards_worker_capabilities() -> None:
     called = service.claim_job.await_args.kwargs
     assert called["worker_capabilities"] == ["codex", "git"]
 
-
 @pytest.mark.skip(reason='Queue substrate removed in Phase 3')
 async def test_queue_heartbeat_returns_system_metadata() -> None:
     """queue.heartbeat should surface system metadata to clients."""
@@ -196,7 +184,6 @@ async def test_queue_heartbeat_returns_system_metadata() -> None:
     assert result["system"]["workersPaused"] is True
     service.heartbeat.assert_awaited_once()
 
-
 async def test_queue_upload_artifact_rejects_invalid_base64() -> None:
     """Optional upload tool should reject invalid base64 payloads."""
 
@@ -213,7 +200,6 @@ async def test_queue_upload_artifact_rejects_invalid_base64() -> None:
             },
             context=_build_context(service),
         )
-
 
 async def test_queue_upload_artifact_decodes_payload_and_dispatches() -> None:
     """Upload tool should decode base64 content before calling service."""
@@ -238,7 +224,6 @@ async def test_queue_upload_artifact_decodes_payload_and_dispatches() -> None:
     called_kwargs = service.upload_artifact.await_args.kwargs
     assert called_kwargs["data"] == b"hello"
 
-
 @pytest.mark.skip(reason='Queue substrate removed in Phase 3')
 async def test_queue_cancel_dispatches_to_service() -> None:
     """queue.cancel should forward reason/user and return serialized job."""
@@ -259,7 +244,6 @@ async def test_queue_cancel_dispatches_to_service() -> None:
     called = service.request_cancel.await_args.kwargs
     assert called["job_id"] == job.id
     assert called["reason"] == "operator request"
-
 
 def _build_system_metadata(paused: bool = False) -> QueueSystemMetadata:
     now = datetime.now(UTC)

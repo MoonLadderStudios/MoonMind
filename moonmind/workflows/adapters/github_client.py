@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-
 @dataclass(slots=True)
 class GitHubPublishResult:
     """Metadata returned when publishing a branch and PR."""
@@ -17,7 +16,6 @@ class GitHubPublishResult:
     branch_name: str
     pr_url: str
     response_path: Path
-
 
 class GitHubClient:
     """Minimal GitHub adapter supporting the workflow publish stage."""
@@ -69,6 +67,5 @@ class GitHubClient:
             "WORKFLOW_TEST_MODE=1 (or WORKFLOW_TEST_MODE=1 for legacy environments) "
             "for local development."
         )
-
 
 __all__ = ["GitHubClient", "GitHubPublishResult"]

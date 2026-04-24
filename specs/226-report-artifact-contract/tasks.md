@@ -7,7 +7,7 @@
 
 **Organization**: This task list covers exactly one user story: `Publish Report Artifacts`.
 
-**Source Traceability**: Original Jira issue `MM-460` and the original Jira preset brief are preserved in `spec.md` and `docs/tmp/jira-orchestration-inputs/MM-460-moonspec-orchestration-input.md`.
+**Source Traceability**: Original Jira issue `MM-460` and the original Jira preset brief are preserved in `spec.md` and `spec.md` (Input).
 
 **Test Commands**:
 
@@ -87,7 +87,7 @@
 ### Story Validation
 
 - [X] T017 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_artifacts.py` and fix failures until the story passes independently
-- [X] T018 Run `rg -n "MM-460|report.primary|report.findings_index|Report Artifact Contract" specs/226-report-artifact-contract docs/tmp/jira-orchestration-inputs/MM-460-moonspec-orchestration-input.md moonmind/workflows/temporal tests/unit/workflows/temporal/test_artifacts.py` and confirm traceability evidence exists
+- [X] T018 Run `rg -n "MM-460|report.primary|report.findings_index|Report Artifact Contract" specs/226-report-artifact-contract moonmind/workflows/temporal tests/unit/workflows/temporal/test_artifacts.py` and confirm traceability evidence exists
 
 ---
 
@@ -96,7 +96,7 @@
 - [X] T019 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full unit verification after targeted tests pass
 - [X] T020 Run `./tools/test_integration.sh` when Docker is available, or record Docker unavailability in final verification notes
 - [X] T021 Run a secret-pattern scan on changed files before final handoff
-- [X] T022 Review `git diff -- specs/226-report-artifact-contract docs/tmp/jira-orchestration-inputs/MM-460-moonspec-orchestration-input.md moonmind/workflows/temporal tests/unit/workflows/temporal/test_artifacts.py .specify/feature.json`
+- [X] T022 Review `git diff -- specs/226-report-artifact-contract moonmind/workflows/temporal tests/unit/workflows/temporal/test_artifacts.py .specify/feature.json`
 - [X] T023 Run `/moonspec-verify` for `specs/226-report-artifact-contract` and preserve verification evidence for MM-460
 
 ---

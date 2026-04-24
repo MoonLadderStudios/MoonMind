@@ -22,7 +22,6 @@ from moonmind.workflows.temporal.runtime.managed_session_controller import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 class _CreateTaskHandler(BaseHTTPRequestHandler):
     requests: list[dict[str, Any]] = []
 
@@ -48,7 +47,6 @@ class _CreateTaskHandler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *_args: Any) -> None:
         return
 
-
 def _load_batch_pr_resolver_module() -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[4]
     return runpy.run_path(
@@ -61,7 +59,6 @@ def _load_batch_pr_resolver_module() -> dict[str, Any]:
             / "batch_pr_resolver.py"
         )
     )
-
 
 def _run_command_env(command: tuple[str, ...]) -> dict[str, str]:
     env: dict[str, str] = {}
@@ -76,7 +73,6 @@ def _run_command_env(command: tuple[str, ...]) -> dict[str, str]:
             continue
         index += 1
     return env
-
 
 async def _run_checked(
     *command: str,
@@ -106,7 +102,6 @@ async def _run_checked(
             f"{stderr.decode(errors='replace') or stdout.decode(errors='replace')}"
         )
 
-
 def _make_world_readable(path: Path) -> None:
     directory_bits = (
         stat.S_IXUSR
@@ -127,7 +122,6 @@ def _make_world_readable(path: Path) -> None:
             child = root_path / filename
             child.chmod(child.stat().st_mode | file_bits)
 
-
 def _make_tmp_path_accessible(path: Path) -> None:
     temp_root = Path("/tmp").resolve()
     for directory in (path, *path.parents):
@@ -146,7 +140,6 @@ def _make_tmp_path_accessible(path: Path) -> None:
             | stat.S_IROTH
         )
 
-
 def _chown_tree(path: Path, *, uid: int, gid: int) -> None:
     for root, dirnames, filenames in os.walk(path):
         root_path = Path(root)
@@ -155,7 +148,6 @@ def _chown_tree(path: Path, *, uid: int, gid: int) -> None:
             os.chown(root_path / dirname, uid, gid)
         for filename in filenames:
             os.chown(root_path / filename, uid, gid)
-
 
 async def _create_source_repo(path: Path) -> None:
     path.mkdir(parents=True)
@@ -172,7 +164,6 @@ async def _create_source_repo(path: Path) -> None:
     await _run_checked("git", "add", "README.md", cwd=path)
     await _run_checked("git", "commit", "-m", "Initial commit", cwd=path)
     _make_world_readable(path)
-
 
 def _expected_child_idempotency_key(
     *,
@@ -193,7 +184,6 @@ def _expected_child_idempotency_key(
     )
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return f"batch-pr-resolver:pr:{pr_number}:sha256:{digest}"
-
 
 @pytest.mark.asyncio
 async def test_codex_session_launch_environment_can_create_child_tasks(
@@ -330,7 +320,6 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
         await asyncio.to_thread(server.server_close)
         server_thread.join(timeout=2)
 
-
 @pytest.mark.asyncio
 async def test_codex_session_launch_command_uses_workspace_and_explicit_auth_target(
     tmp_path: Path,
@@ -409,7 +398,6 @@ async def test_codex_session_launch_command_uses_workspace_and_explicit_auth_tar
         == request.artifact_spool_path
     )
     assert run_env["MOONMIND_SESSION_CODEX_HOME_PATH"] == request.codex_home_path
-
 
 @pytest.mark.asyncio
 async def test_codex_session_workspace_git_metadata_is_managed_user_writable(

@@ -15,9 +15,7 @@ from moonmind.workflows.temporal.boundary_inventory import (
     iter_temporal_boundary_contracts,
 )
 
-
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
-
 
 def test_inventory_activity_names_exist_in_default_activity_catalog() -> None:
     catalog = build_default_activity_catalog()
@@ -30,7 +28,6 @@ def test_inventory_activity_names_exist_in_default_activity_catalog() -> None:
     for activity_name in activity_names:
         route = catalog.resolve_activity(activity_name)
         assert route.activity_type == activity_name
-
 
 def test_inventory_workflow_message_names_match_known_constants() -> None:
     signal_names = {
@@ -46,7 +43,6 @@ def test_inventory_workflow_message_names_match_known_constants() -> None:
 
     assert signal_names <= set(SUPPORTED_SIGNAL_NAMES)
     assert update_names <= set(SUPPORTED_UPDATE_NAMES)
-
 
 def test_inventory_preserves_existing_temporal_names() -> None:
     names = {(contract.kind, contract.owner, contract.name) for contract in iter_temporal_boundary_contracts()}

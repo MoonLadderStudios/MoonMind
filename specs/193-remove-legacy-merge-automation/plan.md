@@ -1,6 +1,6 @@
 # Implementation Plan: Remove Legacy Merge Automation Workflow
 
-**Branch**: `193-remove-legacy-merge-automation` | **Date**: 2026-04-16 | **Spec**: [spec.md](spec.md)  
+**Branch**: `193-remove-legacy-merge-automation` | **Date**: 2026-04-16 | **Spec**: [spec.md](spec.md) 
 **Input**: Single-story feature specification from `specs/193-remove-legacy-merge-automation/spec.md`
 
 ## Summary
@@ -9,15 +9,15 @@ Remove the dead legacy activity-based `MoonMind.MergeAutomation` workflow class 
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Temporal Python SDK, Pydantic v2, pytest, existing MoonMind Temporal workflow helpers  
-**Storage**: No new persistent storage  
-**Unit Testing**: pytest through `./tools/test_unit.sh`  
-**Integration Testing**: pytest workflow-boundary tests through `./tools/test_unit.sh` focused on Temporal workflow modules; compose-backed integration suite not required for this internal cleanup  
-**Target Platform**: MoonMind worker containers on Linux  
-**Project Type**: Python service and Temporal workflow orchestration  
-**Performance Goals**: No additional runtime work; cleanup must not add workflow activity calls or resolver launches  
-**Constraints**: Preserve active merge readiness semantics, preserve child `MoonMind.Run` resolver launch with `publishMode=none`, do not add compatibility aliases for deleted pre-release internals, keep raw credential data out of logs/artifacts  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: Temporal Python SDK, Pydantic v2, pytest, existing MoonMind Temporal workflow helpers 
+**Storage**: No new persistent storage 
+**Unit Testing**: pytest through `./tools/test_unit.sh` 
+**Integration Testing**: pytest workflow-boundary tests through `./tools/test_unit.sh` focused on Temporal workflow modules; compose-backed integration suite not required for this internal cleanup 
+**Target Platform**: MoonMind worker containers on Linux 
+**Project Type**: Python service and Temporal workflow orchestration 
+**Performance Goals**: No additional runtime work; cleanup must not add workflow activity calls or resolver launches 
+**Constraints**: Preserve active merge readiness semantics, preserve child `MoonMind.Run` resolver launch with `publishMode=none`, do not add compatibility aliases for deleted pre-release internals, keep raw credential data out of logs/artifacts 
 **Scale/Scope**: One workflow family cleanup plus focused tests and documentation/input traceability
 
 ## Constitution Check
@@ -33,7 +33,7 @@ Remove the dead legacy activity-based `MoonMind.MergeAutomation` workflow class 
 - IX. Resilient by Default: PASS. Active child workflow cancellation and terminal outcome semantics remain covered.
 - X. Continuous Improvement: PASS. Verification records grep and test evidence for future review.
 - XI. Spec-Driven Development: PASS. This plan follows the MM-364 spec and creates task/verification artifacts before completion.
-- XII. Canonical Documentation: PASS. Volatile orchestration input remains under `docs/tmp`; canonical docs are updated only if they imply both workflow paths are active.
+- XII. Canonical Documentation: PASS. Volatile orchestration input remains under `local-only handoffs`; canonical docs are updated only if they imply both workflow paths are active.
 - XIII. Pre-Release Compatibility: PASS. The legacy internal activity/workflow path is removed rather than wrapped with compatibility aliases.
 
 ## Project Structure
@@ -48,9 +48,9 @@ specs/193-remove-legacy-merge-automation/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── merge-automation-cleanup.md
+│ └── merge-automation-cleanup.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 ├── tasks.md
 └── verification.md
 ```
@@ -63,13 +63,13 @@ moonmind/workflows/temporal/
 ├── activity_runtime.py
 ├── worker_entrypoint.py
 └── workflows/
-    ├── merge_automation.py
-    └── merge_gate.py
+ ├── merge_automation.py
+ └── merge_gate.py
 
 tests/unit/workflows/temporal/
 ├── test_merge_gate_workflow.py
 └── workflows/
-    └── test_merge_automation_temporal.py
+ └── test_merge_automation_temporal.py
 
 docs/Tasks/
 └── PrMergeAutomation.md

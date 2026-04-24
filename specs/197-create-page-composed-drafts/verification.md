@@ -2,7 +2,7 @@
 
 **Feature**: Create Page Composed Preset Drafts  
 **Spec**: `/work/agent_jobs/mm:9ad66c91-d0b6-4c5c-aeff-bffed72244e5/repo/specs/197-create-page-composed-drafts/spec.md`  
-**Original Request Source**: MM-384 Jira preset brief preserved in `spec.md` and `docs/tmp/jira-orchestration-inputs/MM-384-moonspec-orchestration-input.md`  
+**Original Request Source**: MM-384 Jira preset brief preserved in `spec.md` and `spec.md` (Input)  
 **Verdict**: FULLY_IMPLEMENTED
 
 ## Requirement Coverage
@@ -44,7 +44,7 @@
 | `SPECIFY_FEATURE=197-create-page-composed-drafts .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` | PASS | Feature artifacts resolved. |
 | `rg -n "AppliedPresetBinding|StepDraft\\.source|preset-bound|grouped composition|flat reconstruction|Reapply preset|save-as-preset|flatten" docs/UI/CreatePage.md` | PASS | Required composed preset terms present. |
 | `rg -n "template-bound|appliedTemplates|AppliedTemplateState" docs/UI/CreatePage.md` | PASS | No matches after implementation. |
-| `rg -n "MM-384|AppliedPresetBinding|StepDraft\\.source|DESIGN-REQ-016" specs/197-create-page-composed-drafts docs/tmp/jira-orchestration-inputs/MM-384-moonspec-orchestration-input.md` | PASS | Traceability confirmed. |
+| `rg -n "MM-384|AppliedPresetBinding|StepDraft\\.source|DESIGN-REQ-016" specs/197-create-page-composed-drafts` | PASS | Traceability confirmed. |
 | `git diff --check` | PASS | No whitespace errors. |
 | `./tools/test_unit.sh` | NOT RUN | No executable code changed; validation was documentation-contract focused. |
 | `./tools/test_integration.sh` | NOT RUN | No executable code changed; Docker-backed integration tests are not relevant to this documentation-backed runtime contract slice. |

@@ -3,21 +3,21 @@
 **Feature Branch**: `118-agent-skill-phase5`
 **Created**: 2026-03-31
 **Status**: Draft
-**Input**: User description: "Fully implement Phase 5 of docs/tmp/004-AgentSkillSystemPlan.md using test-driven development."
+**Input**: User description: "Fully implement Phase 5 of spec.md (Input) using test-driven development."
 
 ## Source Document Requirements
 
-- **DOC-REQ-001**: `docs/tmp/004-AgentSkillSystemPlan.md` §10 - System MUST add canonical `task.skills` handling to task submission models.
-- **DOC-REQ-002**: `docs/tmp/004-AgentSkillSystemPlan.md` §10 - System MUST add canonical `step.skills` handling to plan-node or step execution models.
-- **DOC-REQ-003**: `docs/tmp/004-AgentSkillSystemPlan.md` §10 - System MUST ensure `step.skills` correctly inherits from and overrides `task.skills`.
-- **DOC-REQ-004**: `docs/tmp/004-AgentSkillSystemPlan.md` §10 - System MUST add validation for invalid skill selectors during task submit or plan validation.
-- **DOC-REQ-005**: `docs/tmp/004-AgentSkillSystemPlan.md` §10 - System MUST add explicit `agent_skill.*` activity family for resolution vs materialization.
-- **DOC-REQ-006**: `docs/tmp/004-AgentSkillSystemPlan.md` §10 - System MUST route `agent_skill.materialize` and related preparation activities to `mm.activity.agent_runtime` or a capable preparation fleet.
-- **DOC-REQ-007**: `docs/tmp/004-AgentSkillSystemPlan.md` §10 - System MUST ensure the workflow explicitly propagates `resolved_skillset_ref` across activity boundaries.
-- **DOC-REQ-008**: `docs/tmp/004-AgentSkillSystemPlan.md` §10 - System MUST pass `resolved_skillset_ref` or equivalent through the `MoonMind.AgentRun` path.
-- **DOC-REQ-009**: `docs/tmp/004-AgentSkillSystemPlan.md` §10 - System MUST ensure workflow payloads carry refs and metadata only.
-- **DOC-REQ-010**: `docs/tmp/004-AgentSkillSystemPlan.md` §10 - System MUST ensure retries and continuation paths reuse the same resolved snapshot.
-- **DOC-REQ-011**: `docs/tmp/004-AgentSkillSystemPlan.md` §10 - System MUST include workflow-boundary tests for task-level selection, step-level override, child workflow dispatch, and rerun behavior.
+- **DOC-REQ-001**: `spec.md (Input)` §10 - System MUST add canonical `task.skills` handling to task submission models.
+- **DOC-REQ-002**: `spec.md (Input)` §10 - System MUST add canonical `step.skills` handling to plan-node or step execution models.
+- **DOC-REQ-003**: `spec.md (Input)` §10 - System MUST ensure `step.skills` correctly inherits from and overrides `task.skills`.
+- **DOC-REQ-004**: `spec.md (Input)` §10 - System MUST add validation for invalid skill selectors during task submit or plan validation.
+- **DOC-REQ-005**: `spec.md (Input)` §10 - System MUST add explicit `agent_skill.*` activity family for resolution vs materialization.
+- **DOC-REQ-006**: `spec.md (Input)` §10 - System MUST route `agent_skill.materialize` and related preparation activities to `mm.activity.agent_runtime` or a capable preparation fleet.
+- **DOC-REQ-007**: `spec.md (Input)` §10 - System MUST ensure the workflow explicitly propagates `resolved_skillset_ref` across activity boundaries.
+- **DOC-REQ-008**: `spec.md (Input)` §10 - System MUST pass `resolved_skillset_ref` or equivalent through the `MoonMind.AgentRun` path.
+- **DOC-REQ-009**: `spec.md (Input)` §10 - System MUST ensure workflow payloads carry refs and metadata only.
+- **DOC-REQ-010**: `spec.md (Input)` §10 - System MUST ensure retries and continuation paths reuse the same resolved snapshot.
+- **DOC-REQ-011**: `spec.md (Input)` §10 - System MUST include workflow-boundary tests for task-level selection, step-level override, child workflow dispatch, and rerun behavior.
 
 ## User Scenarios & Testing
 

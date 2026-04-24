@@ -7,7 +7,7 @@
 
 ## Source Document Requirements
 
-Source: `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/tmp/remaining-work/Temporal-WorkflowTypeCatalogAndLifecycle.md`, `docs/tmp/remaining-work/Api-ExecutionsApiContract.md`
+Source: `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/StepLedgerAndProgressModel.md`
 
 | ID | Source Section | Requirement Summary |
 | --- | --- | --- |

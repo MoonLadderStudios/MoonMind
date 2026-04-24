@@ -2,7 +2,6 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ValidationInfo, field_validator, model_validator
 
-
 class ConfluenceLoadRequest(BaseModel):
     space_key: Optional[str] = None
     page_id: Optional[str] = None
@@ -44,13 +43,11 @@ class ConfluenceLoadRequest(BaseModel):
 
         return self
 
-
 class GitHubLoadRequest(BaseModel):
     repo: str
     branch: Optional[str] = "main"
     filter_extensions: Optional[List[str]] = None
     github_token: Optional[str] = None
-
 
 class GoogleDriveLoadRequest(BaseModel):
     folder_id: Optional[str] = None

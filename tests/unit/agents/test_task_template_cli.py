@@ -8,7 +8,6 @@ import pytest
 
 from moonmind.agents.cli.task_templates import TaskTemplateClient, merge_expanded_steps
 
-
 class _FakeResponse:
     def __init__(self, payload: Any, status_code: int = 200):
         self._payload = payload
@@ -20,7 +19,6 @@ class _FakeResponse:
 
     def json(self):
         return self._payload
-
 
 def test_list_templates_and_expand(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
@@ -62,7 +60,6 @@ def test_list_templates_and_expand(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls[0][0] == "GET"
     assert calls[1][0] == "POST"
 
-
 def test_merge_expanded_steps_modes() -> None:
     existing = [{"id": "s1", "instructions": "one"}]
     incoming = [{"id": "s2", "instructions": "two"}]
@@ -81,7 +78,6 @@ def test_merge_expanded_steps_modes() -> None:
         merge_expanded_steps(
             existing_steps=existing, expanded_steps=incoming, mode="bad"
         )
-
 
 def test_cli_raises_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_get(url, headers, params, timeout):

@@ -46,15 +46,15 @@ Implement MM-458 by verifying and preserving the existing remediation runtime gu
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: SQLAlchemy async ORM, Temporal execution service boundary, remediation action authority and mutation guard services, existing pytest fixtures  
-**Storage**: Existing `TemporalExecutionCanonicalRecord` and `execution_remediation_links`; no new persistent storage  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_service.py tests/unit/workflows/temporal/test_remediation_context.py`  
-**Integration Testing**: Async DB-backed service-boundary tests in the unit suite; no provider credentials or compose-backed integration required for this policy-surface slice  
-**Target Platform**: Linux server / Docker Compose deployment  
-**Project Type**: FastAPI control plane plus Temporal workflow service boundary  
-**Performance Goals**: Policy and capability checks remain bounded local validation with no external calls  
-**Constraints**: Runtime mode; preserve MM-458; no raw host, Docker daemon, arbitrary SQL, secret read, storage-key, redaction bypass, or automatic remediation loop; no new compatibility aliases  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: SQLAlchemy async ORM, Temporal execution service boundary, remediation action authority and mutation guard services, existing pytest fixtures 
+**Storage**: Existing `TemporalExecutionCanonicalRecord` and `execution_remediation_links`; no new persistent storage 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_service.py tests/unit/workflows/temporal/test_remediation_context.py` 
+**Integration Testing**: Async DB-backed service-boundary tests in the unit suite; no provider credentials or compose-backed integration required for this policy-surface slice 
+**Target Platform**: Linux server / Docker Compose deployment 
+**Project Type**: FastAPI control plane plus Temporal workflow service boundary 
+**Performance Goals**: Policy and capability checks remain bounded local validation with no external calls 
+**Constraints**: Runtime mode; preserve MM-458; no raw host, Docker daemon, arbitrary SQL, secret read, storage-key, redaction bypass, or automatic remediation loop; no new compatibility aliases 
 **Scale/Scope**: One remediation policy/capability decision at task creation or action-evaluation time
 
 ## Constitution Check
@@ -70,7 +70,7 @@ Implement MM-458 by verifying and preserving the existing remediation runtime gu
 - IX. Resilient by Default: PASS. Fail-closed policy behavior and bounded outcomes improve unattended safety.
 - X. Continuous Improvement: PASS. Structured outcomes make policy denials diagnosable.
 - XI. Spec-Driven Development: PASS. This plan follows the MM-458 single-story spec.
-- XII. Canonical Documentation Separation: PASS. Canonical docs remain desired-state; Jira input remains under `docs/tmp`.
+- XII. Canonical Documentation Separation: PASS. Canonical docs remain desired-state; Jira input remains under `local-only handoffs`.
 - XIII. Pre-release Compatibility Policy: PASS. No aliases or backward-compat shims.
 
 ## Project Structure
@@ -85,9 +85,9 @@ specs/233-remediation-v1-policy-guardrails/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── remediation-v1-policy-guardrails.md
+│ └── remediation-v1-policy-guardrails.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 

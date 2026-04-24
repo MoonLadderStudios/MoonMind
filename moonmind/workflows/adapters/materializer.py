@@ -20,7 +20,6 @@ from moonmind.workflows.adapters.secret_boundary import SecretResolverBoundary
 logger = logging.getLogger(__name__)
 _TEMPLATE_PATTERN = re.compile(r"{{\s*([A-Za-z0-9_.-]+)\s*}}")
 
-
 class ProviderProfileMaterializer:
     """Materializes the environment and command for a Managed Agent Runtime profile."""
 

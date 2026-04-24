@@ -37,5 +37,5 @@ Phase 0 of the DooD rollout is a contract-locking step. The main question is not
 | `docs/ManagedAgents/DockerOutOfDocker.md` | Already defines glossary and one-shot workload emphasis | Tighten only where tracker/Phase 0 wording needs to stay explicit |
 | `docs/ManagedAgents/CodexCliManagedSessions.md` | Links to DooD doc but does not explicitly describe session-assisted workload tools | Add short cross-reference paragraph |
 | `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` | Defines true agent-runtime boundary but does not name Docker-backed workload tools explicitly | Add short execution-model note |
-| `docs/tmp/remaining-work/` | No DooD tracker exists yet | Add tracker and register it in README |
+| `docs/ManagedAgents/DockerOutOfDocker.md` | No DooD tracker exists yet | Add tracker and register it in README |
 | `tests/unit/` | No DooD Phase 0 documentation contract test exists | Add focused pytest coverage |

@@ -26,7 +26,6 @@ ManifestNodeState = Literal[
 ]
 ManifestUpdateMode = Literal["REPLACE_FUTURE", "APPEND"]
 
-
 class RequestedByModel(BaseModel):
     """Immutable requested-by identity propagated through manifest ingest."""
 
@@ -34,7 +33,6 @@ class RequestedByModel(BaseModel):
 
     type: Literal["user", "system"] = Field(..., alias="type")
     id: str = Field(..., alias="id")
-
 
 class ManifestExecutionPolicyModel(BaseModel):
     """Bounded execution policy payload exposed on manifest ingest detail APIs."""
@@ -53,7 +51,6 @@ class ManifestExecutionPolicyModel(BaseModel):
     )
     schedule_batch_size: Optional[int] = Field(None, alias="scheduleBatchSize", ge=1)
 
-
 class ManifestNodeCountsModel(BaseModel):
     """Aggregate node counts returned by manifest ingest status APIs."""
 
@@ -65,7 +62,6 @@ class ManifestNodeCountsModel(BaseModel):
     succeeded: int = Field(0, alias="completed", ge=0)
     failed: int = Field(0, alias="failed", ge=0)
     canceled: int = Field(0, alias="canceled", ge=0)
-
 
 class ManifestStatusSnapshotModel(BaseModel):
     """Bounded manifest ingest status snapshot."""
@@ -98,7 +94,6 @@ class ManifestStatusSnapshotModel(BaseModel):
     )
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
 
-
 class ManifestNodeModel(BaseModel):
     """One bounded manifest node summary row."""
 
@@ -115,7 +110,6 @@ class ManifestNodeModel(BaseModel):
     started_at: Optional[datetime] = Field(None, alias="startedAt")
     completed_at: Optional[datetime] = Field(None, alias="completedAt")
 
-
 class ManifestPlanNodeModel(BaseModel):
     """Normalized compiled-plan node used for artifact-backed orchestration."""
 
@@ -131,7 +125,6 @@ class ManifestPlanNodeModel(BaseModel):
     )
     runtime_hints: dict[str, Any] = Field(default_factory=dict, alias="runtimeHints")
     dependencies: list[str] = Field(default_factory=list, alias="dependencies")
-
 
 class CompiledManifestPlanModel(BaseModel):
     """Canonical manifest-ingest plan artifact payload."""
@@ -154,7 +147,6 @@ class CompiledManifestPlanModel(BaseModel):
     )
     options: dict[str, Any] = Field(default_factory=dict, alias="options")
 
-
 class ManifestNodePageModel(BaseModel):
     """Cursor-paginated manifest node page."""
 
@@ -163,7 +155,6 @@ class ManifestNodePageModel(BaseModel):
     items: list[ManifestNodeModel] = Field(default_factory=list, alias="items")
     next_cursor: Optional[str] = Field(None, alias="nextCursor")
     count: int = Field(0, alias="count", ge=0)
-
 
 class ManifestRunIndexEntryModel(BaseModel):
     """Lineage row for the canonical run-index artifact."""
@@ -178,7 +169,6 @@ class ManifestRunIndexEntryModel(BaseModel):
     parent_close_policy: str = Field("REQUEST_CANCEL", alias="parentClosePolicy")
     result_artifact_ref: Optional[str] = Field(None, alias="resultArtifactRef")
 
-
 class ManifestRunIndexModel(BaseModel):
     """Canonical run-index artifact payload."""
 
@@ -188,7 +178,6 @@ class ManifestRunIndexModel(BaseModel):
     manifest_ref: str = Field(..., alias="manifestRef")
     counts: ManifestNodeCountsModel = Field(..., alias="counts")
     items: list[ManifestRunIndexEntryModel] = Field(default_factory=list, alias="items")
-
 
 class ManifestIngestSummaryModel(BaseModel):
     """Bounded summary artifact payload for one ingest execution."""
@@ -203,7 +192,6 @@ class ManifestIngestSummaryModel(BaseModel):
     counts: ManifestNodeCountsModel = Field(..., alias="counts")
     failed_node_ids: list[str] = Field(default_factory=list, alias="failedNodeIds")
 
-
 class ManifestUpdateResultModel(BaseModel):
     """Structured details about one manifest-specific update."""
 
@@ -211,7 +199,6 @@ class ManifestUpdateResultModel(BaseModel):
 
     accepted_node_ids: list[str] = Field(default_factory=list, alias="acceptedNodeIds")
     rejected_node_ids: list[str] = Field(default_factory=list, alias="rejectedNodeIds")
-
 
 class ManifestNodeMutationRequestModel(BaseModel):
     """Validation helper for manifest node-targeting updates."""
@@ -228,7 +215,6 @@ class ManifestNodeMutationRequestModel(BaseModel):
             raise ValueError("nodeIds must include at least one node identifier")
         return list(dict.fromkeys(normalized))
 
-
 class ManifestUpdateManifestRequestModel(BaseModel):
     """Validation helper for manifest replacement or append updates."""
 
@@ -244,7 +230,6 @@ class ManifestUpdateManifestRequestModel(BaseModel):
         if not normalized:
             raise ValueError("newManifestArtifactRef is required")
         return normalized
-
 
 def manifest_node_counts_from_nodes(
     nodes: list[ManifestNodeModel] | list[dict[str, Any]],

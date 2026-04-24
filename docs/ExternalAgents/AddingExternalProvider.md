@@ -1,6 +1,6 @@
 # Adding a New External Agent Provider
 
-**Implementation tracking:** [`docs/tmp/remaining-work/ExternalAgents-AddingExternalProvider.md`](../tmp/remaining-work/ExternalAgents-AddingExternalProvider.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 Status: **Guide for current runtime architecture**
 Last updated: 2026-03-30
@@ -142,12 +142,12 @@ PROVIDER_DISABLED_MESSAGE = "targetRuntime=<provider> requires ..."
 
 @dataclass(frozen=True)
 class ProviderRuntimeGate:
-    enabled: bool
-    missing: tuple[str, ...]
+ enabled: bool
+ missing: tuple[str, ...]
 
 def build_provider_gate() -> ProviderRuntimeGate:
-    # Check env vars or other required provider settings
-    ...
+ # Check env vars or other required provider settings
+ ...
 ````
 
 The runtime gate should answer:
@@ -206,53 +206,53 @@ Example skeleton:
 
 ```python id="74484"
 from moonmind.workflows.adapters.base_external_agent_adapter import (
-    BaseExternalAgentAdapter,
+ BaseExternalAgentAdapter,
 )
 from moonmind.schemas.agent_runtime_models import (
-    AgentExecutionRequest,
-    AgentRunHandle,
-    AgentRunResult,
-    AgentRunStatus,
-    ProviderCapabilityDescriptor,
+ AgentExecutionRequest,
+ AgentRunHandle,
+ AgentRunResult,
+ AgentRunStatus,
+ ProviderCapabilityDescriptor,
 )
 
 _CAPABILITY = ProviderCapabilityDescriptor(
-    providerName="<provider>",
-    supportsCallbacks=False,
-    supportsCancel=True,
-    supportsResultFetch=True,
-    defaultPollHintSeconds=15,
-    executionStyle="polling",
+ providerName="<provider>",
+ supportsCallbacks=False,
+ supportsCancel=True,
+ supportsResultFetch=True,
+ defaultPollHintSeconds=15,
+ executionStyle="polling",
 )
 
 class ProviderAgentAdapter(BaseExternalAgentAdapter):
-    def __init__(self, *, client_factory):
-        super().__init__(accepted_agent_ids=frozenset({"<provider>"}))
-        self._client_factory = client_factory
+ def __init__(self, *, client_factory):
+ super().__init__(accepted_agent_ids=frozenset({"<provider>"}))
+ self._client_factory = client_factory
 
-    @property
-    def provider_capability(self) -> ProviderCapabilityDescriptor:
-        return _CAPABILITY
+ @property
+ def provider_capability(self) -> ProviderCapabilityDescriptor:
+ return _CAPABILITY
 
-    async def do_start(self, request, title, description, metadata) -> AgentRunHandle:
-        client = self._client_factory()
-        ...
-        return self.build_handle(...)
+ async def do_start(self, request, title, description, metadata) -> AgentRunHandle:
+ client = self._client_factory()
+ ...
+ return self.build_handle(...)
 
-    async def do_status(self, run_id: str) -> AgentRunStatus:
-        client = self._client_factory()
-        ...
-        return self.build_status(...)
+ async def do_status(self, run_id: str) -> AgentRunStatus:
+ client = self._client_factory()
+ ...
+ return self.build_status(...)
 
-    async def do_fetch_result(self, run_id: str) -> AgentRunResult:
-        client = self._client_factory()
-        ...
-        return self.build_result(...)
+ async def do_fetch_result(self, run_id: str) -> AgentRunResult:
+ client = self._client_factory()
+ ...
+ return self.build_result(...)
 
-    async def do_cancel(self, run_id: str) -> AgentRunStatus:
-        client = self._client_factory()
-        ...
-        return self.build_status(...)
+ async def do_cancel(self, run_id: str) -> AgentRunStatus:
+ client = self._client_factory()
+ ...
+ return self.build_status(...)
 ```
 
 ## 7.1 What `BaseExternalAgentAdapter` gives you
@@ -267,9 +267,9 @@ The base class already handles common external-agent concerns such as:
 * best-effort cancel fallback when `supportsCancel=False`
 * canonical builders such as:
 
-  * `build_handle(...)`
-  * `build_status(...)`
-  * `build_result(...)`
+ * `build_handle(...)`
+ * `build_status(...)`
+ * `build_result(...)`
 
 Use those builders whenever possible.
 
@@ -311,11 +311,11 @@ Good examples:
 
 ```python id="82828"
 metadata = {
-    "providerStatus": raw_status,
-    "normalizedStatus": normalized_status,
-    "externalUrl": provider_url,
-    "trackingRef": provider_tracking_ref,
-    "callbackSupported": True,
+ "providerStatus": raw_status,
+ "normalizedStatus": normalized_status,
+ "externalUrl": provider_url,
+ "trackingRef": provider_tracking_ref,
+ "callbackSupported": True,
 }
 ```
 
@@ -342,16 +342,16 @@ Example:
 
 ```python id="21152"
 def build_default_registry() -> ExternalAdapterRegistry:
-    registry = ExternalAdapterRegistry()
-    # ... existing providers ...
+ registry = ExternalAdapterRegistry()
+ # ... existing providers ...
 
-    if is_provider_enabled():
-        registry.register(
-            "<provider>",
-            lambda: ProviderAgentAdapter(client_factory=_build_client),
-        )
+ if is_provider_enabled():
+ registry.register(
+ "<provider>",
+ lambda: ProviderAgentAdapter(client_factory=_build_client),
+ )
 
-    return registry
+ return registry
 ```
 
 Registration rules:
@@ -377,34 +377,34 @@ Example:
 ```python id="26361"
 from temporalio import activity
 from moonmind.schemas.agent_runtime_models import (
-    AgentExecutionRequest,
-    AgentRunHandle,
-    AgentRunResult,
-    AgentRunStatus,
+ AgentExecutionRequest,
+ AgentRunHandle,
+ AgentRunResult,
+ AgentRunStatus,
 )
 
 @activity.defn(name="integration.<provider>.start")
 async def provider_start_activity(request: AgentExecutionRequest) -> AgentRunHandle:
-    adapter = _build_adapter()
-    return await adapter.start(request)
+ adapter = _build_adapter()
+ return await adapter.start(request)
 
 @activity.defn(name="integration.<provider>.status")
 async def provider_status_activity(payload: dict) -> AgentRunStatus:
-    adapter = _build_adapter()
-    run_id = payload["external_id"] if "external_id" in payload else payload["run_id"]
-    return await adapter.status(run_id)
+ adapter = _build_adapter()
+ run_id = payload["external_id"] if "external_id" in payload else payload["run_id"]
+ return await adapter.status(run_id)
 
 @activity.defn(name="integration.<provider>.fetch_result")
 async def provider_fetch_result_activity(payload: dict) -> AgentRunResult:
-    adapter = _build_adapter()
-    run_id = payload["external_id"] if "external_id" in payload else payload["run_id"]
-    return await adapter.fetch_result(run_id)
+ adapter = _build_adapter()
+ run_id = payload["external_id"] if "external_id" in payload else payload["run_id"]
+ return await adapter.fetch_result(run_id)
 
 @activity.defn(name="integration.<provider>.cancel")
 async def provider_cancel_activity(payload: dict) -> AgentRunStatus:
-    adapter = _build_adapter()
-    run_id = payload["external_id"] if "external_id" in payload else payload["run_id"]
-    return await adapter.cancel(run_id)
+ adapter = _build_adapter()
+ run_id = payload["external_id"] if "external_id" in payload else payload["run_id"]
+ return await adapter.cancel(run_id)
 ```
 
 ## 9.1 Activity contract rule

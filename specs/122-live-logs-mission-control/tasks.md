@@ -6,4 +6,4 @@
 - [x] T004 Align `/api/task-runs/*` observability authorization with execution ownership for admins and owning users
 - [x] T005 Update the React task-detail observability state model to distinguish waiting, launch-failed, binding-missing, and authorization-failed states and to auto-attach once `taskRunId` appears
 - [x] T006 Add unit and integration coverage, including simulated long-running stream validation and browser-facing delayed-`taskRunId` attach tests
-- [x] T007 Update `docs/tmp/009-LiveLogsPlan.md` to reflect the actual completion state after the implementation and tests land
+- [x] T007 Update `docs/ManagedAgents/LiveLogs.md` to reflect the actual completion state after the implementation and tests land

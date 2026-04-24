@@ -32,7 +32,6 @@ from moonmind.workflows.temporal.runtime.terminal_bridge import (
     TerminalBridgeConnection,
 )
 
-
 @pytest.fixture(scope="module")
 def _module_db(tmp_path_factory):
     """Create a single SQLite engine and schema for the module."""
@@ -60,11 +59,9 @@ def _module_db(tmp_path_factory):
     db_base.DATABASE_URL, db_base.engine, db_base.async_session_maker = original
     asyncio.run(_teardown(engine))
 
-
 @pytest.fixture
 def client_app(_module_db) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
-
 
 def _oauth_payload(profile_id: str) -> dict[str, object]:
     return {
@@ -76,7 +73,6 @@ def _oauth_payload(profile_id: str) -> dict[str, object]:
         "cooldown_after_429_seconds": 300,
         "rate_limit_policy": "backoff",
     }
-
 
 @pytest.mark.asyncio
 async def test_create_oauth_session_expires_stale_active_before_conflict_check(
@@ -121,7 +117,6 @@ async def test_create_oauth_session_expires_stale_active_before_conflict_check(
         assert stale_row.status == OAuthSessionStatus.EXPIRED
         assert stale_row.failure_reason is not None
 
-
 @pytest.mark.asyncio
 async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
@@ -154,7 +149,6 @@ async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
     assert captured["session_transport"] == "moonmind_pty_ws"
     assert captured["metadata_json"]["provider_id"] == "openai"
     assert captured["metadata_json"]["provider_label"] == "OpenAI"
-
 
 @pytest.mark.asyncio
 async def test_create_claude_oauth_session_applies_profile_and_transport_defaults(
@@ -221,7 +215,6 @@ async def test_create_claude_oauth_session_applies_profile_and_transport_default
     assert captured["metadata_json"]["provider_id"] == "anthropic"
     assert captured["metadata_json"]["provider_label"] == "Anthropic"
 
-
 @pytest.mark.asyncio
 async def test_create_oauth_session_returns_terminal_transport_refs(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
@@ -249,7 +242,6 @@ async def test_create_oauth_session_returns_terminal_transport_refs(
     assert body["terminal_session_id"] == f"term_{body['session_id']}"
     assert body["terminal_bridge_id"] == f"br_{body['session_id']}"
     assert body["session_transport"] == "moonmind_pty_ws"
-
 
 @pytest.mark.asyncio
 async def test_reconnect_oauth_session_preserves_terminal_transport(
@@ -295,7 +287,6 @@ async def test_reconnect_oauth_session_preserves_terminal_transport(
     assert body["session_transport"] == "moonmind_pty_ws"
     assert captured["session_transport"] == "moonmind_pty_ws"
 
-
 @pytest.mark.asyncio
 async def test_oauth_session_response_redacts_secret_like_failure_reason(
     client_app: AsyncClient, _module_db
@@ -326,7 +317,6 @@ async def test_oauth_session_response_redacts_secret_like_failure_reason(
     assert raw_secret not in response.text
     assert "/home/app/.codex/auth.json" not in response.text
     assert payload["failure_reason"] == "token=[REDACTED] in [REDACTED_AUTH_PATH]"
-
 
 @pytest.mark.asyncio
 async def test_oauth_session_response_includes_safe_provider_profile_summary(
@@ -394,7 +384,6 @@ async def test_oauth_session_response_includes_safe_provider_profile_summary(
     assert "volume_ref" not in payload["profile_summary"]
     assert "volume_mount_path" not in payload["profile_summary"]
 
-
 @pytest.mark.asyncio
 async def test_oauth_session_response_omits_profile_summary_for_other_owner(
     client_app: AsyncClient, _module_db
@@ -438,7 +427,6 @@ async def test_oauth_session_response_omits_profile_summary_for_other_owner(
     assert "Other Owner" not in response.text
     assert "other owner account" not in response.text
 
-
 @pytest.mark.asyncio
 async def test_create_codex_oauth_session_uses_configured_volume_defaults(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
@@ -470,7 +458,6 @@ async def test_create_codex_oauth_session_uses_configured_volume_defaults(
     assert response.status_code == 201
     assert captured["volume_ref"] == "custom_codex_auth"
     assert captured["volume_mount_path"] == "/runtime/codex-home"
-
 
 @pytest.mark.asyncio
 async def test_create_oauth_session_rejects_profile_owned_by_another_user(
@@ -514,7 +501,6 @@ async def test_create_oauth_session_rejects_profile_owned_by_another_user(
     assert response.status_code == 403
     assert response.json()["detail"] == "Not authorized to use this profile ID."
 
-
 @pytest.mark.asyncio
 async def test_create_oauth_session_returns_conflict_for_non_stale_active(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
@@ -546,7 +532,6 @@ async def test_create_oauth_session_returns_conflict_for_non_stale_active(
 
     assert response.status_code == 409
     assert response.json()["detail"] == "An active OAuth session already exists for this profile."
-
 
 @pytest.mark.asyncio
 async def test_create_oauth_session_marks_failed_when_workflow_start_fails(
@@ -581,7 +566,6 @@ async def test_create_oauth_session_marks_failed_when_workflow_start_fails(
         assert failed_row is not None
         assert failed_row.status == OAuthSessionStatus.FAILED
         assert failed_row.failure_reason == "Failed to start OAuth session workflow"
-
 
 @pytest.mark.asyncio
 async def test_oauth_terminal_attach_returns_one_time_websocket_token(
@@ -625,7 +609,6 @@ async def test_oauth_terminal_attach_returns_one_time_websocket_token(
         assert row.metadata_json is not None
         assert row.metadata_json["terminal_attach_token_sha256"] != payload["attach_token"]
         assert row.metadata_json["terminal_attach_token_used"] is False
-
 
 @pytest.mark.asyncio
 async def test_claude_oauth_terminal_attach_allows_awaiting_user_with_hash_only_token(
@@ -671,7 +654,6 @@ async def test_claude_oauth_terminal_attach_allows_awaiting_user_with_hash_only_
         assert row.metadata_json["terminal_attach_token_used"] is False
         assert payload["attach_token"] not in str(row.metadata_json)
 
-
 @pytest.mark.asyncio
 async def test_oauth_terminal_attach_rejects_expired_session(
     client_app: AsyncClient, _module_db
@@ -708,7 +690,6 @@ async def test_oauth_terminal_attach_rejects_expired_session(
         assert row is not None
         assert row.metadata_json is None
 
-
 class _FakeWebSocket:
     def __init__(self) -> None:
         self.sent_json: list[dict[str, object]] = []
@@ -724,11 +705,9 @@ class _FakeWebSocket:
     async def close(self, code: int) -> None:
         self.closed.append(code)
 
-
 class _FailingWritePtyAdapter(InMemoryPtyAdapter):
     async def write_bytes(self, data: bytes) -> None:
         raise BrokenPipeError("auth runner exited")
-
 
 @pytest.mark.asyncio
 async def test_oauth_terminal_message_handler_proxies_to_pty_with_safe_metadata() -> None:
@@ -784,7 +763,6 @@ async def test_oauth_terminal_message_handler_proxies_to_pty_with_safe_metadata(
     }
     assert "codex login" not in str(metadata)
 
-
 @pytest.mark.asyncio
 async def test_oauth_terminal_message_handler_closes_on_pty_write_failure() -> None:
     bridge = TerminalBridgeConnection(
@@ -808,7 +786,6 @@ async def test_oauth_terminal_message_handler_closes_on_pty_write_failure() -> N
     ]
     assert websocket.closed == [1011]
 
-
 @pytest.mark.asyncio
 async def test_oauth_terminal_output_sender_preserves_split_utf8_sequences() -> None:
     websocket = _FakeWebSocket()
@@ -818,7 +795,6 @@ async def test_oauth_terminal_output_sender_preserves_split_utf8_sequences() -> 
     await send_terminal_output(b"\x82\xac\r\n")
 
     assert websocket.sent_text == ["Auth code: ", "€\r\n"]
-
 
 @pytest.mark.asyncio
 async def test_oauth_terminal_message_handler_rejects_generic_exec_frame() -> None:
@@ -845,7 +821,6 @@ async def test_oauth_terminal_message_handler_rejects_generic_exec_frame() -> No
         }
     ]
     assert websocket.closed == [4400]
-
 
 @pytest.mark.asyncio
 async def test_finalize_oauth_session_rejects_failed_volume_verification(
@@ -920,7 +895,6 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
         "session_id": session_id,
         "reason": "Volume verification failed: no_credentials_found",
     }
-
 
 @pytest.mark.asyncio
 async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
@@ -1017,7 +991,6 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
         "container_name": "moonmind_auth_oas_registercodex1",
     }
     assert completed_signal == {"session_id": session_id}
-
 
 @pytest.mark.asyncio
 async def test_finalize_oauth_session_registers_claude_oauth_profile(
@@ -1120,7 +1093,6 @@ async def test_finalize_oauth_session_registers_claude_oauth_profile(
         assert "token" not in repr(profile.__dict__).lower()
     assert synced_runtimes == ["claude_code"]
 
-
 @pytest.mark.asyncio
 async def test_finalize_oauth_session_rejects_other_users_claude_session_before_verify(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
@@ -1164,7 +1136,6 @@ async def test_finalize_oauth_session_rejects_other_users_claude_session_before_
             ManagedAgentProviderProfile, "claude_anthropic_other_user"
         )
         assert profile is None
-
 
 @pytest.mark.asyncio
 async def test_create_claude_oauth_session_rejects_other_users_profile_id(
@@ -1219,7 +1190,6 @@ async def test_create_claude_oauth_session_rejects_other_users_profile_id(
         )
         assert query.scalars().all() == []
 
-
 @pytest.mark.asyncio
 async def test_cancel_oauth_session_rejects_other_users_claude_session(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
@@ -1259,7 +1229,6 @@ async def test_cancel_oauth_session_rejects_other_users_claude_session(
         row = await session.get(ManagedAgentOAuthSession, session_id)
         assert row is not None
         assert row.status == OAuthSessionStatus.AWAITING_USER
-
 
 @pytest.mark.asyncio
 async def test_reconnect_oauth_session_rejects_other_users_claude_session(
@@ -1307,7 +1276,6 @@ async def test_reconnect_oauth_session_rejects_other_users_claude_session(
         rows = query.scalars().all()
         assert len(rows) == 1
         assert rows[0].session_id == session_id
-
 
 @pytest.mark.asyncio
 async def test_claude_oauth_terminal_websocket_rejects_replayed_attach_token(

@@ -17,7 +17,7 @@ Implement Phase 7 in the existing `moonmind.schemas.workload_models`, `moonmind.
 - IX Resilient by Default: PASS, TTL, readiness, and teardown are explicit.
 - X Continuous Improvement: PASS, diagnostics capture bounded outcome metadata.
 - XI Spec-Driven: PASS, this spec/plan/tasks tracks the change.
-- XII Canonical Docs vs Tmp: PASS, implementation tracking updates remain under docs/tmp.
+- XII Canonical Docs vs Tmp: PASS, implementation tracking updates remain under local-only handoffs.
 - XIII Pre-release Compatibility: PASS, no compatibility aliases are introduced.
 
 ## Implementation Strategy

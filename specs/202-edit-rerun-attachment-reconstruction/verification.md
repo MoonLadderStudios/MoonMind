@@ -2,7 +2,7 @@
 
 **Feature**: Edit and Rerun Attachment Reconstruction  
 **Spec**: `specs/202-edit-rerun-attachment-reconstruction/spec.md`  
-**Original Request Source**: spec.md `Input` and `docs/tmp/jira-orchestration-inputs/MM-382-moonspec-orchestration-input.md`  
+**Original Request Source**: spec.md `Input` and `spec.md` (Input)  
 **Verdict**: FULLY_IMPLEMENTED  
 **Confidence**: HIGH
 

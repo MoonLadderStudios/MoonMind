@@ -10,7 +10,6 @@ NonBlankStr: TypeAlias = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1)
 ]
 
-
 def require_non_blank(value: str, *, field_name: str) -> str:
     normalized = str(value).strip()
     if not normalized:

@@ -91,7 +91,7 @@ Test implications: Adapter unit test coverage.
 ## FR-014 / SC-007 - Traceability
 
 Decision: implemented_verified.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-447-moonspec-orchestration-input.md` and `specs/236-claude-manual-auth-api/spec.md` preserve MM-447 and source design mappings.
+Evidence: `spec.md` (Input) and `specs/236-claude-manual-auth-api/spec.md` preserve MM-447 and source design mappings.
 Rationale: MoonSpec verification and pull request metadata need the originating issue key.
 Alternatives considered: Using only a branch name was rejected because issue traceability must be explicit in artifacts.
 Test implications: Final MoonSpec verification.

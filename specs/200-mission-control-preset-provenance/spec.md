@@ -35,14 +35,14 @@ Source Reference
 - Source Document: docs/Tasks/PresetComposability.md
 - Source Title: Preset Composability
 - Source Sections:
-  - 5. docs/UI/MissionControlArchitecture.md
-  - 8. Cross-document invariants
+ - 5. docs/UI/MissionControlArchitecture.md
+ - 8. Cross-document invariants
 - Coverage IDs:
-  - DESIGN-REQ-022
-  - DESIGN-REQ-014
-  - DESIGN-REQ-015
-  - DESIGN-REQ-025
-  - DESIGN-REQ-026
+ - DESIGN-REQ-022
+ - DESIGN-REQ-014
+ - DESIGN-REQ-015
+ - DESIGN-REQ-025
+ - DESIGN-REQ-026
 
 User Story
 As a Mission Control operator, I want task lists, detail pages, and create/edit flows to explain preset-derived work without implying nested runtime behavior.
@@ -64,7 +64,7 @@ Requirements
 Relevant Implementation Notes
 - The canonical active documentation target is `docs/UI/MissionControlArchitecture.md`.
 - The issue references `docs/Tasks/PresetComposability.md`; preserve the reference as Jira traceability even if the source document is unavailable in the current checkout.
-- Preserve desired-state documentation under canonical `docs/` files and keep volatile migration or implementation tracking under `docs/tmp/`.
+- Preserve desired-state documentation under canonical `docs/` files and keep volatile migration or implementation tracking under `local-only handoffs`.
 - Mission Control may explain preset-derived work in previews, task lists, task details, and create/edit flows, but preset composition must not become a runtime execution concept.
 - Task detail provenance summaries and chips may expose Manual, Preset, and Preset path metadata as explanatory context while keeping flat steps as the execution-first ordering model.
 - Submit integration for `/tasks/new` may preview composed presets, but runtime work must not include unresolved preset includes.

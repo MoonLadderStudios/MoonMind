@@ -169,7 +169,7 @@
 
 **Purpose**: Confirm scope, docs, security posture, and full validation after all stories.
 
-- [X] T050 [P] Update Phase 7 completion notes in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`
+- [X] T050 [P] Update Phase 7 completion notes in `docs/ManagedAgents/DockerOutOfDocker.md`
 - [X] T051 [P] Update helper quickstart evidence and any changed validation commands in `specs/163-dood-bounded-helper-containers/quickstart.md`
 - [X] T052 [P] Scan helper diagnostics and tool outputs for secret-like values in `moonmind/workloads/docker_launcher.py` and `moonmind/workloads/tool_bridge.py`
 - [X] T053 Run focused feature verification with `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py`

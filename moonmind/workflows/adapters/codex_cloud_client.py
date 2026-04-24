@@ -10,7 +10,6 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-
 class CodexCloudClientError(RuntimeError):
     """Raised when Codex Cloud API requests fail.
 
@@ -41,7 +40,6 @@ class CodexCloudClientError(RuntimeError):
             parts.append("ambiguous")
         return ": ".join(parts)
 
-
 # Codex Cloud normalized status set.
 _CODEX_CLOUD_STATUS_MAP: dict[str, str] = {
     "accepted": "queued",
@@ -67,7 +65,6 @@ _CODEX_CLOUD_STATUS_MAP: dict[str, str] = {
     "timeout": "failed",
 }
 
-
 def normalize_codex_cloud_status(raw_status: str | None) -> str:
     """Map raw Codex Cloud status values to the provider-neutral status set."""
 
@@ -79,7 +76,6 @@ def normalize_codex_cloud_status(raw_status: str | None) -> str:
         from moonmind.schemas.agent_runtime_models import raise_unsupported_status
         raise_unsupported_status(raw_status or "")
     return mapped
-
 
 class CodexCloudClient:
     """HTTP wrapper for Codex Cloud task management endpoints."""
@@ -222,7 +218,6 @@ class CodexCloudClient:
             last_error.__class__.__name__ if last_error else "unknown error",
             request_path=path,
         ) from last_error
-
 
 __all__ = [
     "CodexCloudClient",

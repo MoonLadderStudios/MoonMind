@@ -36,5 +36,5 @@
 
 ## Notes
 
-- Checklist validated against the canonical MM-370 Jira preset brief in `docs/tmp/jira-orchestration-inputs/MM-370-moonspec-orchestration-input.md`.
+- Checklist validated against the canonical MM-370 Jira preset brief in `spec.md` (Input).
 - Runtime mode selected; `docs/Tasks/ImageSystem.md` is treated as source requirements for product behavior.

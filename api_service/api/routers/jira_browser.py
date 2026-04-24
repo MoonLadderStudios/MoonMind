@@ -32,13 +32,11 @@ _SECRET_MESSAGE_RE = re.compile(
 )
 _GENERIC_ERROR_MESSAGE = "Jira browser request failed."
 
-
 def _get_service() -> JiraBrowserService:
     return JiraBrowserService(
         atlassian_settings=settings.atlassian,
         feature_flags=settings.feature_flags,
     )
-
 
 def _to_http_exception(exc: JiraToolError) -> HTTPException:
     logger.info(
@@ -59,7 +57,6 @@ def _to_http_exception(exc: JiraToolError) -> HTTPException:
         detail["action"] = exc.action
     return HTTPException(status_code=exc.status_code, detail=detail)
 
-
 def _unexpected_http_exception() -> HTTPException:
     logger.exception("jira_browser_unexpected_request_failed")
     return HTTPException(
@@ -70,7 +67,6 @@ def _unexpected_http_exception() -> HTTPException:
             "source": "jira_browser",
         },
     )
-
 
 @router.get(
     "/connections/verify",
@@ -89,7 +85,6 @@ async def verify_connection(
     except Exception:
         raise _unexpected_http_exception() from None
 
-
 @router.get(
     "/projects",
     response_model=JiraListResponse[JiraProject],
@@ -105,7 +100,6 @@ async def list_projects(
         raise _to_http_exception(exc) from None
     except Exception:
         raise _unexpected_http_exception() from None
-
 
 @router.get(
     "/projects/{project_key}/boards",
@@ -123,7 +117,6 @@ async def list_project_boards(
         raise _to_http_exception(exc) from None
     except Exception:
         raise _unexpected_http_exception() from None
-
 
 @router.get(
     "/boards/{board_id}/columns",
@@ -143,7 +136,6 @@ async def list_board_columns(
     except Exception:
         raise _unexpected_http_exception() from None
 
-
 @router.get(
     "/boards/{board_id}/issues",
     response_model=JiraBoardIssues,
@@ -162,7 +154,6 @@ async def list_board_issues(
         raise _to_http_exception(exc) from None
     except Exception:
         raise _unexpected_http_exception() from None
-
 
 @router.get(
     "/issues/{issue_key}",
@@ -186,7 +177,6 @@ async def get_issue(
         raise _to_http_exception(exc) from None
     except Exception:
         raise _unexpected_http_exception() from None
-
 
 @router.get(
     "/issues/{issue_key}/attachments/{attachment_id}/content",

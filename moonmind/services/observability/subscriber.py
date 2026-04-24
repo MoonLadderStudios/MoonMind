@@ -4,7 +4,6 @@ from fastapi import Request
 
 from moonmind.services.observability.publisher import publisher as _default_publisher, ObservabilityPublisher
 
-
 async def log_stream_generator(
     run_id: str,
     request: Request,

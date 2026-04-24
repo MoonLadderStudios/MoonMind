@@ -19,9 +19,7 @@ from moonmind.workloads.tool_bridge import (
     register_workload_tool_handlers,
 )
 
-
 WORKSPACE_ROOT = Path("/work/agent_jobs")
-
 
 def _profile_payload(profile_id: str = "local-python") -> dict[str, object]:
     return {
@@ -49,7 +47,6 @@ def _profile_payload(profile_id: str = "local-python") -> dict[str, object]:
         "timeoutSeconds": 300,
         "maxTimeoutSeconds": 600,
     }
-
 
 def _helper_profile_payload(profile_id: str = "redis-helper") -> dict[str, object]:
     return {
@@ -82,7 +79,6 @@ def _helper_profile_payload(profile_id: str = "redis-helper") -> dict[str, objec
             "killGraceSeconds": 3,
         },
     }
-
 
 class _FakeLauncher:
     def __init__(self, *, status: str = "succeeded") -> None:
@@ -185,11 +181,9 @@ class _FakeLauncher:
             },
         )
 
-
 class _FailingRegistry:
     def validate_request(self, _request: object) -> object:
         raise AssertionError("registry validation should not run")
-
 
 class _FailingLauncher:
     async def run(self, _validated: object) -> object:
@@ -200,7 +194,6 @@ class _FailingLauncher:
 
     async def stop_helper(self, _validated: object, *, reason: str) -> object:
         raise AssertionError("launcher should not run")
-
 
 def test_container_run_workload_tool_definition_routes_to_docker_workload() -> None:
     definition = build_dood_tool_definition_payload(
@@ -226,7 +219,6 @@ def test_container_run_workload_tool_definition_routes_to_docker_workload() -> N
     }
     output_properties = definition["outputs"]["schema"]["properties"]
     assert output_properties["outputRefs"] == {"type": "object"}
-
 
 def test_unreal_run_tests_tool_definition_routes_to_docker_workload() -> None:
     definition = build_dood_tool_definition_payload(
@@ -256,7 +248,6 @@ def test_unreal_run_tests_tool_definition_routes_to_docker_workload() -> None:
         },
         "additionalProperties": False,
     }
-
 
 @pytest.mark.parametrize(
     ("tool_name", "required"),
@@ -288,7 +279,6 @@ def test_helper_tool_definitions_route_to_docker_workload(
     assert "mounts" not in definition["inputs"]["schema"]["properties"]
     assert "devices" not in definition["inputs"]["schema"]["properties"]
     assert "ttlSeconds" in definition["inputs"]["schema"]["properties"]
-
 
 @pytest.mark.asyncio
 async def test_container_run_workload_handler_validates_and_calls_launcher() -> None:
@@ -350,7 +340,6 @@ async def test_container_run_workload_handler_validates_and_calls_launcher() -> 
     }
     assert "session.summary" not in result.outputs["outputRefs"]
 
-
 def test_integration_ci_tool_definition_routes_to_docker_workload() -> None:
     definition = build_dood_tool_definition_payload(
         name=INTEGRATION_CI_TOOL,
@@ -368,7 +357,6 @@ def test_integration_ci_tool_definition_routes_to_docker_workload() -> None:
     assert "image" not in properties
     assert "mounts" not in properties
     assert "devices" not in properties
-
 
 @pytest.mark.asyncio
 async def test_workload_tool_handler_denies_when_workflow_docker_disabled() -> None:
@@ -394,7 +382,6 @@ async def test_workload_tool_handler_denies_when_workflow_docker_disabled() -> N
     assert exc_info.value.details["reason"] == "docker_workflows_disabled"
     assert "docker_workflows_disabled" in exc_info.value.message
 
-
 @pytest.mark.asyncio
 async def test_integration_ci_tool_denies_when_workflow_docker_disabled() -> None:
     handler = build_workload_tool_handler(
@@ -415,7 +402,6 @@ async def test_integration_ci_tool_denies_when_workflow_docker_disabled() -> Non
 
     assert exc_info.value.error_code == "PERMISSION_DENIED"
     assert exc_info.value.details["reason"] == "docker_workflows_disabled"
-
 
 @pytest.mark.asyncio
 async def test_integration_ci_tool_maps_to_curated_profile_and_script() -> None:
@@ -451,7 +437,6 @@ async def test_integration_ci_tool_maps_to_curated_profile_and_script() -> None:
     assert result.outputs["diagnosticsRef"].endswith("diagnostics.json")
     assert result.outputs["workloadMetadata"]["toolName"] == INTEGRATION_CI_TOOL
 
-
 @pytest.mark.asyncio
 async def test_container_run_workload_handler_accepts_explicit_ids_without_context() -> None:
     registry = RunnerProfileRegistry(
@@ -484,7 +469,6 @@ async def test_container_run_workload_handler_accepts_explicit_ids_without_conte
     assert launcher.validated.request.step_id == "step-explicit"
     assert launcher.validated.request.attempt == 3
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("raw_field", ["image", "mounts", "devices", "privileged"])
 async def test_container_run_workload_handler_rejects_raw_docker_fields(
@@ -515,7 +499,6 @@ async def test_container_run_workload_handler_rejects_raw_docker_fields(
 
     assert exc_info.value.error_code == "INVALID_INPUT"
     assert launcher.validated is None
-
 
 @pytest.mark.asyncio
 async def test_container_run_workload_policy_failure_omits_env_values() -> None:
@@ -554,7 +537,6 @@ async def test_container_run_workload_policy_failure_omits_env_values() -> None:
     assert secret_value not in failure_text
     assert launcher.validated is None
 
-
 @pytest.mark.asyncio
 async def test_container_run_workload_handler_maps_failed_result_to_tool_failure_status() -> None:
     registry = RunnerProfileRegistry(
@@ -581,7 +563,6 @@ async def test_container_run_workload_handler_maps_failed_result_to_tool_failure
     assert result.status == "FAILED"
     assert result.outputs["workloadStatus"] == "failed"
     assert result.outputs["exitCode"] == 1
-
 
 @pytest.mark.asyncio
 async def test_container_start_helper_handler_uses_bounded_helper_lifecycle() -> None:
@@ -618,7 +599,6 @@ async def test_container_start_helper_handler_uses_bounded_helper_lifecycle() ->
     assert helper_metadata["status"] == "ready"
     assert helper_metadata["readiness"] == {"status": "ready", "attempts": 1}
 
-
 @pytest.mark.asyncio
 async def test_container_stop_helper_handler_maps_reason_and_default_command() -> None:
     registry = RunnerProfileRegistry(
@@ -650,7 +630,6 @@ async def test_container_stop_helper_handler_maps_reason_and_default_command() -
     assert result.outputs["workloadStatus"] == "stopped"
     helper_metadata = result.outputs["workloadMetadata"]["helper"]
     assert helper_metadata["teardown"]["reason"] == "owner_task_canceled"
-
 
 @pytest.mark.asyncio
 async def test_unreal_run_tests_handler_builds_curated_command() -> None:
@@ -714,7 +693,6 @@ async def test_unreal_run_tests_handler_builds_curated_command() -> None:
         "output.logs.junit": "reports/unreal/junit.xml",
     }
 
-
 @pytest.mark.asyncio
 async def test_unreal_run_tests_handler_enforces_curated_profile() -> None:
     registry = RunnerProfileRegistry(
@@ -740,7 +718,6 @@ async def test_unreal_run_tests_handler_enforces_curated_profile() -> None:
 
     assert launcher.validated is not None
     assert launcher.validated.request.profile_id == "unreal-5_3-linux"
-
 
 @pytest.mark.asyncio
 async def test_unreal_run_tests_handler_normalizes_report_paths() -> None:
@@ -787,7 +764,6 @@ async def test_unreal_run_tests_handler_normalizes_report_paths() -> None:
         "output.logs.junit": "reports/unreal/junit.xml",
     }
 
-
 @pytest.mark.asyncio
 async def test_unreal_run_tests_handler_uses_default_report_outputs() -> None:
     registry = RunnerProfileRegistry(
@@ -818,7 +794,6 @@ async def test_unreal_run_tests_handler_uses_default_report_outputs() -> None:
     }
     assert "--report" in launcher.validated.request.command
 
-
 @pytest.mark.asyncio
 async def test_unreal_run_tests_handler_rejects_report_paths_outside_artifacts() -> None:
     registry = RunnerProfileRegistry(
@@ -846,7 +821,6 @@ async def test_unreal_run_tests_handler_rejects_report_paths_outside_artifacts()
     assert exc_info.value.error_code == "INVALID_INPUT"
     assert "reportPaths" in exc_info.value.message
     assert launcher.validated is None
-
 
 @pytest.mark.asyncio
 async def test_unreal_run_tests_handler_rejects_non_mapping_env_overrides() -> None:
@@ -876,7 +850,6 @@ async def test_unreal_run_tests_handler_rejects_non_mapping_env_overrides() -> N
     assert "envOverrides" in exc_info.value.message
     assert launcher.validated is None
 
-
 @pytest.mark.asyncio
 async def test_unreal_run_tests_handler_requires_project_path_before_launch() -> None:
     registry = RunnerProfileRegistry(
@@ -903,14 +876,12 @@ async def test_unreal_run_tests_handler_requires_project_path_before_launch() ->
     assert "projectPath" in exc_info.value.message
     assert launcher.validated is None
 
-
 class _RecordingDispatcher:
     def __init__(self) -> None:
         self.skills: list[tuple[str, str]] = []
 
     def register_skill(self, *, skill_name: str, version: str, handler: Any) -> None:
         self.skills.append((skill_name, version))
-
 
 def test_unrestricted_tool_definitions_are_registered_as_docker_workloads() -> None:
     for tool_name in (CONTAINER_RUN_CONTAINER_TOOL, CONTAINER_RUN_DOCKER_TOOL):
@@ -919,7 +890,6 @@ def test_unrestricted_tool_definitions_are_registered_as_docker_workloads() -> N
         assert definition["type"] == "skill"
         assert definition["executor"]["activity_type"] == "mm.tool.execute"
         assert definition["requirements"]["capabilities"] == ["docker_workload"]
-
 
 def test_register_workload_tool_handlers_omits_all_dood_tools_when_disabled() -> None:
     dispatcher = _RecordingDispatcher()
@@ -932,7 +902,6 @@ def test_register_workload_tool_handlers_omits_all_dood_tools_when_disabled() ->
     )
 
     assert dispatcher.skills == []
-
 
 def test_register_workload_tool_handlers_exposes_only_curated_tools_in_profiles_mode() -> None:
     dispatcher = _RecordingDispatcher()
@@ -949,7 +918,6 @@ def test_register_workload_tool_handlers_exposes_only_curated_tools_in_profiles_
     assert CONTAINER_RUN_DOCKER_TOOL not in registered
     assert INTEGRATION_CI_TOOL in registered
 
-
 def test_register_workload_tool_handlers_exposes_unrestricted_tools_only_in_unrestricted_mode() -> None:
     dispatcher = _RecordingDispatcher()
 
@@ -962,7 +930,6 @@ def test_register_workload_tool_handlers_exposes_unrestricted_tools_only_in_unre
 
     registered = {name for name, _version in dispatcher.skills}
     assert registered == DOOD_TOOL_NAMES
-
 
 @pytest.mark.asyncio
 async def test_profiles_mode_denies_direct_unrestricted_container_invocation() -> None:
@@ -988,7 +955,6 @@ async def test_profiles_mode_denies_direct_unrestricted_container_invocation() -
     assert exc_info.value.error_code == "PERMISSION_DENIED"
     assert exc_info.value.details["reason"] == "docker_workflow_mode_forbidden"
     assert exc_info.value.details["workflowDockerMode"] == "profiles"
-
 
 @pytest.mark.asyncio
 async def test_unrestricted_mode_allows_unrestricted_docker_handler() -> None:

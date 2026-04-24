@@ -9,7 +9,6 @@ from moonmind.workflows.temporal.story_output_tools import (
     create_jira_orchestrate_tasks_from_issue_mappings,
 )
 
-
 class _FakeJiraService:
     def __init__(self) -> None:
         self.requests: list[Any] = []
@@ -70,7 +69,6 @@ class _FakeJiraService:
             "linkType": request.link_type,
         }
 
-
 class _FakeExecutionCreator:
     def __init__(self, *, fail_at: int | None = None) -> None:
         self.requests: list[dict[str, Any]] = []
@@ -86,7 +84,6 @@ class _FakeExecutionCreator:
             "runId": f"run-{index}",
             "title": kwargs.get("title"),
         }
-
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_from_inline_story_breakdown():
@@ -125,7 +122,6 @@ async def test_create_jira_issues_from_inline_story_breakdown():
     assert request.fields["labels"] == ["moonmind"]
     assert "Intent is visible" in request.description
 
-
 @pytest.mark.asyncio
 async def test_create_jira_issues_resolves_issue_type_name_from_story_breakdown_source():
     service = _FakeJiraService()
@@ -156,7 +152,7 @@ async def test_create_jira_issues_resolves_issue_type_name_from_story_breakdown_
         {
             "repository": "MoonLadderStudios/MoonMind",
             "targetBranch": "breakdown-branch",
-            "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
             "storyOutput": {
                 "mode": "jira",
                 "jira": {
@@ -179,7 +175,6 @@ async def test_create_jira_issues_resolves_issue_type_name_from_story_breakdown_
     assert "Source Document: docs/Designs/RuntimeTypes.md" in request.description
     assert "Section 1" in request.description
     assert "DESIGN-REQ-001" in request.description
-
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_preserves_source_reference_when_description_truncates():
@@ -221,14 +216,13 @@ async def test_create_jira_issues_preserves_source_reference_when_description_tr
     assert "DESIGN-REQ-001" in request.description
     assert request.description.endswith("[Truncated by MoonMind before Jira export]")
 
-
 @pytest.mark.asyncio
 async def test_create_jira_issues_blocks_story_breakdown_without_source_reference():
     service = _FakeJiraService()
 
     result = await create_jira_issues_from_stories(
         {
-            "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
             "storyOutput": {
                 "mode": "jira",
                 "jira": {
@@ -247,7 +241,6 @@ async def test_create_jira_issues_blocks_story_breakdown_without_source_referenc
     assert "requires sourceReference.path" in result.outputs["storyOutput"]["reason"]
     assert "STORY-001" in result.outputs["storyOutput"]["reason"]
 
-
 @pytest.mark.asyncio
 async def test_create_jira_issues_falls_back_to_docs_tmp_when_jira_target_missing():
     result = await create_jira_issues_from_stories(
@@ -255,7 +248,7 @@ async def test_create_jira_issues_falls_back_to_docs_tmp_when_jira_target_missin
             "repository": "MoonLadderStudios/MoonMind",
             "targetBranch": "breakdown-branch",
             "startingBranch": "main",
-            "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
             "storyOutput": {"mode": "jira"},
             "stories": [{"summary": "Story without Jira config"}],
         }
@@ -267,18 +260,17 @@ async def test_create_jira_issues_falls_back_to_docs_tmp_when_jira_target_missin
         "status": "fallback",
         "reason": "Jira projectKey and issueTypeId are required.",
         "storyCount": 1,
-        "path": "docs/tmp/story-breakdowns/example/stories.json",
+        "path": "artifacts/story-breakdowns/example/stories.json",
     }
     assert result.outputs["push_status"] == ""
     assert result.outputs["push_branch"] == "breakdown-branch"
-
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_fails_when_jira_mode_has_no_story_payload():
     with pytest.raises(ValueError, match="No stories were available"):
         await create_jira_issues_from_stories(
             {
-                "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+                "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
                 "storyOutput": {
                     "mode": "jira",
                     "jira": {
@@ -290,12 +282,11 @@ async def test_create_jira_issues_fails_when_jira_mode_has_no_story_payload():
             }
         )
 
-
 @pytest.mark.asyncio
 async def test_create_jira_issues_allows_explicit_fallback_when_jira_mode_has_no_story_payload():
     result = await create_jira_issues_from_stories(
         {
-            "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
             "storyOutput": {
                 "mode": "jira",
                 "fallback": "docs_tmp",
@@ -313,7 +304,6 @@ async def test_create_jira_issues_allows_explicit_fallback_when_jira_mode_has_no
         result.outputs["storyOutput"]["reason"]
         == "No stories were available for Jira issue creation."
     )
-
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_truncates_description_and_creates_subtasks():
@@ -349,7 +339,6 @@ async def test_create_jira_issues_truncates_description_and_creates_subtasks():
     assert request.description.endswith("[Truncated by MoonMind before Jira export]")
     assert request.fields["labels"] == ["moonmind-workflow-workflow-123"]
 
-
 @pytest.mark.asyncio
 async def test_create_jira_issues_reuses_existing_issue_with_workflow_marker():
     service = _FakeJiraService()
@@ -382,7 +371,6 @@ async def test_create_jira_issues_reuses_existing_issue_with_workflow_marker():
     assert created_issue["existing"] is True
     assert created_issue["issueKey"] == "MM-123"
 
-
 @pytest.mark.asyncio
 async def test_create_jira_issues_fallback_reports_partial_success():
     class _FailingAfterFirstService(_FakeJiraService):
@@ -395,7 +383,7 @@ async def test_create_jira_issues_fallback_reports_partial_success():
 
     result = await create_jira_issues_from_stories(
         {
-            "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
             "storyOutput": {
                 "mode": "jira",
                 "jira": {"projectKey": "MM", "issueTypeId": "10001"},
@@ -418,7 +406,6 @@ async def test_create_jira_issues_fallback_reports_partial_success():
     assert result.outputs["storyOutput"]["createdCount"] == 1
     assert result.outputs["jira"]["partial"] is True
     assert result.outputs["jira"]["createdIssues"][0]["issueKey"] == "MM-1"
-
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_linear_blocker_chain_creates_adjacent_links():
@@ -458,7 +445,6 @@ async def test_create_jira_issues_linear_blocker_chain_creates_adjacent_links():
     ]
     assert [item["status"] for item in jira["linkResults"]] == ["created", "created"]
 
-
 @pytest.mark.asyncio
 async def test_create_jira_issues_dependency_mode_none_skips_links():
     service = _FakeJiraService()
@@ -485,7 +471,6 @@ async def test_create_jira_issues_dependency_mode_none_skips_links():
     assert result.outputs["jira"]["dependencyMode"] == "none"
     assert result.outputs["jira"]["linkCount"] == 0
     assert result.outputs["jira"]["dependencyChainComplete"] is None
-
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_partial_link_failure_preserves_created_issues():
@@ -524,7 +509,6 @@ async def test_create_jira_issues_partial_link_failure_preserves_created_issues(
     assert [item["status"] for item in jira["linkResults"]] == ["created", "failed"]
     assert jira["linkResults"][1]["blocksIssueKey"] == "MM-2"
     assert jira["linkResults"][1]["blockedIssueKey"] == "MM-3"
-
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_reuses_existing_issues_and_links():
@@ -574,14 +558,13 @@ async def test_create_jira_issues_reuses_existing_issues_and_links():
     assert result.outputs["jira"]["linkResults"][0]["status"] == "existing"
     assert result.outputs["jira"]["dependencyChainComplete"] is True
 
-
 @pytest.mark.asyncio
 async def test_create_jira_issues_rejects_unsupported_dependency_mode_before_mutation():
     service = _FakeJiraService()
 
     result = await create_jira_issues_from_stories(
         {
-            "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
             "storyOutput": {
                 "mode": "jira",
                 "jira": {
@@ -599,7 +582,6 @@ async def test_create_jira_issues_rejects_unsupported_dependency_mode_before_mut
     assert result.outputs["storyOutput"]["status"] == "fallback"
     assert "Unsupported Jira dependencyMode" in result.outputs["storyOutput"]["reason"]
 
-
 @pytest.mark.asyncio
 async def test_create_jira_issues_fallback_preserves_dependency_mode_metadata():
     result = await create_jira_issues_from_stories(
@@ -607,7 +589,7 @@ async def test_create_jira_issues_fallback_preserves_dependency_mode_metadata():
             "repository": "MoonLadderStudios/MoonMind",
             "targetBranch": "breakdown-branch",
             "startingBranch": "main",
-            "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
             "storyOutput": {
                 "mode": "jira",
                 "jira": {"dependencyMode": "linear_blocker_chain"},
@@ -619,7 +601,6 @@ async def test_create_jira_issues_fallback_preserves_dependency_mode_metadata():
     assert result.outputs["storyOutput"]["status"] == "fallback"
     assert result.outputs["storyOutput"]["dependencyMode"] == "linear_blocker_chain"
     assert result.outputs["storyOutput"]["reason"] == "Jira projectKey and issueTypeId are required."
-
 
 @pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_traceability():
@@ -646,7 +627,7 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
             },
             "traceability": {
                 "sourceIssueKey": "MM-404",
-                "sourceBriefRef": "docs/tmp/jira-orchestration-inputs/MM-404-moonspec-orchestration-input.md",
+                "sourceBriefRef": "spec.md (Input)",
             },
         },
         execution_creator=creator,
@@ -683,7 +664,6 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
     }
     assert "merge_automation" not in first_parameters["task"]["publish"]
     assert "MM-404" in first_parameters["task"]["instructions"]
-
 
 @pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_uses_previous_step_mappings_and_owner_context():
@@ -728,7 +708,6 @@ async def test_create_jira_orchestrate_tasks_uses_previous_step_mappings_and_own
     assert task["inputs"]["constraints"] == "Preserve source issue MM-404 traceability."
     assert "Source Jira issue: MM-404." in task["instructions"]
 
-
 @pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_handles_one_and_zero_story_results():
     one_creator = _FakeExecutionCreator()
@@ -758,7 +737,6 @@ async def test_create_jira_orchestrate_tasks_handles_one_and_zero_story_results(
     assert zero.outputs["jiraOrchestration"]["status"] == "no_downstream_tasks"
     assert zero.outputs["jiraOrchestration"]["createdTaskCount"] == 0
     assert zero.outputs["jiraOrchestration"]["dependencyCount"] == 0
-
 
 @pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_reports_missing_issue_key_and_partial_failures():

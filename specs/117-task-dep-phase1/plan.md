@@ -78,7 +78,7 @@ api_service/api/routers/executions.py        # _create_execution_from_task_reque
 tests/unit/workflows/temporal/
 └── test_temporal_service.py                 # ADD: self-dependency rejection test
 
-docs/tmp/011-TaskDependenciesPlan.md         # UPDATE: Phase 1 status to complete
+docs/Tasks/TaskDependencies.md         # UPDATE: Phase 1 status to complete
 
 specs/117-task-dep-phase1/
 ├── plan.md         # This file

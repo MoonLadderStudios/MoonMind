@@ -13,7 +13,6 @@ from moonmind.workflows.temporal.activity_runtime import (
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 async def test_claude_launch_session_shapes_oauth_home_environment(tmp_path: Path) -> None:
     controller = AsyncMock()
     controller.launch_session = AsyncMock(
@@ -74,7 +73,6 @@ async def test_claude_launch_session_shapes_oauth_home_environment(tmp_path: Pat
     assert "ANTHROPIC_API_KEY" not in environment
     assert "CLAUDE_API_KEY" not in environment
     assert "OPENAI_API_KEY" not in environment
-
 
 async def test_claude_launch_session_redacts_auth_path_failures(tmp_path: Path) -> None:
     controller = AsyncMock()

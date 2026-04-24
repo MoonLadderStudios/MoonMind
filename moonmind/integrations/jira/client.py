@@ -18,7 +18,6 @@ logger = stdlib_logging.getLogger(__name__)
 
 _RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
 
-
 class JiraClient:
     """Async Jira REST wrapper for trusted managed-agent tool execution."""
 

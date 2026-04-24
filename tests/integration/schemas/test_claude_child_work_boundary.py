@@ -10,9 +10,7 @@ from moonmind.schemas import build_claude_child_work_fixture_flow
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def test_claude_child_work_boundary_keeps_subagents_and_teams_distinct() -> None:
     flow = build_claude_child_work_fixture_flow(

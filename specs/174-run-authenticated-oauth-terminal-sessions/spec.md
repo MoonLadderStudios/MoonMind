@@ -3,7 +3,7 @@
 **Feature Branch**: `174-run-authenticated-oauth-terminal-sessions`  
 **Created**: 2026-04-15  
 **Status**: Draft  
-**Input**: MM-333: Run authenticated OAuth terminal sessions. As an authorized operator, I can start a browser-based OAuth terminal session that runs a provider login command inside a short-lived auth runner, streams PTY I/O through MoonMind, verifies the resulting credentials, and closes deterministically on success, cancellation, expiry, or failure. Source: `docs/ManagedAgents/OAuthTerminal.md` sections 5, 5.1, 5.2, 5.3, and 9. Coverage IDs: DESIGN-REQ-001, DESIGN-REQ-010, DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-022. Breakdown Story ID: STORY-002. Breakdown JSON: `docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthtermina-74125184/stories.json`.
+**Input**: MM-333: Run authenticated OAuth terminal sessions. As an authorized operator, I can start a browser-based OAuth terminal session that runs a provider login command inside a short-lived auth runner, streams PTY I/O through MoonMind, verifies the resulting credentials, and closes deterministically on success, cancellation, expiry, or failure. Source: `docs/ManagedAgents/OAuthTerminal.md` sections 5, 5.1, 5.2, 5.3, and 9. Coverage IDs: DESIGN-REQ-001, DESIGN-REQ-010, DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-022. Breakdown Story ID: STORY-002. Breakdown JSON: `artifacts/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthtermina-74125184/stories.json`.
 
 ## User Story 1 - Browser OAuth Terminal Session
 

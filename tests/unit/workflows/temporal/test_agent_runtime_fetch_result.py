@@ -16,7 +16,6 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 pytestmark = [pytest.mark.asyncio]
 
-
 def _save_failed_record(
     store: ManagedRunStore,
     *,
@@ -42,7 +41,6 @@ def _save_failed_record(
             failureClass="execution_error",
         )
     )
-
 
 async def test_fetch_result_maps_gemini_quota_report_to_integration_error(
     tmp_path: Path,
@@ -90,7 +88,6 @@ async def test_fetch_result_maps_gemini_quota_report_to_integration_error(
     assert result.provider_error_code == "quota_exhausted"
     assert "exhausted your capacity" in result.summary.lower()
 
-
 async def test_fetch_result_returns_structured_provider_error_from_record(
     tmp_path: Path,
 ) -> None:
@@ -121,7 +118,6 @@ async def test_fetch_result_returns_structured_provider_error_from_record(
     assert result.failure_class == "integration_error"
     assert result.provider_error_code == "429"
     assert result.summary == "Gemini API rate limit exceeded"
-
 
 async def test_fetch_result_keeps_non_generic_failure_summary(
     tmp_path: Path,
@@ -166,7 +162,6 @@ async def test_fetch_result_keeps_non_generic_failure_summary(
     assert result.summary == "pr-resolver reported blocked state"
     assert result.provider_error_code is None
 
-
 async def test_fetch_result_maps_gemini_rate_limit_to_429(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -209,7 +204,6 @@ async def test_fetch_result_maps_gemini_rate_limit_to_429(
     assert result.failure_class == "integration_error"
     assert result.provider_error_code == "429"
     assert "rate limit" in result.summary.lower()
-
 
 async def test_fetch_result_prefers_report_with_matching_run_workspace(
     tmp_path: Path,
@@ -278,7 +272,6 @@ async def test_fetch_result_prefers_report_with_matching_run_workspace(
     assert isinstance(result, AgentRunResult)
     assert result.failure_class == "integration_error"
     assert result.provider_error_code == "quota_exhausted"
-
 
 async def test_fetch_result_uses_diagnostics_when_report_missing(
     tmp_path: Path,

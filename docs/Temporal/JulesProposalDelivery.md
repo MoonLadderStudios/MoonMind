@@ -1,6 +1,6 @@
 # Jules Proposal Delivery and Management
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-JulesProposalDelivery.md`](../tmp/remaining-work/Temporal-JulesProposalDelivery.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 Status: Proposed
 Owner: MoonMind Engineering
@@ -55,11 +55,11 @@ Since Jules is moving toward an ExternalEvent/Callback model (per `JulesTemporal
 The activity catalog (`moonmind/workflows/temporal/activity_catalog.py`) will be expanded with the following signatures:
 
 - `integration.jules.send_proposal`:
-  - **Input:** `proposal_id`, `correlation_id`, `proposal_payload`
-  - **Output:** `external_operation_id` (Jules ID), `provider_status`
+ - **Input:** `proposal_id`, `correlation_id`, `proposal_payload`
+ - **Output:** `external_operation_id` (Jules ID), `provider_status`
 - `integration.jules.sync_proposal_status`:
-  - **Input:** `external_operation_id`
-  - **Output:** `normalized_status` (e.g., `pending`, `promoted`, `rejected`), `provider_status`
+ - **Input:** `external_operation_id`
+ - **Output:** `normalized_status` (e.g., `pending`, `promoted`, `rejected`), `provider_status`
 
 These activities will reuse the core Jules integration patterns, including status normalization and artifact discipline.
 
@@ -77,4 +77,4 @@ Temporal provides the necessary durability to handle intermittent delivery failu
 
 ## 7) Delivery surface
 
-**Target:** Jules-facing proposal payloads flow through extended adapter schemas, dedicated Temporal activities (`send_proposal`, `sync_proposal_status` or equivalents), a `MoonMind.ProposalDelivery` (or integrated) workflow triggered from the API, and dashboard visibility of delivery status. Build-out status is in [`docs/tmp/remaining-work/Temporal-JulesProposalDelivery.md`](../tmp/remaining-work/Temporal-JulesProposalDelivery.md).
+**Target:** Jules-facing proposal payloads flow through extended adapter schemas, dedicated Temporal activities (`send_proposal`, `sync_proposal_status` or equivalents), a `MoonMind.ProposalDelivery` (or integrated) workflow triggered from the API, and dashboard visibility of delivery status. Build-out status is in .

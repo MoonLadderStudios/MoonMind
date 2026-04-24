@@ -16,11 +16,9 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 def _make_mock_store(
     *,
@@ -50,7 +48,6 @@ def _make_mock_store(
     store.load.return_value = record
     return store
 
-
 def _make_subprocess_result(
     returncode: int = 0,
     stdout: str = "",
@@ -59,7 +56,6 @@ def _make_subprocess_result(
     return subprocess.CompletedProcess(
         args=[], returncode=returncode, stdout=stdout, stderr=stderr,
     )
-
 
 def test_detect_pr_url_uses_workspace_command_shims(tmp_path):
     store = _make_mock_store(workspace_path=str(tmp_path / "run-1" / "repo"))
@@ -87,7 +83,6 @@ def test_detect_pr_url_uses_workspace_command_shims(tmp_path):
     assert isinstance(gh_env, dict)
     assert gh_env["PATH"].startswith(str(workspace.parent / ".moonmind" / "bin"))
 
-
 def test_parse_git_status_paths_handles_nul_delimited_non_ascii_and_renames() -> None:
     status_output = (
         b'M  "quoted-looking.txt"\0'
@@ -104,16 +99,13 @@ def test_parse_git_status_paths_handles_nul_delimited_non_ascii_and_renames() ->
         "old path.txt",
     )
 
-
 def test_parse_git_status_paths_rejects_truncated_rename_record() -> None:
     with pytest.raises(ValueError, match="missing original path"):
         TemporalAgentRuntimeActivities._parse_git_status_paths(b"R  renamed path.txt\0")
 
-
 # ---------------------------------------------------------------------------
 # _push_workspace_branch
 # ---------------------------------------------------------------------------
-
 
 class TestPushWorkspaceBranch:
     """Tests for TemporalAgentRuntimeActivities._push_workspace_branch."""
@@ -991,11 +983,9 @@ class TestPushWorkspaceBranch:
         assert len(revlist_range) == 1
         assert "origin/develop" in revlist_range[0]
 
-
 # ---------------------------------------------------------------------------
 # agent_runtime_fetch_result — push integration
 # ---------------------------------------------------------------------------
-
 
 class TestFetchResultPushIntegration:
     """Tests for publish_mode-aware git push inside fetch_result."""

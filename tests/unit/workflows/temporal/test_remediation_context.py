@@ -54,7 +54,6 @@ from moonmind.workflows.temporal.remediation_tools import (
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
-
 async def _create_target_and_remediation(
     session: AsyncSession,
     mock_client_adapter,
@@ -107,7 +106,6 @@ async def _create_target_and_remediation(
     )
     return target, remediation
 
-
 def _admin_permissions(**overrides):
     data = {
         "can_view_target": True,
@@ -119,7 +117,6 @@ def _admin_permissions(**overrides):
     data.update(overrides)
     return RemediationPermissionSet(**data)
 
-
 def _admin_profile(**overrides):
     data = {
         "profile_ref": "admin_healer",
@@ -129,7 +126,6 @@ def _admin_profile(**overrides):
     }
     data.update(overrides)
     return RemediationSecurityProfile(**data)
-
 
 CANONICAL_REMEDIATION_ACTIONS = {
     "execution.pause",
@@ -147,7 +143,6 @@ CANONICAL_REMEDIATION_ACTIONS = {
     "workload.restart_helper_container",
     "workload.reap_orphan_container",
 }
-
 
 def test_remediation_action_authority_lists_canonical_mm483_action_registry():
     service = RemediationActionAuthorityService(session=object())
@@ -170,7 +165,6 @@ def test_remediation_action_authority_lists_canonical_mm483_action_registry():
         assert item["verificationHint"]
         assert item["auditPayloadShape"]
 
-
 def test_remediation_action_authority_rejects_legacy_action_aliases():
     service = RemediationActionAuthorityService(session=object())
 
@@ -190,7 +184,6 @@ def test_remediation_action_authority_rejects_legacy_action_aliases():
         "workload.restart_helper_container",
         "session.terminate",
     }
-
 
 def test_remediation_action_authority_lists_policy_compatible_actions():
     service = RemediationActionAuthorityService(session=object())
@@ -221,7 +214,6 @@ def test_remediation_action_authority_lists_policy_compatible_actions():
         ),
     )
     assert listed_again[0]["inputMetadata"]["reason"]["required"] is False
-
 
 def test_remediation_action_authority_does_not_advertise_raw_admin_actions():
     service = RemediationActionAuthorityService(session=object())
@@ -258,7 +250,6 @@ def test_remediation_action_authority_does_not_advertise_raw_admin_actions():
         }
     )
 
-
 @pytest.fixture
 def mock_client_adapter():
     adapter = MagicMock()
@@ -269,7 +260,6 @@ def mock_client_adapter():
     adapter.cancel_workflow = AsyncMock()
     adapter.terminate_workflow = AsyncMock()
     return adapter
-
 
 @asynccontextmanager
 async def temporal_db(tmp_path):
@@ -285,7 +275,6 @@ async def temporal_db(tmp_path):
             yield session
     finally:
         await engine.dispose()
-
 
 @pytest.mark.asyncio
 async def test_remediation_context_builder_creates_bounded_linked_artifact(
@@ -480,7 +469,6 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
         assert "password" not in serialized.lower()
         assert "token=" not in serialized.lower()
 
-
 def test_remediation_lifecycle_summary_audit_and_continuation_are_bounded():
     assert normalize_remediation_phase("diagnosing") == "diagnosing"
     assert normalize_remediation_phase("unknown") == "failed"
@@ -599,7 +587,6 @@ def test_remediation_lifecycle_summary_audit_and_continuation_are_bounded():
         "lock_release_attempt",
     ]
 
-
 def test_remediation_summary_allows_hierarchical_target_identifiers():
     summary = build_remediation_summary_block(
         target_workflow_id="/tenant/workflows/target",
@@ -612,7 +599,6 @@ def test_remediation_summary_allows_hierarchical_target_identifiers():
 
     assert summary["targetWorkflowId"] == "/tenant/workflows/target"
     assert summary["targetRunId"] == "/runs/target-run"
-
 
 def test_remediation_audit_normalizes_string_timestamps():
     audit = build_remediation_audit_event(
@@ -632,7 +618,6 @@ def test_remediation_audit_normalizes_string_timestamps():
 
     assert audit["timestamp"] == "2026-04-21T23:02:03Z"
 
-
 def test_remediation_audit_rejects_malformed_string_timestamps():
     with pytest.raises(RemediationContextError, match="timestamp must be ISO8601"):
         build_remediation_audit_event(
@@ -649,7 +634,6 @@ def test_remediation_audit_rejects_malformed_string_timestamps():
             approval_decision="approved",
             timestamp="not-a-timestamp",
         )
-
 
 def test_target_remediation_linkage_summary_is_compact():
     summary = build_target_remediation_linkage_summary(
@@ -677,7 +661,6 @@ def test_target_remediation_linkage_summary_is_compact():
         "lastUpdatedAt": "2026-04-22T01:02:03Z",
         "metadata": {"safe": "value"},
     }
-
 
 @pytest.mark.asyncio
 async def test_remediation_lifecycle_publisher_creates_required_artifacts(
@@ -800,7 +783,6 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
         assert published_summary["authorityMode"] == "admin_auto"
         assert published_summary["resolution"] == "resolved_after_action"
 
-
 @pytest.mark.asyncio
 async def test_remediation_context_builder_rejects_non_remediation_workflow(
     tmp_path, mock_client_adapter
@@ -844,7 +826,6 @@ async def test_remediation_context_builder_rejects_non_remediation_workflow(
         ).scalars().all()
         assert links == []
 
-
 class RecordingLogReader:
     def __init__(self) -> None:
         self.calls = []
@@ -872,7 +853,6 @@ class RecordingLogReader:
             next_cursor="cursor-2",
         )
 
-
 class RecordingLiveFollower:
     def __init__(self) -> None:
         self.calls = []
@@ -893,7 +873,6 @@ class RecordingLiveFollower:
             ),
             resume_cursor={"sequence": 43},
         )
-
 
 class RecordingActionExecutor:
     def __init__(self) -> None:
@@ -917,7 +896,6 @@ class RecordingActionExecutor:
                 "targetWorkflowId": target_health.workflow_id,
             },
         }
-
 
 @pytest.mark.asyncio
 async def test_remediation_evidence_tools_read_only_context_declared_evidence(
@@ -1057,7 +1035,6 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
                 stream="stdout",
             )
 
-
 @pytest.mark.asyncio
 async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
     tmp_path, mock_client_adapter
@@ -1181,7 +1158,6 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
                 task_run_id="tr_other",
             )
 
-
 @pytest.mark.asyncio
 async def test_remediation_evidence_tools_prepare_action_request_rereads_target_health(
     tmp_path, mock_client_adapter
@@ -1274,7 +1250,6 @@ async def test_remediation_evidence_tools_prepare_action_request_rereads_target_
                 remediation_workflow_id=remediation.workflow_id,
                 action_kind=" ",
             )
-
 
 @pytest.mark.asyncio
 async def test_remediation_execute_action_delegates_and_publishes_lifecycle_artifacts(
@@ -1371,7 +1346,6 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
         assert link.latest_action_summary == action_kind
         assert link.outcome == "applied"
 
-
 @pytest.mark.asyncio
 async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_context(
     tmp_path, mock_client_adapter
@@ -1460,7 +1434,6 @@ async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_
 
         assert executor.calls == []
 
-
 @pytest.mark.asyncio
 async def test_remediation_context_builder_rejects_missing_target_record(
     tmp_path, mock_client_adapter
@@ -1507,7 +1480,6 @@ async def test_remediation_context_builder_rejects_missing_target_record(
                 principal="service:remediation-context",
             )
 
-
 @pytest.mark.asyncio
 async def test_remediation_action_authority_enforces_authority_modes(
     tmp_path, mock_client_adapter
@@ -1552,7 +1524,6 @@ async def test_remediation_action_authority_enforces_authority_modes(
         assert denied.reason == "observe_only_rejects_side_effects"
         assert denied.executable is False
 
-
 @pytest.mark.asyncio
 async def test_remediation_action_authority_requires_approval_for_gated_mode(
     tmp_path, mock_client_adapter
@@ -1594,7 +1565,6 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
         assert approved.executable is True
         assert approved.audit["requestingPrincipal"] == "user:operator"
         assert approved.audit["executionPrincipal"] == "service:admin-healer"
-
 
 @pytest.mark.asyncio
 async def test_remediation_action_authority_enforces_profile_permissions_and_risk(
@@ -1672,7 +1642,6 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
         assert high_risk.reason == "high_risk_requires_approval"
         assert high_risk.executable is False
 
-
 @pytest.mark.asyncio
 async def test_remediation_action_authority_rejects_unsupported_authority_mode(
     tmp_path, mock_client_adapter
@@ -1706,7 +1675,6 @@ async def test_remediation_action_authority_rejects_unsupported_authority_mode(
         assert result.decision == "denied"
         assert result.reason == "unsupported_authority_mode"
         assert result.executable is False
-
 
 @pytest.mark.asyncio
 async def test_remediation_action_authority_cache_keys_include_request_shape(
@@ -1762,7 +1730,6 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
         assert dry_run_payload["result"]["verificationRequired"] is False
         assert dry_run_payload["result"]["verificationHint"] is None
 
-
 @pytest.mark.asyncio
 async def test_remediation_action_authority_redacts_audits_and_deduplicates(
     tmp_path, mock_client_adapter
@@ -1808,7 +1775,6 @@ async def test_remediation_action_authority_redacts_audits_and_deduplicates(
         assert result.audit["requestingPrincipal"] == "user:operator"
         assert result.audit["executionPrincipal"] == "service:admin-healer"
 
-
 def test_remediation_action_redaction_handles_null_and_single_segment_paths(
     monkeypatch,
 ):
@@ -1820,7 +1786,6 @@ def test_remediation_action_redaction_handles_null_and_single_segment_paths(
 
     assert remediation_actions._redact_text(None) == ""
     assert remediation_actions._redact_text("/tmp") == "[REDACTED_PATH]"
-
 
 @pytest.mark.asyncio
 async def test_remediation_action_authority_denies_raw_access_and_unknown_targets(
@@ -1860,7 +1825,6 @@ async def test_remediation_action_authority_denies_raw_access_and_unknown_target
         assert missing.decision == "denied"
         assert missing.reason == "remediation_link_not_found"
         assert "missing-remediation" not in missing.audit["summary"]
-
 
 @pytest.mark.asyncio
 async def test_remediation_action_authority_uses_prepared_action_context(
@@ -1905,7 +1869,6 @@ async def test_remediation_action_authority_uses_prepared_action_context(
         assert preparation.target.workflow_id == target.workflow_id
         assert decision.decision == "allowed"
         assert decision.target_workflow_id == target.workflow_id
-
 
 @pytest.mark.asyncio
 async def test_remediation_mutation_guard_enforces_exclusive_locks_and_recovery(
@@ -2025,7 +1988,6 @@ async def test_remediation_mutation_guard_enforces_exclusive_locks_and_recovery(
         assert lost.decision == "denied"
         assert lost.reason == "mutation_lock_lost"
 
-
 @pytest.mark.asyncio
 async def test_remediation_mutation_guard_enforces_ledger_budgets_and_cooldowns(
     tmp_path, mock_client_adapter
@@ -2122,7 +2084,6 @@ async def test_remediation_mutation_guard_enforces_ledger_budgets_and_cooldowns(
         assert exhausted.decision == "escalate"
         assert exhausted.reason == "action_budget_exhausted"
 
-
 @pytest.mark.asyncio
 async def test_remediation_mutation_guard_persists_locks_and_ledger_across_service_restart(
     tmp_path, mock_client_adapter
@@ -2209,7 +2170,6 @@ async def test_remediation_mutation_guard_persists_locks_and_ledger_across_servi
         assert conflict.reason == "mutation_lock_conflict"
         assert conflict.lock.lock_id == first.lock.lock_id
 
-
 @pytest.mark.asyncio
 async def test_remediation_mutation_guard_persists_released_lock_across_service_restart(
     tmp_path, mock_client_adapter
@@ -2278,7 +2238,6 @@ async def test_remediation_mutation_guard_persists_released_lock_across_service_
         assert lost.reason == "mutation_lock_lost"
         assert other.decision == "allowed"
         assert other.lock.status == "acquired"
-
 
 @pytest.mark.asyncio
 async def test_remediation_mutation_guard_rejects_nested_and_changed_targets(
@@ -2395,7 +2354,6 @@ async def test_remediation_mutation_guard_rejects_nested_and_changed_targets(
         assert material_drift.reason == "target_materially_changed"
         assert unavailable.decision == "denied"
         assert unavailable.reason == "target_health_unavailable"
-
 
 @pytest.mark.asyncio
 async def test_remediation_mutation_guard_serialization_redacts_sensitive_values(

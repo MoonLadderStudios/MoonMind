@@ -13,7 +13,6 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
 
 _VALID_AUTH_MODES = frozenset({"service_account_scoped", "basic"})
 
-
 @dataclass(frozen=True, slots=True)
 class ResolvedJiraConnection:
     """Resolved Jira connection details for one trusted tool call."""
@@ -26,7 +25,6 @@ class ResolvedJiraConnection:
     retry_attempts: int
     redaction_values: tuple[str, ...]
 
-
 def _normalize_url(value: str | None) -> str | None:
     normalized = str(value or "").strip()
     if normalized.startswith("https://https://"):
@@ -34,7 +32,6 @@ def _normalize_url(value: str | None) -> str | None:
     if not normalized:
         return None
     return normalized.rstrip("/")
-
 
 async def _resolve_binding_value(
     *,
@@ -55,7 +52,6 @@ async def _resolve_binding_value(
 
     raw = str(raw_value or "").strip()
     return raw or None
-
 
 async def resolve_jira_connection(
     atlassian_settings: AtlassianSettings | None = None,

@@ -3,7 +3,7 @@
 ## Input Classification
 
 Decision: MM-458 is a single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-458-moonspec-orchestration-input.md` defines one user story, one acceptance-criteria set, and one bounded runtime behavior area.
+Evidence: `spec.md` (Input) defines one user story, one acceptance-criteria set, and one bounded runtime behavior area.
 Rationale: The story focuses on manual-by-default remediation v1, future self-healing policy constraints, raw capability denial, and bounded edge-case outcomes.
 Alternatives considered: Treating `docs/Tasks/TaskRemediation.md` as a broad design was rejected because the Jira preset brief already selected one independently testable slice.
 Test implications: Unit and service-boundary tests should target the selected policy/capability surface.

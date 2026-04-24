@@ -19,7 +19,6 @@ pytestmark = [pytest.mark.asyncio]
 
 CURRENT_USER_DEP = get_current_user()
 
-
 class _FakeJiraService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
@@ -30,7 +29,6 @@ class _FakeJiraService:
         if self.raise_on_get_issue is not None:
             raise self.raise_on_get_issue
         return {"issueKey": request.issue_key, "summary": "Example"}
-
 
 @pytest.fixture
 def router_app(
@@ -43,7 +41,6 @@ def router_app(
     monkeypatch.setattr(mcp_tools_router, "_jules_registry", None)
     monkeypatch.setattr(mcp_tools_router, "_jules_client", None)
     return app
-
 
 async def test_list_tools_includes_enabled_jira_tools(
     router_app: FastAPI,
@@ -65,7 +62,6 @@ async def test_list_tools_includes_enabled_jira_tools(
     assert response.status_code == 200
     names = sorted(tool["name"] for tool in response.json()["tools"])
     assert names == ["jira.get_issue", "jira.verify_connection"]
-
 
 async def test_call_tool_dispatches_to_jira_service(
     router_app: FastAPI,
@@ -91,7 +87,6 @@ async def test_call_tool_dispatches_to_jira_service(
     assert response.status_code == 200
     assert response.json()["result"] == {"issueKey": "ENG-1", "summary": "Example"}
     assert service.calls[0][0] == "get_issue"
-
 
 async def test_call_tool_maps_jira_errors_to_http_response(
     router_app: FastAPI,
@@ -122,7 +117,6 @@ async def test_call_tool_maps_jira_errors_to_http_response(
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "jira_policy_denied"
-
 
 async def test_call_tool_rejects_invalid_jira_arguments(
     router_app: FastAPI,

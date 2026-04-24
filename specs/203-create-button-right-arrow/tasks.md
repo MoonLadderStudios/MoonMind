@@ -29,7 +29,7 @@
 
 **Purpose**: Confirm the active feature context and existing Create Page test surface before writing red tests.
 
-- [X] T001 Confirm MM-390 source input, single-story spec, and active feature locator in `docs/tmp/jira-orchestration-inputs/MM-390-moonspec-orchestration-input.md`, `specs/203-create-button-right-arrow/spec.md`, and `.specify/feature.json` (FR-009, SC-006).
+- [X] T001 Confirm MM-390 source input, single-story spec, and active feature locator in `spec.md` (Input), `specs/203-create-button-right-arrow/spec.md`, and `.specify/feature.json` (FR-009, SC-006).
 - [X] T002 Confirm existing Create Page submit control and test harness locations in `frontend/src/entrypoints/task-create.tsx` and `frontend/src/entrypoints/task-create.test.tsx` (DESIGN-REQ-001, DESIGN-REQ-003).
 
 ## Phase 2: Foundational

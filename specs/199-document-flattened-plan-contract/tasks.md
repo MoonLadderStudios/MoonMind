@@ -9,7 +9,7 @@
 
 - Focused documentation contract check: `rg -n "authoring concern|flattened execution contract|unresolved preset include|binding_id|include_path|blueprint_step_slug|detached|provenance" docs/Tasks/SkillAndPlanContracts.md`
 - Validation rule check: `rg -n "absent provenance|invalid claimed preset provenance|unresolved preset include|nested preset semantics|never executable logic" docs/Tasks/SkillAndPlanContracts.md`
-- Source traceability check: `rg -n "MM-386|DESIGN-REQ-001|DESIGN-REQ-019|DESIGN-REQ-020|DESIGN-REQ-021|DESIGN-REQ-025|DESIGN-REQ-026" specs/199-document-flattened-plan-contract docs/tmp/jira-orchestration-inputs/MM-386-moonspec-orchestration-input.md`
+- Source traceability check: `rg -n "MM-386|DESIGN-REQ-001|DESIGN-REQ-019|DESIGN-REQ-020|DESIGN-REQ-021|DESIGN-REQ-025|DESIGN-REQ-026" specs/199-document-flattened-plan-contract`
 - Full unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - Hermetic integration tests: `./tools/test_integration.sh`
 - Final verification: `/moonspec-verify`
@@ -22,14 +22,14 @@
 - FR-005, FR-007, SC-004, DESIGN-REQ-025: validation allows absent provenance and rejects structurally invalid claimed preset provenance.
 - FR-008, FR-010, SC-005, DESIGN-REQ-019: manual authoring, preset expansion, and other plan-producing tools all produce the same flattened graph.
 - FR-009, FR-010, SC-006, DESIGN-REQ-026: runtime has no nested preset semantics and provenance is never executable logic.
-- FR-011: canonical docs remain desired-state; volatile planning stays under `docs/tmp/` and `specs/`.
+- FR-011: canonical docs remain desired-state; volatile planning stays under `local-only handoffs` and `specs/`.
 - FR-012, SC-007: MM-386 and original Jira preset brief remain visible in artifacts and verification evidence.
 - Acceptance scenarios 1-6: contract review confirms flat stored plan shape, validation behavior, provenance semantics, authoring-origin-neutral DAG semantics, and runtime executor behavior.
 - Acceptance scenario 7: traceability review confirms MM-386 remains present.
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm active MM-386 feature directory and source input in `.specify/feature.json`, `docs/tmp/jira-orchestration-inputs/MM-386-moonspec-orchestration-input.md`, and `specs/199-document-flattened-plan-contract/spec.md` (FR-012, SC-007).
+- [X] T001 Confirm active MM-386 feature directory and source input in `.specify/feature.json`, `spec.md` (Input), and `specs/199-document-flattened-plan-contract/spec.md` (FR-012, SC-007).
 - [X] T002 Confirm `docs/Tasks/SkillAndPlanContracts.md` is the canonical documentation target and `docs/Tasks/PresetComposability.md` is absent in the current checkout in `specs/199-document-flattened-plan-contract/research.md` (FR-011).
 - [X] T003 Confirm the managed branch limitation for `.specify/scripts/bash/check-prerequisites.sh --json` is recorded in `specs/199-document-flattened-plan-contract/plan.md` (FR-011).
 

@@ -11,7 +11,6 @@ from api_service.main import startup_event
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 async def _seed_db(tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
     db_base.DATABASE_URL = db_url
@@ -22,14 +21,12 @@ async def _seed_db(tmp_path):
     async with db_base.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-
 def _isolate_secret_env_sources(monkeypatch, tmp_path) -> None:
     empty_dotenv = tmp_path / ".env.empty"
     empty_dotenv.write_text("", encoding="utf-8")
     monkeypatch.setattr("moonmind.config.paths.ENV_FILE", empty_dotenv)
     for key in ("GITHUB_TOKEN", "GITHUB_PAT", "ATLASSIAN_API_KEY"):
         monkeypatch.delenv(key, raising=False)
-
 
 @pytest.mark.asyncio
 async def test_startup_syncs_managed_secrets_from_env(monkeypatch, disabled_env_keys, tmp_path):
@@ -66,7 +63,6 @@ async def test_startup_syncs_managed_secrets_from_env(monkeypatch, disabled_env_
     assert atlassian_secret.ciphertext == "atl-token"
     assert atlassian_secret.details.get("imported_from") == ".env"
 
-
 @pytest.mark.asyncio
 async def test_startup_updates_existing_env_managed_secret(monkeypatch, disabled_env_keys, tmp_path):
     await _seed_db(tmp_path)
@@ -99,7 +95,6 @@ async def test_startup_updates_existing_env_managed_secret(monkeypatch, disabled
 
     assert refreshed.ciphertext == "new-github-token"
     assert refreshed.details.get("migrated_at") is not None
-
 
 @pytest.mark.asyncio
 async def test_startup_syncs_managed_secrets_from_dotenv_file(
@@ -141,7 +136,6 @@ async def test_startup_syncs_managed_secrets_from_dotenv_file(
     assert github_secret.ciphertext == "ghp-dotenv-token"
     assert atlassian_secret is not None
     assert atlassian_secret.ciphertext == "atl-dotenv-token"
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("slug", ["GITHUB_PAT"])
@@ -189,7 +183,6 @@ async def test_startup_syncs_github_alias_and_refreshes_canonical_slug(
     assert alias_secret.status == SecretStatus.ACTIVE
     assert alias_secret.ciphertext == "ghp-alias-token"
     assert alias_secret.details.get("imported_from") == ".env"
-
 
 @pytest.mark.asyncio
 async def test_startup_ignores_whitespace_only_env_tokens(

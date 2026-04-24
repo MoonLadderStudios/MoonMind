@@ -1,6 +1,6 @@
 # Llama Index Manifest System – Schema & Operator Guide
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Rag-LlamaIndexManifestSystem.md`](../tmp/remaining-work/Rag-LlamaIndexManifestSystem.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 > **Status:** Draft v0 (Temporal-aligned)
 > **Last updated:** 2026‑03‑20
@@ -16,12 +16,12 @@
 2. [Architecture Overview](#architecture-overview)
 3. [Manifest Schema (v0)](#manifest-schema-v0)
 
-   * [Top‑level Keys](#top-level-keys)
-   * [JSON Schema (abridged)](#json-schema-abridged)
+ * [Top‑level Keys](#top-level-keys)
+ * [JSON Schema (abridged)](#json-schema-abridged)
 4. [Examples](#examples)
 
-   * [Minimal GitHub Reader](#example-a-minimal-github-reader)
-   * [“Kitchen Sink” Multi‑source + Hybrid + Eval](#example-b-kitchen-sink-multi-source--hybrid--eval)
+ * [Minimal GitHub Reader](#example-a-minimal-github-reader)
+ * [“Kitchen Sink” Multi‑source + Hybrid + Eval](#example-b-kitchen-sink-multi-source--hybrid--eval)
 5. [CLI & API Usage](#cli--api-usage)
 6. [Orchestration (Temporal)](#orchestration-temporal)
 7. [Performance & Cost Tuning](#performance--cost-tuning)
@@ -60,17 +60,17 @@ We need repeatable, auditable, **declarative** pipelines for bringing text/code 
 
 ```mermaid
 flowchart LR
-  A[Manifest YAML] --> B[Loader + Validator]
-  B -->|Plan| C[Runner]
-  C --> D[Readers]
-  D --> E[Transforms]
-  E --> F[Embed]
-  F --> G[Vector Store Index]
-  G --> H[Retrievers]
-  H --> I[API / Chat]
-  C --> J[Evaluation]
-  C --> K[Observability/Artifacts]
-  C --> L[Temporal Workflow]
+ A[Manifest YAML] --> B[Loader + Validator]
+ B -->|Plan| C[Runner]
+ C --> D[Readers]
+ D --> E[Transforms]
+ E --> F[Embed]
+ F --> G[Vector Store Index]
+ G --> H[Retrievers]
+ H --> I[API / Chat]
+ C --> J[Evaluation]
+ C --> K[Observability/Artifacts]
+ C --> L[Temporal Workflow]
 ```
 
 **Execution modes**
@@ -87,31 +87,31 @@ Manifests are YAML. Environment variables interpolate as `${VAR}`. A JSON Schema
 
 ### Top‑level Keys
 
-| Key                | Required | Description                                                                                    |
+| Key | Required | Description |
 | ------------------ | :------: | ---------------------------------------------------------------------------------------------- |
-| `version`          |     ✅    | Schema version string (e.g., `"v0"`)                                                           |
-| `metadata`         |     ✅    | Name, description, owner, tags                                                                 |
-| `llm`              |          | LLM provider/model/params for answer generation (optional; retrieval‑only if omitted)          |
-| `embeddings`       |     ✅    | Provider/model for vectorization and optional `batchSize`                                      |
-| `vectorStore`      |     ✅    | Type (`pgvector`, `qdrant`, `milvus`) + connection + `indexName`                               |
-| `dataSources[]`    |     ✅    | List of readers (e.g., `GithubRepositoryReader`, `GoogleDriveReader`, `SimpleDirectoryReader`) |
-| `transforms`       |          | Splitter, HTML→text, metadata enrichment, PII redaction                                        |
-| `indices[]`        |     ✅    | Index definitions (usually a `VectorStoreIndex`) and persistence                               |
-| `retrievers[]`     |     ✅    | Named retrievers (`Vector`, `Hybrid`) with params, optional reranker                           |
-| `postprocessors[]` |          | Similarity cutoff, dedupe, prev/next node fetcher                                              |
-| `evaluation`       |          | Datasets + metrics (e.g., hitRate@k, ndcg@k, faithfulness)                                     |
-| `run`              |          | Concurrency, batch size, error policy, `dryRun`                                                |
-| `observability`    |          | Tracing/log sinks (`opentelemetry`, `stdout`), callback manager                                |
-| `security`         |          | PII redaction, metadata allowlist                                                              |
-| `scheduling`       |          | Cron or `"manual"`; used for Temporal Schedules                                                |
+| `version` | ✅ | Schema version string (e.g., `"v0"`) |
+| `metadata` | ✅ | Name, description, owner, tags |
+| `llm` | | LLM provider/model/params for answer generation (optional; retrieval‑only if omitted) |
+| `embeddings` | ✅ | Provider/model for vectorization and optional `batchSize` |
+| `vectorStore` | ✅ | Type (`pgvector`, `qdrant`, `milvus`) + connection + `indexName` |
+| `dataSources[]` | ✅ | List of readers (e.g., `GithubRepositoryReader`, `GoogleDriveReader`, `SimpleDirectoryReader`) |
+| `transforms` | | Splitter, HTML→text, metadata enrichment, PII redaction |
+| `indices[]` | ✅ | Index definitions (usually a `VectorStoreIndex`) and persistence |
+| `retrievers[]` | ✅ | Named retrievers (`Vector`, `Hybrid`) with params, optional reranker |
+| `postprocessors[]` | | Similarity cutoff, dedupe, prev/next node fetcher |
+| `evaluation` | | Datasets + metrics (e.g., hitRate@k, ndcg@k, faithfulness) |
+| `run` | | Concurrency, batch size, error policy, `dryRun` |
+| `observability` | | Tracing/log sinks (`opentelemetry`, `stdout`), callback manager |
+| `security` | | PII redaction, metadata allowlist |
+| `scheduling` | | Cron or `"manual"`; used for Temporal Schedules |
 
 #### Common sub‑structures
 
 * **`dataSources[].params`**: reader‑specific fields
 
-  * GitHub: `owner`, `repo`, `branch`, `include[]`, `exclude[]`, `maxFiles`
-  * Google Drive: `folderId`, `mimeTypes[]`
-  * Local directory: `inputDir`, `recursive`, `requiredExts[]`
+ * GitHub: `owner`, `repo`, `branch`, `include[]`, `exclude[]`, `maxFiles`
+ * Google Drive: `folderId`, `mimeTypes[]`
+ * Local directory: `inputDir`, `recursive`, `requiredExts[]`
 * **`dataSources[].auth`**: secret references (e.g., `githubToken: "${GITHUB_TOKEN}"`)
 * **`transforms.splitter`**: `type`, `chunkSize`, `chunkOverlap`
 * **`retrievers[].reranker`**: `type`, `topK`
@@ -127,147 +127,147 @@ Manifests are YAML. Environment variables interpolate as `${VAR}`. A JSON Schema
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://moonmind.dev/schemas/manifest-v0.json",
-  "title": "MoonMind LlamaIndex Manifest (v0)",
-  "type": "object",
-  "required": ["version", "metadata", "embeddings", "vectorStore", "dataSources", "indices", "retrievers"],
-  "properties": {
-    "version": { "const": "v0" },
-    "metadata": {
-      "type": "object",
-      "required": ["name", "description"],
-      "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "description": { "type": "string" },
-        "owner": { "type": "string" },
-        "tags": { "type": "array", "items": { "type": "string" } }
-      }
-    },
-    "llm": {
-      "type": "object",
-      "properties": {
-        "provider": { "type": "string" },
-        "model": { "type": "string" },
-        "temperature": { "type": "number", "minimum": 0, "maximum": 2 }
-      },
-      "additionalProperties": false
-    },
-    "embeddings": {
-      "type": "object",
-      "required": ["provider", "model"],
-      "properties": {
-        "provider": { "type": "string" },
-        "model": { "type": "string" },
-        "batchSize": { "type": "integer", "minimum": 1 }
-      },
-      "additionalProperties": false
-    },
-    "vectorStore": {
-      "type": "object",
-      "required": ["type", "indexName", "connection"],
-      "properties": {
-        "type": { "enum": ["pgvector", "qdrant", "milvus"] },
-        "indexName": { "type": "string" },
-        "connection": { "type": "object", "additionalProperties": true }
-      }
-    },
-    "dataSources": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "required": ["id", "type", "params"],
-        "properties": {
-          "id": { "type": "string" },
-          "type": { "type": "string" },
-          "params": { "type": "object", "additionalProperties": true },
-          "auth": { "type": "object", "additionalProperties": true },
-          "schedule": {
-            "type": "string",
-            "description": "\"manual\" literal or cron expression"
-          }
-        }
-      }
-    },
-    "transforms": {
-      "type": "object",
-      "properties": {
-        "htmlToText": { "type": "boolean" },
-        "splitter": {
-          "type": "object",
-          "properties": {
-            "type": { "type": "string" },
-            "chunkSize": { "type": "integer", "minimum": 1 },
-            "chunkOverlap": { "type": "integer", "minimum": 0 }
-          }
-        },
-        "enrichMetadata": {
-          "type": "array",
-          "items": { "type": "object", "additionalProperties": true }
-        }
-      }
-    },
-    "indices": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "required": ["id", "type", "sources"],
-        "properties": {
-          "id": { "type": "string" },
-          "type": { "enum": ["VectorStoreIndex"] },
-          "sources": { "type": "array", "items": { "type": "string" } },
-          "persist": { "type": "object", "properties": { "path": { "type": "string" } } }
-        }
-      }
-    },
-    "retrievers": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "required": ["id", "type", "indices"],
-        "properties": {
-          "id": { "type": "string" },
-          "type": { "enum": ["Vector", "Hybrid"] },
-          "indices": { "type": "array", "items": { "type": "string" } },
-          "params": { "type": "object", "properties": { "topK": { "type": "integer", "minimum": 1 }, "alpha": { "type": "number", "minimum": 0, "maximum": 1 } } },
-          "reranker": { "type": "object", "properties": { "type": { "type": "string" }, "topK": { "type": "integer", "minimum": 1 } } }
-        }
-      }
-    },
-    "postprocessors": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-    "evaluation": {
-      "type": "object",
-      "properties": {
-        "datasets": { "type": "array", "items": { "type": "object", "required": ["name", "path"], "properties": { "name": { "type": "string" }, "path": { "type": "string" } } } },
-        "metrics": { "type": "array", "items": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "threshold": { "type": "number" } } } }
-      }
-    },
-    "run": {
-      "type": "object",
-      "properties": {
-        "concurrency": { "type": "integer", "minimum": 1 },
-        "batchSize": { "type": "integer", "minimum": 1 },
-        "errorPolicy": { "enum": ["continue", "stopOnFirstError"] },
-        "dryRun": { "type": "boolean" }
-      }
-    },
-    "observability": { "type": "object", "additionalProperties": true },
-    "security": {
-      "type": "object",
-      "properties": {
-        "piiRedaction": { "type": "boolean" },
-        "allowlistMetadata": { "type": "array", "items": { "type": "string" } }
-      }
-    },
-    "scheduling": {
-      "type": "string",
-      "description": "\"manual\" literal or cron expression"
-    }
-  },
-  "additionalProperties": false
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://moonmind.dev/schemas/manifest-v0.json",
+ "title": "MoonMind LlamaIndex Manifest (v0)",
+ "type": "object",
+ "required": ["version", "metadata", "embeddings", "vectorStore", "dataSources", "indices", "retrievers"],
+ "properties": {
+ "version": { "const": "v0" },
+ "metadata": {
+ "type": "object",
+ "required": ["name", "description"],
+ "properties": {
+ "name": { "type": "string", "minLength": 1 },
+ "description": { "type": "string" },
+ "owner": { "type": "string" },
+ "tags": { "type": "array", "items": { "type": "string" } }
+ }
+ },
+ "llm": {
+ "type": "object",
+ "properties": {
+ "provider": { "type": "string" },
+ "model": { "type": "string" },
+ "temperature": { "type": "number", "minimum": 0, "maximum": 2 }
+ },
+ "additionalProperties": false
+ },
+ "embeddings": {
+ "type": "object",
+ "required": ["provider", "model"],
+ "properties": {
+ "provider": { "type": "string" },
+ "model": { "type": "string" },
+ "batchSize": { "type": "integer", "minimum": 1 }
+ },
+ "additionalProperties": false
+ },
+ "vectorStore": {
+ "type": "object",
+ "required": ["type", "indexName", "connection"],
+ "properties": {
+ "type": { "enum": ["pgvector", "qdrant", "milvus"] },
+ "indexName": { "type": "string" },
+ "connection": { "type": "object", "additionalProperties": true }
+ }
+ },
+ "dataSources": {
+ "type": "array",
+ "minItems": 1,
+ "items": {
+ "type": "object",
+ "required": ["id", "type", "params"],
+ "properties": {
+ "id": { "type": "string" },
+ "type": { "type": "string" },
+ "params": { "type": "object", "additionalProperties": true },
+ "auth": { "type": "object", "additionalProperties": true },
+ "schedule": {
+ "type": "string",
+ "description": "\"manual\" literal or cron expression"
+ }
+ }
+ }
+ },
+ "transforms": {
+ "type": "object",
+ "properties": {
+ "htmlToText": { "type": "boolean" },
+ "splitter": {
+ "type": "object",
+ "properties": {
+ "type": { "type": "string" },
+ "chunkSize": { "type": "integer", "minimum": 1 },
+ "chunkOverlap": { "type": "integer", "minimum": 0 }
+ }
+ },
+ "enrichMetadata": {
+ "type": "array",
+ "items": { "type": "object", "additionalProperties": true }
+ }
+ }
+ },
+ "indices": {
+ "type": "array",
+ "minItems": 1,
+ "items": {
+ "type": "object",
+ "required": ["id", "type", "sources"],
+ "properties": {
+ "id": { "type": "string" },
+ "type": { "enum": ["VectorStoreIndex"] },
+ "sources": { "type": "array", "items": { "type": "string" } },
+ "persist": { "type": "object", "properties": { "path": { "type": "string" } } }
+ }
+ }
+ },
+ "retrievers": {
+ "type": "array",
+ "minItems": 1,
+ "items": {
+ "type": "object",
+ "required": ["id", "type", "indices"],
+ "properties": {
+ "id": { "type": "string" },
+ "type": { "enum": ["Vector", "Hybrid"] },
+ "indices": { "type": "array", "items": { "type": "string" } },
+ "params": { "type": "object", "properties": { "topK": { "type": "integer", "minimum": 1 }, "alpha": { "type": "number", "minimum": 0, "maximum": 1 } } },
+ "reranker": { "type": "object", "properties": { "type": { "type": "string" }, "topK": { "type": "integer", "minimum": 1 } } }
+ }
+ }
+ },
+ "postprocessors": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+ "evaluation": {
+ "type": "object",
+ "properties": {
+ "datasets": { "type": "array", "items": { "type": "object", "required": ["name", "path"], "properties": { "name": { "type": "string" }, "path": { "type": "string" } } } },
+ "metrics": { "type": "array", "items": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "threshold": { "type": "number" } } } }
+ }
+ },
+ "run": {
+ "type": "object",
+ "properties": {
+ "concurrency": { "type": "integer", "minimum": 1 },
+ "batchSize": { "type": "integer", "minimum": 1 },
+ "errorPolicy": { "enum": ["continue", "stopOnFirstError"] },
+ "dryRun": { "type": "boolean" }
+ }
+ },
+ "observability": { "type": "object", "additionalProperties": true },
+ "security": {
+ "type": "object",
+ "properties": {
+ "piiRedaction": { "type": "boolean" },
+ "allowlistMetadata": { "type": "array", "items": { "type": "string" } }
+ }
+ },
+ "scheduling": {
+ "type": "string",
+ "description": "\"manual\" literal or cron expression"
+ }
+ },
+ "additionalProperties": false
 }
 ```
 
@@ -282,51 +282,51 @@ Manifests are YAML. Environment variables interpolate as `${VAR}`. A JSON Schema
 ```yaml
 version: "v0"
 metadata:
-  name: "repo-docs"
-  description: "Index README + docs from MoonMind"
+ name: "repo-docs"
+ description: "Index README + docs from MoonMind"
 
 embeddings:
-  provider: "openai"
-  model: "text-embedding-3-large"
+ provider: "openai"
+ model: "text-embedding-3-large"
 
 vectorStore:
-  type: "pgvector"
-  indexName: "mm_repo_docs"
-  connection:
-    dsn: "${PG_DSN}"
+ type: "pgvector"
+ indexName: "mm_repo_docs"
+ connection:
+ dsn: "${PG_DSN}"
 
 dataSources:
-  - id: "mm-repo"
-    type: "GithubRepositoryReader"
-    params:
-      owner: "MoonLadderStudios"
-      repo: "MoonMind"
-      branch: "main"
-      include: ["README.md", "docs/**/*.md"]
-      exclude: ["**/node_modules/**", "**/*.png", "**/*.svg"]
-      maxFiles: 500
-    auth:
-      githubToken: "${GITHUB_TOKEN}"
+ - id: "mm-repo"
+ type: "GithubRepositoryReader"
+ params:
+ owner: "MoonLadderStudios"
+ repo: "MoonMind"
+ branch: "main"
+ include: ["README.md", "docs/**/*.md"]
+ exclude: ["**/node_modules/**", "**/*.png", "**/*.svg"]
+ maxFiles: 500
+ auth:
+ githubToken: "${GITHUB_TOKEN}"
 
 transforms:
-  splitter:
-    type: "TokenTextSplitter"
-    chunkSize: 1000
-    chunkOverlap: 100
+ splitter:
+ type: "TokenTextSplitter"
+ chunkSize: 1000
+ chunkOverlap: 100
 
 indices:
-  - id: "mm_repo_vector"
-    type: "VectorStoreIndex"
-    sources: ["mm-repo"]
+ - id: "mm_repo_vector"
+ type: "VectorStoreIndex"
+ sources: ["mm-repo"]
 
 retrievers:
-  - id: "mm_repo_vector_r"
-    type: "Vector"
-    indices: ["mm_repo_vector"]
-    params: { topK: 8 }
+ - id: "mm_repo_vector_r"
+ type: "Vector"
+ indices: ["mm_repo_vector"]
+ params: { topK: 8 }
 
 run:
-  concurrency: 6
+ concurrency: 6
 ```
 
 **Notes**
@@ -343,102 +343,102 @@ run:
 ```yaml
 version: "v0"
 metadata:
-  name: "moonmind-kitchen-sink"
-  tags: ["demo","full"]
+ name: "moonmind-kitchen-sink"
+ tags: ["demo","full"]
 
 llm:
-  provider: "openai"
-  model: "gpt-4o-mini"
-  temperature: 0
+ provider: "openai"
+ model: "gpt-4o-mini"
+ temperature: 0
 
 embeddings:
-  provider: "openai"
-  model: "text-embedding-3-large"
-  batchSize: 256
+ provider: "openai"
+ model: "text-embedding-3-large"
+ batchSize: 256
 
 vectorStore:
-  type: "qdrant"
-  indexName: "mm_full_v0"
-  connection:
-    host: "${QDRANT_HOST}"
-    port: "${QDRANT_PORT}"
+ type: "qdrant"
+ indexName: "mm_full_v0"
+ connection:
+ host: "${QDRANT_HOST}"
+ port: "${QDRANT_PORT}"
 
 dataSources:
-  - id: "github-code-docs"
-    type: "GithubRepositoryReader"
-    params:
-      owner: "MoonLadderStudios"
-      repo: "MoonMind"
-      branch: "main"
-      include: ["**/*.py","**/*.md"]
-      exclude: ["tests/**","**/__pycache__/**","**/*.png","**/*.jpg"]
-      maxFiles: 5000
-    auth:
-      githubToken: "${GITHUB_TOKEN}"
-    schedule: "0 4 * * *"     # nightly
+ - id: "github-code-docs"
+ type: "GithubRepositoryReader"
+ params:
+ owner: "MoonLadderStudios"
+ repo: "MoonMind"
+ branch: "main"
+ include: ["**/*.py","**/*.md"]
+ exclude: ["tests/**","**/__pycache__/**","**/*.png","**/*.jpg"]
+ maxFiles: 5000
+ auth:
+ githubToken: "${GITHUB_TOKEN}"
+ schedule: "0 4 * * *" # nightly
 
-  - id: "gdrive-specs"
-    type: "GoogleDriveReader"
-    params:
-      folderId: "${SPECS_FOLDER_ID}"
-      mimeTypes: ["application/pdf","application/vnd.google-apps.document"]
+ - id: "gdrive-specs"
+ type: "GoogleDriveReader"
+ params:
+ folderId: "${SPECS_FOLDER_ID}"
+ mimeTypes: ["application/pdf","application/vnd.google-apps.document"]
 
-  - id: "local-handbook"
-    type: "SimpleDirectoryReader"
-    params:
-      inputDir: "./handbook"
-      recursive: true
-      requiredExts: [".md",".txt"]
+ - id: "local-handbook"
+ type: "SimpleDirectoryReader"
+ params:
+ inputDir: "./handbook"
+ recursive: true
+ requiredExts: [".md",".txt"]
 
 transforms:
-  htmlToText: true
-  splitter:
-    type: "TokenTextSplitter"
-    chunkSize: 800
-    chunkOverlap: 120
-  enrichMetadata:
-    - type: "PathToTags"
-    - type: "InferDocType"     # code|design|spec|handbook
+ htmlToText: true
+ splitter:
+ type: "TokenTextSplitter"
+ chunkSize: 800
+ chunkOverlap: 120
+ enrichMetadata:
+ - type: "PathToTags"
+ - type: "InferDocType" # code|design|spec|handbook
 
 indices:
-  - id: "mm_full_vector"
-    type: "VectorStoreIndex"
-    sources: ["github-code-docs","gdrive-specs","local-handbook"]
-    persist:
-      path: "s3://moonmind-indices/mm_full_vector_v0/"
+ - id: "mm_full_vector"
+ type: "VectorStoreIndex"
+ sources: ["github-code-docs","gdrive-specs","local-handbook"]
+ persist:
+ path: "s3://moonmind-indices/mm_full_vector_v0/"
 
 retrievers:
-  - id: "mm_hybrid"
-    type: "Hybrid"
-    indices: ["mm_full_vector"]
-    params:
-      topK: 10
-      alpha: 0.55
-    reranker:
-      type: "bge-reranker-large"
-      topK: 5
+ - id: "mm_hybrid"
+ type: "Hybrid"
+ indices: ["mm_full_vector"]
+ params:
+ topK: 10
+ alpha: 0.55
+ reranker:
+ type: "bge-reranker-large"
+ topK: 5
 
 postprocessors:
-  - type: "SimilarityCutoff"
-    threshold: 0.74
+ - type: "SimilarityCutoff"
+ threshold: 0.74
 
 evaluation:
-  datasets:
-    - name: "smoke"
-      path: "./eval/smoke.jsonl"
-  metrics:
-    - name: "hitRate@10"
-      threshold: 0.8
-    - name: "ndcg@10"
-      threshold: 0.7
+ datasets:
+ - name: "smoke"
+ path: "./eval/smoke.jsonl"
+ metrics:
+ - name: "hitRate@10"
+ threshold: 0.8
+ - name: "ndcg@10"
+ threshold: 0.7
 
 run:
-  concurrency: 12
-  errorPolicy: "continue"
+ concurrency: 12
+ errorPolicy: "continue"
 
 observability:
-  tracing: "opentelemetry"
-  logs: "stdout"
+ tracing: "opentelemetry"
+ logs: "stdout"
 ```
 
 ---
@@ -471,8 +471,8 @@ To submit a manifest for durable execution, use the MoonMind API to start a `Moo
 ```bash
 # Submit via API — starts a Temporal workflow execution
 curl -X POST /api/manifests/{name}/runs \
-  -H 'Content-Type: application/json' \
-  -d '{"executionPolicy": {"failurePolicy": "fail_fast", "maxConcurrency": 50}}'
+ -H 'Content-Type: application/json' \
+ -d '{"executionPolicy": {"failurePolicy": "fail_fast", "maxConcurrency": 50}}'
 ```
 
 See [ManifestIngestDesign.md](ManifestIngestDesign.md) for the full workflow input/output contract.
@@ -547,9 +547,9 @@ Manifest execution is orchestrated by the `MoonMind.ManifestIngest` Temporal wor
 
 1. Implement a `ReaderAdapter` with:
 
-   * `plan()` → enumerate files/docs and estimate sizes
-   * `fetch()` → yield `(text, metadata)` items
-   * `state()` → return cursor for incremental runs (e.g., latest commit SHA or timestamp)
+ * `plan()` → enumerate files/docs and estimate sizes
+ * `fetch()` → yield `(text, metadata)` items
+ * `state()` → return cursor for incremental runs (e.g., latest commit SHA or timestamp)
 
 2. Add a `type` discriminator (e.g., `ConfluenceReader`) and define `params`/`auth`.
 
@@ -578,7 +578,7 @@ Manifest execution is orchestrated by the `MoonMind.ManifestIngest` Temporal wor
 
 ## Roadmap & Versioning
 
-The manifest schema is **v0** with backwards‑compatible minor additions within `v0`. Breaking changes bump `version` and ship an upgrade script (`manifest migrate`). Product milestones beyond the current schema (scheduled jobs, lineage, multi‑tenant policy, dataset registries, evaluation dashboards) and legacy example migration are tracked in [`docs/tmp/remaining-work/Rag-LlamaIndexManifestSystem.md`](../tmp/remaining-work/Rag-LlamaIndexManifestSystem.md).
+The manifest schema is **v0** with backwards‑compatible minor additions within `v0`. Breaking changes bump `version` and ship an upgrade script (`manifest migrate`). Product milestones beyond the current schema (scheduled jobs, lineage, multi‑tenant policy, dataset registries, evaluation dashboards) and legacy example migration are tracked in MoonSpec feature artifacts or local planning notes when needed.
 
 ---
 

@@ -19,12 +19,10 @@ _CREDENTIAL_KEYS = {
     "refresh_token",
 }
 
-
 @dataclass(frozen=True, slots=True)
 class JiraIssueCandidate:
     issue_key: str
     source: str
-
 
 @dataclass(frozen=True, slots=True)
 class PostMergeJiraCompletionConfig:
@@ -52,7 +50,6 @@ class PostMergeJiraCompletionConfig:
             required=_coerce_bool(raw.get("required"), default=True),
             fields=dict(raw.get("fields") or {}) if isinstance(raw.get("fields"), Mapping) else {},
         )
-
 
 @dataclass(frozen=True, slots=True)
 class PostMergeJiraCompletionDecision:
@@ -95,13 +92,11 @@ class PostMergeJiraCompletionDecision:
             payload["transition"] = _sanitize_mapping(self.transition)
         return payload
 
-
 def _normalize_text(value: Any) -> str | None:
     if value is None:
         return None
     candidate = str(value).strip()
     return candidate or None
-
 
 def _normalize_issue_key(value: Any) -> str | None:
     candidate = _normalize_text(value)
@@ -111,7 +106,6 @@ def _normalize_issue_key(value: Any) -> str | None:
     if not match:
         return None
     return match.group(1).upper()
-
 
 def _coerce_bool(value: Any, *, default: bool) -> bool:
     if isinstance(value, bool):
@@ -124,7 +118,6 @@ def _coerce_bool(value: Any, *, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     return default
-
 
 def candidate_keys_from_payload(payload: Mapping[str, Any]) -> list[JiraIssueCandidate]:
     config = PostMergeJiraCompletionConfig.from_payload(
@@ -150,7 +143,6 @@ def candidate_keys_from_payload(payload: Mapping[str, Any]) -> list[JiraIssueCan
                 _append_candidate(candidates, match, "pr_metadata")
     return candidates
 
-
 def _append_candidate(
     candidates: list[JiraIssueCandidate],
     value: Any,
@@ -159,7 +151,6 @@ def _append_candidate(
     issue_key = _normalize_issue_key(value)
     if issue_key:
         candidates.append(JiraIssueCandidate(issue_key=issue_key, source=source))
-
 
 async def resolve_issue_key(
     candidates: list[JiraIssueCandidate],
@@ -248,17 +239,14 @@ async def resolve_issue_key(
         "reason": None,
     }
 
-
 def _transition_target(transition: Mapping[str, Any]) -> Mapping[str, Any]:
     target = transition.get("to")
     if not isinstance(target, Mapping):
         return {}
     return target
 
-
 def _transition_to_status_name(transition: Mapping[str, Any]) -> str:
     return str(_transition_target(transition).get("name") or "")
-
 
 def _read_failure_decision(
     *,
@@ -273,10 +261,8 @@ def _read_failure_decision(
         reason=_scrub_exception(exc)[:500],
     )
 
-
 def _scrub_exception(exc: Exception) -> str:
     return redact_sensitive_text(SecretRedactor().scrub(str(exc)))
-
 
 def select_done_transition(
     *,
@@ -324,7 +310,6 @@ def select_done_transition(
         }
     return _transition_selection(done_transitions[0], config=config)
 
-
 def _transition_selection(
     transition: Mapping[str, Any],
     *,
@@ -348,7 +333,6 @@ def _transition_selection(
         "reason": None,
     }
 
-
 def _missing_required_fields(
     transition: Mapping[str, Any],
     configured_fields: Mapping[str, Any],
@@ -363,7 +347,6 @@ def _missing_required_fields(
         if field_meta.get("required") and field_id not in configured_fields:
             missing.append(str(field_id))
     return missing
-
 
 async def complete_post_merge_jira(
     payload: Mapping[str, Any],
@@ -444,7 +427,6 @@ async def complete_post_merge_jira(
         transitioned=True,
     )
 
-
 def _issue_status(issue: Mapping[str, Any]) -> dict[str, str | None]:
     fields = issue.get("fields") if isinstance(issue, Mapping) else {}
     status = fields.get("status") if isinstance(fields, Mapping) else {}
@@ -458,7 +440,6 @@ def _issue_status(issue: Mapping[str, Any]) -> dict[str, str | None]:
         "category": _normalize_text(category.get("key") or category.get("name")),
     }
 
-
 def _transition_category(transition: Mapping[str, Any]) -> str | None:
     target = _transition_target(transition)
     category = target.get("statusCategory")
@@ -466,10 +447,8 @@ def _transition_category(transition: Mapping[str, Any]) -> str | None:
         return None
     return _normalize_text(category.get("key") or category.get("name"))
 
-
 def _is_done_category(value: Any) -> bool:
     return str(value or "").strip().lower() == "done"
-
 
 def _sanitize_mapping(payload: Mapping[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}

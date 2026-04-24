@@ -26,9 +26,7 @@ from moonmind.schemas import (
     ClaudeUsageRollup,
 )
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def _required_retention_classes() -> tuple[ClaudeRetentionClass, ...]:
     return (
@@ -59,7 +57,6 @@ def _required_retention_classes() -> tuple[ClaudeRetentionClass, ...]:
         ),
     )
 
-
 def _hook_audit() -> ClaudeHookAudit:
     return ClaudeHookAudit(
         auditId="hook-audit-1",
@@ -72,7 +69,6 @@ def _hook_audit() -> ClaudeHookAudit:
         outcome="allow",
         createdAt=NOW,
     )
-
 
 def test_event_subscription_and_envelope_validate_closed_families() -> None:
     subscription = ClaudeEventSubscription(
@@ -116,7 +112,6 @@ def test_event_subscription_and_envelope_validate_closed_families() -> None:
             occurredAt=NOW,
         )
 
-
 def test_event_envelope_rejects_missing_required_identity() -> None:
     with pytest.raises(ValidationError, match="sessionId"):
         ClaudeEventEnvelope(
@@ -134,7 +129,6 @@ def test_event_envelope_rejects_missing_required_identity() -> None:
             sessionId="session-1",
             occurredAt=NOW,
         )
-
 
 def test_event_envelope_allows_non_session_scoped_identities() -> None:
     policy_event = ClaudeEventEnvelope(
@@ -157,7 +151,6 @@ def test_event_envelope_allows_non_session_scoped_identities() -> None:
     assert group_event.session_id is None
     assert group_event.session_group_id == "group-1"
 
-
 def test_event_envelope_metadata_is_payload_light() -> None:
     with pytest.raises(ValidationError, match="payload-light"):
         ClaudeEventEnvelope(
@@ -168,7 +161,6 @@ def test_event_envelope_metadata_is_payload_light() -> None:
             occurredAt=NOW,
             metadata={"checkpointPayload": {"raw": "runtime-local payload"}},
         )
-
 
 def test_storage_evidence_is_payload_light_by_default() -> None:
     evidence = ClaudeStorageEvidence(
@@ -197,7 +189,6 @@ def test_storage_evidence_is_payload_light_by_default() -> None:
             createdAt=NOW,
             metadata={"transcript": "full transcript should not be here"},
         )
-
 
 def test_retention_evidence_requires_policy_controlled_complete_classes() -> None:
     evidence = ClaudeRetentionEvidence(
@@ -241,7 +232,6 @@ def test_retention_evidence_requires_policy_controlled_complete_classes() -> Non
             policyControlled=False,
         )
 
-
 def test_telemetry_evidence_accepts_supported_metric_and_span_names() -> None:
     assert "managed_sessions_active" in CLAUDE_TELEMETRY_METRIC_NAMES
     assert "session.bootstrap" in CLAUDE_TELEMETRY_SPAN_NAMES
@@ -281,7 +271,6 @@ def test_telemetry_evidence_accepts_supported_metric_and_span_names() -> None:
 
     with pytest.raises(ValidationError):
         ClaudeTelemetrySpan(spanName="unknown.span", durationMs=1)
-
 
 def test_usage_rollup_rejects_double_counting_shapes() -> None:
     rollup = ClaudeUsageRollup(
@@ -330,7 +319,6 @@ def test_usage_rollup_rejects_double_counting_shapes() -> None:
             includedInParentRollup=True,
             createdAt=NOW,
         )
-
 
 def test_governance_compliance_and_dashboard_evidence_are_bounded() -> None:
     governance = ClaudeGovernanceEvidence(

@@ -1,6 +1,6 @@
 # Temporal Signals System
 
-**Implementation tracking:** [`docs/tmp/020-TemporalSignalsPlan.md`](../tmp/020-TemporalSignalsPlan.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
@@ -9,7 +9,7 @@ Last Updated: 2026-03-27
 > [!NOTE]
 > This document defines the desired-state Temporal Signals System for MoonMind.
 > It describes which interactions should use Temporal Signals, how those signals are shaped, and how workflows must react to them.
-> Migration sequencing, rollout work, and implementation tasks belong in [`docs/tmp/020-TemporalSignalsPlan.md`](../tmp/020-TemporalSignalsPlan.md).
+> Migration sequencing, rollout work, and implementation tasks belong in .
 
 ---
 
@@ -37,28 +37,28 @@ In the desired state, Signals are a first-class Temporal contract across `MoonMi
 The Temporal Signals System must support all of the following:
 
 1. **Clear async control boundaries**
-   - Signals represent asynchronous events, not general-purpose edit commands.
+ - Signals represent asynchronous events, not general-purpose edit commands.
 
 2. **Stable workflow contracts**
-   - Each signal name, payload shape, and semantic effect is explicitly defined per workflow.
+ - Each signal name, payload shape, and semantic effect is explicitly defined per workflow.
 
 3. **Small durable payloads**
-   - Signal inputs remain compact and durable-history-safe, with artifact references used for larger bodies.
+ - Signal inputs remain compact and durable-history-safe, with artifact references used for larger bodies.
 
 4. **Workflow-to-workflow coordination**
-   - Child workflows, singleton manager workflows, and session workflows can coordinate without database polling loops.
+ - Child workflows, singleton manager workflows, and session workflows can coordinate without database polling loops.
 
 5. **Deterministic wait-state handling**
-   - Workflows convert signal arrival into deterministic state changes and `workflow.wait_condition(...)` wake-ups.
+ - Workflows convert signal arrival into deterministic state changes and `workflow.wait_condition(...)` wake-ups.
 
 6. **Signal-safe retries and duplicates**
-   - Retries, duplicate callbacks, and repeated operator actions do not corrupt workflow state or trigger duplicate side effects.
+ - Retries, duplicate callbacks, and repeated operator actions do not corrupt workflow state or trigger duplicate side effects.
 
 7. **Operator-visible behavior**
-   - Signal-driven state changes are reflected in search attributes, memo summaries, and durable execution records.
+ - Signal-driven state changes are reflected in search attributes, memo summaries, and durable execution records.
 
 8. **Scheduling-aware semantics**
-   - Deferred execution control uses the correct Temporal primitive for the required mutability.
+ - Deferred execution control uses the correct Temporal primitive for the required mutability.
 
 ---
 
@@ -551,7 +551,6 @@ When signal contracts change, MoonMind must protect in-flight executions by eith
 - using an explicit cutover plan that isolates old and new workflow histories safely.
 
 ---
-
 
 ### 10.1 Explicit Compatibility Notes (Phase 0)
 

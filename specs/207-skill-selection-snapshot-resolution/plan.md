@@ -22,7 +22,7 @@ Implement MM-406 by wiring task-wide and step-specific agent skill intent into t
 | FR-009 | implemented_unverified | integration tests cover plan registry snapshot retry/rerun reuse; not task/step resolved snapshots | extend boundary coverage for resolved task/step snapshot reuse | workflow boundary |
 | FR-010 | implemented_unverified | `_build_agent_execution_request` propagates `resolved_skillset_ref`; adapter metadata propagation exists | verify launch path receives resolved ref from new pre-launch resolution | unit + workflow boundary |
 | FR-011 | implemented_verified | `AgentSkillMaterializer` writes `.agents/skills_active`; test asserts `.agents/skills` is not mutated | no new implementation | final verify |
-| FR-012 | implemented_verified | `spec.md`; `docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md` | preserve through tasks, verification, commit, and PR metadata | traceability check |
+| FR-012 | implemented_verified | `spec.md`; `spec.md` (Input) | preserve through tasks, verification, commit, and PR metadata | traceability check |
 | DESIGN-REQ-006 | partial | resolver creates immutable snapshot; pre-launch task/step call missing | add pre-launch resolution | unit + workflow boundary |
 | DESIGN-REQ-007 | implemented_unverified | manifest artifact persistence exists | assert manifest ref remains compact in launch path | unit + workflow boundary |
 | DESIGN-REQ-008 | missing | task and step selectors parse; merge semantics absent | add merge helper and tests | unit |
@@ -64,7 +64,7 @@ Implement MM-406 by wiring task-wide and step-specific agent skill intent into t
 - **IX. Resilient by Default**: PASS. Fail-fast resolution prevents runtime launch with invalid skill intent.
 - **X. Facilitate Continuous Improvement**: PASS. Final verification will preserve structured outcome evidence.
 - **XI. Spec-Driven Development**: PASS. Implementation proceeds from spec, plan, and tasks.
-- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Jira input remains under `docs/tmp/`; canonical docs are source requirements only.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Jira input remains under `local-only handoffs`; canonical docs are source requirements only.
 - **XIII. Pre-release Compatibility Policy**: PASS. Internal contract changes should update all callers without compatibility aliases.
 
 ## Project Structure
@@ -79,9 +79,9 @@ specs/207-skill-selection-snapshot-resolution/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── skill-snapshot-resolution.md
+│ └── skill-snapshot-resolution.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 
@@ -99,7 +99,6 @@ tests/unit/services/test_skill_resolution.py
 tests/unit/workflows/agent_skills/test_agent_skills_activities.py
 tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py
 tests/integration/workflows/temporal/workflows/test_run_agent_dispatch.py
-docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md
 ```
 
 **Structure Decision**: Use existing task selector contracts, resolver services, activities, and AgentRun request fields. Add a narrow selector-merge helper and workflow call-site coverage rather than introducing a new persistent model or parallel skill-resolution path.

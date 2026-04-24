@@ -1,6 +1,6 @@
 # Jules Temporal External Event Contract
 
-**Implementation tracking:** [`docs/tmp/remaining-work/ExternalAgents-JulesTemporalExternalEventContract.md`](../tmp/remaining-work/ExternalAgents-JulesTemporalExternalEventContract.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 Status: **Implemented core contract; callback ingress remains future-facing**
 Owner: MoonMind Platform

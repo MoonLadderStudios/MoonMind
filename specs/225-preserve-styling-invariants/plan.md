@@ -52,7 +52,7 @@ Implement and verify the MM-430 styling source and build invariants for Mission 
 - **IX. Resilient by Default**: PASS. The story protects source/build boundaries and avoids generated artifact drift.
 - **X. Continuous Improvement**: PASS. Verification evidence will record outcome and remaining gaps.
 - **XI. Spec-Driven Development**: PASS. Runtime work proceeds from this one-story spec, plan, and tasks.
-- **XII. Canonical Documentation Separation**: PASS. Migration/run artifacts remain under `docs/tmp` and `specs/`.
+- **XII. Canonical Documentation Separation**: PASS. Migration/run artifacts remain under `local-only handoffs` and `specs/`.
 - **XIII. Pre-release Compatibility Policy**: PASS. No internal compatibility aliases or translation layers are introduced.
 
 ## Project Structure
@@ -66,9 +66,9 @@ specs/225-preserve-styling-invariants/
 ├── research.md
 ├── quickstart.md
 ├── contracts/
-│   └── styling-invariants.md
+│ └── styling-invariants.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 

@@ -10,7 +10,6 @@ from moonmind.claude.runtime import (
     resolve_anthropic_api_key,
 )
 
-
 def test_resolve_anthropic_api_key_prefers_argument(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
@@ -18,7 +17,6 @@ def test_resolve_anthropic_api_key_prefers_argument(monkeypatch) -> None:
     key = resolve_anthropic_api_key(api_key="  provided-key  ")
 
     assert key == "provided-key"
-
 
 def test_resolve_anthropic_api_key_prefers_anthropic_env(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-env")
@@ -28,7 +26,6 @@ def test_resolve_anthropic_api_key_prefers_anthropic_env(monkeypatch) -> None:
 
     assert key == "anthropic-env"
 
-
 def test_resolve_anthropic_api_key_falls_back_to_alias(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("CLAUDE_API_KEY", "alias-key")
@@ -37,13 +34,11 @@ def test_resolve_anthropic_api_key_falls_back_to_alias(monkeypatch) -> None:
 
     assert key == "alias-key"
 
-
 def test_is_claude_runtime_enabled_respects_alias(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
 
     assert is_claude_runtime_enabled()
-
 
 def test_build_runtime_gate_state_reports_source(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key")
@@ -54,7 +49,6 @@ def test_build_runtime_gate_state_reports_source(monkeypatch) -> None:
     assert state.enabled is True
     assert state.source_env == "ANTHROPIC_API_KEY"
     assert state.error_message == CLAUDE_RUNTIME_DISABLED_MESSAGE
-
 
 def test_build_runtime_gate_state_honors_custom_error_message(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 def managed_runtime_artifact_root() -> Path:
     """Return the normalized artifact root for managed-runtime files.
 

@@ -29,7 +29,7 @@
 **Purpose**: Confirm the single-story MM-499 artifact set and the exact repo surfaces that must move from a boolean Docker gate to a tri-mode policy contract.
 
 - [X] T001 Confirm `specs/248-enforce-docker-workflow-modes-and-registry-gating/` contains `spec.md`, `plan.md`, `research.md`, `contracts/workflow-docker-mode-contract.md`, and `quickstart.md` for MM-499
-- [X] T002 Confirm the current MM-499 touchpoints and traceability targets in `moonmind/config/settings.py`, `moonmind/schemas/workload_models.py`, `moonmind/workloads/registry.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workflows/temporal/worker_runtime.py`, `moonmind/workflows/temporal/activity_runtime.py`, and `docs/tmp/jira-orchestration-inputs/MM-499-moonspec-orchestration-input.md`
+- [X] T002 Confirm the current MM-499 touchpoints and traceability targets in `moonmind/config/settings.py`, `moonmind/schemas/workload_models.py`, `moonmind/workloads/registry.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workflows/temporal/worker_runtime.py`, `moonmind/workflows/temporal/activity_runtime.py`, and `spec.md` (Input)
 
 ---
 

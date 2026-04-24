@@ -59,7 +59,7 @@ Implement MM-410 by replacing the current visible generic step file input with a
 - **VIII. Modular and Extensible Architecture**: PASS. Work is scoped to the Create page entrypoint, styles, and tests.
 - **IX. Resilient by Default**: PASS. Invalid, failed, incomplete, or uploading attachments continue to block create/edit/rerun.
 - **XI. Spec-Driven Development Is the Source of Truth**: PASS. MM-410 is preserved in spec artifacts and planned tests.
-- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Runtime artifacts live under `specs/` and docs/tmp.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Runtime artifacts live under `specs/` and local-only handoffs.
 - **XIII. Pre-Release Compatibility Policy**: PASS. No compatibility aliases or fallback contract changes.
 
 ## Project Structure
@@ -74,9 +74,9 @@ specs/207-visible-step-attachments/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── create-page-visible-step-attachments.md
+│ └── create-page-visible-step-attachments.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 
@@ -90,7 +90,6 @@ frontend/src/entrypoints/
 frontend/src/styles/
 └── mission-control.css
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-410-moonspec-orchestration-input.md
 ```
 

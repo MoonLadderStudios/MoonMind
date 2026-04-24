@@ -31,7 +31,6 @@ from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_FLEET
 from moonmind.workflows.temporal.runtime.providers import registry as provider_registry
 from moonmind.workflows.temporal.workers import REGISTERED_TEMPORAL_WORKFLOW_TYPES
 
-
 @pytest_asyncio.fixture
 async def _oauth_activity_session_factory(tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/oauth-activities.db"
@@ -44,12 +43,10 @@ async def _oauth_activity_session_factory(tmp_path):
     finally:
         await engine.dispose()
 
-
 @asynccontextmanager
 async def _session_context(session_factory):
     async with session_factory() as session:
         yield session
-
 
 class TestOAuthSessionCatalogRegistration:
     """Verify OAuth session activities are registered in the catalog."""
@@ -109,7 +106,6 @@ class TestOAuthSessionCatalogRegistration:
         assert route.timeouts.start_to_close_seconds == 30
         assert route.timeouts.schedule_to_close_seconds == 60
 
-
 class TestOAuthSessionWorkflowRegistration:
     """Verify the OAuth session workflow is registered."""
 
@@ -122,7 +118,6 @@ class TestOAuthSessionWorkflowRegistration:
         assert route.activity_type == "oauth_session.cleanup_stale"
         assert route.fleet == "artifacts"
         assert route.timeouts.start_to_close_seconds == 60
-
 
 @pytest.mark.asyncio
 async def test_register_profile_activity_persists_oauth_home_codex_profile(
@@ -185,7 +180,6 @@ async def test_register_profile_activity_persists_oauth_home_codex_profile(
         assert profile.volume_mount_path == "/home/app/.codex"
         assert profile.max_parallel_runs == 3
 
-
 @pytest.mark.asyncio
 async def test_register_profile_activity_rejects_codex_oauth_profile_without_refs(
     _oauth_activity_session_factory,
@@ -224,7 +218,6 @@ async def test_register_profile_activity_rejects_codex_oauth_profile_without_ref
 
     async with _oauth_activity_session_factory() as session:
         assert await session.get(ManagedAgentProviderProfile, profile_id) is None
-
 
 @pytest.mark.asyncio
 async def test_register_profile_activity_rejects_failed_verification_metadata(
@@ -282,7 +275,6 @@ async def test_register_profile_activity_rejects_failed_verification_metadata(
         assert row.failure_reason is None
         assert await session.get(ManagedAgentProviderProfile, profile_id) is None
 
-
 @pytest.mark.asyncio
 async def test_update_terminal_session_persists_runner_metadata(
     _oauth_activity_session_factory,
@@ -332,7 +324,6 @@ async def test_update_terminal_session_persists_runner_metadata(
         assert row.session_transport == "moonmind_pty_ws"
         assert row.expires_at is not None
 
-
 @pytest.mark.asyncio
 async def test_start_auth_runner_resolves_provider_bootstrap_command(
     monkeypatch: pytest.MonkeyPatch,
@@ -367,7 +358,6 @@ async def test_start_auth_runner_resolves_provider_bootstrap_command(
     assert observed["bootstrap_command"] == ("codex", "login", "--device-auth")
     assert observed["volume_ref"] == "codex_auth_volume"
     assert observed["volume_mount_path"] == "/home/app/.codex"
-
 
 @pytest.mark.asyncio
 async def test_start_auth_runner_resolves_claude_bootstrap_command(
@@ -404,7 +394,6 @@ async def test_start_auth_runner_resolves_claude_bootstrap_command(
     assert observed["volume_ref"] == "claude_auth_volume"
     assert observed["volume_mount_path"] == "/home/app/.claude"
 
-
 @pytest.mark.asyncio
 async def test_start_auth_runner_rejects_missing_provider_command(
     monkeypatch: pytest.MonkeyPatch,
@@ -422,7 +411,6 @@ async def test_start_auth_runner_rejects_missing_provider_command(
                 "volume_mount_path": "/home/app/.codex",
             }
         )
-
 
 @pytest.mark.asyncio
 async def test_stop_auth_runner_without_container_is_idempotent(

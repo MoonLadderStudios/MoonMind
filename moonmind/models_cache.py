@@ -11,7 +11,6 @@ from moonmind.factories.openai_factory import list_openai_models
 
 logger = logging.getLogger(__name__)
 
-
 class ModelCache:
     _instance = None
     _lock = Lock()
@@ -472,13 +471,11 @@ class ModelCache:
                 return model
         return None
 
-
 # Global instance of ModelCache
 # Initialize with the refresh interval from settings
 model_cache = ModelCache(
     refresh_interval_seconds=settings.model_cache_refresh_interval_seconds
 )
-
 
 def force_refresh_model_cache():
     """Utility function to manually trigger a cache refresh."""
@@ -489,7 +486,6 @@ def force_refresh_model_cache():
         openai_api_key=settings.openai.openai_api_key,
     )
     model_cache.refresh_models_sync()
-
 
 async def refresh_model_cache_for_user(user, db_session):
     """

@@ -26,7 +26,7 @@
 
 **Purpose**: Confirm existing artifact, UI, worker, vision, and task-contract boundaries are the implementation surfaces.
 
-- [X] T001 Confirm source traceability for MM-374 and DESIGN-REQ-016/DESIGN-REQ-017/DESIGN-REQ-020 in `specs/203-protect-image-access/spec.md` and `docs/tmp/jira-orchestration-inputs/MM-374-moonspec-orchestration-input.md` (FR-013, SC-007)
+- [X] T001 Confirm source traceability for MM-374 and DESIGN-REQ-016/DESIGN-REQ-017/DESIGN-REQ-020 in `specs/203-protect-image-access/spec.md` and `spec.md` (Input) (FR-013, SC-007)
 - [X] T002 Inspect existing artifact authorization, task-detail download rendering, worker materialization, vision context, and task contract test locations in `tests/unit/workflows/temporal/test_artifact_authorization.py`, `frontend/src/entrypoints/task-detail.test.tsx`, `tests/unit/agents/codex_worker/test_worker.py`, `tests/integration/vision/test_context_artifacts.py`, and `tests/unit/workflows/tasks/test_task_contract.py`
 
 ---
@@ -85,7 +85,7 @@
 
 **Purpose**: Validate traceability and complete MoonSpec verification.
 
-- [X] T014 Run source traceability check: `rg -n "MM-374|DESIGN-REQ-016|DESIGN-REQ-017|DESIGN-REQ-020" specs/203-protect-image-access docs/tmp/jira-orchestration-inputs/MM-374-moonspec-orchestration-input.md` (FR-013, SC-007)
+- [X] T014 Run source traceability check: `rg -n "MM-374|DESIGN-REQ-016|DESIGN-REQ-017|DESIGN-REQ-020" specs/203-protect-image-access` (FR-013, SC-007)
 - [X] T015 Run full unit suite with `./tools/test_unit.sh` or document exact blocker
 - [X] T016 Run hermetic integration suite with `./tools/test_integration.sh` when Docker is available or document exact blocker
 - [X] T017 Run `/moonspec-verify` equivalent and record final verification evidence for MM-374

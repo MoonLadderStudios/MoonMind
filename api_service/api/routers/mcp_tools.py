@@ -66,7 +66,6 @@ if settings.jules.jules_enabled:
             "Jules tools will not be registered"
         )
 
-
 def _to_http_exception(exc: Exception) -> HTTPException:
     if isinstance(exc, ToolNotFoundError):
         return HTTPException(
@@ -105,7 +104,6 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         },
     )
 
-
 @router.get("/tools", response_model=ToolListResponse)
 async def list_tools(
     _user: User = Depends(get_current_user()),
@@ -117,7 +115,6 @@ async def list_tools(
     if _jules_registry is not None:
         tools = tools + _jules_registry.list_tools()
     return ToolListResponse(tools=tools)
-
 
 @router.post("/tools/call", response_model=ToolCallResponse)
 async def call_tool(

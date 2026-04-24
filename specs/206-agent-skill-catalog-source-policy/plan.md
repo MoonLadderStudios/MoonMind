@@ -1,6 +1,6 @@
 # Implementation Plan: Agent Skill Catalog and Source Policy
 
-**Branch**: `206-agent-skill-catalog-source-policy` | **Date**: 2026-04-18 | **Spec**: [spec.md](spec.md)  
+**Branch**: `206-agent-skill-catalog-source-policy` | **Date**: 2026-04-18 | **Spec**: [spec.md](spec.md) 
 **Input**: Single-story feature specification from `specs/206-agent-skill-catalog-source-policy/spec.md`
 
 ## Summary
@@ -37,15 +37,15 @@ Implement MM-405 by closing the remaining policy gap in agent-skill source resol
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 with Pydantic v2 models, SQLAlchemy async ORM, Temporal Python SDK activity boundaries  
-**Primary Dependencies**: Pydantic v2, SQLAlchemy async session fixtures, Temporal activity wrappers, existing agent-skill resolver/materializer services  
-**Storage**: Existing agent skill tables and artifact-backed version content; no new persistent tables planned  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/test_skill_resolution.py tests/unit/api/test_agent_skills_service.py tests/unit/services/test_skill_materialization.py` for iteration; final `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`  
-**Integration Testing**: `./tools/test_integration.sh` for required hermetic integration checks when Docker is available; no provider verification required  
-**Target Platform**: MoonMind API service, Temporal worker activity runtime, managed runtime workspace preparation  
-**Project Type**: Python web service and Temporal workflow system  
-**Performance Goals**: Skill resolution remains deterministic and proportional to the number of candidate skill directories and deployment skill records; no additional network calls are introduced for repo/local policy gating  
-**Constraints**: Runtime mode; no raw credentials; no mutation of checked-in skill folders during materialization; large skill content stays out of workflow history; unsupported policy states fail closed rather than silently enabling untrusted sources; preserve MM-405 traceability  
+**Language/Version**: Python 3.12 with Pydantic v2 models, SQLAlchemy async ORM, Temporal Python SDK activity boundaries 
+**Primary Dependencies**: Pydantic v2, SQLAlchemy async session fixtures, Temporal activity wrappers, existing agent-skill resolver/materializer services 
+**Storage**: Existing agent skill tables and artifact-backed version content; no new persistent tables planned 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/test_skill_resolution.py tests/unit/api/test_agent_skills_service.py tests/unit/services/test_skill_materialization.py` for iteration; final `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` 
+**Integration Testing**: `./tools/test_integration.sh` for required hermetic integration checks when Docker is available; no provider verification required 
+**Target Platform**: MoonMind API service, Temporal worker activity runtime, managed runtime workspace preparation 
+**Project Type**: Python web service and Temporal workflow system 
+**Performance Goals**: Skill resolution remains deterministic and proportional to the number of candidate skill directories and deployment skill records; no additional network calls are introduced for repo/local policy gating 
+**Constraints**: Runtime mode; no raw credentials; no mutation of checked-in skill folders during materialization; large skill content stays out of workflow history; unsupported policy states fail closed rather than silently enabling untrusted sources; preserve MM-405 traceability 
 **Scale/Scope**: One agent-skill source-policy slice covering catalog contracts, immutable versions, source precedence, repo/local policy gates, and runtime materialization boundaries
 
 ## Constitution Check
@@ -63,7 +63,7 @@ Implement MM-405 by closing the remaining policy gap in agent-skill source resol
 - **IX. Resilient by Default**: PASS. Denied or unsupported source policy fails closed for untrusted repo/local sources.
 - **X. Facilitate Continuous Improvement**: PASS. Verification records MM-405 traceability and policy evidence.
 - **XI. Spec-Driven Development**: PASS. Implementation proceeds from this spec/plan/tasks sequence.
-- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Volatile orchestration input remains under `docs/tmp/`; no canonical migration narrative is added.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Volatile orchestration input remains under `local-only handoffs`; no canonical migration narrative is added.
 - **XIII. Pre-release Compatibility Policy**: PASS. No compatibility aliases or semantic fallbacks are introduced.
 
 ## Project Structure
@@ -78,9 +78,9 @@ specs/206-agent-skill-catalog-source-policy/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── agent-skill-source-policy.md
+│ └── agent-skill-source-policy.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 
@@ -95,7 +95,6 @@ api_service/db/models.py
 tests/unit/services/test_skill_resolution.py
 tests/unit/api/test_agent_skills_service.py
 tests/unit/services/test_skill_materialization.py
-docs/tmp/jira-orchestration-inputs/MM-405-moonspec-orchestration-input.md
 ```
 
 **Structure Decision**: Use the existing agent-skill schema, resolver, service, and materialization modules. No new package or persistent table is planned. Add or update focused unit tests around existing resolver/service boundaries, and use final verification to confirm already-covered behavior remains intact.

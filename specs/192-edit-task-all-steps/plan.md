@@ -9,15 +9,15 @@ Fix MM-340 by preserving ordered task step data in the Temporal edit/rerun draft
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React frontend plus Python 3.12 backend context  
-**Primary Dependencies**: React, TanStack Query, Vitest, Testing Library, existing Temporal task editing helpers  
-**Storage**: Existing execution detail and input artifact contracts; no new persistent storage  
-**Unit Testing**: Vitest through `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` for focused iteration and `./tools/test_unit.sh` for final verification  
-**Integration Testing**: Frontend component integration tests in Vitest/Testing Library for edit-form load and submit behavior; required project integration suite remains `./tools/test_integration.sh` when backend/compose boundaries change  
-**Target Platform**: Mission Control web UI served by FastAPI  
-**Project Type**: Web application frontend with existing API contracts  
-**Performance Goals**: Reconstruct and render typical multi-step task drafts without extra network calls beyond existing execution/artifact fetches  
-**Constraints**: Preserve MM-340 traceability; do not mutate historical artifacts; do not drop user-authored steps; keep compatibility-sensitive Temporal/backend payloads unchanged unless proven necessary  
+**Language/Version**: TypeScript/React frontend plus Python 3.12 backend context 
+**Primary Dependencies**: React, TanStack Query, Vitest, Testing Library, existing Temporal task editing helpers 
+**Storage**: Existing execution detail and input artifact contracts; no new persistent storage 
+**Unit Testing**: Vitest through `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` for focused iteration and `./tools/test_unit.sh` for final verification 
+**Integration Testing**: Frontend component integration tests in Vitest/Testing Library for edit-form load and submit behavior; required project integration suite remains `./tools/test_integration.sh` when backend/compose boundaries change 
+**Target Platform**: Mission Control web UI served by FastAPI 
+**Project Type**: Web application frontend with existing API contracts 
+**Performance Goals**: Reconstruct and render typical multi-step task drafts without extra network calls beyond existing execution/artifact fetches 
+**Constraints**: Preserve MM-340 traceability; do not mutate historical artifacts; do not drop user-authored steps; keep compatibility-sensitive Temporal/backend payloads unchanged unless proven necessary 
 **Scale/Scope**: One user-facing edit/rerun reconstruction path for supported `MoonMind.Run` tasks
 
 ## Constitution Check
@@ -35,7 +35,7 @@ Fix MM-340 by preserving ordered task step data in the Temporal edit/rerun draft
 - IX. Resilient by Default: PASS. The update preserves existing steps rather than silently truncating them.
 - X. Facilitate Continuous Improvement: PASS. Verification evidence will identify MM-340 and test coverage.
 - XI. Spec-Driven Development: PASS. Spec, plan, tasks, and verification are part of the change.
-- XII. Canonical Documentation Separation: PASS. Implementation notes remain under `specs/` and `docs/tmp`; no canonical docs are rewritten.
+- XII. Canonical Documentation Separation: PASS. Implementation notes remain under `specs/` and `local-only handoffs`; no canonical docs are rewritten.
 - XIII. Pre-Release Compatibility Policy: PASS. No compatibility aliases or hidden transforms are added.
 
 ## Project Structure
@@ -50,7 +50,7 @@ specs/192-edit-task-all-steps/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── edit-task-steps-ui.md
+│ └── edit-task-steps-ui.md
 └── tasks.md
 ```
 
@@ -59,10 +59,10 @@ specs/192-edit-task-all-steps/
 ```text
 frontend/src/
 ├── lib/
-│   └── temporalTaskEditing.ts
+│ └── temporalTaskEditing.ts
 └── entrypoints/
-    ├── task-create.tsx
-    └── task-create.test.tsx
+ ├── task-create.tsx
+ └── task-create.test.tsx
 ```
 
 **Structure Decision**: Use the existing Mission Control frontend task-editing modules. Backend files are not planned unless tests show execution detail lacks step data.

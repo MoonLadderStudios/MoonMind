@@ -49,7 +49,6 @@ _TOKEN_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 )
 
-
 def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
     runtime = (
         str(env.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower() or "codex"
@@ -60,13 +59,11 @@ def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
         raise RuntimeError(f"MOONMIND_WORKER_RUNTIME must be one of: {supported}")
     return runtime
 
-
 def _env_flag(value: str | None, *, default: bool) -> bool:
     text = str(value or "").strip().lower()
     if not text:
         return default
     return text in {"1", "true", "yes", "on"}
-
 
 def _first_non_empty(
     source: Mapping[str, str], keys: Sequence[str], *, default: str = ""
@@ -76,7 +73,6 @@ def _first_non_empty(
         if value:
             return value
     return default
-
 
 def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
     default_skill = _first_non_empty(
@@ -119,9 +115,6 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
     ]
     return tuple(dict.fromkeys(value for value in values if value))
 
-
-
-
 def _worker_capabilities(source: Mapping[str, str]) -> tuple[str, ...]:
     """Return normalized worker capability labels from env configuration."""
 
@@ -134,7 +127,6 @@ def _worker_capabilities(source: Mapping[str, str]) -> tuple[str, ...]:
         if token:
             normalized.append(token)
     return tuple(dict.fromkeys(normalized))
-
 
 def _effective_worker_capabilities(
     source: Mapping[str, str], runtime: str
@@ -151,7 +143,6 @@ def _effective_worker_capabilities(
         return tuple(capabilities)
     return (runtime, "git", "gh")
 
-
 def _jules_runtime_gate_from_env(source: Mapping[str, str]):
     """Return Jules runtime gate state derived from worker environment."""
 
@@ -159,7 +150,6 @@ def _jules_runtime_gate_from_env(source: Mapping[str, str]):
         env=source,
         error_message=JULES_RUNTIME_DISABLED_MESSAGE,
     )
-
 
 def _redact_value(text: str, secrets: Sequence[str]) -> str:
     redacted = text
@@ -170,7 +160,6 @@ def _redact_value(text: str, secrets: Sequence[str]) -> str:
         redacted = pattern.sub("[REDACTED]", redacted)
     return redacted
 
-
 def _truncate_error_message(
     message: str, *, max_chars: int = _MAX_ERROR_MESSAGE_CHARS
 ) -> str:
@@ -179,7 +168,6 @@ def _truncate_error_message(
     head_chars = min(768, max_chars - 4)
     tail_chars = max_chars - head_chars - 3
     return f"{message[:head_chars]}...{message[-tail_chars:]}"
-
 
 def _run_checked_command(
     command: list[str],
@@ -222,9 +210,6 @@ def _run_checked_command(
         )
     )
 
-
-
-
 def _validate_embedding_profile(env: Mapping[str, str]) -> None:
     """Enforce embedding prerequisites for runtime profiles that use Google."""
 
@@ -244,7 +229,6 @@ def _validate_embedding_profile(env: Mapping[str, str]) -> None:
         "or GEMINI_API_KEY is missing."
     )
 
-
 def _verify_codex_search_cli(source: Mapping[str, str]) -> str:
     """Validate ripgrep availability for Codex-first repository search defaults."""
 
@@ -258,7 +242,6 @@ def _verify_codex_search_cli(source: Mapping[str, str]) -> str:
             "set MOONMIND_RG_BINARY to a compatible `rg` executable on PATH). "
             f"Details: {exc}"
         ) from exc
-
 
 def run_preflight(env: Mapping[str, str] | None = None) -> None:
     """Validate CLI dependencies and auth state before daemon start."""
@@ -359,7 +342,6 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     github_token = str(source.get("GITHUB_TOKEN", "")).strip()
     redaction_values = (github_token,) if github_token else ()
 
-
     if resolved_paths["rg"] is not None:
         _run_checked_command(
             [resolved_paths["rg"], "--version"],
@@ -447,7 +429,6 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         unset_env_keys=("GITHUB_TOKEN", "GH_TOKEN"),
     )
 
-
 def build_parser() -> argparse.ArgumentParser:
     """Create CLI parser for worker runtime options."""
 
@@ -458,7 +439,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Process at most one claim cycle and exit.",
     )
     return parser
-
 
 async def _run(args: argparse.Namespace) -> None:
     config = CodexWorkerConfig.from_env()
@@ -500,7 +480,6 @@ async def _run(args: argparse.Namespace) -> None:
     finally:
         await queue_client.aclose()
 
-
 def main(argv: list[str] | None = None) -> int:
     """Entry point for `moonmind-codex-worker`."""
 
@@ -511,7 +490,6 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         parser.exit(status=1, message=f"moonmind-codex-worker failed: {exc}\n")
     return 0
-
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())

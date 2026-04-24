@@ -3,7 +3,6 @@
 import sys
 from pathlib import Path
 
-
 def test_e2e_script_exists_and_is_executable():
     """Verify that test_temporal_e2e.py exists and can be imported."""
     script_path = Path("scripts/test_temporal_e2e.py")
@@ -15,7 +14,6 @@ def test_e2e_script_exists_and_is_executable():
         py_compile.compile(str(script_path), doraise=True)
     except Exception as e:
         assert False, f"Syntax error in script: {e}"
-
 
 def test_e2e_script_dry_run(monkeypatch):
     """If there's a dry-run or unit-test mode, we test it. Here we just test we can import it."""

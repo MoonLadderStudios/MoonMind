@@ -2,7 +2,7 @@
 
 **Feature**: Skill Selection and Snapshot Resolution
 **Spec**: `/work/agent_jobs/mm:a5ced108-472d-4af5-b351-41150acbaf00/repo/specs/207-skill-selection-snapshot-resolution/spec.md`
-**Original Request Source**: `spec.md` `Input`, preserving Jira issue `MM-406` and `docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md`
+**Original Request Source**: `spec.md` `Input`, preserving Jira issue `MM-406` and `spec.md` (Input)
 **Verdict**: ADDITIONAL_WORK_NEEDED
 **Confidence**: MEDIUM
 
@@ -13,7 +13,7 @@
 | Red-first focused unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py` | PASS after implementation | The same command failed before implementation because the selector merge helper and workflow resolver method were missing. |
 | Focused unit regression | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py tests/unit/services/test_skill_resolution.py tests/unit/workflows/agent_skills/test_agent_skills_activities.py tests/unit/services/test_skill_materialization.py` | PASS | 72 Python tests and 286 frontend tests passed. |
 | Full unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | PASS | 3589 Python tests passed, 1 xpassed, 16 subtests passed; 286 frontend tests passed. |
-| Traceability | `rg -n "MM-406|DESIGN-REQ-006|DESIGN-REQ-007|DESIGN-REQ-008|DESIGN-REQ-009|DESIGN-REQ-010|DESIGN-REQ-019" specs/207-skill-selection-snapshot-resolution docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md` | PASS | Jira key and source IDs remain present. |
+| Traceability | `rg -n "MM-406|DESIGN-REQ-006|DESIGN-REQ-007|DESIGN-REQ-008|DESIGN-REQ-009|DESIGN-REQ-010|DESIGN-REQ-019" specs/207-skill-selection-snapshot-resolution` | PASS | Jira key and source IDs remain present. |
 | Hermetic integration | `./tools/test_integration.sh` | NOT RUN | Docker socket unavailable in the managed runtime: `dial unix /var/run/docker.sock: connect: no such file or directory`. |
 
 ## Requirement Coverage

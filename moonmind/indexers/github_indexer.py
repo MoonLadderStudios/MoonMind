@@ -8,7 +8,6 @@ from llama_index.core.node_parser import SimpleNodeParser  # Default node parser
 from llama_index.readers.github import GithubRepositoryReader
 from llama_index.readers.github.repository.github_client import GithubClient
 
-
 class GitHubIndexer:
     def __init__(
         self,

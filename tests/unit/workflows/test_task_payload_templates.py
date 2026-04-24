@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from moonmind.workflows.tasks.payload import compile_task_payload_templates
 
-
 def test_compile_task_payload_templates_merges_capabilities_and_metadata() -> None:
     payload = {
         "repository": "Moon/Repo",

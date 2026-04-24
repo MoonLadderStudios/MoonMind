@@ -36,14 +36,11 @@ REQUIRED_TEMPLATE_PATHS: tuple[tuple[str, ...], ...] = (
     ("sandbox_workspace_write", "network_access"),
 )
 
-
 class CodexConfigError(RuntimeError):
     """Raised when the Codex configuration cannot be enforced."""
 
-
 def _format_path(path: tuple[str, ...]) -> str:
     return ".".join(path)
-
 
 def _read_required_path(
     config: dict[str, Any],
@@ -61,7 +58,6 @@ def _read_required_path(
         cursor = cursor[key]
     return deepcopy(cursor)
 
-
 def _set_nested_path(
     config: dict[str, Any],
     *,
@@ -77,7 +73,6 @@ def _set_nested_path(
         cursor = current
     cursor[key_path[-1]] = value
 
-
 def _load_toml(path: Path) -> Dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -87,10 +82,8 @@ def _load_toml(path: Path) -> Dict[str, Any]:
     except toml.TomlDecodeError as exc:  # pragma: no cover - defensive branch
         raise CodexConfigError(f"Invalid TOML content in {path}: {exc}") from exc
 
-
 def _ensure_trailing_newline(content: str) -> str:
     return content if content.endswith("\n") else f"{content}\n"
-
 
 def _enforce_shared_file_permissions(path: Path) -> None:
     """Ensure config permissions are compatible with shared root/non-root workers."""
@@ -109,7 +102,6 @@ def _enforce_shared_file_permissions(path: Path) -> None:
     except OSError as exc:
         raise CodexConfigError(f"Failed to set file mode for {path}: {exc}") from exc
 
-
 def _write_secure_text(path: Path, content: str) -> None:
     """Write ``content`` to ``path`` with strict owner-write/group-read permissions."""
 
@@ -121,14 +113,12 @@ def _write_secure_text(path: Path, content: str) -> None:
     finally:
         _enforce_shared_file_permissions(path)
 
-
 @dataclass(frozen=True)
 class CodexConfigResult:
     """Represents the enforced Codex configuration."""
 
     path: Path
     config: Dict[str, Any]
-
 
 def ensure_codex_config(
     *, target_path: Optional[Path] = None, target_home: Optional[Path] = None
@@ -182,7 +172,6 @@ def ensure_codex_config(
     _write_secure_text(target_path, rendered)
     return CodexConfigResult(target_path, merged_config)
 
-
 def main() -> int:
     try:
         result = ensure_codex_config()
@@ -198,7 +187,6 @@ def main() -> int:
 
     print(f"[codex-config] required settings enforced at {result.path}")
     return 0
-
 
 if __name__ == "__main__":  # pragma: no cover - CLI entrypoint
     sys.exit(main())

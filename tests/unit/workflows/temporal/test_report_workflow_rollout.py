@@ -14,7 +14,6 @@ from moonmind.workflows.temporal.report_artifacts import (
     validate_report_workflow_artifact_classes,
 )
 
-
 def test_supported_report_workflow_mappings_separate_report_and_observability() -> None:
     """MM-464: workflow examples map curated report classes separately."""
 
@@ -61,7 +60,6 @@ def test_supported_report_workflow_mappings_separate_report_and_observability() 
     )
     assert "finding_counts" in benchmark.recommended_metadata_keys
 
-
 def test_report_workflow_validation_requires_primary_report() -> None:
     """MM-464: new report-producing workflows cannot treat output.primary as a report."""
 
@@ -89,7 +87,6 @@ def test_report_workflow_validation_requires_primary_report() -> None:
         ),
     )
 
-
 def test_generic_output_only_artifacts_classify_as_rollout_fallback() -> None:
     """MM-464: generic outputs remain valid fallback, not canonical reports."""
 
@@ -110,7 +107,6 @@ def test_generic_output_only_artifacts_classify_as_rollout_fallback() -> None:
     assert invalid["has_canonical_report"] is False
     assert invalid["report_link_types"] == ("report.evidence",)
 
-
 def test_report_workflow_generic_fallback_rejects_non_generic_links() -> None:
     """MM-464: fallback validation only accepts generic output classes."""
 
@@ -130,7 +126,6 @@ def test_report_workflow_generic_fallback_rejects_non_generic_links() -> None:
             allow_generic_fallback=True,
         )
 
-
 def test_report_rollout_phases_are_ordered() -> None:
     """MM-464: incremental migration phases are available to runtime helpers."""
 
@@ -140,7 +135,6 @@ def test_report_rollout_phases_are_ordered() -> None:
         "compact_report_bundle_contract",
         "optional_projections_filters_retention_pinning",
     )
-
 
 def test_report_projection_summary_is_ref_only() -> None:
     """MM-464: convenience summaries are projections over artifact refs."""

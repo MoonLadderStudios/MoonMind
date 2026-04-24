@@ -40,13 +40,11 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
 )
 
-
 # ── Mock activities ──
 
 @activity.defn(name="agent_runtime.publish_artifacts")
 async def mock_publish_artifacts(result: AgentRunResult | None = None) -> AgentRunResult | None:
     return result
-
 
 @activity.defn(name="agent_runtime.cancel")
 async def mock_cancel(request: dict) -> AgentRunStatus:
@@ -57,11 +55,9 @@ async def mock_cancel(request: dict) -> AgentRunStatus:
         status="canceled"
     )
 
-
 PLAN_GENERATE_CALLS: list[Dict[str, Any]] = []
 ARTIFACT_READ_CALLS: list[Dict[str, Any]] = []
 SKILL_EXECUTE_CALLS: list[Dict[str, Any]] = []
-
 
 def _trusted_search_attributes() -> TypedSearchAttributes:
     return TypedSearchAttributes(
@@ -76,7 +72,6 @@ def _trusted_search_attributes() -> TypedSearchAttributes:
             ),
         ]
     )
-
 
 async def _register_test_search_attributes(env: WorkflowEnvironment) -> None:
     await env.client.operator_service.add_search_attributes(
@@ -94,12 +89,10 @@ async def _register_test_search_attributes(env: WorkflowEnvironment) -> None:
         )
     )
 
-
 @activity.defn(name="plan.generate")
 async def mock_plan_generate_agent(args: Dict[str, Any]) -> Dict[str, Any]:
     PLAN_GENERATE_CALLS.append(args)
     return {"plan_ref": "artifact://plan/agent-test"}
-
 
 @activity.defn(name="artifact.read")
 async def mock_artifact_read_agent(args: Dict[str, Any]) -> bytes:
@@ -133,7 +126,6 @@ async def mock_artifact_read_agent(args: Dict[str, Any]) -> bytes:
     }
     return json.dumps(payload).encode("utf-8")
 
-
 @activity.defn(name="artifact.read")
 async def mock_artifact_read_jules_missing_pr(args: Dict[str, Any]) -> bytes:
     ARTIFACT_READ_CALLS.append(args)
@@ -165,16 +157,13 @@ async def mock_artifact_read_jules_missing_pr(args: Dict[str, Any]) -> bytes:
     }
     return json.dumps(payload).encode("utf-8")
 
-
 @activity.defn(name="artifact.create")
 async def mock_artifact_create(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"artifact_id": "test-artifact-id", "artifact_ref": f"artifact://{args.get('artifact_id', 'test')}"}
 
-
 @activity.defn(name="artifact.write_complete")
 async def mock_artifact_write_complete(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"status": "complete"}
-
 
 @workflow.defn(name="MoonMind.ProviderProfileManager")
 class MockProviderProfileManager:
@@ -222,7 +211,6 @@ class MockProviderProfileManager:
                 await handle.signal("slot_assigned", {"profile_id": profile_id})
         return {}
 
-
 @workflow.defn(name="MoonMind.AgentRun")
 class MockNoPrAgentRun:
     @workflow.run
@@ -237,15 +225,12 @@ class MockNoPrAgentRun:
             "retryRecommendation": None,
         }
 
-
 @activity.defn(name="mm.skill.execute")
 async def mock_skill_execute_agent(args: Dict[str, Any]) -> Dict[str, Any]:
     SKILL_EXECUTE_CALLS.append(args)
     return {"status": "COMPLETED", "outputs": {}}
 
-
 # ── Integration tests (require Temporal test server) ──
-
 
 class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
@@ -426,9 +411,7 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                     exc_info.exception.cause.message,
                 )
 
-
 # ── Snapshot-pinning workflow-boundary tests ──
-
 
 class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
     """Verify that resolved_skillset_ref is stable across the retry loop

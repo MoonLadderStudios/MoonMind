@@ -121,7 +121,7 @@
 
 **Purpose**: Verify runtime scope, update implementation tracking, and run the requested validation suite.
 
-- [X] T031 [P] Update Phase 2 implementation tracking notes in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`
+- [X] T031 [P] Update Phase 2 implementation tracking notes in `docs/ManagedAgents/DockerOutOfDocker.md`
 - [X] T032 [P] Run focused Phase 2 verification with `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py`
 - [X] T033 Run full unit verification with `./tools/test_unit.sh`
 - [X] T034 Run runtime scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`

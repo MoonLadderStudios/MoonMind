@@ -91,7 +91,6 @@ _STEP_KIND = "step"
 _INCLUDE_KIND = "include"
 logger = logging.getLogger(__name__)
 
-
 class _StatsdEmitter:
     """Best-effort StatsD counter emitter for template catalog activity."""
 
@@ -152,32 +151,25 @@ class _StatsdEmitter:
                 self._disabled_until = time.monotonic() + self._backoff_seconds
                 self._backoff_seconds = min(self._backoff_seconds * 2, 60.0)
 
-
 _METRICS = _StatsdEmitter()
-
 
 class TaskTemplateError(RuntimeError):
     """Base error for task template catalog operations."""
 
-
 class TaskTemplateNotFoundError(TaskTemplateError):
     """Raised when a template or version is missing."""
-
 
 class TaskTemplateValidationError(TaskTemplateError):
     """Raised when template payloads fail validation."""
 
-
 class TaskTemplateConflictError(TaskTemplateError):
     """Raised when uniqueness constraints are violated."""
-
 
 @dataclass(slots=True)
 class ExpandOptions:
     """Options provided when expanding template steps."""
 
     should_enforce_step_limit: bool = True
-
 
 def _normalize_slug(value: str) -> str:
     normalized = _SLUG_PATTERN.sub("-", str(value or "").strip().lower()).strip("-")
@@ -186,7 +178,6 @@ def _normalize_slug(value: str) -> str:
     if len(normalized) > 128:
         raise TaskTemplateValidationError("Template slug exceeds max length (128).")
     return normalized
-
 
 def _normalize_scope(scope: str) -> TaskTemplateScopeType:
     raw = str(scope or "").strip().lower()
@@ -199,7 +190,6 @@ def _normalize_scope(scope: str) -> TaskTemplateScopeType:
         )
     return TaskTemplateScopeType(raw)
 
-
 def _normalize_scope_ref(
     scope: TaskTemplateScopeType, scope_ref: str | None
 ) -> str | None:
@@ -211,7 +201,6 @@ def _normalize_scope_ref(
             "scopeRef is required for personal scopes."
         )
     return cleaned
-
 
 def _normalize_tag_list(values: list[Any] | None) -> list[str]:
     if values is None:
@@ -226,7 +215,6 @@ def _normalize_tag_list(values: list[Any] | None) -> list[str]:
         normalized.append(tag)
     return normalized
 
-
 def _normalize_capabilities(values: list[Any] | None) -> list[str]:
     if values is None:
         return []
@@ -240,7 +228,6 @@ def _normalize_capabilities(values: list[Any] | None) -> list[str]:
         normalized.append(capability)
     return normalized
 
-
 def _extract_step_capabilities(step: dict[str, Any]) -> list[str]:
     skill = step.get("skill")
     if not isinstance(skill, dict):
@@ -250,21 +237,17 @@ def _extract_step_capabilities(step: dict[str, Any]) -> list[str]:
         return []
     return _normalize_capabilities(caps)
 
-
 def _slugify_from_title(title: str) -> str:
     return _normalize_slug(title)
-
 
 def _hash_from_inputs(values: dict[str, Any]) -> str:
     normalized = repr(sorted(values.items())).encode("utf-8")
     return hashlib.sha1(normalized).hexdigest()[:8]
 
-
 def _build_step_id(
     *, slug: str, version: str, index: int, inputs: dict[str, Any]
 ) -> str:
     return f"tpl:{slug}:{version}:{index:02d}:{_hash_from_inputs(inputs)}"
-
 
 def _template_path_label(
     *, slug: str, version: str, alias: str | None = None
@@ -274,10 +257,8 @@ def _template_path_label(
         return f"{alias}:{label}"
     return label
 
-
 def _format_include_path(path: list[str]) -> str:
     return " -> ".join(path)
-
 
 def _composition_capabilities(node: dict[str, Any]) -> list[str]:
     capabilities = list(node.get("requiredCapabilities") or [])
@@ -285,7 +266,6 @@ def _composition_capabilities(node: dict[str, Any]) -> list[str]:
         if isinstance(child, dict):
             capabilities.extend(_composition_capabilities(child))
     return _normalize_capabilities(capabilities)
-
 
 def _render_value(
     env: SandboxedEnvironment,
@@ -305,13 +285,11 @@ def _render_value(
         }
     return value
 
-
 def _first_allowed_jira_project_key() -> str | None:
     projects = settings.atlassian.jira.jira_allowed_projects
     if not projects:
         return None
     return projects.split(",")[0]
-
 
 def _effective_inputs_schema(
     *, slug: str, inputs_schema: list[dict[str, Any]]
@@ -331,7 +309,6 @@ def _effective_inputs_schema(
             definition["default"] = project_key
             break
     return effective_schema
-
 
 def _serialize_template(
     *,
@@ -372,7 +349,6 @@ def _serialize_template(
         ),
     }
 
-
 def load_seed_template_definitions(seed_dir: Path) -> list[dict[str, Any]]:
     """Load seed template definitions from YAML files."""
 
@@ -387,14 +363,12 @@ def load_seed_template_definitions(seed_dir: Path) -> list[dict[str, Any]]:
         loaded.append(document)
     return loaded
 
-
 @dataclass(slots=True)
 class SeedSyncResult:
     """Summary of a seed synchronization run."""
 
     created: int = 0
     updated: int = 0
-
 
 class TaskTemplateCatalogService:
     """Catalog service for task step templates."""

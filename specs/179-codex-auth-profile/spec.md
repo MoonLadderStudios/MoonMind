@@ -17,7 +17,7 @@ Use this Jira preset brief as the canonical MoonSpec orchestration input. Preser
 MM-318: breakdown docs\ManagedAgents\OAuthTerminal.md
 
 Selected generated story: STORY-001 Codex Auth Volume Profile Contract
-Breakdown JSON: docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthterminal-md/stories.json
+Breakdown JSON: artifacts/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthterminal-md/stories.json
 Source design: docs/ManagedAgents/OAuthTerminal.md
 ```
 

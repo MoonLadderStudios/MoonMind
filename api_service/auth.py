@@ -20,18 +20,14 @@ from api_service.db.models import User
 from api_service.services.profile_service import ProfileService
 from moonmind.config.settings import settings
 
-
 class UserRead(schemas.BaseUser[uuid.UUID]):
     pass
-
 
 class UserCreate(schemas.BaseUserCreate):
     pass
 
-
 class UserUpdate(schemas.BaseUserUpdate):
     pass
-
 
 class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     reset_password_token_secret = settings.security.JWT_SECRET_KEY
@@ -69,17 +65,13 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     ):
         print(f"Verification requested for user {user.id}. Verification token: {token}")
 
-
 async def get_user_db(session: get_async_session = Depends(get_async_session)):
     yield SQLAlchemyUserDatabase(session, User)
-
 
 async def get_user_manager(user_db: SQLAlchemyUserDatabase = Depends(get_user_db)):
     yield UserManager(user_db)
 
-
 from contextlib import asynccontextmanager
-
 
 @asynccontextmanager
 async def get_user_manager_context(
@@ -92,11 +84,9 @@ async def get_user_manager_context(
     yield UserManager(user_db)
     # No specific cleanup needed for UserManager itself here, session is managed outside.
 
-
 # Hardcoded default user details for disabled auth mode
 _DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
 _DEFAULT_USER_EMAIL = "default@example.com"
-
 
 async def get_or_create_default_user(
     db_session: AsyncSession, user_manager: UserManager
@@ -215,13 +205,10 @@ async def get_or_create_default_user(
             status_code=500, detail=f"Could not create default user: {e}"
         )
 
-
 bearer_transport = BearerTransport(tokenUrl="auth/jwt/login")
-
 
 def get_jwt_strategy() -> JWTStrategy:
     return JWTStrategy(secret=settings.security.JWT_SECRET_KEY, lifetime_seconds=3600)
-
 
 auth_backend = AuthenticationBackend(
     name="jwt",

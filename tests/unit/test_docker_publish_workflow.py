@@ -4,15 +4,12 @@ from pathlib import Path
 
 import yaml
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "docker-publish.yml"
-
 
 def _load_workflow() -> dict:
     assert WORKFLOW_PATH.exists(), f"Missing workflow: {WORKFLOW_PATH}"
     return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
-
 
 def test_docker_publish_generates_version_before_platform_builds() -> None:
     workflow = _load_workflow()
@@ -38,7 +35,6 @@ def test_docker_publish_generates_version_before_platform_builds() -> None:
 
     build_job = workflow["jobs"]["build"]
     assert build_job["needs"] == "metadata"
-
 
 def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
     workflow = _load_workflow()

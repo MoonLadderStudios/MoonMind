@@ -1,12 +1,12 @@
 # Workflow Type Catalog and Lifecycle
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-WorkflowTypeCatalogAndLifecycle.md`](../tmp/remaining-work/Temporal-WorkflowTypeCatalogAndLifecycle.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 MoonMind’s **Temporal-native** lifecycle contract for Temporal-managed executions. Task-shaped product surfaces may still use `task` labels; this document governs workflow types and execution semantics inside Temporal.
 
-**Status:** Normative (Temporal application layer)  
-**Owner:** MoonMind Platform  
-**Last updated:** 2026-04-04  
+**Status:** Normative (Temporal application layer) 
+**Owner:** MoonMind Platform 
+**Last updated:** 2026-04-04 
 **Audience:** backend, infra, dashboard
 
 ---
@@ -27,29 +27,29 @@ This document defines the **Temporal-side contract**. Public MoonMind APIs and U
 
 ## 2. Design principles
 
-1. **A Temporal-managed row is a Workflow Execution.**  
-   Temporal-backed list/detail views should come from Temporal Visibility. Task-oriented compatibility surfaces may still remain multi-source during migration.
+1. **A Temporal-managed row is a Workflow Execution.** 
+ Temporal-backed list/detail views should come from Temporal Visibility. Task-oriented compatibility surfaces may still remain multi-source during migration.
 
-2. **Workflow Types are the root orchestration categories.**  
-   We do not introduce parallel top-level taxonomies for provider brand, runtime brand, or task-queue brand.
+2. **Workflow Types are the root orchestration categories.** 
+ We do not introduce parallel top-level taxonomies for provider brand, runtime brand, or task-queue brand.
 
-3. **Workflows orchestrate; Activities do side effects.**  
-   All nondeterminism lives in Activities.
+3. **Workflows orchestrate; Activities do side effects.** 
+ All nondeterminism lives in Activities.
 
-4. **True agent execution is a child-workflow concern.**  
-   `MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution. Task-scoped managed sessions are represented separately by `MoonMind.AgentSession` when a runtime uses the managed-session plane.
+4. **True agent execution is a child-workflow concern.** 
+ `MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution. Task-scoped managed sessions are represented separately by `MoonMind.AgentSession` when a runtime uses the managed-session plane.
 
-5. **Edits are modeled as Updates.**  
-   Signals are used for asynchronous events such as approvals, webhooks, and external notifications.
+5. **Edits are modeled as Updates.** 
+ Signals are used for asynchronous events such as approvals, webhooks, and external notifications.
 
-6. **Large payloads live outside workflow history.**  
-   Workflows reference artifacts and compact contracts rather than inlining large content.
+6. **Large payloads live outside workflow history.** 
+ Workflows reference artifacts and compact contracts rather than inlining large content.
 
-7. **Task Queues are routing plumbing, not product semantics.**  
-   MoonMind does not promise FIFO ordering to users.
+7. **Task Queues are routing plumbing, not product semantics.** 
+ MoonMind does not promise FIFO ordering to users.
 
-8. **Canonical runtime contracts cross the workflow boundary.**  
-   Workflow code should receive canonical `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult` contracts rather than provider-shaped payloads.
+8. **Canonical runtime contracts cross the workflow boundary.** 
+ Workflow code should receive canonical `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult` contracts rather than provider-shaped payloads.
 
 ---
 
@@ -170,9 +170,9 @@ Rules:
 - `proposals` means post-execution proposal generation/submission is active
 - `finalizing` means the workflow is producing its final outputs and terminal summary
 - terminal `mm_state` must align with Temporal close status:
-  - Temporal Completed → `completed`
-  - Temporal Failed / TimedOut / Terminated → `failed`
-  - Temporal Canceled → `canceled`
+ - Temporal Completed → `completed`
+ - Temporal Failed / TimedOut / Terminated → `failed`
+ - Temporal Canceled → `canceled`
 
 `mm_state` is the only required domain-state field for list filtering.
 
@@ -470,36 +470,36 @@ For true agent-runtime work, contract-shape failures such as unsupported provide
 
 ```mermaid
 stateDiagram-v2
-  [*] --> initializing
-  [*] --> scheduled : delayed start
-  scheduled --> initializing : start time reached
-  initializing --> waiting_on_dependencies : dependency gate
-  waiting_on_dependencies --> planning : dependencies ready
-  initializing --> planning : needs plan
-  initializing --> executing : plan provided
-  planning --> executing : plan ready
-  executing --> awaiting_slot : child run or managed resource waits
-  awaiting_slot --> executing : slot assigned
-  executing --> awaiting_external : external/provider wait
-  awaiting_external --> executing : external work progressed or finished
-  executing --> proposals : execution complete
-  proposals --> finalizing : proposals done
-  finalizing --> completed
-  scheduled --> canceled
-  initializing --> failed
-  waiting_on_dependencies --> failed
-  planning --> failed
-  awaiting_slot --> failed
-  executing --> failed
-  proposals --> failed
-  awaiting_external --> failed
-  initializing --> canceled
-  waiting_on_dependencies --> canceled
-  planning --> canceled
-  awaiting_slot --> canceled
-  executing --> canceled
-  proposals --> canceled
-  awaiting_external --> canceled
+ [*] --> initializing
+ [*] --> scheduled : delayed start
+ scheduled --> initializing : start time reached
+ initializing --> waiting_on_dependencies : dependency gate
+ waiting_on_dependencies --> planning : dependencies ready
+ initializing --> planning : needs plan
+ initializing --> executing : plan provided
+ planning --> executing : plan ready
+ executing --> awaiting_slot : child run or managed resource waits
+ awaiting_slot --> executing : slot assigned
+ executing --> awaiting_external : external/provider wait
+ awaiting_external --> executing : external work progressed or finished
+ executing --> proposals : execution complete
+ proposals --> finalizing : proposals done
+ finalizing --> completed
+ scheduled --> canceled
+ initializing --> failed
+ waiting_on_dependencies --> failed
+ planning --> failed
+ awaiting_slot --> failed
+ executing --> failed
+ proposals --> failed
+ awaiting_external --> failed
+ initializing --> canceled
+ waiting_on_dependencies --> canceled
+ planning --> canceled
+ awaiting_slot --> canceled
+ executing --> canceled
+ proposals --> canceled
+ awaiting_external --> canceled
 ```
 
 Key notes:
@@ -514,15 +514,15 @@ Key notes:
 
 ```mermaid
 stateDiagram-v2
-  [*] --> initializing
-  initializing --> executing : load/parse/validate/compile
-  executing --> executing : orchestrate graph
-  executing --> finalizing : aggregate results
-  finalizing --> completed
-  initializing --> failed
-  executing --> failed
-  initializing --> canceled
-  executing --> canceled
+ [*] --> initializing
+ initializing --> executing : load/parse/validate/compile
+ executing --> executing : orchestrate graph
+ executing --> finalizing : aggregate results
+ finalizing --> completed
+ initializing --> failed
+ executing --> failed
+ initializing --> canceled
+ executing --> canceled
 ```
 
 Key notes:
@@ -535,23 +535,23 @@ Key notes:
 
 ```mermaid
 stateDiagram-v2
-  [*] --> initializing
-  initializing --> awaiting_slot : managed runtime profile slot needed
-  initializing --> executing : no slot wait needed
-  awaiting_slot --> executing : slot assigned
-  executing --> awaiting_external : waiting on provider/runtime progress
-  awaiting_external --> executing : provider/runtime progressed
-  executing --> finalizing : result available
-  finalizing --> completed
-  initializing --> failed
-  awaiting_slot --> failed
-  executing --> failed
-  awaiting_external --> failed
-  finalizing --> failed
-  initializing --> canceled
-  awaiting_slot --> canceled
-  executing --> canceled
-  awaiting_external --> canceled
+ [*] --> initializing
+ initializing --> awaiting_slot : managed runtime profile slot needed
+ initializing --> executing : no slot wait needed
+ awaiting_slot --> executing : slot assigned
+ executing --> awaiting_external : waiting on provider/runtime progress
+ awaiting_external --> executing : provider/runtime progressed
+ executing --> finalizing : result available
+ finalizing --> completed
+ initializing --> failed
+ awaiting_slot --> failed
+ executing --> failed
+ awaiting_external --> failed
+ finalizing --> failed
+ initializing --> canceled
+ awaiting_slot --> canceled
+ executing --> canceled
+ awaiting_external --> canceled
 ```
 
 Key notes:
@@ -566,18 +566,18 @@ Key notes:
 
 ```mermaid
 stateDiagram-v2
-  [*] --> initializing
-  initializing --> active : session launched or recovered
-  active --> active : send/steer/interrupt turns
-  active --> clearing : clear requested
-  clearing --> active : new epoch established
-  active --> terminating : cancel or teardown requested
-  clearing --> terminating
-  terminating --> terminated
-  initializing --> failed
-  active --> failed
-  clearing --> failed
-  terminating --> failed
+ [*] --> initializing
+ initializing --> active : session launched or recovered
+ active --> active : send/steer/interrupt turns
+ active --> clearing : clear requested
+ clearing --> active : new epoch established
+ active --> terminating : cancel or teardown requested
+ clearing --> terminating
+ terminating --> terminated
+ initializing --> failed
+ active --> failed
+ clearing --> failed
+ terminating --> failed
 ```
 
 Key notes:

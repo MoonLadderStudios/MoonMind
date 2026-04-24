@@ -18,7 +18,7 @@ Source Document
 - Sections: 1. Purpose, 8. Verification, 10. Operator Behavior, 11. Required Boundaries
 - Coverage IDs: DESIGN-REQ-004, DESIGN-REQ-016, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-022
 - Breakdown Story ID: STORY-005
-- Breakdown JSON: docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthtermina-74125184/stories.json
+- Breakdown JSON: artifacts/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthtermina-74125184/stories.json
 
 Acceptance Criteria
 - OAuth enrollment surfaces show session status, timestamps, failure reason, and registered profile summary where applicable.

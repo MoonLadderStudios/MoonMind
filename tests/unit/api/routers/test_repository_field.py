@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from api_service.api.routers.executions import _serialize_execution
 from api_service.db.models import MoonMindWorkflowState, TemporalWorkflowType
 
-
 def test_serialize_execution_includes_repository():
     # Setup a mock execution record
     record = SimpleNamespace(
@@ -91,7 +90,6 @@ def test_serialize_execution_includes_repository():
     result = _serialize_execution(record)
     assert result.repository is None
 
-
 def test_serialize_execution_includes_pr_url_from_memo():
     record = SimpleNamespace(
         namespace="default",
@@ -122,7 +120,6 @@ def test_serialize_execution_includes_pr_url_from_memo():
 
     assert result.pr_url == "https://github.com/MoonLadderStudios/MoonMind/pull/789"
 
-
 def test_serialize_execution_includes_pr_url_from_legacy_camel_case_memo_key():
     record = SimpleNamespace(
         namespace="default",
@@ -152,7 +149,6 @@ def test_serialize_execution_includes_pr_url_from_legacy_camel_case_memo_key():
     result = _serialize_execution(record)
 
     assert result.pr_url == "https://github.com/MoonLadderStudios/MoonMind/pull/790"
-
 
 def test_serialize_execution_ignores_unsafe_pr_url_sources():
     record = SimpleNamespace(

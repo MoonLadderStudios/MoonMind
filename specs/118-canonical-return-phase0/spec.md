@@ -13,4 +13,4 @@ Phase 0 sets the stage for this refactor by identifying the exact workflow coerc
 - **DOC-REQ-CANON-001**: Establish a complete list of `MoonMind.AgentRun` and `MoonMind.Run` normalization points that must be removed.
 - **DOC-REQ-CANON-002**: Identify all provider and runtime integrations that emit non-canonical payload dicts.
 - **DOC-REQ-CANON-003**: Formalize the use of `workflow.patched` for in-flight history execution of active agents, or declare an explicit cutover.
-- **DOC-REQ-CANON-004**: Record findings directly in [`010-CanonicalReturnPlan.md`](../../docs/tmp/010-CanonicalReturnPlan.md) or a structured plan document.
+- **DOC-REQ-CANON-004**: Record findings directly in [`010-CanonicalReturnPlan.md`](../../docs/Temporal/WorkflowTypeCatalogAndLifecycle.md) or a structured plan document.

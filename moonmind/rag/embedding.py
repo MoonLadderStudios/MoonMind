@@ -10,7 +10,6 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-
 def ollama_dependency_available() -> bool:
     """Return whether the optional ollama package is importable."""
 
@@ -20,10 +19,8 @@ def ollama_dependency_available() -> bool:
         return False
     return True
 
-
 class EmbeddingError(RuntimeError):
     """Raised when embedding generation fails."""
-
 
 @dataclass(slots=True)
 class EmbeddingConfig:
@@ -32,7 +29,6 @@ class EmbeddingConfig:
     google_api_key: Optional[str]
     openai_api_key: Optional[str]
     ollama_model: Optional[str]
-
 
 class EmbeddingClient:
     """Simple synchronous embedding adapter."""

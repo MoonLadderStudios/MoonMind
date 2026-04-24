@@ -25,7 +25,7 @@ Coverage IDs
 Story Metadata
 - Story ID: STORY-004
 - Short name: temporal-payload-policy
-- Breakdown JSON: docs/tmp/story-breakdowns/mm-316-breakdown-docs-temporal-temporaltypesafet-c8c0a38c/stories.json
+- Breakdown JSON: artifacts/story-breakdowns/mm-316-breakdown-docs-temporal-temporaltypesafet-c8c0a38c/stories.json
 ```
 
 ## User Story & Testing

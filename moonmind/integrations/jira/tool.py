@@ -30,7 +30,6 @@ from moonmind.integrations.jira.models import (
 
 _JQL_ORDER_BY_RE = re.compile(r"\border\s+by\b", re.IGNORECASE)
 
-
 class JiraToolService:
     """Trusted Jira action layer used by the MCP tool registry."""
 

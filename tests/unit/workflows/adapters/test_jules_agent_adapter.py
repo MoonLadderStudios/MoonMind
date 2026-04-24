@@ -11,7 +11,6 @@ from moonmind.workflows.adapters.jules_client import JulesClientError
 
 pytestmark = [pytest.mark.asyncio]
 
-
 class _FakeJulesAdapterClient:
     def __init__(
         self,
@@ -68,7 +67,6 @@ class _FakeJulesAdapterClient:
         self.sent_messages.append(request)
         return None
 
-
 def _request(*, idempotency_key: str = "idem-1") -> AgentExecutionRequest:
     return AgentExecutionRequest(
         agentKind="external",
@@ -84,7 +82,6 @@ def _request(*, idempotency_key: str = "idem-1") -> AgentExecutionRequest:
         },
     )
 
-
 async def test_start_returns_canonical_handle_and_reuses_idempotency_key():
     client = _FakeJulesAdapterClient()
     adapter = JulesAgentAdapter(client_factory=lambda: client)
@@ -98,7 +95,6 @@ async def test_start_returns_canonical_handle_and_reuses_idempotency_key():
     assert first.metadata["normalizedStatus"] == "queued"
     assert second.run_id == first.run_id
     assert len(client.created) == 1
-
 
 async def test_status_and_fetch_result_normalize_provider_states():
     client = _FakeJulesAdapterClient(get_status="completed")
@@ -114,7 +110,6 @@ async def test_status_and_fetch_result_normalize_provider_states():
     assert result.summary is not None
     assert "completed" in result.summary
     assert result.failure_class is None
-
 
 async def test_status_and_fetch_result_prefer_pull_request_url():
     client = _FakeJulesAdapterClient(
@@ -134,7 +129,6 @@ async def test_status_and_fetch_result_prefer_pull_request_url():
     assert result.metadata["externalUrl"] == "https://github.com/org/repo/pull/123"
     assert result.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/123"
 
-
 async def test_cancel_returns_intervention_requested_when_provider_rejects_cancel():
     client = _FakeJulesAdapterClient(resolve_raises=True)
     adapter = JulesAgentAdapter(client_factory=lambda: client)
@@ -144,7 +138,6 @@ async def test_cancel_returns_intervention_requested_when_provider_rejects_cance
     assert status.run_id == "task-cancel"
     assert status.status == "intervention_requested"
     assert status.metadata["cancelAccepted"] is False
-
 
 async def test_start_passes_repository_in_source_context():
     client = _FakeJulesAdapterClient()
@@ -169,7 +162,6 @@ async def test_start_passes_repository_in_source_context():
     assert create_req.source_context.source == "sources/github/owner/repo"
     assert create_req.source_context.github_repo_context.starting_branch == "main"
 
-
 async def test_start_passes_explicit_branch_in_source_context():
     client = _FakeJulesAdapterClient()
     adapter = JulesAgentAdapter(client_factory=lambda: client)
@@ -190,7 +182,6 @@ async def test_start_passes_explicit_branch_in_source_context():
     create_req = client.created[0]
     assert create_req.source_context.source == "sources/github/owner/repo"
     assert create_req.source_context.github_repo_context.starting_branch == "develop"
-
 
 @pytest.mark.asyncio
 async def test_start_passes_starting_branch_in_source_context():
@@ -214,7 +205,6 @@ async def test_start_passes_starting_branch_in_source_context():
     assert create_req.source_context.source == "sources/github/owner/repo"
     assert create_req.source_context.github_repo_context.starting_branch == "feature-branch"
 
-
 async def test_start_without_workspace_spec_raises_value_error():
     """Jules requires workspace_spec.repository, so missing it must raise ValueError."""
     client = _FakeJulesAdapterClient()
@@ -233,7 +223,6 @@ async def test_start_without_workspace_spec_raises_value_error():
         await adapter.start(req)
 
     assert len(client.created) == 0
-
 
 async def test_start_defaults_automation_mode_for_pr_publish():
     client = _FakeJulesAdapterClient()
@@ -254,7 +243,6 @@ async def test_start_defaults_automation_mode_for_pr_publish():
     assert len(client.created) == 1
     create_req = client.created[0]
     assert create_req.automation_mode == "AUTO_CREATE_PR"
-
 
 async def test_start_defaults_automation_mode_for_branch_publish():
     client = _FakeJulesAdapterClient()
@@ -277,7 +265,6 @@ async def test_start_defaults_automation_mode_for_branch_publish():
     assert create_req.automation_mode == "AUTO_CREATE_PR"
     assert handle.metadata["automationMode"] == "AUTO_CREATE_PR"
     assert handle.metadata["publishMode"] == "branch"
-
 
 async def test_send_message_returns_running_status():
     """send_message() should call the client and return a running status."""

@@ -58,15 +58,15 @@ Implement MM-456 by extending the existing remediation runtime boundary so each 
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK service boundaries, existing Temporal artifact service, existing remediation context/action services  
-**Storage**: Existing Temporal execution records, `execution_remediation_links`, Temporal artifact metadata/content store, and existing execution memo/search/projection paths; no new persistent database table planned unless audit events cannot reuse an existing control-event mechanism  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` plus focused schema/service tests as needed  
-**Integration Testing**: `./tools/test_integration.sh` for hermetic integration when artifact/read-model routes are touched; targeted service-boundary tests may run through `./tools/test_unit.sh` first  
-**Target Platform**: Linux server / Docker Compose deployment  
-**Project Type**: FastAPI control plane plus Temporal workflow/service boundary  
-**Performance Goals**: Remediation lifecycle evidence publication is bounded by small JSON artifacts and compact audit/link fields; no unbounded log or artifact bodies enter workflow history  
-**Constraints**: Runtime mode; preserve MM-456 traceability; keep artifacts server-mediated; no raw credentials, presigned URLs, storage keys, local filesystem paths, or unbounded logs in durable summaries/audit metadata  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK service boundaries, existing Temporal artifact service, existing remediation context/action services 
+**Storage**: Existing Temporal execution records, `execution_remediation_links`, Temporal artifact metadata/content store, and existing execution memo/search/projection paths; no new persistent database table planned unless audit events cannot reuse an existing control-event mechanism 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` plus focused schema/service tests as needed 
+**Integration Testing**: `./tools/test_integration.sh` for hermetic integration when artifact/read-model routes are touched; targeted service-boundary tests may run through `./tools/test_unit.sh` first 
+**Target Platform**: Linux server / Docker Compose deployment 
+**Project Type**: FastAPI control plane plus Temporal workflow/service boundary 
+**Performance Goals**: Remediation lifecycle evidence publication is bounded by small JSON artifacts and compact audit/link fields; no unbounded log or artifact bodies enter workflow history 
+**Constraints**: Runtime mode; preserve MM-456 traceability; keep artifacts server-mediated; no raw credentials, presigned URLs, storage keys, local filesystem paths, or unbounded logs in durable summaries/audit metadata 
 **Scale/Scope**: One remediation run linked to one target execution/run, with multiple bounded artifact and audit records for that run
 
 ## Constitution Check
@@ -82,7 +82,7 @@ Implement MM-456 by extending the existing remediation runtime boundary so each 
 - IX. Resilient by Default: PASS. Cancellation, failure, degraded evidence, and continuation are explicit.
 - X. Continuous Improvement: PASS. Summary and audit evidence improves post-run diagnosis.
 - XI. Spec-Driven Development: PASS. This plan follows the MM-456 one-story spec.
-- XII. Canonical Documentation Separation: PASS. Temporary Jira input remains under `docs/tmp`; canonical docs are not turned into migration notes.
+- XII. Canonical Documentation Separation: PASS. Temporary Jira input remains under `local-only handoffs`; canonical docs are not turned into migration notes.
 - XIII. Pre-release Compatibility Policy: PASS. No compatibility alias layer is planned.
 
 ## Project Structure
@@ -97,9 +97,9 @@ specs/232-remediation-lifecycle-audit/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── remediation-lifecycle-audit.md
+│ └── remediation-lifecycle-audit.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 

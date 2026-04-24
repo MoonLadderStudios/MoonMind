@@ -21,7 +21,6 @@ from moonmind.workflows.temporal.activity_catalog import (
     manifest_ingest_activity_routes,
 )
 
-
 def _skill_definition(
     *,
     activity_type: str = "mm.skill.execute",
@@ -56,7 +55,6 @@ def _skill_definition(
             },
         }
     )
-
 
 def test_default_catalog_exposes_canonical_queues_and_fleets():
     catalog = build_default_activity_catalog()
@@ -99,7 +97,6 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
     assert fleets[INTEGRATIONS_FLEET].task_queues == (INTEGRATIONS_TASK_QUEUE,)
     assert "docker_workload" in fleets[AGENT_RUNTIME_FLEET].capabilities
 
-
 def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     catalog = build_default_activity_catalog()
 
@@ -127,7 +124,6 @@ def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     assert artifact_route.fleet == ARTIFACTS_FLEET
     assert artifact_route.task_queue == ARTIFACTS_TASK_QUEUE
 
-
 def test_resolve_skill_preserves_skill_policy_timeouts():
     catalog = build_default_activity_catalog()
     route = catalog.resolve_skill(
@@ -142,13 +138,11 @@ def test_resolve_skill_preserves_skill_policy_timeouts():
     assert route.timeouts.start_to_close_seconds == 42
     assert route.timeouts.schedule_to_close_seconds == 420
 
-
 def test_resolve_skill_rejects_incompatible_routing_capabilities():
     catalog = build_default_activity_catalog()
 
     with pytest.raises(TemporalActivityCatalogError, match="incompatible"):
         catalog.resolve_skill(_skill_definition(capabilities=["llm", "sandbox"]))
-
 
 def test_resolve_explicit_activity_uses_catalog_binding():
     catalog = build_default_activity_catalog()
@@ -163,7 +157,6 @@ def test_resolve_explicit_activity_uses_catalog_binding():
     assert route.activity_type == "integration.jules.fetch_result"
     assert route.fleet == INTEGRATIONS_FLEET
     assert route.task_queue == INTEGRATIONS_TASK_QUEUE
-
 
 def test_resolve_curated_pentest_activity_uses_agent_runtime_binding():
     catalog = build_default_activity_catalog()
@@ -181,7 +174,6 @@ def test_resolve_curated_pentest_activity_uses_agent_runtime_binding():
     assert route.capability_class == "agent_runtime"
     assert route.heartbeat_required is True
 
-
 def test_resolve_explicit_activity_requires_binding_reason():
     catalog = build_default_activity_catalog()
 
@@ -192,7 +184,6 @@ def test_resolve_explicit_activity_requires_binding_reason():
                 capabilities=["integration:jules"],
             )
         )
-
 
 def test_manifest_ingest_activity_routes_stay_at_activity_queue_boundaries():
     routes = manifest_ingest_activity_routes(build_default_activity_catalog())

@@ -17,7 +17,6 @@ from moonmind.workflows.temporal.deployment_safety import (
     validate_agent_session_deployment_safety,
 )
 
-
 def _run_git(args: list[str]) -> list[str]:
     result = subprocess.run(
         ["git", *args],
@@ -29,7 +28,6 @@ def _run_git(args: list[str]) -> list[str]:
     )
     return [line for line in result.stdout.splitlines() if line.strip()]
 
-
 def _changed_paths(base_ref: str) -> list[str]:
     merge_base = _run_git(["merge-base", base_ref, "HEAD"])[0]
     committed = _run_git(["diff", "--name-only", f"{merge_base}..HEAD"])
@@ -38,12 +36,10 @@ def _changed_paths(base_ref: str) -> list[str]:
     untracked = _run_git(["ls-files", "--others", "--exclude-standard"])
     return sorted(set(committed + staged + unstaged + untracked))
 
-
 def _repo_paths() -> list[str]:
     tracked = _run_git(["ls-files"])
     untracked = _run_git(["ls-files", "--others", "--exclude-standard"])
     return sorted(set(tracked + untracked))
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -101,7 +97,6 @@ def main(argv: list[str] | None = None) -> int:
     if report.active_feature_dir:
         print(f"Active Spec Kit feature: {report.active_feature_dir}")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

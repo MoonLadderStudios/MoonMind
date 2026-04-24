@@ -6,7 +6,6 @@ from moonmind.auth.secret_refs import ParsedSecretRef, SecretMissingError
 
 logger = structlog.get_logger(__name__)
 
-
 class EnvSecretResolver(SecretBackendResolver):
     """Resolves secrets dynamically from the process environment (`env://`)."""
 

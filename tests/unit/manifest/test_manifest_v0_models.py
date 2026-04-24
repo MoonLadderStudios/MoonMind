@@ -20,11 +20,9 @@ from moonmind.schemas.manifest_v0_models import (
     export_v0_schema,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 def _make_manifest(**overrides) -> ManifestV0:
     """Create a minimal valid ManifestV0 with optional overrides."""
@@ -40,11 +38,9 @@ def _make_manifest(**overrides) -> ManifestV0:
     defaults.update(overrides)
     return ManifestV0(**defaults)
 
-
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
-
 
 class TestManifestV0Construction:
     def test_minimal(self):
@@ -72,11 +68,9 @@ class TestManifestV0Construction:
         assert sc.piiRedaction is False
         assert sc.allowlistMetadata == []
 
-
 # ---------------------------------------------------------------------------
 # Serialization
 # ---------------------------------------------------------------------------
-
 
 class TestSerialization:
     def test_round_trip(self):
@@ -91,11 +85,9 @@ class TestSerialization:
         assert "properties" in schema
         assert "ManifestMetadata" in json.dumps(schema)
 
-
 # ---------------------------------------------------------------------------
 # Cross-field validation
 # ---------------------------------------------------------------------------
-
 
 class TestCrossFieldValidation:
     def test_index_references_valid_datasource(self):
@@ -116,11 +108,9 @@ class TestCrossFieldValidation:
                 ],
             )
 
-
 # ---------------------------------------------------------------------------
 # YAML loading
 # ---------------------------------------------------------------------------
-
 
 class TestYamlLoading:
     def test_from_yaml_string(self):
@@ -178,11 +168,9 @@ class TestYamlLoading:
         with pytest.raises(FileNotFoundError):
             ManifestV0.from_yaml_file("/nonexistent.yaml")
 
-
 # ---------------------------------------------------------------------------
 # JSON Schema export
 # ---------------------------------------------------------------------------
-
 
 class TestExportSchema:
     def test_export_creates_file(self, tmp_path):

@@ -59,7 +59,6 @@ async def mock_stop_auth_runner(request: dict) -> dict:
 async def mock_mark_failed(request: dict) -> dict:
     return {}
 
-
 @asynccontextmanager
 async def _oauth_workers(
     env: WorkflowEnvironment,
@@ -92,7 +91,6 @@ async def _oauth_workers(
             )
         )
         yield
-
 
 async def test_oauth_session_workflow_success() -> None:
     """Test full successful OAuth session workflow lifecycle."""
@@ -169,7 +167,6 @@ async def test_oauth_session_workflow_cancel() -> None:
             assert result["session_id"] == "sess_default"
             assert result["status"] == "cancelled"
 
-
 async def test_oauth_session_workflow_external_failure() -> None:
     """Test externally observed terminal failure closes as failed."""
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -212,7 +209,6 @@ async def test_oauth_session_workflow_external_failure() -> None:
             assert result["failure_reason"] == (
                 "Volume verification failed: no_credentials_found"
             )
-
 
 async def test_oauth_session_workflow_start_failure_is_redacted() -> None:
     """Auth runner launch failures return actionable reasons without raw secrets."""
@@ -263,7 +259,6 @@ async def test_oauth_session_workflow_start_failure_is_redacted() -> None:
     assert failures
     assert "token=" not in failures[0]
     assert "password=" not in failures[0]
-
 
 async def test_oauth_session_workflow_api_finalize_skips_verify_and_register() -> None:
     """API-completed finalization closes without re-running verify/register."""
@@ -318,7 +313,6 @@ async def test_oauth_session_workflow_api_finalize_skips_verify_and_register() -
             assert result["status"] == "succeeded"
             assert verify_calls == 0
             assert register_calls == 0
-
 
 async def test_oauth_session_workflow_missing_transport_uses_legacy_bridge_default() -> None:
     """Payloads started before session_transport existed keep the old command path."""
@@ -382,7 +376,6 @@ async def test_oauth_session_workflow_missing_transport_uses_legacy_bridge_defau
         }
     ]
     assert terminal_payloads[0]["session_transport"] == "moonmind_pty_ws"
-
 
 async def test_oauth_session_workflow_success_starts_and_stops_runner() -> None:
     """Successful OAuth session owns runner startup and cleanup metadata."""
@@ -460,7 +453,6 @@ async def test_oauth_session_workflow_success_starts_and_stops_runner() -> None:
         }
     ]
 
-
 async def test_oauth_session_workflow_rejects_codex_oauth_input_without_refs() -> None:
     """Codex OAuth sessions route missing refs through the failure activity path."""
     status_updates: list[str] = []
@@ -503,7 +495,6 @@ async def test_oauth_session_workflow_rejects_codex_oauth_input_without_refs() -
             assert failures == [
                 "volume_ref and volume_mount_path are required for Codex OAuth sessions"
             ]
-
 
 async def test_oauth_session_workflow_none_transport_skips_bridge_and_records_statuses() -> None:
     """OAuth sessions can use transport-neutral none mode without PTY bridge startup."""

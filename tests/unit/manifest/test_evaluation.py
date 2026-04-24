@@ -16,11 +16,9 @@ from moonmind.manifest.evaluation import (
     _load_dataset,
 )
 
-
 # ---------------------------------------------------------------------------
 # hitRate@k
 # ---------------------------------------------------------------------------
-
 
 class TestHitRateAtK:
     def test_perfect_hit_rate(self):
@@ -47,11 +45,9 @@ class TestHitRateAtK:
         assert hit_rate_at_k(queries, retrieved, k=2) == 0.0
         assert hit_rate_at_k(queries, retrieved, k=3) == 1.0
 
-
 # ---------------------------------------------------------------------------
 # ndcg@k
 # ---------------------------------------------------------------------------
-
 
 class TestNdcgAtK:
     def test_perfect_ndcg(self):
@@ -76,11 +72,9 @@ class TestNdcgAtK:
         expected = (1.0 / math.log2(3)) / (1.0 / math.log2(2))
         assert ndcg_at_k(queries, retrieved, k=3) == pytest.approx(expected)
 
-
 # ---------------------------------------------------------------------------
 # MetricScore
 # ---------------------------------------------------------------------------
-
 
 class TestMetricScore:
     def test_passed_when_above_threshold(self):
@@ -95,11 +89,9 @@ class TestMetricScore:
         m = MetricScore(name="hitRate@10", score=0.3)
         assert m.passed is True
 
-
 # ---------------------------------------------------------------------------
 # EvaluationResult
 # ---------------------------------------------------------------------------
-
 
 class TestEvaluationResult:
     def test_to_dict(self):
@@ -117,11 +109,9 @@ class TestEvaluationResult:
         assert d["passed"] is True
         assert len(d["datasets"]) == 1
 
-
 # ---------------------------------------------------------------------------
 # Dataset loading
 # ---------------------------------------------------------------------------
-
 
 class TestLoadDataset:
     def test_valid_jsonl(self, tmp_path):

@@ -13,7 +13,6 @@ from moonmind.config.settings import (
     TemporalDashboardSettings,
 )
 
-
 # Fixture for default settings, can be customized in tests
 @pytest.fixture
 def app_settings_defaults():
@@ -44,7 +43,6 @@ def app_settings_defaults():
         },
     }
 
-
 # Test that the removed fields are indeed gone
 def test_default_model_fields_removed(app_settings_defaults):
     # Since extra="ignore", these should just be ignored, not raise ValidationError
@@ -59,7 +57,6 @@ def test_default_model_fields_removed(app_settings_defaults):
     assert not hasattr(settings, "default_chat_model")
     assert not hasattr(settings, "default_embed_model")
 
-
 class TestGoogleSettings:
     def test_google_api_key_accepts_gemini_alias(self, monkeypatch):
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
@@ -69,7 +66,6 @@ class TestGoogleSettings:
 
         assert settings.google_api_key == "gemini-key"
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-
 
 class TestAtlassianSettings:
     def test_atlassian_url_correction(self, monkeypatch):
@@ -105,7 +101,6 @@ class TestAtlassianSettings:
 
         # Clean up environment variable
         monkeypatch.delenv("ATLASSIAN_URL", raising=False)
-
 
 class TestOIDCSettings:
     def test_auth_provider_default(self, monkeypatch):
@@ -143,7 +138,6 @@ class TestOIDCSettings:
         monkeypatch.delenv("DEFAULT_USER_ID", raising=False)
         monkeypatch.delenv("DEFAULT_USER_EMAIL", raising=False)
 
-
 class TestTemporalDashboardSettings:
     def test_default_values(self):
         settings = TemporalDashboardSettings(_env_file=None)
@@ -160,7 +154,6 @@ class TestTemporalDashboardSettings:
 
         monkeypatch.delenv("TEMPORAL_DASHBOARD_ACTIONS_ENABLED", raising=False)
         monkeypatch.delenv("TEMPORAL_DASHBOARD_SUBMIT_ENABLED", raising=False)
-
 
 class TestFeatureFlagsSettings:
     def test_task_template_catalog_reads_prefixed_env(self, monkeypatch):
@@ -371,7 +364,6 @@ class TestFeatureFlagsSettings:
 
         assert settings.jira_create_page_default_project_key == "ENG"
         assert settings.jira_create_page_default_board_id == "42"
-
 
 class TestWorkflowSettings:
     @pytest.fixture(autouse=True)
@@ -721,10 +713,6 @@ class TestWorkflowSettings:
         assert settings.repo_root == "/tmp/workspace-root"
         monkeypatch.delenv("WORKFLOW_REPO_ROOT", raising=False)
 
-
-
-
-
     def test_live_session_env_overrides(self, monkeypatch):
         """Live session settings should honor MOONMIND_LIVE_SESSION_* overrides."""
 
@@ -936,7 +924,6 @@ class TestWorkflowSettings:
         assert settings.workflow.default_queue == "moonmind.jobs"
         assert settings.workflow.codex_queue == "moonmind.jobs"
 
-
 def test_task_proposal_policy_settings_defaults(app_settings_defaults):
     """Task proposal defaults should expose policy knobs on both settings."""
 
@@ -947,7 +934,6 @@ def test_task_proposal_policy_settings_defaults(app_settings_defaults):
     assert settings.workflow.proposal_max_items_project == 3
     assert settings.task_proposals.moonmind_severity_floor_default == "high"
     assert settings.workflow.proposal_moonmind_severity_floor == "high"
-
 
 def test_task_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) -> None:
     """Environment variables should override policy defaults everywhere."""
@@ -973,7 +959,6 @@ def test_task_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) 
     monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_MOONMIND", raising=False)
     monkeypatch.delenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", raising=False)
 
-
 def test_workflow_settings_accept_queue_aliases(monkeypatch) -> None:
     """WORKFLOW_DEFAULT_* aliases should configure workflow queue defaults."""
 
@@ -990,7 +975,6 @@ def test_workflow_settings_accept_queue_aliases(monkeypatch) -> None:
     monkeypatch.delenv("WORKFLOW_DEFAULT_QUEUE", raising=False)
     monkeypatch.delenv("WORKFLOW_DEFAULT_EXCHANGE", raising=False)
     monkeypatch.delenv("WORKFLOW_DEFAULT_ROUTING_KEY", raising=False)
-
 
 class TestAppSettingsRuntimeValidation:
     def test_app_settings_allows_claude_default_with_api_key(

@@ -51,7 +51,7 @@ Test implications: Existing Codex tests plus a Claude no-call assertion.
 ## SC-007 Traceability
 
 Decision: Preserve MM-446 and DESIGN-REQ-005/008/009 across `spec.md`, `plan.md`, `tasks.md`, and verification.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-446-moonspec-orchestration-input.md` is the canonical orchestration input.
+Evidence: `spec.md` (Input) is the canonical orchestration input.
 Rationale: Downstream artifacts and PR metadata need unambiguous Jira/source mapping.
 Alternatives considered: Reference only the source design document; rejected because the user explicitly required preserving MM-446.
 Test implications: Final verification.

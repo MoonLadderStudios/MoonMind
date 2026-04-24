@@ -8,7 +8,7 @@ FULLY_IMPLEMENTED
 
 | Check | Evidence | Result |
 |-------|----------|--------|
-| MM-381 source preservation | `docs/tmp/jira-orchestration-inputs/MM-381-moonspec-orchestration-input.md`, `specs/200-jira-import-declared-targets/spec.md` | PASS |
+| MM-381 source preservation | `spec.md` (Input), `specs/200-jira-import-declared-targets/spec.md` | PASS |
 | Feature artifacts | `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/create-page-jira-import-targets.md`, `quickstart.md`, `tasks.md` | PASS |
 | Focused UI tests | `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` | PASS, 150 tests |
 | Unit wrapper | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` | PASS, 3506 Python tests, 16 subtests, and 150 Create page UI tests |

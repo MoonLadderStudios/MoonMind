@@ -72,7 +72,7 @@ Verification
 - Verify MM-404 and the original synthesized Jira preset brief are preserved in MoonSpec artifacts and delivery metadata.
 ```
 
-**Canonical Jira Brief**: `docs/tmp/jira-orchestration-inputs/MM-404-moonspec-orchestration-input.md`
+**Canonical Jira Brief**: `spec.md` (Input)
 
 ## Original Jira Preset Brief
 

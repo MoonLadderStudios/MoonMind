@@ -124,7 +124,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - Context pack primitives (`rag/context_pack.py`)
 - RAG retrieval CLI (`moonmind rag search`)
 - RAG overlay and guardrails
-- RAG doc ↔ spec consolidation completed (see `docs/tmp/RagDocUpdates.md`)
+- RAG doc ↔ spec consolidation completed (see `docs/MoonMindRoadmap.md`)
 
 ### Remaining tasks
 - [ ] **5.1** End-to-end manifest ingest testing — Manifest pipeline built but not fully tested against live data sources
@@ -254,9 +254,9 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 These are technical debt items that don't map to README claims but improve code quality and maintainability.
 
 ### Remaining tasks
-- [x] **H.1** Complete legacy system removal — Code removal is complete (migration `c1d2e3f4a5b6`); requirements and guard tests in `specs/087-orchestrator-removal/` and `tests/unit/orchestrator_removal/`. Remaining documentation updates are tracked in `docs/tmp/016-SingleSubstrateMigration.md`.
-- [ ] **H.2** Spec deduplication — Merge duplicate specs identified in `docs/tmp/SpecMergeReview.md`: Worker Pause (038/040), Claude gating (044/046), Manifest Phase 0 (032/034), Jules events (048 stub → delete), Task Presets (026/028)
-- [ ] **H.3** Legacy skill dispatch cleanup — Remove dead `tool.type == "skill"` branch in `run.py`; all current plan generators emit `agent_runtime` nodes. See `docs/tmp/skill-system-alignment.md`.
+- [x] **H.1** Complete legacy system removal — Code removal is complete (migration `c1d2e3f4a5b6`); requirements and guard tests in `specs/087-orchestrator-removal/` and `tests/unit/orchestrator_removal/`. Remaining documentation updates are tracked in `docs/MoonMindRoadmap.md`.
+- [ ] **H.2** Spec deduplication — Merge duplicate specs identified in `docs/MoonMindRoadmap.md`: Worker Pause (038/040), Claude gating (044/046), Manifest Phase 0 (032/034), Jules events (048 stub → delete), Task Presets (026/028)
+- [ ] **H.3** Legacy skill dispatch cleanup — Remove dead `tool.type == "skill"` branch in `run.py`; all current plan generators emit `agent_runtime` nodes. See `docs/MoonMindRoadmap.md`.
 - [ ] **H.4** Delete legacy docs identified in `docs/LegacyDocsReview.md` — 6 docs flagged for deletion (`CodexCliWorkers.md`, `GeminiCliWorkers.md`, `SpecKitAutomation.md`, etc.)
 
 ---
@@ -282,7 +282,7 @@ The milestones below are ordered by **impact on delivering the README promise** 
 
 ---
 
-## `docs/tmp/` File Dispositions
+## `local-only handoffs` File Dispositions
 
 | File | Disposition | Rationale |
 |------|-------------|-----------|

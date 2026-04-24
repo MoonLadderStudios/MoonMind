@@ -21,7 +21,7 @@
 
 **Purpose**: Confirm the MM-503 artifact set, target runtime surfaces, and focused validation files before verification work begins.
 
-- [X] T001 Confirm `docs/tmp/jira-orchestration-inputs/MM-503-moonspec-orchestration-input.md`, `specs/252-route-docker-workload-plane/spec.md`, `specs/252-route-docker-workload-plane/plan.md`, `specs/252-route-docker-workload-plane/research.md`, `specs/252-route-docker-workload-plane/contracts/shared-docker-workload-plane-contract.md`, and `specs/252-route-docker-workload-plane/quickstart.md` remain the canonical MM-503 source and planning artifacts for FR-007 and SC-006
+- [X] T001 Confirm `spec.md` (Input), `specs/252-route-docker-workload-plane/spec.md`, `specs/252-route-docker-workload-plane/plan.md`, `specs/252-route-docker-workload-plane/research.md`, `specs/252-route-docker-workload-plane/contracts/shared-docker-workload-plane-contract.md`, and `specs/252-route-docker-workload-plane/quickstart.md` remain the canonical MM-503 source and planning artifacts for FR-007 and SC-006
 - [X] T002 Confirm the MM-503 runtime touchpoints in `moonmind/workloads/registry.py`, `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workflows/temporal/activity_runtime.py`, `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py`
 
 ---
@@ -81,7 +81,7 @@
 
 - [X] T016 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_activity_runtime.py` and confirm MM-503 unit evidence passes together
 - [X] T017 Attempt `./tools/test_integration.sh`, record any environment blocker precisely, then run `pytest tests/integration/temporal/test_profile_backed_workload_contract.py -q --tb=short -m 'integration_ci'` as a focused fallback to confirm the MM-503 dispatcher/runtime shared-plane evidence passes
-- [X] T018 Review `specs/252-route-docker-workload-plane/spec.md`, `specs/252-route-docker-workload-plane/plan.md`, `specs/252-route-docker-workload-plane/research.md`, `specs/252-route-docker-workload-plane/contracts/shared-docker-workload-plane-contract.md`, `specs/252-route-docker-workload-plane/quickstart.md`, and `docs/tmp/jira-orchestration-inputs/MM-503-moonspec-orchestration-input.md` to confirm FR-007 and SC-006 preserve MM-503 across downstream artifacts
+- [X] T018 Review `specs/252-route-docker-workload-plane/spec.md`, `specs/252-route-docker-workload-plane/plan.md`, `specs/252-route-docker-workload-plane/research.md`, `specs/252-route-docker-workload-plane/contracts/shared-docker-workload-plane-contract.md`, `specs/252-route-docker-workload-plane/quickstart.md`, and `spec.md` (Input) to confirm FR-007 and SC-006 preserve MM-503 across downstream artifacts
 
 **Checkpoint**: MM-503 is complete when the existing shared workload-plane behavior is proven across curated and unrestricted tool classes and the canonical artifact set preserves the Jira source brief.
 

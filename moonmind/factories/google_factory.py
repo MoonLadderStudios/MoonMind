@@ -6,7 +6,6 @@ from moonmind.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-
 def list_google_models(api_key: str | None = None):
     key_to_use = api_key if api_key else settings.google.google_api_key
     if not key_to_use:
@@ -17,7 +16,6 @@ def list_google_models(api_key: str | None = None):
 
     genai.configure(api_key=key_to_use)
     return genai.list_models()
-
 
 def get_google_model(model_name: str = None, api_key: str = None):
     if not model_name:

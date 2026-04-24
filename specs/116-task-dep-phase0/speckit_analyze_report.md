@@ -33,7 +33,7 @@ No CRITICAL or HIGH findings.
 
 ## Constitution Alignment Issues
 
-None identified. The feature aligns cleanly with Principle XII: canonical doc = desired state, migration backlog = docs/tmp/.
+None identified. The feature aligns cleanly with Principle XII: canonical doc = desired state, migration backlog = docs/Tasks/TaskDependencies.md
 
 ---
 

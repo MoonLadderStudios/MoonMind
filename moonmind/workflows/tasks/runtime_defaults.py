@@ -47,11 +47,9 @@ _RUNTIME_EFFORT_ENV_KEYS: dict[str, tuple[str, ...]] = {
     "jules": ("MOONMIND_JULES_EFFORT", "JULES_REASONING_EFFORT"),
 }
 
-
 def _clean_optional_string(value: object) -> str | None:
     text = str(value).strip() if value is not None else ""
     return text or None
-
 
 def normalize_runtime_id(runtime: object) -> str:
     """Return the canonical managed runtime id for *runtime*.
@@ -62,7 +60,6 @@ def normalize_runtime_id(runtime: object) -> str:
     """
     key = (_clean_optional_string(runtime) or DEFAULT_TASK_RUNTIME).lower()
     return _RUNTIME_ALIASES.get(key, key)
-
 
 def resolve_default_task_runtime(
     workflow_settings: Any,
@@ -76,7 +73,6 @@ def resolve_default_task_runtime(
     )
     raw = (configured or fallback).lower()
     return normalize_runtime_id(raw)
-
 
 def resolve_runtime_defaults(
     runtime: object,
@@ -119,7 +115,6 @@ def resolve_runtime_defaults(
         _DEFAULT_RUNTIME_EFFORTS.get(runtime_key),
     )
     return model, effort
-
 
 __all__ = [
     "DEFAULT_REPOSITORY",

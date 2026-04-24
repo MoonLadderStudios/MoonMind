@@ -25,7 +25,7 @@
 
 **Purpose**: Confirm MM-382 input, existing related artifacts, and runtime implementation surfaces.
 
-- [X] T001 Classify `docs/tmp/jira-orchestration-inputs/MM-382-moonspec-orchestration-input.md` as a single-story runtime feature request covering MM-382
+- [X] T001 Classify `spec.md` (Input) as a single-story runtime feature request covering MM-382
 - [X] T002 Inspect existing Moon Spec artifacts and identify `specs/196-preserve-attachment-bindings/` as related but keyed to MM-369, requiring a new MM-382 canonical spec directory
 - [X] T003 Inspect `docs/UI/CreatePage.md` sections 13 and 14 for DESIGN-REQ-019, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-005, and DESIGN-REQ-006
 - [X] T004 Inspect current implementation and tests in `frontend/src/lib/temporalTaskEditing.ts`, `frontend/src/entrypoints/task-create.tsx`, `frontend/src/entrypoints/task-create.test.tsx`, `tests/unit/api/routers/test_executions.py`, and `tests/contract/test_temporal_execution_api.py`

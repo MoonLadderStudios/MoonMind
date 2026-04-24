@@ -9,7 +9,6 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
 )
 
-
 def _record() -> CodexManagedSessionRecord:
     return CodexManagedSessionRecord(
         sessionId="sess-1",
@@ -27,7 +26,6 @@ def _record() -> CodexManagedSessionRecord:
         startedAt=datetime(2026, 4, 6, 12, 0, tzinfo=UTC),
     )
 
-
 def test_store_round_trips_phase6_session_record(tmp_path) -> None:
     store = ManagedSessionStore(tmp_path)
     record = _record()
@@ -39,7 +37,6 @@ def test_store_round_trips_phase6_session_record(tmp_path) -> None:
     assert loaded == record
     assert loaded.task_run_id == "task-1"
     assert loaded.container_id == "ctr-1"
-
 
 @pytest.mark.asyncio
 async def test_store_update_status_persists_artifact_refs_and_offsets(tmp_path) -> None:
@@ -63,7 +60,6 @@ async def test_store_update_status_persists_artifact_refs_and_offsets(tmp_path) 
     assert updated.diagnostics_ref == "sess-1/diagnostics.json"
     assert updated.last_log_offset == 17
     assert updated.last_log_at == datetime(2026, 4, 6, 12, 5, tzinfo=UTC)
-
 
 @pytest.mark.asyncio
 async def test_store_update_revalidates_and_normalizes_mutations(tmp_path) -> None:

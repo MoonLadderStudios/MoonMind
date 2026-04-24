@@ -8,4 +8,4 @@
 - [x] Update `moonmind/workflows/temporal/runtime/supervisor.py` and `store.py` to consume the new schema refs.
 - [x] Update `moonmind/proxy/routers/...` to expose endpoints `GET /api/task-runs/{id}/observability-summary`, `logs/stdout`, `logs/stderr`, etc.
 - [x] Write API unit tests.
-- [x] Mark completion in `docs/tmp/009-LiveLogsPlan.md`.
+- [x] Mark completion in `docs/ManagedAgents/LiveLogs.md`.

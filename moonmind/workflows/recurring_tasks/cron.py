@@ -6,16 +6,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-
 class CronExpressionError(ValueError):
     """Raised when a cron expression or timezone value is invalid."""
-
 
 @dataclass(frozen=True, slots=True)
 class _CronField:
     values: frozenset[int]
     wildcard: bool
-
 
 @dataclass(frozen=True, slots=True)
 class CronSpec:
@@ -25,7 +22,6 @@ class CronSpec:
     month: _CronField
     weekday: _CronField
 
-
 def _parse_int(value: str, *, field_name: str) -> int:
     text = str(value or "").strip()
     if not text:
@@ -33,7 +29,6 @@ def _parse_int(value: str, *, field_name: str) -> int:
     if not text.isdigit():
         raise CronExpressionError(f"{field_name} contains invalid token '{text}'")
     return int(text)
-
 
 def _parse_field(
     token: str,
@@ -99,7 +94,6 @@ def _parse_field(
 
     return _CronField(values=frozenset(values), wildcard=False)
 
-
 def parse_cron_expression(expression: str) -> CronSpec:
     """Parse a standard 5-field cron expression."""
 
@@ -127,7 +121,6 @@ def parse_cron_expression(expression: str) -> CronSpec:
         weekday=weekday,
     )
 
-
 def validate_timezone_name(timezone_name: str) -> str:
     """Validate and normalize an IANA timezone name."""
 
@@ -141,7 +134,6 @@ def validate_timezone_name(timezone_name: str) -> str:
         raise CronExpressionError(f"timezone '{normalized}' is invalid") from exc
 
     return normalized
-
 
 def _matches_day(spec: CronSpec, candidate: datetime) -> bool:
     day_match = candidate.day in spec.day.values
@@ -157,7 +149,6 @@ def _matches_day(spec: CronSpec, candidate: datetime) -> bool:
         return day_match
     return day_match or weekday_match
 
-
 def _matches(spec: CronSpec, candidate: datetime) -> bool:
     return (
         candidate.minute in spec.minute.values
@@ -165,7 +156,6 @@ def _matches(spec: CronSpec, candidate: datetime) -> bool:
         and candidate.month in spec.month.values
         and _matches_day(spec, candidate)
     )
-
 
 def compute_next_occurrence(
     *,
@@ -192,7 +182,6 @@ def compute_next_occurrence(
         cursor += timedelta(minutes=1)
 
     raise CronExpressionError("unable to compute next occurrence for cron schedule")
-
 
 __all__ = [
     "CronExpressionError",

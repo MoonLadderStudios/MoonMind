@@ -45,11 +45,9 @@ MOCK_PROFILE_READ_SANITIZED_SCHEMA = UserProfileReadSanitized(
     id=MOCK_PROFILE_DATA["id"], user_id=MOCK_PROFILE_DATA["user_id"]
 )
 
-
 @pytest.fixture
 def mock_db_session():
     return AsyncMock(spec=AsyncSession)
-
 
 @pytest.fixture
 def mock_profile_service():
@@ -57,7 +55,6 @@ def mock_profile_service():
     service.get_or_create_profile = AsyncMock(return_value=MOCK_PROFILE_READ_SCHEMA)
     service.update_profile = AsyncMock(return_value=MOCK_PROFILE_READ_SCHEMA)
     return service
-
 
 @pytest.mark.asyncio
 async def test_get_current_user_profile_success(mock_db_session, mock_profile_service):
@@ -78,7 +75,6 @@ async def test_get_current_user_profile_success(mock_db_session, mock_profile_se
     assert result.openai_api_key_set is True  # test data has openai_api_key set
     assert result.anthropic_api_key_set is True
 
-
 @pytest.mark.asyncio
 async def test_get_current_user_profile_user_id_none(
     mock_db_session, mock_profile_service
@@ -97,7 +93,6 @@ async def test_get_current_user_profile_user_id_none(
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
     assert exc_info.value.detail == "User ID is missing."
     mock_profile_service.get_or_create_profile.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_update_current_user_profile_success(
@@ -125,7 +120,6 @@ async def test_update_current_user_profile_success(
         db_session=mock_db_session, user_id=USER_ID, profile_data=update_data
     )
 
-
 @pytest.mark.asyncio
 async def test_update_current_user_profile_user_id_none(
     mock_db_session, mock_profile_service
@@ -148,7 +142,6 @@ async def test_update_current_user_profile_user_id_none(
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
     assert exc_info.value.detail == "User ID is missing."
     mock_profile_service.update_profile.assert_not_called()
-
 
 # Test for the get_profile_service dependency itself (simple test)
 @pytest.mark.asyncio

@@ -4,7 +4,6 @@ from pathlib import Path
 
 from moonmind.schemas.managed_session_models import LaunchCodexManagedSessionRequest
 
-
 def write_fake_app_server(
     tmp_path: Path,
     *,
@@ -306,7 +305,6 @@ __COMPLETION_BLOCK__
         encoding="utf-8",
     )
     return script
-
 
 def launch_request(tmp_path: Path) -> LaunchCodexManagedSessionRequest:
     workspace_path = tmp_path / "repo"

@@ -21,7 +21,7 @@
 
 **Purpose**: Confirm the MM-500 source brief, feature scope, and repo surfaces before verification work.
 
-- [X] T001 Confirm `docs/tmp/jira-orchestration-inputs/MM-500-moonspec-orchestration-input.md` is the canonical MM-500 source input and no existing MM-500 spec directory exists under `specs/`
+- [X] T001 Confirm `spec.md` (Input) is the canonical MM-500 source input and no existing MM-500 spec directory exists under `specs/`
 - [X] T002 Confirm the MM-500 runtime touchpoints in `moonmind/schemas/workload_models.py`, `moonmind/workloads/registry.py`, `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workflows/temporal/activity_runtime.py`, and the existing workload unit suites
 
 ---
@@ -66,7 +66,7 @@
 - [X] T009 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workloads/test_docker_workload_launcher.py` and confirm the MM-500-focused workload unit suites pass
 - [X] T010 Attempt `./tools/test_integration.sh`, record the managed-session Docker-socket blocker, then run `pytest tests/integration/temporal/test_profile_backed_workload_contract.py tests/integration/temporal/test_integration_ci_tool_contract.py -q --tb=short -m 'integration_ci'` as a focused fallback and confirm the MM-500 integration boundary plus existing integration-ci curated-tool evidence pass
 - [X] T011 Review `tests/integration/temporal/test_integration_ci_tool_contract.py` together with the new MM-500 integration boundary to confirm FR-005 and DESIGN-REQ-025 remain covered without widening the profile-backed path
-- [X] T012 Review `spec.md`, `plan.md`, `research.md`, `contracts/profile-backed-workload-contract.md`, `quickstart.md`, and `docs/tmp/jira-orchestration-inputs/MM-500-moonspec-orchestration-input.md` to confirm FR-007 and SC-006 preserve MM-500 across downstream artifacts
+- [X] T012 Review `spec.md`, `plan.md`, `research.md`, `contracts/profile-backed-workload-contract.md`, `quickstart.md`, and `spec.md` (Input) to confirm FR-007 and SC-006 preserve MM-500 across downstream artifacts
 
 **Checkpoint**: MM-500 is complete when the existing profile-backed workload/helper implementation is proven at unit and integration boundaries and the canonical artifact set preserves the Jira source brief.
 

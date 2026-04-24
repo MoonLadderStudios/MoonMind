@@ -12,7 +12,6 @@ from moonmind.workflows.temporal.runtime.providers.registry import (
     supported_runtime_ids,
 )
 
-
 class TestOAuthProviderRegistry:
     """Verify provider registry entries and lookup."""
 
@@ -44,8 +43,6 @@ class TestOAuthProviderRegistry:
         assert spec["provider_label"] == "Anthropic"
         assert spec["success_check"] == "claude_config_exists"
         assert get_provider_bootstrap_command("claude_code") == ("claude", "login")
-
-
 
     def test_unknown_runtime_returns_none(self) -> None:
         assert get_provider("unknown_runtime") is None

@@ -17,7 +17,6 @@ OPENCLAW_DISABLED_MESSAGE = (
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 
-
 @dataclass(frozen=True, slots=True)
 class OpenClawRuntimeGate:
     """Whether OpenClaw is enabled and required env vars are present."""
@@ -26,10 +25,8 @@ class OpenClawRuntimeGate:
     missing: tuple[str, ...]
     error_message: str
 
-
 def _clean(value: object | None) -> str:
     return str(value or "").strip()
-
 
 def _enabled_from_env(*, env: Mapping[str, Any]) -> bool:
     raw = _clean(env.get("OPENCLAW_ENABLED"))
@@ -41,7 +38,6 @@ def _enabled_from_env(*, env: Mapping[str, Any]) -> bool:
     if lowered in _FALSE_VALUES:
         return False
     return False
-
 
 def build_openclaw_gate(
     *,
@@ -66,10 +62,8 @@ def build_openclaw_gate(
         error_message=error_message,
     )
 
-
 def is_openclaw_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
     return build_openclaw_gate(env=env).enabled
-
 
 def resolved_gateway_url(*, env: Mapping[str, Any] | None = None) -> str:
     """Return configured gateway base URL or local dev default."""
@@ -78,12 +72,10 @@ def resolved_gateway_url(*, env: Mapping[str, Any] | None = None) -> str:
     url = _clean(source.get("OPENCLAW_GATEWAY_URL"))
     return url or DEFAULT_GATEWAY_URL
 
-
 def resolved_default_model(*, env: Mapping[str, Any] | None = None) -> str:
     source = env if env is not None else os.environ
     m = _clean(source.get("OPENCLAW_DEFAULT_MODEL"))
     return m or "openclaw-default"
-
 
 def resolved_timeout_seconds(*, env: Mapping[str, Any] | None = None) -> int:
     source = env if env is not None else os.environ
@@ -94,7 +86,6 @@ def resolved_timeout_seconds(*, env: Mapping[str, Any] | None = None) -> int:
         return max(60, int(raw))
     except ValueError:
         return 3600
-
 
 __all__ = [
     "DEFAULT_GATEWAY_URL",

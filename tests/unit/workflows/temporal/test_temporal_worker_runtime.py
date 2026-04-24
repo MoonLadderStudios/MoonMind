@@ -29,7 +29,6 @@ from moonmind.workflows.temporal.worker_runtime import (
 )
 from moonmind.workflows.temporal.workers import AGENT_RUNTIME_FLEET, SANDBOX_FLEET, WORKFLOW_FLEET
 
-
 @asynccontextmanager
 async def _template_db(tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/child_task_templates.db"
@@ -45,7 +44,6 @@ async def _template_db(tmp_path):
         yield async_session_maker
     finally:
         await engine.dispose()
-
 
 def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -> None:
     record = logging.LogRecord(
@@ -112,12 +110,10 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -
     assert "rawLog" not in record.managed_session
     assert "token" not in record.managed_session
 
-
 def test_opentelemetry_log_format_includes_session_locator_fields() -> None:
     assert "container_id=%(managed_session_container_id)s" in _OPENTELEMETRY_LOG_FORMAT
     assert "thread_id=%(managed_session_thread_id)s" in _OPENTELEMETRY_LOG_FORMAT
     assert "turn_id=%(managed_session_turn_id)s" in _OPENTELEMETRY_LOG_FORMAT
-
 
 def test_configure_worker_logging_applies_otel_formatter_to_existing_handlers() -> None:
     handler = logging.StreamHandler()
@@ -136,7 +132,6 @@ def test_configure_worker_logging_applies_otel_formatter_to_existing_handlers() 
         isinstance(existing_filter, OpenTelemetryLoggingFilter)
         for existing_filter in handler.filters
     )
-
 
 def test_runtime_planner_preserves_execution_profile_ref():
     planner = _build_runtime_planner()
@@ -162,7 +157,6 @@ def test_runtime_planner_preserves_execution_profile_ref():
     runtime_node = plan["nodes"][0]["inputs"]["runtime"]
     assert runtime_node["mode"] == "claude"
     assert runtime_node["executionProfileRef"] == "claude-minimax-oauth"
-
 
 def test_runtime_planner_preserves_execution_profile_ref_snake_case():
     planner = _build_runtime_planner()
@@ -190,7 +184,6 @@ def test_runtime_planner_preserves_execution_profile_ref_snake_case():
         == "anthropic-work"
     )
 
-
 def test_runtime_planner_promotes_profile_id_to_runtime_node():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
@@ -215,7 +208,6 @@ def test_runtime_planner_promotes_profile_id_to_runtime_node():
     runtime_node = plan["nodes"][0]["inputs"]["runtime"]
     assert runtime_node["profileId"] == "codex-provider-profile"
     assert runtime_node["providerProfile"] == "codex-provider-profile"
-
 
 def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
     planner = _build_runtime_planner()
@@ -247,7 +239,6 @@ def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
     assert '"pr": "123"' in node_inputs["instructions"]
     assert node_inputs["repo"] == "MoonLadderStudios/MoonMind"
     assert node_inputs["selectedSkill"] == "pr-resolver"
-
 
 def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
     planner = _build_runtime_planner()
@@ -293,7 +284,7 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
     assert breakdown["inputs"]["selectedSkill"] == "moonspec-breakdown"
     assert "Do not create or modify any `spec.md`" in breakdown["inputs"]["instructions"]
     assert breakdown["inputs"]["storyBreakdownPath"].startswith(
-        "docs/tmp/story-breakdowns/"
+        "artifacts/story-breakdowns/"
     )
     assert breakdown["inputs"]["storyBreakdownPath"].endswith("/stories.json")
     assert "commit your work" in breakdown["inputs"]["instructions"]
@@ -312,7 +303,6 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
         jira["inputs"]["storyBreakdownPath"]
         == breakdown["inputs"]["storyBreakdownPath"]
     )
-
 
 def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset():
     planner = _build_runtime_planner()
@@ -358,7 +348,7 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
     jira = plan["nodes"][1]
 
     assert breakdown["inputs"]["storyBreakdownPath"].startswith(
-        "docs/tmp/story-breakdowns/"
+        "artifacts/story-breakdowns/"
     )
     assert breakdown["inputs"]["storyOutput"]["mode"] == "jira"
     assert breakdown["inputs"]["targetBranch"].startswith("jira-breakdown-")
@@ -376,7 +366,6 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
     assert jira["inputs"]["storyOutput"]["jira"]["dependencyMode"] == (
         "linear_blocker_chain"
     )
-
 
 def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
     planner = _build_runtime_planner()
@@ -446,7 +435,6 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
         "sourceIssueKey": "MM-404"
     }
 
-
 @pytest.mark.asyncio
 async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path):
     async with _template_db(tmp_path) as session_maker:
@@ -487,7 +475,6 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
     assert task["steps"][12]["title"] == "Move Jira issue to Code Review"
     assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
     assert len(task["appliedStepTemplates"][0]["stepIds"]) == 13
-
 
 def test_runtime_planner_uses_branch_handoff_for_jira_output_when_task_publish_none():
     planner = _build_runtime_planner()
@@ -540,7 +527,6 @@ def test_runtime_planner_uses_branch_handoff_for_jira_output_when_task_publish_n
     assert jira["inputs"]["storyOutput"]["mode"] == "jira"
     assert jira["inputs"]["targetBranch"] == breakdown["inputs"]["targetBranch"]
 
-
 def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
@@ -551,7 +537,7 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():
     plan = planner(
         inputs={
             "task": {
-                "instructions": "Create Jira stories from docs/tmp/story-breakdowns/example.",
+                "instructions": "Create Jira stories from artifacts/story-breakdowns/example.",
                 "tool": {"type": "skill", "name": "jira-issue-creator"},
                 "runtime": {"mode": "codex_cli"},
                 "publish": {"mode": "pr"},
@@ -572,7 +558,6 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():
     assert node["inputs"]["instructions"].startswith("Use $jira-issue-creator.")
     assert "targetBranch" not in node["inputs"]
     assert "commit your work" not in node["inputs"]["instructions"]
-
 
 def test_runtime_planner_does_not_require_pr_branch_for_jira_verify():
     planner = _build_runtime_planner()
@@ -606,7 +591,6 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_verify():
     assert "targetBranch" not in node["inputs"]
     assert "commit your work" not in node["inputs"]["instructions"]
 
-
 def test_runtime_planner_does_not_require_pr_branch_for_jira_pr_verify():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
@@ -639,7 +623,6 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_pr_verify():
     assert "targetBranch" not in node["inputs"]
     assert "commit your work" not in node["inputs"]["instructions"]
 
-
 def test_runtime_planner_inherits_top_level_jira_skill_for_multi_step_publish():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
@@ -670,7 +653,6 @@ def test_runtime_planner_inherits_top_level_jira_skill_for_multi_step_publish():
         assert node["inputs"]["publishMode"] == "none"
         assert "targetBranch" not in node["inputs"]
         assert node["inputs"]["instructions"].startswith("Use $jira-issue-creator.")
-
 
 def test_runtime_planner_single_step_tool_does_not_override_top_level_publish_scope():
     planner = _build_runtime_planner()
@@ -704,7 +686,6 @@ def test_runtime_planner_single_step_tool_does_not_override_top_level_publish_sc
     assert node["inputs"]["publishMode"] == "pr"
     assert "targetBranch" in node["inputs"]
 
-
 def test_runtime_planner_invalid_step_list_keeps_non_jira_publish_scope():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
@@ -733,7 +714,6 @@ def test_runtime_planner_invalid_step_list_keeps_non_jira_publish_scope():
     assert node["inputs"]["selectedSkill"] == "pr-resolver"
     assert node["inputs"]["publishMode"] == "pr"
     assert "targetBranch" in node["inputs"]
-
 
 def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
     """When pr-resolver has no inputs.pr but git.startingBranch is set,
@@ -768,7 +748,6 @@ def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
     assert '"pr": "fix/my-feature-branch"' in node_inputs["instructions"]
     assert plan["metadata"]["title"] == "fix/my-feature-branch"
 
-
 def test_runtime_planner_pr_resolver_title_uses_case_insensitive_tool_inputs():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
@@ -795,7 +774,6 @@ def test_runtime_planner_pr_resolver_title_uses_case_insensitive_tool_inputs():
     node_inputs = plan["nodes"][0]["inputs"]
     assert '"pr": "fix/from-tool-inputs"' in node_inputs["instructions"]
     assert plan["metadata"]["title"] == "fix/from-tool-inputs"
-
 
 def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions():
     planner = _build_runtime_planner()
@@ -826,7 +804,6 @@ def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions(
             snapshot=snapshot,
         )
 
-
 def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -852,7 +829,6 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     assert artifacts_root.is_dir()
     assert not (artifacts_root / "artifacts").exists()
 
-
 def test_build_agent_runtime_deps_reuses_global_session_network(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -876,13 +852,11 @@ def test_build_agent_runtime_deps_reuses_global_session_network(
     assert session_controller._network_name == "shared-moonmind-network"
     assert session_controller._moonmind_url == "http://moonmind-api:8000"
 
-
 def _make_snapshot():
     return SimpleNamespace(
         digest="reg:sha256:test",
         artifact_ref="art_registry_123",
     )
-
 
 def test_runtime_planner_multi_step_generates_multiple_nodes_with_edges():
     planner = _build_runtime_planner()
@@ -924,7 +898,6 @@ def test_runtime_planner_multi_step_generates_multiple_nodes_with_edges():
     assert len(edges) == 2
     assert edges[0] == {"from": "s1", "to": "s2"}
     assert edges[1] == {"from": "s2", "to": "s3"}
-
 
 def test_runtime_planner_multi_step_preserves_custom_keys():
     planner = _build_runtime_planner()
@@ -969,7 +942,6 @@ def test_runtime_planner_multi_step_preserves_custom_keys():
     assert s2_inputs["instructions"] == "Step two instructions"
     assert "custom_field" not in s2_inputs
 
-
 def test_runtime_planner_single_step_falls_back_to_single_node():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()
@@ -993,7 +965,6 @@ def test_runtime_planner_single_step_falls_back_to_single_node():
     assert plan["edges"] == []
     assert plan["nodes"][0]["inputs"]["instructions"] == "Do the thing"
 
-
 def test_runtime_planner_no_steps_falls_back_to_single_node():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()
@@ -1012,7 +983,6 @@ def test_runtime_planner_no_steps_falls_back_to_single_node():
     assert len(plan["nodes"]) == 1
     assert plan["edges"] == []
     assert plan["nodes"][0]["inputs"]["instructions"] == "Do the thing"
-
 
 def test_runtime_planner_multi_step_step_fallback_instructions():
     """When a step has no instructions, the task-level instructions are used."""
@@ -1038,7 +1008,6 @@ def test_runtime_planner_multi_step_step_fallback_instructions():
     assert plan["nodes"][0]["inputs"]["instructions"] == "Explicit step A"
     assert plan["nodes"][1]["inputs"]["instructions"] == "Task-level fallback"
 
-
 def test_runtime_planner_multi_step_auto_generated_ids():
     """When steps lack explicit IDs, sequential IDs are generated."""
     planner = _build_runtime_planner()
@@ -1063,7 +1032,6 @@ def test_runtime_planner_multi_step_auto_generated_ids():
     assert plan["nodes"][1]["id"] == "step-2"
     assert plan["edges"] == [{"from": "step-1", "to": "step-2"}]
 
-
 def test_runtime_planner_publish_pr_appends_gh_suffix_for_cli_runtimes():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()
@@ -1084,7 +1052,6 @@ def test_runtime_planner_publish_pr_appends_gh_suffix_for_cli_runtimes():
     assert "commit your work" in text
     assert "Do NOT push or create a pull request" in text
     assert "gh pr create" not in text
-
 
 def test_runtime_planner_publish_pr_skips_gh_suffix_for_jules():
     """Jules uses API automationMode AUTO_CREATE_PR; do not inject gh CLI text."""
@@ -1107,7 +1074,6 @@ def test_runtime_planner_publish_pr_skips_gh_suffix_for_jules():
     assert text == "Do work"
     assert "gh pr create" not in text
 
-
 def test_runtime_planner_publish_pr_uses_task_title_for_target_branch_prefix():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()
@@ -1128,7 +1094,6 @@ def test_runtime_planner_publish_pr_uses_task_title_for_target_branch_prefix():
     target = plan["nodes"][-1]["inputs"]["targetBranch"]
     assert target.startswith("fix-login-redirect-")
     assert re.fullmatch(r"[a-z0-9-]+-[0-9a-f]{8}", target)
-
 
 def test_runtime_planner_publish_pr_treats_authored_branch_as_base():
     planner = _build_runtime_planner()
@@ -1155,7 +1120,6 @@ def test_runtime_planner_publish_pr_treats_authored_branch_as_base():
     assert node_inputs["targetBranch"].startswith("fix-create-branch-publish-")
     assert re.fullmatch(r"[a-z0-9-]+-[0-9a-f]{8}", node_inputs["targetBranch"])
 
-
 def test_runtime_planner_publish_pr_uses_step_title_for_target_branch_prefix():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()
@@ -1178,7 +1142,6 @@ def test_runtime_planner_publish_pr_uses_step_title_for_target_branch_prefix():
     target = plan["nodes"][0]["inputs"]["targetBranch"]
     assert target.startswith("create-pr-friendly-branch-")
     assert re.fullmatch(r"[a-z0-9-]+-[0-9a-f]{8}", target)
-
 
 def test_runtime_planner_publish_pr_propagates_commit_message_override():
     planner = _build_runtime_planner()
@@ -1204,7 +1167,6 @@ def test_runtime_planner_publish_pr_propagates_commit_message_override():
         == "Use producer commit text"
     )
 
-
 def test_runtime_planner_publish_pr_falls_back_to_top_level_commit_message():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()
@@ -1223,12 +1185,10 @@ def test_runtime_planner_publish_pr_falls_back_to_top_level_commit_message():
 
     assert plan["nodes"][-1]["inputs"]["commitMessage"] == "Top-level commit text"
 
-
 def test_enforce_codex_config_skips_non_managed_fleet() -> None:
     with patch("api_service.scripts.ensure_codex_config.ensure_codex_config") as mock_ensure:
         _enforce_codex_config_for_managed_fleet(WORKFLOW_FLEET)
     mock_ensure.assert_not_called()
-
 
 @pytest.mark.parametrize("fleet", [SANDBOX_FLEET, AGENT_RUNTIME_FLEET])
 def test_enforce_codex_config_runs_for_managed_fleets(fleet: str) -> None:
@@ -1236,7 +1196,6 @@ def test_enforce_codex_config_runs_for_managed_fleets(fleet: str) -> None:
         mock_ensure.return_value = SimpleNamespace(path="/tmp/codex-config.toml")
         _enforce_codex_config_for_managed_fleet(fleet)
     mock_ensure.assert_called_once_with()
-
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
@@ -1309,7 +1268,6 @@ async def test_main_async_workflow_fleet(
     # Verify worker run is called
     mock_worker.run.assert_awaited_once()
 
-
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
 @patch("moonmind.workflows.temporal.worker_runtime._build_runtime_activities")
@@ -1362,7 +1320,6 @@ async def test_main_async_activity_fleet(
     mock_runtime_activities.assert_awaited_once_with(mock_topology)
     mock_worker.run.assert_awaited_once()
     mock_resources.aclose.assert_awaited_once()
-
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
@@ -1476,7 +1433,6 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     assert isinstance(proposal_service_factory(), typing.AsyncContextManager)
     await resources.aclose()
 
-
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
 @patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
@@ -1572,7 +1528,6 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         agent_skills_activities=ANY,
     )
     await resources.aclose()
-
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.settings")

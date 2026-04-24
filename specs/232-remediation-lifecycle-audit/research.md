@@ -3,7 +3,7 @@
 ## Input Classification
 
 Decision: MM-456 is a single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-456-moonspec-orchestration-input.md` defines one user story, one source document, one acceptance-criteria set, and one bounded runtime observability/audit behavior area.
+Evidence: `spec.md` (Input) defines one user story, one source document, one acceptance-criteria set, and one bounded runtime observability/audit behavior area.
 Rationale: The Jira preset brief selects remediation lifecycle evidence from `docs/Tasks/TaskRemediation.md` sections 13, 14, and 16; it does not ask to implement the entire remediation design.
 Alternatives considered: Treating `docs/Tasks/TaskRemediation.md` as a broad declarative design was rejected because the Jira brief already selected one independently testable story. Treating this as docs mode was rejected because the selected mode is runtime.
 Test implications: Unit and service-boundary tests should target exactly this lifecycle evidence story.

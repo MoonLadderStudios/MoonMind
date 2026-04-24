@@ -3,7 +3,6 @@
 import sys
 from pathlib import Path
 
-
 def test_teardown_script_exists_and_is_executable():
     """Verify that teardown_temporal.py exists and is syntactically valid."""
     script_path = Path("scripts/teardown_temporal.py")
@@ -15,7 +14,6 @@ def test_teardown_script_exists_and_is_executable():
         py_compile.compile(str(script_path), doraise=True)
     except Exception as e:
         assert False, f"Syntax error in script: {e}"
-
 
 def test_teardown_script_importable(monkeypatch):
     """Ensure the script can be imported without executing its side effects."""

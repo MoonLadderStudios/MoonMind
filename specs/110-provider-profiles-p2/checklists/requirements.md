@@ -31,4 +31,4 @@
 
 ## Notes
 
-- All items pass automatically as the requirements were sourced directly from the architectural document `docs/tmp/005-ProviderProfilesPlan.md`.
+- All items pass automatically as the requirements were sourced directly from the architectural document `docs/Tasks/SkillAndPlanContracts.md`.

@@ -7,11 +7,11 @@
 
 ## Source Requirements
 
-- **DOC-REQ-001**: All remaining Mission Control pages must use TypeScript/Vite entrypoints before legacy retirement can complete. Source: `docs/tmp/063-UI-TypeScriptSystem.md` Phase 2 / Phase 3.
+- **DOC-REQ-001**: All remaining Mission Control pages must use TypeScript/Vite entrypoints before legacy retirement can complete. Source: `docs/UI/TypeScriptSystem.md` Phase 2 / Phase 3.
 - **DOC-REQ-002**: Server-owned routes remain canonical; no SPA takeover is allowed during the migration. Source: `docs/UI/TypeScriptSystem.md` §§4, 5, 11, 15.
-- **DOC-REQ-003**: The legacy `dashboard.js` monolith and `task_dashboard.html` fallback shell must be removed once no routes require them. Source: `docs/tmp/063-UI-TypeScriptSystem.md` Phase 3.
-- **DOC-REQ-004**: Dashboard CSS ownership must move to the Vite/PostCSS pipeline instead of the standalone `dashboard:css` path. Source: `docs/tmp/063-UI-TypeScriptSystem.md` Phase 3 and `docs/UI/TypeScriptSystem.md` §13.2.
-- **DOC-REQ-005**: Operator and contributor docs must describe the TypeScript/Vite path as the adopted Mission Control frontend system, with migration tracker state updated or closed out. Source: `docs/tmp/063-UI-TypeScriptSystem.md` Phase 3 and `docs/UI/TypeScriptSystem.md`.
+- **DOC-REQ-003**: The legacy `dashboard.js` monolith and `task_dashboard.html` fallback shell must be removed once no routes require them. Source: `docs/UI/TypeScriptSystem.md` Phase 3.
+- **DOC-REQ-004**: Dashboard CSS ownership must move to the Vite/PostCSS pipeline instead of the standalone `dashboard:css` path. Source: `docs/UI/TypeScriptSystem.md` Phase 3 and `docs/UI/TypeScriptSystem.md` §13.2.
+- **DOC-REQ-005**: Operator and contributor docs must describe the TypeScript/Vite path as the adopted Mission Control frontend system, with migration tracker state updated or closed out. Source: `docs/UI/TypeScriptSystem.md` Phase 3 and `docs/UI/TypeScriptSystem.md`.
 
 ## User Scenarios & Testing
 

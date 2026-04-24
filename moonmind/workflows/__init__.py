@@ -16,24 +16,20 @@ from moonmind.workflows.temporal import (
     TemporalExecutionService,
 )
 
-
 def get_workflow_repository(session: AsyncSession) -> WorkflowRepository:
     """Factory helper used by FastAPI dependencies to access workflow repositories."""
 
     return WorkflowRepository(session)
-
 
 def get_automation_repository(session: AsyncSession) -> AutomationRepository:
     """Factory helper returning the workflow automation repository."""
 
     return AutomationRepository(session)
 
-
 def get_task_proposal_repository(session: AsyncSession) -> TaskProposalRepository:
     """Factory helper returning the task proposal repository."""
 
     return TaskProposalRepository(session)
-
 
 def get_task_proposal_service(session: AsyncSession) -> TaskProposalService:
     """Factory helper returning the task proposal service."""
@@ -42,12 +38,10 @@ def get_task_proposal_service(session: AsyncSession) -> TaskProposalService:
         get_task_proposal_repository(session),
     )
 
-
 def get_temporal_execution_service(session: AsyncSession) -> TemporalExecutionService:
     """Factory helper returning the Temporal execution lifecycle service."""
 
     return TemporalExecutionService(session)
-
 
 def get_temporal_artifact_repository(
     session: AsyncSession,
@@ -56,12 +50,10 @@ def get_temporal_artifact_repository(
 
     return TemporalArtifactRepository(session)
 
-
 def get_temporal_artifact_service(session: AsyncSession) -> TemporalArtifactService:
     """Factory helper returning Temporal artifact service for one session."""
 
     return TemporalArtifactService(get_temporal_artifact_repository(session))
-
 
 __all__ = sorted(
     [

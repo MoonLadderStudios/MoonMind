@@ -18,7 +18,6 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 LOG_CONTEXT_LINES = 5
 # --- End Configuration ---
 
-
 # --- Error Clustering Functions ---
 def is_error(line: str) -> bool:
     error_signatures = [
@@ -48,7 +47,6 @@ def is_error(line: str) -> bool:
         return False
 
     return any(sig in line_lower for sig in error_signatures)
-
 
 def find_and_cluster_errors(
     log_lines: list[str], log_context_lines_count: int = 5
@@ -87,9 +85,7 @@ def find_and_cluster_errors(
         )
     return error_events
 
-
 # --- End Error Clustering Functions ---
-
 
 # --- API Request Helper ---
 def make_api_request(
@@ -124,9 +120,7 @@ def make_api_request(
         print(f"Unexpected error during API request to {url}: {e}", file=sys.stderr)
     return None
 
-
 # --- End API Request Helper ---
-
 
 def get_owner_and_repo_from_git():
     try:
@@ -161,7 +155,6 @@ def get_owner_and_repo_from_git():
         )
         return None, None
 
-
 def get_current_git_commit_sha():
     try:
         sha_bytes = subprocess.check_output(
@@ -184,7 +177,6 @@ def get_current_git_commit_sha():
             file=sys.stderr,
         )
         return None
-
 
 def get_current_git_branch():
     try:
@@ -211,7 +203,6 @@ def get_current_git_branch():
             file=sys.stderr,
         )
         return None
-
 
 def get_latest_action_run(branch_name):
     global OWNER, REPO
@@ -252,7 +243,6 @@ def get_latest_action_run(branch_name):
         return None
     return runs_data["workflow_runs"][0]
 
-
 def fetch_jobs_for_run(jobs_url: str, token: str) -> list[dict] | None:
     """Fetches all job objects for a given workflow run's jobs_url."""
     print(f"Fetching job details from: {jobs_url}", file=sys.stderr)
@@ -270,13 +260,11 @@ def fetch_jobs_for_run(jobs_url: str, token: str) -> list[dict] | None:
     # The API for jobs_url returns an object with a "jobs" array
     return jobs_data_response.get("jobs")
 
-
 class NoRedirection(urllib.request.HTTPRedirectHandler):
     def http_error_302(self, req, fp, code, msg, headers):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
     http_error_301 = http_error_303 = http_error_307 = http_error_302
-
 
 def get_job_log_content(
     job_id: int, job_name: str, owner: str, repo: str, token: str
@@ -432,7 +420,6 @@ def get_job_log_content(
         file=sys.stderr,
     )
     return log_content_lines
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -680,7 +667,6 @@ def main():
         }
         print(json.dumps(error_json, indent=2), file=sys.stdout)
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

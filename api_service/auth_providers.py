@@ -22,9 +22,7 @@ from moonmind.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-
 _cached_current_user_dependency = None
-
 
 async def get_default_user_from_db(
     session: AsyncSession = Depends(get_async_session),
@@ -40,7 +38,6 @@ async def get_default_user_from_db(
     if user is None:
         raise HTTPException(status_code=500, detail="Default user not found")
     return user
-
 
 def get_current_user():
     """Return a dependency that yields the current user.
@@ -104,9 +101,7 @@ def get_current_user():
 
     return _cached_current_user_dependency
 
-
 current_active_user_optional = fastapi_users.current_user(active=True, optional=True)
-
 
 def get_current_user_optional():
     """Return an auth dependency that tolerates missing bearer credentials.
@@ -119,7 +114,6 @@ def get_current_user_optional():
         return current_active_user_optional
     return get_current_user()
 
-
 async def get_auth_manager(
     db: AsyncSession = Depends(get_async_session),
 ) -> AuthProviderManager:
@@ -127,7 +121,6 @@ async def get_auth_manager(
     profile_provider = ProfileAuthProvider(db, ProfileService())
     env_provider = EnvAuthProvider()
     return AuthProviderManager(profile_provider, env_provider)
-
 
 def get_auth_router():
     router = APIRouter()

@@ -51,7 +51,7 @@ Deliver MM-397 by hardening the existing Skills Page zip upload into a canonical
 - **IX. Resilient by Default**: PASS. Invalid imports fail before publishing a skill directory.
 - **X. Continuous Improvement**: PASS. Adds regression tests for import behavior.
 - **XI. Spec-Driven Development**: PASS. MM-397 artifacts are under `specs/218-skill-zip-import/`.
-- **XII. Canonical Documentation Separation**: PASS. Jira orchestration input remains under `docs/tmp`.
+- **XII. Canonical Documentation Separation**: PASS. Jira orchestration input remains under `local-only handoffs`.
 - **XIII. Pre-Release Compatibility**: PASS. Canonical endpoint is used by the UI; existing legacy dashboard endpoint delegates to the same helper only for current local callers.
 
 ## Project Structure
@@ -66,7 +66,7 @@ specs/218-skill-zip-import/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── skill-import-api.md
+│ └── skill-import-api.md
 ├── tasks.md
 └── verification.md
 ```
@@ -78,7 +78,6 @@ api_service/api/routers/task_dashboard.py
 frontend/src/entrypoints/skills.tsx
 tests/unit/api/routers/test_task_dashboard.py
 frontend/src/entrypoints/skills.test.tsx
-docs/tmp/jira-orchestration-inputs/MM-397-moonspec-orchestration-input.md
 ```
 
 ## Complexity Tracking

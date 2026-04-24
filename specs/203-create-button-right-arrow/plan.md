@@ -1,6 +1,6 @@
 # Implementation Plan: Create Button Right Arrow
 
-**Branch**: `203-create-button-right-arrow` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md)  
+**Branch**: `203-create-button-right-arrow` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md) 
 **Input**: Single-story feature specification from `specs/203-create-button-right-arrow/spec.md`
 
 ## Summary
@@ -9,15 +9,15 @@ Implement MM-390 by updating the Create Page primary submit action so its visibl
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control Create Page behavior; Python 3.12 for API and integration test context  
-**Primary Dependencies**: React, Vite/Vitest, Testing Library, existing Mission Control UI components and styles, FastAPI execution API surface  
-**Storage**: No new persistent storage; this story changes only the Create Page submit action presentation  
-**Unit Testing**: Focused Vitest through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`; final unit suite through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`  
-**Integration Testing**: `./tools/test_integration.sh` for required hermetic integration checks when Docker is available; no new provider verification is required  
-**Target Platform**: Mission Control browser UI served by the MoonMind API service  
-**Project Type**: Web service with React frontend and Temporal-backed task execution backend  
-**Performance Goals**: Submit action rendering remains immediate during normal Create Page render; no additional network requests or task submission steps are introduced  
-**Constraints**: Runtime mode; preserve explicit submit behavior; preserve accessible Create action naming; do not alter validation, disabled/loading state behavior, task payload shape, Jira import, presets, dependencies, runtime controls, attachments, or publish controls; preserve MM-390 traceability  
+**Language/Version**: TypeScript/React for Mission Control Create Page behavior; Python 3.12 for API and integration test context 
+**Primary Dependencies**: React, Vite/Vitest, Testing Library, existing Mission Control UI components and styles, FastAPI execution API surface 
+**Storage**: No new persistent storage; this story changes only the Create Page submit action presentation 
+**Unit Testing**: Focused Vitest through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`; final unit suite through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` 
+**Integration Testing**: `./tools/test_integration.sh` for required hermetic integration checks when Docker is available; no new provider verification is required 
+**Target Platform**: Mission Control browser UI served by the MoonMind API service 
+**Project Type**: Web service with React frontend and Temporal-backed task execution backend 
+**Performance Goals**: Submit action rendering remains immediate during normal Create Page render; no additional network requests or task submission steps are introduced 
+**Constraints**: Runtime mode; preserve explicit submit behavior; preserve accessible Create action naming; do not alter validation, disabled/loading state behavior, task payload shape, Jira import, presets, dependencies, runtime controls, attachments, or publish controls; preserve MM-390 traceability 
 **Scale/Scope**: One Create Page primary submit control across normal, disabled, loading, desktop, and mobile presentations
 
 ## Constitution Check
@@ -35,7 +35,7 @@ Implement MM-390 by updating the Create Page primary submit action so its visibl
 - **IX. Resilient by Default**: PASS. Existing validation, disabled, loading, and submit failure behavior remains unchanged.
 - **X. Facilitate Continuous Improvement**: PASS. Verification evidence will preserve MM-390 and the observed behavior.
 - **XI. Spec-Driven Development**: PASS. Implementation will proceed from the MM-390 spec and preserve the Jira source brief.
-- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. No canonical documentation changes are required; volatile Jira input remains under `docs/tmp/`.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. No canonical documentation changes are required; volatile Jira input remains under `local-only handoffs`.
 - **XIII. Pre-release Compatibility Policy**: PASS. No compatibility alias, translation layer, or internal contract fallback is introduced.
 
 ## Project Structure
@@ -49,9 +49,9 @@ specs/203-create-button-right-arrow/
 ├── research.md
 ├── quickstart.md
 ├── contracts/
-│   └── create-button-right-arrow.md
+│ └── create-button-right-arrow.md
 └── checklists/
-    └── requirements.md
+ └── requirements.md
 ```
 
 ### Source Code (repository root)
@@ -59,7 +59,6 @@ specs/203-create-button-right-arrow/
 ```text
 frontend/src/entrypoints/task-create.tsx
 frontend/src/entrypoints/task-create.test.tsx
-docs/tmp/jira-orchestration-inputs/MM-390-moonspec-orchestration-input.md
 ```
 
 **Structure Decision**: Use the existing Create Page entrypoint and test file. Add no backend source files unless implementation discovers the submit action is generated from a shared component that requires a localized prop or label update. No `data-model.md` is required because the story does not introduce or change data entities, fields, relationships, validation rules, or state transitions.

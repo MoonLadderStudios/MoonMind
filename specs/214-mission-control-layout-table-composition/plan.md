@@ -1,6 +1,6 @@
 # Implementation Plan: Mission Control Layout and Table Composition Patterns
 
-**Branch**: `run-jira-orchestrate-for-mm-426-standard-7f2da784` | **Date**: 2026-04-21 | **Spec**: `specs/214-mission-control-layout-table-composition/spec.md`  
+**Branch**: `run-jira-orchestrate-for-mm-426-standard-7f2da784` | **Date**: 2026-04-21 | **Spec**: `specs/214-mission-control-layout-table-composition/spec.md` 
 **Input**: Single-story feature specification from `specs/214-mission-control-layout-table-composition/spec.md`
 
 ## Summary
@@ -19,7 +19,7 @@ Implement MM-426 by making Mission Control's task-list composition match the des
 | FR-006 | implemented_verified | `frontend/src/components/tables/DataTable.tsx` emits `.data-table-slab`, `.data-table`, and `.data-table-empty` classes. | no new implementation | compile/UI unit |
 | FR-007 | implemented_verified | Existing task-list tests continue to cover request behavior, sorting, pagination, dependency summaries, runtime labels, and mobile cards. | no new implementation | UI unit |
 | FR-008 | implemented_verified | `tasks-list.test.tsx` includes MM-426-focused composition, filter-chip, and sticky-header assertions. | no new implementation | UI unit |
-| FR-009 | implemented_verified | `spec.md`, `verification.md`, and `docs/tmp/jira-orchestration-inputs/MM-426-moonspec-orchestration-input.md` preserve MM-426, the trusted Jira preset brief, and source design coverage IDs. | no new implementation | final verify |
+| FR-009 | implemented_verified | `spec.md`, `verification.md`, and `spec.md` (Input) preserve MM-426, the trusted Jira preset brief, and source design coverage IDs. | no new implementation | final verify |
 | DESIGN-REQ-012 | implemented_verified | `spec.md` maps MM-426 to the Mission Control layout system; `tasks-list.tsx` uses control and data surfaces that support data-wide route composition. | no new implementation | UI unit |
 | DESIGN-REQ-013 | implemented_verified | `frontend/src/styles/mission-control.css` uses a three-zone masthead grid, and `frontend/src/entrypoints/mission-control.test.tsx` verifies brand-left, nav-centered, version-right desktop alignment. | no new implementation | UI unit |
 | DESIGN-REQ-014 | implemented_verified | Control deck/filter cluster requirements are implemented by `.task-list-control-deck`, `.task-list-control-grid`, utility cluster, chips, and clear action. | no new implementation | UI unit |
@@ -27,15 +27,15 @@ Implement MM-426 by making Mission Control's task-list composition match the des
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control UI; CSS for shared Mission Control styling  
-**Primary Dependencies**: React, TanStack Query, Vite/Vitest, existing Mission Control shared stylesheet  
-**Storage**: No new persistent storage  
+**Language/Version**: TypeScript/React for Mission Control UI; CSS for shared Mission Control styling 
+**Primary Dependencies**: React, TanStack Query, Vite/Vitest, existing Mission Control shared stylesheet 
+**Storage**: No new persistent storage 
 **Unit Testing**: `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/mission-control.test.tsx`; direct `./node_modules/.bin/vitest` if the npm script cannot resolve `vitest` in the managed container; final wrapper via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx`
 **Integration Testing**: Existing task-list UI render tests exercise API request shape, route links, and user-level filter/pagination flows in an integration-style browser component boundary; no compose-backed integration is required because backend contracts are unchanged
-**Target Platform**: Browser-hosted Mission Control UI served by FastAPI  
-**Project Type**: Web UI composition/design-system story  
-**Performance Goals**: Avoid new network calls, runtime loops, or heavy visual effects; sticky headers are CSS-only  
-**Constraints**: Preserve task-list request parameters, sorting, pagination, mobile card behavior, and route ownership  
+**Target Platform**: Browser-hosted Mission Control UI served by FastAPI 
+**Project Type**: Web UI composition/design-system story 
+**Performance Goals**: Avoid new network calls, runtime loops, or heavy visual effects; sticky headers are CSS-only 
+**Constraints**: Preserve task-list request parameters, sorting, pagination, mobile card behavior, and route ownership 
 **Scale/Scope**: Task list entrypoint, shared DataTable component, shared Mission Control stylesheet, focused UI tests, MoonSpec artifacts
 
 ## Constitution Check
@@ -51,7 +51,7 @@ Implement MM-426 by making Mission Control's task-list composition match the des
 - IX. Resilient by Default: PASS. No workflow or side-effect contract changes; existing behavior tests continue to run.
 - X. Continuous Improvement: PASS. Verification evidence is captured in MoonSpec artifacts.
 - XI. Spec-Driven Development: PASS. Implementation proceeds from this single-story spec.
-- XII. Documentation Separation: PASS. Desired-state docs remain canonical; runtime traceability input stays under `docs/tmp`.
+- XII. Documentation Separation: PASS. Desired-state docs remain canonical; runtime traceability input stays under `local-only handoffs`.
 - XIII. Pre-Release Compatibility Policy: PASS. No compatibility aliases or hidden fallback contract is introduced.
 
 ## Project Structure
@@ -63,7 +63,7 @@ specs/214-mission-control-layout-table-composition/
 ├── research.md
 ├── quickstart.md
 ├── contracts/
-│   └── layout-table-composition.md
+│ └── layout-table-composition.md
 ├── tasks.md
 └── verification.md
 
@@ -73,7 +73,6 @@ frontend/src/
 ├── entrypoints/tasks-list.test.tsx
 └── styles/mission-control.css
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-426-moonspec-orchestration-input.md
 ```
 

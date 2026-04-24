@@ -27,7 +27,6 @@ except ImportError:  # pragma: no cover – fall back for newer versions
 
             SimpleDirectoryReader = download_loader("SimpleDirectoryReader")  # type: ignore
 
-
 class LocalDataIndexer:
     def __init__(self, data_dir: str, logger: logging.Logger = None):
         self.logger = logger or logging.getLogger(__name__)

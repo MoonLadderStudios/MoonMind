@@ -49,13 +49,11 @@ _CODEX_MANAGED_RUNTIME_NOTE = (
 )
 _CODEX_MANAGED_RUNTIME_NOTE_HEADER = "Managed Codex CLI note:\n"
 
-
 def append_managed_codex_runtime_note(instruction: str) -> str:
     normalized = str(instruction or "")
     if normalized and _CODEX_MANAGED_RUNTIME_NOTE_HEADER not in normalized:
         return normalized + _CODEX_MANAGED_RUNTIME_NOTE
     return normalized
-
 
 class CodexCliStrategy(ManagedRuntimeStrategy):
     """Strategy for launching ``codex`` CLI runs."""

@@ -19,13 +19,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/retrieval", tags=["Retrieval"])
 
-
 @dataclass(frozen=True, slots=True)
 class RetrievalAuthContext:
     auth_source: str
     allowed_repositories: tuple[str, ...]
     capabilities: tuple[str, ...]
-
 
 class RetrievalQuery(BaseModel):
     query: str = Field(..., min_length=1)
@@ -33,7 +31,6 @@ class RetrievalQuery(BaseModel):
     filters: Dict[str, str] = Field(default_factory=dict)
     overlay_policy: str = Field(default="include", pattern="^(include|skip)$")
     budgets: Dict[str, int] = Field(default_factory=dict)
-
 
 def get_retrieval_service(request: Request) -> ContextRetrievalService:
     cached = getattr(request.app.state, "retrieval_service", None)
@@ -44,8 +41,6 @@ def get_retrieval_service(request: Request) -> ContextRetrievalService:
     request.app.state.retrieval_service = service
     return service
 
-
-
 def _bearer_token(authorization_header: Optional[str]) -> Optional[str]:
     raw = str(authorization_header or "").strip()
     if not raw:
@@ -54,7 +49,6 @@ def _bearer_token(authorization_header: Optional[str]) -> Optional[str]:
     if scheme.lower() != "bearer" or not token.strip():
         return None
     return token.strip()
-
 
 async def authorize_retrieval_request(
     worker_token_header: Optional[str] = Header(None, alias="X-MoonMind-Worker-Token"),
@@ -82,14 +76,12 @@ async def authorize_retrieval_request(
         detail="Retrieval authentication is required.",
     )
 
-
 def _requested_repo(payload: RetrievalQuery) -> str:
     for key in ("repo", "repository"):
         value = str(payload.filters.get(key, "")).strip()
         if value:
             return value
     return ""
-
 
 def _enforce_repo_scope(payload: RetrievalQuery, auth: RetrievalAuthContext) -> None:
     if auth.auth_source != "worker_token" or not auth.allowed_repositories:
@@ -102,11 +94,9 @@ def _enforce_repo_scope(payload: RetrievalQuery, auth: RetrievalAuthContext) -> 
             detail=f"Repository '{repo}' is not permitted for this worker token.",
         )
 
-
 @router.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
-
 
 @router.post("/context")
 async def retrieve_context_pack(

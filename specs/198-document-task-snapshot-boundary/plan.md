@@ -17,7 +17,7 @@ Implement MM-385 by updating the canonical task architecture contract so preset 
 **Target Platform**: MoonMind control plane and managed runtime documentation contract
 **Project Type**: Runtime architecture contract documentation
 **Performance Goals**: No runtime performance impact; documentation must identify compile-time preset composition boundaries without adding execution-plane work
-**Constraints**: Preserve canonical docs as desired-state documentation, keep volatile planning under `docs/tmp/`, do not introduce compatibility aliases or hidden runtime fallback behavior, and preserve Jira issue key MM-385 in artifacts
+**Constraints**: Preserve canonical docs as desired-state documentation, keep volatile planning under `local-only handoffs`, do not introduce compatibility aliases or hidden runtime fallback behavior, and preserve Jira issue key MM-385 in artifacts
 **Scale/Scope**: One canonical documentation file plus MoonSpec artifacts for one independently testable story
 
 ## Constitution Check
@@ -33,7 +33,7 @@ Implement MM-385 by updating the canonical task architecture contract so preset 
 - IX. Resilient by Default: PASS. Submitted tasks remain executable and reconstructible after catalog changes.
 - X. Continuous Improvement: PASS. Verification evidence will identify any remaining documentation or runtime-contract gaps.
 - XI. Spec-Driven Development: PASS. This one-story MoonSpec drives the change.
-- XII. Canonical Documentation Separation: PASS. Canonical docs describe desired state; migration or orchestration notes remain under `docs/tmp/` and `specs/`.
+- XII. Canonical Documentation Separation: PASS. Canonical docs describe desired state; migration or orchestration notes remain under `local-only handoffs` and `specs/`.
 - XIII. Pre-Release Compatibility Policy: PASS. No compatibility layer or semantic fallback is introduced.
 
 ## Project Structure
@@ -48,11 +48,11 @@ specs/198-document-task-snapshot-boundary/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── task-snapshot-compilation-boundary.md
+│ └── task-snapshot-compilation-boundary.md
 ├── tasks.md
 ├── verification.md
 └── checklists/
-    └── requirements.md
+ └── requirements.md
 ```
 
 ### Source Code (repository root)
@@ -60,11 +60,10 @@ specs/198-document-task-snapshot-boundary/
 ```text
 docs/
 └── Tasks/
-    └── TaskArchitecture.md
+ └── TaskArchitecture.md
 
-docs/tmp/
 └── jira-orchestration-inputs/
-    └── MM-385-moonspec-orchestration-input.md
+ └── MM-385-moonspec-orchestration-input.md
 ```
 
 **Structure Decision**: Update `docs/Tasks/TaskArchitecture.md` because MM-385 targets the task architecture system snapshot, task contract normalization, snapshot durability, and execution-plane boundary. Do not create replacement canonical docs or move volatile planning into `docs/`.

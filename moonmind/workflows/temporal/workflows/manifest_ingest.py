@@ -13,20 +13,17 @@ from moonmind.workflows.temporal.activity_catalog import (
 WORKFLOW_NAME = "MoonMind.ManifestIngest"
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
-
 class ManifestIngestWorkflowInput(TypedDict, total=False):
     workflow_type: str
     manifest_ref: str
     action: str
     options: Optional[dict[str, Any]]
 
-
 class ManifestIngestWorkflowOutput(TypedDict):
     status: str
     manifest_digest: Optional[str]
     plan_ref: Optional[str]
     summary_ref: Optional[str]
-
 
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindManifestIngestWorkflow:

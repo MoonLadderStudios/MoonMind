@@ -18,7 +18,6 @@ from api_service.auth_providers import get_current_user
 from api_service.db import models as db_models
 from moonmind.schemas.temporal_artifact_models import ArtifactMetadataModel
 
-
 def _artifact() -> SimpleNamespace:
     now = datetime.now(UTC)
     return SimpleNamespace(
@@ -38,7 +37,6 @@ def _artifact() -> SimpleNamespace:
         metadata_json={},
     )
 
-
 def _policy(artifact: SimpleNamespace) -> SimpleNamespace:
     ref = SimpleNamespace(
         artifact_ref_v=1,
@@ -51,7 +49,6 @@ def _policy(artifact: SimpleNamespace) -> SimpleNamespace:
     return SimpleNamespace(
         raw_access_allowed=True, preview_artifact_ref=None, default_read_ref=ref
     )
-
 
 def _build_app() -> tuple[FastAPI, AsyncMock]:
     app = FastAPI()
@@ -73,7 +70,6 @@ def _build_app() -> tuple[FastAPI, AsyncMock]:
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
     return app, service
-
 
 def test_pin_unpin_delete_contracts() -> None:
     app, service = _build_app()

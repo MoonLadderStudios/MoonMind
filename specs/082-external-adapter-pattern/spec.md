@@ -3,7 +3,7 @@
 **Feature Branch**: `082-external-adapter-pattern`  
 **Created**: 2026-03-17  
 **Status**: Draft  
-**Input**: User description: "Implement 2.3 from docs/tmp/Roadmap.md — Generic external-agent adapter pattern — Designed in ExternalAgentIntegrationSystem.md, not generalized in code"
+**Input**: User description: "Implement 2.3 from docs/MoonMindRoadmap.md — Generic external-agent adapter pattern — Designed in ExternalAgentIntegrationSystem.md, not generalized in code"
 
 ## Source Document Requirements
 

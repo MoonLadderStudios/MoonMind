@@ -55,7 +55,6 @@ run:
   dryRun: false
 """.strip()
 
-
 @asynccontextmanager
 async def temporal_db(tmp_path: Path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/manifest_ingest_runtime.db"
@@ -67,7 +66,6 @@ async def temporal_db(tmp_path: Path):
         yield session_maker
     finally:
         await engine.dispose()
-
 
 def _record(**overrides):
     now = datetime.now(UTC)
@@ -116,7 +114,6 @@ def _record(**overrides):
     payload.update(overrides)
     return SimpleNamespace(**payload)
 
-
 def test_initialize_manifest_projection_sets_defaults_for_missing_fields() -> None:
     record = _record(
         owner_id=None,
@@ -142,7 +139,6 @@ def test_initialize_manifest_projection_sets_defaults_for_missing_fields() -> No
         "canceled": 0,
     }
 
-
 def test_build_manifest_status_snapshot_derives_counts_and_refs() -> None:
     record = _record()
 
@@ -161,7 +157,6 @@ def test_build_manifest_status_snapshot_derives_counts_and_refs() -> None:
     assert snapshot.counts.running == 1
     assert snapshot.counts.failed == 1
 
-
 def test_update_manifest_returns_next_safe_point_and_updates_ref() -> None:
     record = _record()
 
@@ -179,7 +174,6 @@ def test_update_manifest_returns_next_safe_point_and_updates_ref() -> None:
     assert record.parameters["manifestUpdate"]["mode"] == "REPLACE_FUTURE"
     assert "art_manifest_2" in record.artifact_refs
 
-
 def test_set_concurrency_updates_execution_policy_immediately() -> None:
     record = _record()
 
@@ -194,7 +188,6 @@ def test_set_concurrency_updates_execution_policy_immediately() -> None:
 
     assert response["applied"] == "immediate"
     assert record.parameters["executionPolicy"]["maxConcurrency"] == 9
-
 
 def test_pause_and_resume_toggle_paused_state_without_awaiting_external() -> None:
     record = _record()
@@ -221,7 +214,6 @@ def test_pause_and_resume_toggle_paused_state_without_awaiting_external() -> Non
     assert record.paused is False
     assert record.state == MoonMindWorkflowState.EXECUTING
 
-
 def test_cancel_nodes_marks_mutable_nodes_canceled_and_reports_rejections() -> None:
     record = _record()
 
@@ -238,7 +230,6 @@ def test_cancel_nodes_marks_mutable_nodes_canceled_and_reports_rejections() -> N
     assert response["result"]["rejectedNodeIds"] == ["node-c"]
     assert record.parameters["manifestNodes"][0]["state"] == "canceled"
 
-
 def test_retry_nodes_moves_terminal_nodes_back_to_ready() -> None:
     record = _record()
 
@@ -254,7 +245,6 @@ def test_retry_nodes_moves_terminal_nodes_back_to_ready() -> None:
     assert response["result"]["acceptedNodeIds"] == ["node-c"]
     assert record.parameters["manifestNodes"][2]["state"] == "ready"
     assert record.parameters["manifestNodes"][2]["resultArtifactRef"] is None
-
 
 def test_list_manifest_nodes_supports_state_filter_and_cursor() -> None:
     record = _record(
@@ -281,13 +271,11 @@ def test_list_manifest_nodes_supports_state_filter_and_cursor() -> None:
     assert first_page.next_cursor
     assert [item.node_id for item in second_page.items] == ["node-c"]
 
-
 def test_list_manifest_nodes_rejects_invalid_cursor() -> None:
     record = _record()
 
     with pytest.raises(ValueError, match="Invalid cursor"):
         list_manifest_nodes(record, state=None, cursor="not-base64", limit=10)
-
 
 def test_compile_manifest_plan_produces_stable_node_ids() -> None:
     requested_by = {"type": "user", "id": "user-1"}
@@ -315,7 +303,6 @@ def test_compile_manifest_plan_produces_stable_node_ids() -> None:
         node.node_id for node in second.nodes
     ]
 
-
 def test_resolve_workflow_requested_by_rejects_owner_mismatch() -> None:
     with pytest.raises(
         ManifestIngestValidationError,
@@ -325,7 +312,6 @@ def test_resolve_workflow_requested_by_rejects_owner_mismatch() -> None:
             {"requestedBy": {"type": "user", "id": "user-2"}},
             owner_id="user-1",
         )
-
 
 def test_runtime_manifest_nodes_preserve_dependencies_and_requester() -> None:
     nodes = _runtime_manifest_nodes(
@@ -363,7 +349,6 @@ def test_runtime_manifest_nodes_preserve_dependencies_and_requester() -> None:
         }
     ]
 
-
 def test_apply_manifest_node_update_replace_future_preserves_started_nodes() -> None:
     updated = _apply_manifest_node_update(
         {
@@ -381,7 +366,6 @@ def test_apply_manifest_node_update_replace_future_preserves_started_nodes() -> 
         "node-running": {"nodeId": "node-running", "state": "running"},
         "node-fresh": {"nodeId": "node-fresh", "state": "ready"},
     }
-
 
 def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
     monkeypatch: pytest.MonkeyPatch,
@@ -486,7 +470,6 @@ def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
         }
     ]
 
-
 def test_manifest_workflow_cancel_nodes_cancels_running_tasks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -526,7 +509,6 @@ def test_manifest_workflow_cancel_nodes_cancels_running_tasks(
         "acceptedNodeIds": ["node-a", "node-b"],
         "rejectedNodeIds": ["missing"],
     }
-
 
 @pytest.mark.asyncio
 async def test_manifest_activities_compile_plan_and_write_summary(
@@ -595,7 +577,6 @@ async def test_manifest_activities_compile_plan_and_write_summary(
             assert run_index_ref.artifact_id.startswith("art_")
             assert summary_data["counts"]["ready"] == 1
             assert len(run_index_data["items"]) == 1
-
 
 @pytest.mark.asyncio
 async def test_start_manifest_child_runs_preserves_lineage_and_request_cancel_policy(
@@ -674,7 +655,6 @@ async def test_start_manifest_child_runs_preserves_lineage_and_request_cancel_po
             assert child.parameters["nodeId"] == nodes[0].node_id
             assert child.parameters["parentClosePolicy"] == "REQUEST_CANCEL"
 
-
 def test_apply_manifest_node_update_append_adds_new_nodes() -> None:
     """T008 DOC-REQ-005: APPEND mode adds new nodes without modifying existing ones."""
     updated = _apply_manifest_node_update(
@@ -692,7 +672,6 @@ def test_apply_manifest_node_update_append_adds_new_nodes() -> None:
     assert "node-new" in updated
     assert updated["node-new"]["state"] == "ready"
 
-
 def test_apply_manifest_node_update_append_rejects_duplicate_node_ids() -> None:
     """T008 DOC-REQ-005: APPEND mode rejects duplicate node IDs."""
     with pytest.raises(
@@ -709,7 +688,6 @@ def test_apply_manifest_node_update_append_rejects_duplicate_node_ids() -> None:
             mode="APPEND",
         )
 
-
 def test_execution_policy_from_parameters_uses_defaults_for_missing_fields() -> None:
     """T006 DOC-REQ-008: Execution policy only allows maxConcurrency and failurePolicy."""
     from moonmind.workflows.temporal.manifest_ingest import (
@@ -725,7 +703,6 @@ def test_execution_policy_from_parameters_uses_defaults_for_missing_fields() -> 
     )
     assert policy_override.max_concurrency == 10
     assert policy_override.failure_policy == "continue_and_report"
-
 
 def test_compile_manifest_plan_node_ids_differ_for_different_content() -> None:
     """T004 DOC-REQ-002: Different manifest content produces different node IDs."""
@@ -767,7 +744,6 @@ run:
     first_ids = {node.node_id for node in first.nodes}
     second_ids = {node.node_id for node in second.nodes}
     assert first_ids != second_ids
-
 
 def test_manifest_workflow_fail_fast_cancels_remaining_nodes(
     monkeypatch: pytest.MonkeyPatch,
@@ -858,8 +834,6 @@ def test_manifest_workflow_fail_fast_cancels_remaining_nodes(
     assert workflow_instance._nodes["node-a"]["state"] == "failed"
     assert workflow_instance._nodes["node-b"]["state"] == "canceled"
 
-
-
 def test_manifest_workflow_dependency_ordering_blocks_dependents(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -945,7 +919,6 @@ def test_manifest_workflow_dependency_ordering_blocks_dependents(
 
     assert result["status"] == "completed"
     assert child_execution_order == ["node-a", "node-b"]
-
 
 def test_best_effort_continues_after_failures(
     monkeypatch: pytest.MonkeyPatch,
@@ -1035,7 +1008,6 @@ def test_best_effort_continues_after_failures(
     assert workflow_instance._nodes["node-a"]["state"] == "failed"
     assert workflow_instance._nodes["node-b"]["state"] == "completed"
 
-
 def test_continue_and_report_is_accepted_policy_value() -> None:
     """T022 DOC-REQ-009: continue_and_report is an accepted failurePolicy value."""
     from moonmind.workflows.temporal.manifest_ingest import (
@@ -1047,7 +1019,6 @@ def test_continue_and_report_is_accepted_policy_value() -> None:
     )
     assert policy.failure_policy == "continue_and_report"
     assert policy.max_concurrency == 5
-
 
 def test_set_concurrency_rejects_out_of_bounds(
     monkeypatch: pytest.MonkeyPatch,
@@ -1083,7 +1054,6 @@ def test_set_concurrency_rejects_out_of_bounds(
     assert response["accepted"] is True
     assert workflow_instance._concurrency == 10
 
-
 def test_secrets_not_in_workflow_memo() -> None:
     """T023 DOC-REQ-013: memo must not contain raw secrets or high-cardinality payloads."""
     record = _record()
@@ -1105,7 +1075,6 @@ def test_secrets_not_in_workflow_memo() -> None:
         "checkpoint_artifact_ref",
     }
     assert set(memo.keys()) <= allowed_memo_keys
-
 
 def test_authorization_lineage_propagated_to_child(
     monkeypatch: pytest.MonkeyPatch,

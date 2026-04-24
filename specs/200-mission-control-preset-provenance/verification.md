@@ -11,7 +11,7 @@
 | Suite | Command | Result | Notes |
 |-------|---------|--------|-------|
 | Documentation contract | `rg -n "Preset provenance|Manual|Preset path|unresolved preset includes|Expansion summaries|subtask|sub-plan|separate workflow" docs/UI/MissionControlArchitecture.md` | PASS | Found required Mission Control provenance, submit, evidence, and vocabulary terms. |
-| Source traceability | `rg -n "MM-387|DESIGN-REQ-014|DESIGN-REQ-015|DESIGN-REQ-022|DESIGN-REQ-025|DESIGN-REQ-026" specs/200-mission-control-preset-provenance docs/tmp/jira-orchestration-inputs/MM-387-moonspec-orchestration-input.md` | PASS | Jira key and all source IDs are preserved in the orchestration input and MoonSpec artifacts. |
+| Source traceability | `rg -n "MM-387|DESIGN-REQ-014|DESIGN-REQ-015|DESIGN-REQ-022|DESIGN-REQ-025|DESIGN-REQ-026" specs/200-mission-control-preset-provenance` | PASS | Jira key and all source IDs are preserved in the orchestration input and MoonSpec artifacts. |
 | Unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | PASS | Python: 3506 passed, 1 xpassed, 16 subtests passed. Frontend: 10 files passed, 267 tests passed. |
 
 ## Requirement Coverage
@@ -25,8 +25,8 @@
 | FR-005 | `docs/UI/MissionControlArchitecture.md` §15.2 | VERIFIED | `/tasks/new` may preview composed presets and must reject unresolved preset includes before runtime submission. |
 | FR-006 | `docs/UI/MissionControlArchitecture.md` §17.3 | VERIFIED | Expansion summaries are secondary to flat steps, logs, diagnostics, and output artifacts. |
 | FR-007 | `docs/UI/MissionControlArchitecture.md` §9.3 and §18.1 | VERIFIED | Vocabulary forbids subtask, sub-plan, and separate workflow-run labels for preset includes. |
-| FR-008 | `docs/UI/MissionControlArchitecture.md`; `specs/200-mission-control-preset-provenance/` | VERIFIED | Canonical doc remains desired-state; volatile work is isolated to specs and docs/tmp. |
-| FR-009 | `specs/200-mission-control-preset-provenance/spec.md`; `docs/tmp/jira-orchestration-inputs/MM-387-moonspec-orchestration-input.md` | VERIFIED | MM-387 and original Jira preset brief are preserved. |
+| FR-008 | `docs/UI/MissionControlArchitecture.md`; `specs/200-mission-control-preset-provenance/` | VERIFIED | Canonical doc remains desired-state; volatile work is isolated to specs and local-only handoffs. |
+| FR-009 | `specs/200-mission-control-preset-provenance/spec.md`; `spec.md` (Input) | VERIFIED | MM-387 and original Jira preset brief are preserved. |
 
 ## Acceptance Scenario Coverage
 

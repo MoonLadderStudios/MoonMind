@@ -24,7 +24,6 @@ from moonmind.workflows.temporal.artifacts import (
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 @asynccontextmanager
 async def _db(tmp_path: Path):
     url = f"sqlite+aiosqlite:///{tmp_path}/temporal_artifact_authz.db"
@@ -36,7 +35,6 @@ async def _db(tmp_path: Path):
         yield maker
     finally:
         await engine.dispose()
-
 
 class TestArtifactAuthorizationBoundaries:
     """Phase 6: authorization boundary tests for the artifact service."""

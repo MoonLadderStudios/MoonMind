@@ -47,7 +47,6 @@ from .github_auth_broker import GitHubAuthBrokerManager
 from .managed_session_store import ManagedSessionStore
 from .managed_session_supervisor import ManagedSessionSupervisor
 
-
 _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
 _CONTAINER_NAME_SANITIZER = re.compile(r"[^a-zA-Z0-9_.-]+")
 _RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
@@ -68,7 +67,6 @@ _SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
 _CONTAINER_LOG_EXCERPT_TAIL_LINES = 40
 _CONTAINER_LOG_EXCERPT_MAX_CHARS = 2000
 logger = logging.getLogger(__name__)
-
 
 def _managed_session_docker_network(
     request_environment: Mapping[str, str] | None = None,
@@ -98,7 +96,6 @@ def _managed_session_docker_network(
             return "local-network"
     return None
 
-
 class CommandRunner(Protocol):
     async def __call__(
         self,
@@ -110,7 +107,6 @@ class CommandRunner(Protocol):
         run_as_gid: int | None = None,
     ) -> tuple[int, str, str]:
         pass
-
 
 async def _default_command_runner(
     command: tuple[str, ...],
@@ -146,17 +142,14 @@ async def _default_command_runner(
         stderr.decode("utf-8", errors="replace"),
     )
 
-
 def _normalize_absolute_posix_path(value: str, *, field_name: str) -> PurePosixPath:
     normalized = PurePosixPath(posixpath.normpath(value))
     if not normalized.is_absolute():
         raise RuntimeError(f"{field_name} must be an absolute path: {value}")
     return normalized
 
-
 def _is_sensitive_env_key(key: str) -> bool:
     return bool(_SENSITIVE_ENV_KEY_PATTERN.search(key))
-
 
 class DockerCodexManagedSessionController:
     """Launch and control managed Codex session containers via Docker CLI."""

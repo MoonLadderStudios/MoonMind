@@ -2,7 +2,6 @@ from qdrant_client.http import models as qmodels
 
 from moonmind.rag.qdrant_client import RagQdrantClient
 
-
 def _point(
     *,
     score: float,
@@ -26,7 +25,6 @@ def _point(
         vector=None,
     )
 
-
 def _client() -> RagQdrantClient:
     client = RagQdrantClient.__new__(RagQdrantClient)
     client.collection = "repo-main"
@@ -37,7 +35,6 @@ def _client() -> RagQdrantClient:
     client._embedding_dimensions = None  # type: ignore[attr-defined]
     client._client = None  # type: ignore[attr-defined]
     return client
-
 
 def test_search_caps_results_to_top_k_after_overlay_merge():
     client = _client()
@@ -91,7 +88,6 @@ def test_search_caps_results_to_top_k_after_overlay_merge():
     assert result.items[0].source == "src/overlay_a.py"
     assert result.items[1].source == "src/overlay_b.py"
 
-
 def test_search_uses_query_points_when_search_api_is_unavailable():
     client = _client()
     calls: list[str] = []
@@ -144,7 +140,6 @@ def test_search_uses_query_points_when_search_api_is_unavailable():
         "src/canon_a.py",
     ]
 
-
 def test_merge_results_skips_expired_overlay_chunks():
     client = _client()
     expired_overlay = _point(
@@ -166,7 +161,6 @@ def test_merge_results_skips_expired_overlay_chunks():
     assert len(items) == 1
     assert items[0].trust_class == "canonical"
     assert items[0].text == "canonical"
-
 
 def test_merge_results_keeps_multiple_chunks_when_hash_missing():
     client = _client()

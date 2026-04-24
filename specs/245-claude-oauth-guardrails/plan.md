@@ -34,16 +34,16 @@ Implement MM-482 by hardening the cross-cutting Claude OAuth guardrails after th
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, pytest, existing OAuth session/terminal bridge/runtime-launch services  
-**Storage**: Existing OAuth session rows, provider-profile rows, managed-session diagnostics, artifact metadata, and workflow history; no new persistent tables planned  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` with focused targets under `tests/unit/api_service/api/routers/`, `tests/unit/services/temporal/runtime/`, and `tests/unit/workflows/temporal/`  
-**Integration Testing**: `./tools/test_integration.sh` only if changes affect hermetic API/artifact/worker seams beyond current in-process boundary tests  
-**Target Platform**: Linux API and worker containers in MoonMind-managed runtime environments  
-**Project Type**: FastAPI control plane plus Temporal-backed OAuth/session/runtime orchestration  
-**Performance Goals**: Guardrail enforcement remains bounded to existing route, WebSocket, verification, and launch surfaces without introducing new persistent storage or extra provider round-trips  
-**Constraints**: No raw credential contents, raw auth-volume paths below the mount root, token values, environment dumps, or durable terminal-input storage in operator-visible surfaces; preserve existing MM-478 through MM-481 behavior while strengthening guardrails; no compatibility aliases or hidden fallback semantics  
-**Scale/Scope**: One runtime (`claude_code`), one OAuth-backed profile (`claude_anthropic`), one OAuth session/terminal flow, one verification boundary, one runtime launch path, one cross-cutting guardrail story  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, pytest, existing OAuth session/terminal bridge/runtime-launch services 
+**Storage**: Existing OAuth session rows, provider-profile rows, managed-session diagnostics, artifact metadata, and workflow history; no new persistent tables planned 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` with focused targets under `tests/unit/api_service/api/routers/`, `tests/unit/services/temporal/runtime/`, and `tests/unit/workflows/temporal/` 
+**Integration Testing**: `./tools/test_integration.sh` only if changes affect hermetic API/artifact/worker seams beyond current in-process boundary tests 
+**Target Platform**: Linux API and worker containers in MoonMind-managed runtime environments 
+**Project Type**: FastAPI control plane plus Temporal-backed OAuth/session/runtime orchestration 
+**Performance Goals**: Guardrail enforcement remains bounded to existing route, WebSocket, verification, and launch surfaces without introducing new persistent storage or extra provider round-trips 
+**Constraints**: No raw credential contents, raw auth-volume paths below the mount root, token values, environment dumps, or durable terminal-input storage in operator-visible surfaces; preserve existing MM-478 through MM-481 behavior while strengthening guardrails; no compatibility aliases or hidden fallback semantics 
+**Scale/Scope**: One runtime (`claude_code`), one OAuth-backed profile (`claude_anthropic`), one OAuth session/terminal flow, one verification boundary, one runtime launch path, one cross-cutting guardrail story 
 
 ## Constitution Check
 
@@ -58,7 +58,7 @@ Implement MM-482 by hardening the cross-cutting Claude OAuth guardrails after th
 - IX. Resilient by Default: PASS. The plan emphasizes fail-closed authorization, one-time token use, and sanitized operator-visible failures.
 - X. Continuous Improvement: PASS. The requirement-status table and quickstart commands preserve verification evidence.
 - XI. Spec-Driven Development: PASS. This plan follows one independently testable MM-482 story.
-- XII. Canonical Docs vs Tmp: PASS. `docs/ManagedAgents/ClaudeAnthropicOAuth.md` remains the source design and the Jira brief stays under `docs/tmp`.
+- XII. Canonical Docs vs Tmp: PASS. `docs/ManagedAgents/ClaudeAnthropicOAuth.md` remains the source design and the Jira brief stays under `local-only handoffs`.
 - XIII. Pre-Release Velocity: PASS. No compatibility wrappers or partial migrations are proposed.
 
 ## Project Structure
@@ -73,7 +73,7 @@ specs/245-claude-oauth-guardrails/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── claude-oauth-guardrails.md
+│ └── claude-oauth-guardrails.md
 └── tasks.md
 ```
 

@@ -1,6 +1,6 @@
 # Secrets System
 
-**Implementation tracking:** [`docs/tmp/010-SecretsSystemPlan.md`](../tmp/010-SecretsSystemPlan.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
@@ -9,7 +9,7 @@ Last Updated: 2026-03-27
 > [!NOTE]
 > This document defines the desired-state MoonMind Secrets System.
 > It is a declarative contract for how secrets are referenced, stored, resolved, materialized, and audited.
-> Phase sequencing, migration work, and implementation checklists belong in [`docs/tmp/010-SecretsSystemPlan.md`](../tmp/010-SecretsSystemPlan.md).
+> Phase sequencing, migration work, and implementation checklists belong in .
 
 ---
 
@@ -54,34 +54,34 @@ This document builds on [`ProviderProfiles.md`](./ProviderProfiles.md). Provider
 The Secrets System must support all of the following:
 
 1. **SecretRef as a first-class contract**
-   - Durable system contracts store references, not raw secret values.
+ - Durable system contracts store references, not raw secret values.
 
 2. **Local-first secure defaults**
-   - Core deployments must not require AWS, GCP, Azure, Vault Cloud, or another mandatory external public-cloud secret service.
+ - Core deployments must not require AWS, GCP, Azure, Vault Cloud, or another mandatory external public-cloud secret service.
 
 3. **Encrypted-at-rest managed secrets**
-   - UI-entered or API-managed secrets must be stored encrypted at rest in MoonMind-controlled persistence.
+ - UI-entered or API-managed secrets must be stored encrypted at rest in MoonMind-controlled persistence.
 
 4. **Multiple secret backends**
-   - Operators may choose simple local sources or optional external managers.
+ - Operators may choose simple local sources or optional external managers.
 
 5. **Launch-time resolution**
-   - Secret values are resolved only when needed for runtime launch or MoonMind-owned outbound calls.
+ - Secret values are resolved only when needed for runtime launch or MoonMind-owned outbound calls.
 
 6. **Proxy-first provider access where possible**
-   - When MoonMind owns an outbound provider call path, the caller should receive a MoonMind-controlled capability rather than a raw provider credential.
+ - When MoonMind owns an outbound provider call path, the caller should receive a MoonMind-controlled capability rather than a raw provider credential.
 
 7. **Narrow runtime materialization**
-   - When a third-party runtime truly requires raw credentials in-process, the system should materialize only the minimum required values for the shortest required scope.
+ - When a third-party runtime truly requires raw credentials in-process, the system should materialize only the minimum required values for the shortest required scope.
 
 8. **No raw secrets in durable artifacts**
-   - Prompts, artifacts, workflow histories, run metadata, diagnostics, and generated durable config should not contain raw secret values.
+ - Prompts, artifacts, workflow histories, run metadata, diagnostics, and generated durable config should not contain raw secret values.
 
 9. **Operator observability without secret leakage**
-   - Operators must be able to answer who set a secret, what references are in use, which backend resolved a value, and why a run failed, without exposing the secret itself.
+ - Operators must be able to answer who set a secret, what references are in use, which backend resolved a value, and why a run failed, without exposing the secret itself.
 
 10. **Rotation and revocation**
-    - Secret values and backend credentials must be rotatable with clear operator-visible behavior.
+ - Secret values and backend credentials must be rotatable with clear operator-visible behavior.
 
 ---
 

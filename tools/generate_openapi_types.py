@@ -8,7 +8,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OPENAPI_EXPORT = REPO_ROOT / "tools" / "export_openapi.py"
 DEFAULT_OUTPUT = REPO_ROOT / "frontend" / "src" / "generated" / "openapi.ts"
@@ -16,17 +15,14 @@ OPENAPI_TYPESCRIPT_CLI = (
     REPO_ROOT / "node_modules" / "openapi-typescript" / "bin" / "cli.js"
 )
 
-
 def _run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, cwd=cwd, capture_output=True, text=True)
-
 
 def _forward_streams(result: subprocess.CompletedProcess[str]) -> None:
     if result.stdout:
         sys.stdout.write(result.stdout)
     if result.stderr:
         sys.stderr.write(result.stderr)
-
 
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="moonmind-openapi-") as temp_dir:
@@ -49,7 +45,6 @@ def main() -> int:
         )
         _forward_streams(generate_result)
         return generate_result.returncode
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

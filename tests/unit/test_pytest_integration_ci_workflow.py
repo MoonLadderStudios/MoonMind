@@ -4,15 +4,12 @@ from pathlib import Path
 
 import yaml
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "pytest-integration-ci.yml"
-
 
 def _load_workflow() -> dict:
     assert WORKFLOW_PATH.exists(), f"Missing workflow: {WORKFLOW_PATH}"
     return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
-
 
 def test_required_pytest_integration_ci_workflow_exists_and_has_expected_triggers() -> None:
     workflow = _load_workflow()
@@ -28,7 +25,6 @@ def test_required_pytest_integration_ci_workflow_exists_and_has_expected_trigger
         "reopened",
         "ready_for_review",
     ]
-
 
 def test_required_pytest_integration_ci_workflow_runs_hermetic_runner_and_uploads_failure_diagnostics() -> None:
     workflow = _load_workflow()

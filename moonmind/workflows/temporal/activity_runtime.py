@@ -60,7 +60,6 @@ from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DI
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
 
-
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunStatus,
@@ -136,8 +135,6 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
 )
 
-
-
 class CmdRes:
     def __init__(self, stdout_bytes: bytes):
         self._stdout_bytes = stdout_bytes
@@ -189,7 +186,6 @@ _GITHUB_PULL_REQUEST_URL_PATTERN = re.compile(
 _GEMINI_ERROR_REPORT_DIR = Path("/tmp")
 _GEMINI_ERROR_REPORT_GLOB = "gemini-client-error-*.json"
 
-
 def _managed_session_telemetry_context(
     payload: Mapping[str, Any] | BaseModel | None,
     *,
@@ -219,7 +215,6 @@ def _managed_session_telemetry_context(
         elif isinstance(value, str) and value.strip():
             context[key] = value.strip()
     return context
-
 
 def _log_managed_session_activity(
     activity_type: str,
@@ -255,7 +250,6 @@ _PUBLISH_GIT_EXCLUDED_PATHS: tuple[str, ...] = (
     ".agents/skills/active",
 )
 _SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS = 10.0
-
 
 class ManagedSessionController(Protocol):
     """Remote control surface for managed session containers."""
@@ -308,14 +302,11 @@ class ManagedSessionController(Protocol):
     async def reconcile(self) -> Sequence[CodexManagedSessionRecord | Mapping[str, Any]]:
         pass
 
-
 def _managed_runtime_artifact_root() -> Path:
     return managed_runtime_artifact_root()
 
-
 class TemporalActivityRuntimeError(RuntimeError):
     """Raised when one of the Temporal activity helpers cannot complete."""
-
 
 def _docker_workflows_disabled_failure() -> temporal_exceptions.ApplicationError:
     return temporal_exceptions.ApplicationError(
@@ -324,14 +315,12 @@ def _docker_workflows_disabled_failure() -> temporal_exceptions.ApplicationError
         non_retryable=True,
     )
 
-
 def _docker_workflow_mode_forbidden_failure(*, workflow_docker_mode: str, tool_name: str) -> temporal_exceptions.ApplicationError:
     return temporal_exceptions.ApplicationError(
         f"policy_denied: docker_workflow_mode_forbidden ({tool_name} requires unrestricted; current mode={workflow_docker_mode})",
         type="docker_workflow_mode_forbidden",
         non_retryable=True,
     )
-
 
 @dataclass(frozen=True, slots=True)
 class ArtifactCreateActivityResult:
@@ -340,13 +329,11 @@ class ArtifactCreateActivityResult:
     artifact_ref: ArtifactRef
     upload_descriptor: ArtifactUploadDescriptor
 
-
 @dataclass(frozen=True, slots=True)
 class PlanGenerateActivityResult:
     """Result from ``plan.generate``."""
 
     plan_ref: ArtifactRef
-
 
 @dataclass(frozen=True, slots=True)
 class ManifestCompileActivityResult:
@@ -354,7 +341,6 @@ class ManifestCompileActivityResult:
 
     plan_ref: ArtifactRef
     manifest_digest: str
-
 
 @dataclass(frozen=True, slots=True)
 class SandboxCommandResult:
@@ -366,7 +352,6 @@ class SandboxCommandResult:
     stdout_tail: str
     stderr_tail: str
     diagnostics_ref: ArtifactRef | None
-
 
 @dataclass(frozen=True, slots=True)
 class IntegrationStartResult:
@@ -384,7 +369,6 @@ class IntegrationStartResult:
     def external_url(self) -> str | None:
         return self.url
 
-
 @dataclass(frozen=True, slots=True)
 class IntegrationStatusResult:
     """Structured result from ``integration.jules.status``."""
@@ -401,7 +385,6 @@ class IntegrationStatusResult:
     def external_url(self) -> str | None:
         return self.url
 
-
 @dataclass(frozen=True, slots=True)
 class TemporalActivityBinding:
     """Resolved runtime binding of one activity type to a handler."""
@@ -410,7 +393,6 @@ class TemporalActivityBinding:
     task_queue: str
     fleet: str
     handler: Callable[..., Any]
-
 
 _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "artifact.create": ("artifacts", "artifact_create"),
@@ -550,7 +532,6 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_skill.materialize": ("agent_skills", "materialize"),
 }
 
-
 def _artifact_id_from_ref(value: ArtifactRef | str) -> str:
     if isinstance(value, ArtifactRef):
         return value.artifact_id
@@ -558,7 +539,6 @@ def _artifact_id_from_ref(value: ArtifactRef | str) -> str:
     if not normalized:
         raise TemporalActivityRuntimeError("artifact reference is required")
     return normalized
-
 
 def _derive_integration_title(
     description: str, fallback_title: str | None = None
@@ -582,7 +562,6 @@ def _derive_integration_title(
                     return first_line
     return original_title or "MoonMind Integration Task"
 
-
 def _artifact_locator(value: ArtifactRef | str | None) -> str | None:
     if value is None:
         return None
@@ -590,7 +569,6 @@ def _artifact_locator(value: ArtifactRef | str | None) -> str | None:
         return value.artifact_id
     normalized = str(value).strip()
     return normalized or None
-
 
 def _temporal_snapshot_from_payload(
     payload: Mapping[str, Any],
@@ -622,7 +600,6 @@ def _temporal_snapshot_from_payload(
         skills=skills,
     )
 
-
 async def _read_json_artifact(
     service: TemporalArtifactService,
     *,
@@ -635,7 +612,6 @@ async def _read_json_artifact(
         allow_restricted_raw=True,
     )
     return json.loads(payload.decode("utf-8"))
-
 
 def build_activity_invocation_envelope(
     *,
@@ -659,7 +635,6 @@ def build_activity_invocation_envelope(
         side_effecting=side_effecting,
     )
 
-
 def build_compact_activity_result(
     *,
     output_refs: Sequence[ArtifactRef | str] = (),
@@ -680,7 +655,6 @@ def build_compact_activity_result(
         diagnostics_ref=_artifact_locator(diagnostics_ref),
     )
 
-
 def build_activity_execution_context(
     *,
     workflow_id: str,
@@ -698,7 +672,6 @@ def build_activity_execution_context(
         attempt=attempt,
         task_queue=task_queue,
     )
-
 
 def build_observability_summary(
     *,
@@ -727,7 +700,6 @@ def build_observability_summary(
         metrics_dimensions=dict(metrics_dimensions or {}),
     )
 
-
 async def _write_json_artifact(
     service: TemporalArtifactService,
     *,
@@ -750,11 +722,9 @@ async def _write_json_artifact(
     )
     return build_artifact_ref(completed)
 
-
 def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
     text = payload.decode("utf-8", errors="replace")
     return text[-max_chars:]
-
 
 def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any]:
     if is_dood_tool(name):
@@ -1077,7 +1047,6 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
         },
     }
 
-
 def _iter_requested_registry_tools(
     parameters: Mapping[str, Any] | None,
 ) -> tuple[tuple[str, str], ...]:
@@ -1129,7 +1098,6 @@ def _iter_requested_registry_tools(
 
     return tuple(selected)
 
-
 def _default_skill_registry_payload(
     *, parameters: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -1140,7 +1108,6 @@ def _default_skill_registry_payload(
         ]
     }
 
-
 def _contains_placeholder_refs(value: Any) -> bool:
     if isinstance(value, str):
         return _PLACEHOLDER_DIGEST_FRAGMENT in value.lower()
@@ -1149,7 +1116,6 @@ def _contains_placeholder_refs(value: Any) -> bool:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return any(_contains_placeholder_refs(item) for item in value)
     return False
-
 
 def _coerce_activity_request(
     request: Mapping[str, Any] | None,
@@ -1164,7 +1130,6 @@ def _coerce_activity_request(
         )
     return dict(request)
 
-
 def _coerce_activity_payload_input(
     request: Any,
     *,
@@ -1176,7 +1141,6 @@ def _coerce_activity_payload_input(
     elif request is None:
         request = kwargs
     return _coerce_activity_request(request, activity_type=activity_type)
-
 
 def _validate_external_agent_run_input(payload: Any) -> ExternalAgentRunInput:
     """Validate external activity input, including scalar legacy histories."""
@@ -1190,7 +1154,6 @@ def _validate_external_agent_run_input(payload: Any) -> ExternalAgentRunInput:
             f"external agent run payload is invalid: {exc}"
         ) from exc
 
-
 def _validate_agent_runtime_status_input(payload: Any) -> AgentRuntimeStatusInput:
     if isinstance(payload, AgentRuntimeStatusInput):
         return payload
@@ -1200,7 +1163,6 @@ def _validate_agent_runtime_status_input(payload: Any) -> AgentRuntimeStatusInpu
         raise TemporalActivityRuntimeError(
             f"agent_runtime.status payload is invalid: {exc}"
         ) from exc
-
 
 def _validate_agent_runtime_fetch_result_input(
     payload: Any,
@@ -1219,7 +1181,6 @@ def _validate_agent_runtime_fetch_result_input(
             f"agent_runtime.fetch_result payload is invalid: {exc}"
         ) from exc
 
-
 def _validate_agent_runtime_cancel_input(payload: Any) -> AgentRuntimeCancelInput:
     if isinstance(payload, AgentRuntimeCancelInput):
         return payload
@@ -1230,7 +1191,6 @@ def _validate_agent_runtime_cancel_input(payload: Any) -> AgentRuntimeCancelInpu
             f"agent_runtime.cancel payload is invalid: {exc}"
         ) from exc
 
-
 async def _maybe_call_heartbeat(
     callback: HeartbeatCallback | None,
     payload: Mapping[str, Any],
@@ -1240,7 +1200,6 @@ async def _maybe_call_heartbeat(
     result = callback(payload)
     if inspect.isawaitable(result):
         await result
-
 
 async def _await_with_activity_heartbeats(
     awaitable: Awaitable[Any],
@@ -1270,7 +1229,6 @@ async def _await_with_activity_heartbeats(
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-
 
 class TemporalPlanActivities:
     """Implementation helpers for ``plan.*`` activities."""
@@ -1486,7 +1444,6 @@ class TemporalPlanActivities:
             },
         )
 
-
 class TemporalSkillActivities:
     """Implementation helper for ``mm.skill.execute``."""
 
@@ -1589,7 +1546,6 @@ class TemporalSkillActivities:
             context=context,
             idempotency_key=idempotency_key,
         )
-
 
 class TemporalManifestActivities:
     """Implementation helpers for manifest-ingest activity steps."""
@@ -1733,7 +1689,6 @@ class TemporalManifestActivities:
             requested_by=compiled_plan.requested_by,
         )
         return [node.model_dump(by_alias=True, mode="json") for node in runtime_nodes]
-
 
 class TemporalSandboxActivities:
     """Implementation helper for ``sandbox.run_command``."""
@@ -2100,7 +2055,6 @@ class TemporalSandboxActivities:
                 "labels": ["sandbox", "tests", "report"],
             },
         )
-
 
 class TemporalIntegrationActivities:
     """Implementation helpers for ``integration.jules.*``."""
@@ -2845,7 +2799,6 @@ class TemporalProposalActivities:
             "errors": errors,
         }
 
-
 class TemporalAgentRuntimeActivities:
     """Implementation helpers for ``agent_runtime.*`` activities."""
 
@@ -3181,8 +3134,6 @@ class TemporalAgentRuntimeActivities:
                 logger.error("Supervisor failed for run %s", run_id, exc_info=True)
                 await self._cleanup_managed_run_publish_support_best_effort(run_id)
                 return
-
-
 
         task = asyncio.create_task(_supervise_and_publish())
         self._supervision_tasks.add(task)
@@ -5740,7 +5691,6 @@ class TemporalAgentRuntimeActivities:
             status="canceled",
         )
 
-
 def _build_activity_wrapper(
     func: Callable[..., Any],
 ) -> Callable[[Any, Any], Awaitable[Any]]:
@@ -5802,7 +5752,6 @@ def _build_activity_wrapper(
 
     return _wrapper
 
-
 def _bind_activity_handler(
     implementation: Any,
     *,
@@ -5824,7 +5773,6 @@ def _bind_activity_handler(
     decorated_func = activity.defn(name=activity_type)(_wrapper)
     return decorated_func.__get__(implementation, type(implementation))
 
-
 class TemporalReviewActivities:
     """Implementation helpers for ``step.review`` activities."""
 
@@ -5834,7 +5782,6 @@ class TemporalReviewActivities:
     ) -> dict[str, Any]:
         from moonmind.workflows.temporal.activities.step_review import step_review_activity
         return await step_review_activity(payload)
-
 
 def build_activity_bindings(
     catalog: TemporalActivityCatalog,
@@ -5951,7 +5898,6 @@ def build_activity_bindings(
                 )
 
     return tuple(bindings)
-
 
 __all__ = [
     "ArtifactCreateActivityResult",

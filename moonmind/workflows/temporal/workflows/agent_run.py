@@ -100,7 +100,6 @@ _EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
     "unknown": RunStatus.awaiting_callback,
 }
 
-
 def _setdefault_compact_ref_metadata(
     metadata: dict[str, Any],
     field_name: str,
@@ -108,7 +107,6 @@ def _setdefault_compact_ref_metadata(
 ) -> None:
     for key, compact_value in compact_temporal_ref_metadata(field_name, value).items():
         metadata.setdefault(key, compact_value)
-
 
 # Default workflow-level execution timeouts
 DEFAULT_MANAGED_TIMEOUT_SECONDS = 3600      # 1 hour
@@ -152,7 +150,6 @@ _DEFAULT_SESSION_IMAGE_REF = os.environ.get(
 )
 _SLOT_HANDOFF_TTL_SECONDS = 10
 
-
 def _request_selected_skill(request: AgentExecutionRequest) -> str | None:
     """Return the selected agent skill recorded in request metadata, if present."""
 
@@ -167,7 +164,6 @@ def _request_selected_skill(request: AgentExecutionRequest) -> str | None:
         or ""
     ).strip()
     return selected_skill or None
-
 
 def _request_step_ledger_context(
     request: AgentExecutionRequest,
@@ -196,7 +192,6 @@ def _request_step_ledger_context(
         context["scope"] = scope
     return context
 
-
 def _request_reserves_slot_for_immediate_followup(
     request: AgentExecutionRequest,
 ) -> bool:
@@ -211,12 +206,10 @@ def _request_reserves_slot_for_immediate_followup(
     continuity_map = continuity if isinstance(continuity, Mapping) else {}
     return bool(continuity_map.get("reserveForImmediateFollowup"))
 
-
 def _normalize_agent_runtime_id(agent_id: str) -> str:
     """Normalize runtime identifiers for managed runtime routing."""
 
     return str(agent_id).strip().lower().replace("-", "_")
-
 
 def _legacy_manager_workflow_id(runtime_id: str) -> str:
     # Preserve legacy workflow IDs for in-flight histories. New executions use

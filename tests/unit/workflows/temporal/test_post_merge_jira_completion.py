@@ -12,7 +12,6 @@ from moonmind.workflows.temporal.post_merge_jira_completion import (
     select_done_transition,
 )
 
-
 def _issue(key: str = "MM-403", category: str = "indeterminate") -> dict[str, object]:
     return {
         "key": key,
@@ -23,7 +22,6 @@ def _issue(key: str = "MM-403", category: str = "indeterminate") -> dict[str, ob
             }
         },
     }
-
 
 def _transition(
     transition_id: str = "41",
@@ -41,7 +39,6 @@ def _transition(
         "fields": fields or {},
     }
 
-
 def test_candidate_keys_prefers_explicit_post_merge_issue_key() -> None:
     candidates = candidate_keys_from_payload(
         {
@@ -54,7 +51,6 @@ def test_candidate_keys_prefers_explicit_post_merge_issue_key() -> None:
     assert [(item.issue_key, item.source) for item in candidates] == [
         ("MM-403", "explicit_post_merge")
     ]
-
 
 @pytest.mark.asyncio
 async def test_resolve_issue_key_deduplicates_and_detects_ambiguity() -> None:
@@ -91,7 +87,6 @@ async def test_resolve_issue_key_deduplicates_and_detects_ambiguity() -> None:
     assert ambiguous["issueKey"] is None
     assert calls == ["MM-403", "MM-403", "MM-404"]
 
-
 def test_select_done_transition_requires_exactly_one_safe_done_transition() -> None:
     config = PostMergeJiraCompletionConfig()
 
@@ -125,7 +120,6 @@ def test_select_done_transition_requires_exactly_one_safe_done_transition() -> N
     assert required_field["status"] == "blocked"
     assert "required field" in required_field["reason"]
 
-
 def test_select_done_transition_supports_already_done_noop_and_explicit_name() -> None:
     noop = select_done_transition(
         issue=_issue(category="done"),
@@ -142,7 +136,6 @@ def test_select_done_transition_supports_already_done_noop_and_explicit_name() -
     assert explicit["status"] == "selected"
     assert explicit["transition"]["transitionId"] == "41"
 
-
 def test_completion_decision_is_compact_and_credential_free() -> None:
     decision = PostMergeJiraCompletionDecision(
         status="blocked",
@@ -156,7 +149,6 @@ def test_completion_decision_is_compact_and_credential_free() -> None:
 
     assert dumped["status"] == "blocked"
     assert "authorization" not in str(dumped).lower()
-
 
 @pytest.mark.asyncio
 async def test_complete_post_merge_jira_transitions_one_valid_issue() -> None:
@@ -191,7 +183,6 @@ async def test_complete_post_merge_jira_transitions_one_valid_issue() -> None:
     assert decision.status == "succeeded"
     assert decision.transitioned is True
     assert calls[-1] == ("transition_issue", ("MM-403", "41", {}))
-
 
 @pytest.mark.asyncio
 async def test_complete_post_merge_jira_returns_failed_decision_for_read_failures() -> None:

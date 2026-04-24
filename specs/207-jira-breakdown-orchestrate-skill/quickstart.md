@@ -125,7 +125,6 @@ Traceability verification:
 ```bash
 rg -n "MM-404|Jira Breakdown and Orchestrate" \
   specs/207-jira-breakdown-orchestrate-skill \
-  docs/tmp/jira-orchestration-inputs/MM-404-moonspec-orchestration-input.md
 ```
 
 Story validation evidence on 2026-04-18: `test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_traceability` exercises a stubbed three-story result and confirms three downstream tasks, two `dependsOn` edges, stable idempotency keys, and MM-404 traceability.

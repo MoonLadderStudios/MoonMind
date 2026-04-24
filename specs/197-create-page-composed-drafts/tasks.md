@@ -2,14 +2,14 @@
 
 **Input**: `specs/197-create-page-composed-drafts/spec.md`  
 **Plan**: `specs/197-create-page-composed-drafts/plan.md`  
-**Canonical Jira Input**: `docs/tmp/jira-orchestration-inputs/MM-384-moonspec-orchestration-input.md`  
+**Canonical Jira Input**: `spec.md` (Input)  
 **Unit test command**: `rg -n "AppliedPresetBinding|StepDraft.source|preset-bound|grouped composition|flat reconstruction|Reapply preset|save-as-preset|flatten" docs/UI/CreatePage.md`  
 **Integration test command**: `! rg -n "template-bound|appliedTemplates|AppliedTemplateState" docs/UI/CreatePage.md`  
 **Final verification**: `/moonspec-verify`
 
 ## Source Traceability
 
-The original MM-384 Jira preset brief is preserved in `docs/tmp/jira-orchestration-inputs/MM-384-moonspec-orchestration-input.md` and in `specs/197-create-page-composed-drafts/spec.md`. Tasks cover FR-001 through FR-013, SC-001 through SC-004, and DESIGN-REQ-010 through DESIGN-REQ-016, DESIGN-REQ-025, and DESIGN-REQ-026.
+The original MM-384 Jira preset brief is preserved in `spec.md` (Input) and in `specs/197-create-page-composed-drafts/spec.md`. Tasks cover FR-001 through FR-013, SC-001 through SC-004, and DESIGN-REQ-010 through DESIGN-REQ-016, DESIGN-REQ-025, and DESIGN-REQ-026.
 
 ## Phase 1: Setup
 
@@ -48,12 +48,12 @@ The original MM-384 Jira preset brief is preserved in `docs/tmp/jira-orchestrati
 
 - [X] T014 Run required-term documentation-contract check for `docs/UI/CreatePage.md` and record PASS/FAIL in final verification evidence (FR-002, FR-003, SC-002)
 - [X] T015 Run legacy terminology cleanup check for `docs/UI/CreatePage.md` and record PASS/FAIL in final verification evidence (FR-010, SC-003)
-- [X] T016 Confirm MM-384 traceability across `docs/tmp/jira-orchestration-inputs/MM-384-moonspec-orchestration-input.md`, `specs/197-create-page-composed-drafts/spec.md`, and `specs/197-create-page-composed-drafts/tasks.md` (FR-013, SC-001)
+- [X] T016 Confirm MM-384 traceability across `spec.md` (Input), `specs/197-create-page-composed-drafts/spec.md`, and `specs/197-create-page-composed-drafts/tasks.md` (FR-013, SC-001)
 
 ## Phase 4: Polish
 
 - [X] T017 Run MoonSpec artifact alignment review and write `specs/197-create-page-composed-drafts/speckit_analyze_report.md` (SC-001)
-- [X] T018 Review `git diff -- docs/UI/CreatePage.md specs/197-create-page-composed-drafts docs/tmp/jira-orchestration-inputs/MM-384-moonspec-orchestration-input.md .specify/feature.json` for unrelated changes (SC-004)
+- [X] T018 Review `git diff -- docs/UI/CreatePage.md specs/197-create-page-composed-drafts .specify/feature.json` for unrelated changes (SC-004)
 
 ## Phase 5: Final Verification
 

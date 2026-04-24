@@ -10,7 +10,6 @@ from typing import Any, Iterable, List, Mapping, MutableMapping, Optional
 
 ISOFORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
-
 @dataclass(slots=True)
 class ContextItem:
     score: float
@@ -25,7 +24,6 @@ class ContextItem:
     def to_dict(self) -> MutableMapping[str, Any]:
         data = asdict(self)
         return data
-
 
 @dataclass(slots=True)
 class ContextPack:
@@ -53,10 +51,8 @@ class ContextPack:
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
 
-
 def _normalize_whitespace(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.strip().splitlines())
-
 
 def build_context_text(items: Iterable[ContextItem], *, max_chars: int) -> str:
     body: list[str] = ["### Retrieved Context"]
@@ -78,7 +74,6 @@ def build_context_text(items: Iterable[ContextItem], *, max_chars: int) -> str:
     if len(body) == 1:
         body.append("No context retrieved.")
     return "\n".join(body)
-
 
 def build_context_pack(
     *,

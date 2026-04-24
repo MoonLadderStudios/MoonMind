@@ -7,7 +7,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-
 async def start_oauth_session_workflow(session_model: Any) -> None:
     """Start the Temporal workflow for a new OAuth session.
 
@@ -52,7 +51,6 @@ async def start_oauth_session_workflow(session_model: Any) -> None:
             f"Failed to start OAuth session workflow {workflow_id}"
         ) from exc
 
-
 async def cancel_oauth_session_workflow(session_id: str) -> None:
     """Cancel an existing OAuth session Temporal workflow.
 
@@ -74,7 +72,6 @@ async def cancel_oauth_session_workflow(session_id: str) -> None:
             "Failed to cancel OAuth session workflow %s", session_id
         )
 
-
 async def complete_oauth_session_workflow(session_id: str) -> None:
     """Signal that the API has already verified and finalized a session."""
     from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -94,7 +91,6 @@ async def complete_oauth_session_workflow(session_id: str) -> None:
         logger.exception(
             "Failed to mark OAuth session workflow %s complete", session_id
         )
-
 
 async def fail_oauth_session_workflow(session_id: str, reason: str) -> None:
     """Signal an OAuth session workflow that the terminal failed externally."""

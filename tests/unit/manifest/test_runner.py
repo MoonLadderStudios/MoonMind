@@ -18,14 +18,12 @@ spec:
         - foo: bar
 """
 
-
 class DummyReader:
     def __init__(self, token: str):
         self.token = token
 
     def load_data(self, foo: str):
         return [f"{self.token}-{foo}"]
-
 
 def test_runner_instantiates_and_runs():
     manifest = Manifest.model_validate_yaml(yaml_str)
@@ -38,7 +36,6 @@ def test_runner_instantiates_and_runs():
 
     dl.assert_called_once_with("DummyReader")
     assert results["DummyReader"][0] == ["123-bar"]
-
 
 def test_runner_handles_errors():
     class BadReader(DummyReader):
@@ -54,11 +51,9 @@ def test_runner_handles_errors():
     # Error during load_data should result in empty list for the reader
     assert results["DummyReader"] == []
 
-
 class DummyChild:
     def __init__(self, value: str):
         self.value = value
-
 
 class ParentReader:
     def __init__(self, child: DummyChild):
@@ -66,7 +61,6 @@ class ParentReader:
 
     def load_data(self):
         return [self.child.value]
-
 
 def test_runner_recursive_initialization():
     yaml_nested = """
@@ -93,7 +87,6 @@ spec:
         results = runner.run()
 
     assert results["ParentReader"][0] == ["hello"]
-
 
 def test_runner_falls_back_when_download_loader_is_unavailable(monkeypatch):
     import sys

@@ -26,5 +26,5 @@ Add endpoints for:
 
 Or add them to the existing `runs.py` or `activity_router.py`.
 
-#### [MODIFY] `docs/tmp/009-LiveLogsPlan.md`
+#### [MODIFY] `docs/ManagedAgents/LiveLogs.md`
 Mark tasks as completed.

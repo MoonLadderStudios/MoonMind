@@ -89,7 +89,7 @@
 
 **Purpose**: Strengthen the completed story without expanding scope.
 
-- [X] T021 [P] Check traceability for MM-476 in `docs/tmp/jira-orchestration-inputs/MM-476-moonspec-orchestration-input.md` and `specs/238-workflow-docker-access/`
+- [X] T021 [P] Check traceability for MM-476 in `spec.md` (Input) and `specs/238-workflow-docker-access/`
 - [X] T022 Run quickstart unit and integration-boundary validation commands from `specs/238-workflow-docker-access/quickstart.md`
 - [X] T023 Run full unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - [X] T024 Run full hermetic integration verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_integration.sh` when Docker is available, or record the Docker-socket blocker in final verification evidence

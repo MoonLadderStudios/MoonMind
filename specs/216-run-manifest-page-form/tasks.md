@@ -14,7 +14,7 @@
 ## Phase 1: Setup
 
 - [X] T001 Create Moon Spec artifacts for MM-419 in `specs/216-run-manifest-page-form/`.
-- [X] T002 Preserve canonical Jira brief for MM-419 in `docs/tmp/jira-orchestration-inputs/MM-419-moonspec-orchestration-input.md`.
+- [X] T002 Preserve canonical Jira brief for MM-419 in `spec.md` (Input).
 
 ## Phase 2: Foundational
 

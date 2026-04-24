@@ -9,7 +9,6 @@ from api_service.api.schemas import UserProfileUpdate
 from api_service.db.models import UserProfile
 from api_service.services.profile_service import ProfileService
 
-
 @pytest.mark.asyncio
 async def test_update_profile_enforces_ownership():
     service = ProfileService()
@@ -26,7 +25,6 @@ async def test_update_profile_enforces_ownership():
         )
 
     assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
-
 
 @pytest.mark.asyncio
 async def test_userprofile_read_populates_from_encrypted():

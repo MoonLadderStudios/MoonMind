@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-
 @dataclass(slots=True)
 class CodexSubmissionResult:
     """Structured response from a Codex submission."""
@@ -16,7 +15,6 @@ class CodexSubmissionResult:
     task_id: str
     logs_path: Path
     summary: str
-
 
 @dataclass(slots=True)
 class CodexDiffResult:
@@ -26,14 +24,11 @@ class CodexDiffResult:
     description: str
     has_changes: bool = True
 
-
 class CodexDiffNotReadyError(RuntimeError):
     """Raised while a Codex diff is not yet available."""
 
-
 class CodexDiffRetrievalError(RuntimeError):
     """Raised for non-transient Codex diff retrieval failures."""
-
 
 class CodexClient:
     """Lightweight adapter encapsulating Codex automation entrypoints."""
@@ -127,7 +122,6 @@ class CodexClient:
             "WORKFLOW_TEST_MODE=1 (or WORKFLOW_TEST_MODE=1 for legacy environments) "
             "for local development."
         )
-
 
 __all__ = [
     "CodexClient",

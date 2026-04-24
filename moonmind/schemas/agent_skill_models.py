@@ -4,7 +4,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 class AgentSkillSourceKind(str, enum.Enum):
     """Source provenance for a resolved skill."""
 
@@ -13,13 +12,11 @@ class AgentSkillSourceKind(str, enum.Enum):
     REPO = "repo"
     LOCAL = "local"
 
-
 class AgentSkillFormat(str, enum.Enum):
     """Supported payload formatting inside a given skill version."""
 
     MARKDOWN = "markdown"
     BUNDLE = "bundle"
-
 
 class RuntimeMaterializationMode(str, enum.Enum):
     """Options for how a runtime receives the resolved skill set."""
@@ -29,7 +26,6 @@ class RuntimeMaterializationMode(str, enum.Enum):
     HYBRID = "hybrid"
     RETRIEVAL = "retrieval"
 
-
 class SkillSelectorEntry(BaseModel):
     """An explicit include rule for a single skill."""
 
@@ -37,7 +33,6 @@ class SkillSelectorEntry(BaseModel):
     version: str | None = None
     
     model_config = ConfigDict(extra="forbid")
-
 
 class SkillSelector(BaseModel):
     """Selection intent expressing which agent skills should be active."""
@@ -49,7 +44,6 @@ class SkillSelector(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
 class AgentSkillProvenance(BaseModel):
     """Metadata explaining where a resolved skill instance came from."""
 
@@ -59,7 +53,6 @@ class AgentSkillProvenance(BaseModel):
     skill_set_name: str | None = None
     
     model_config = ConfigDict(extra="forbid")
-
 
 class ResolvedSkillEntry(BaseModel):
     """An individual agent skill and the immutable version selected for a run."""
@@ -72,7 +65,6 @@ class ResolvedSkillEntry(BaseModel):
     provenance: AgentSkillProvenance
     
     model_config = ConfigDict(extra="forbid")
-
 
 class ResolvedSkillSet(BaseModel):
     """The immutable, exact set of agent skills selected for a specific run or step."""
@@ -87,7 +79,6 @@ class ResolvedSkillSet(BaseModel):
     policy_summary: dict[str, Any] = Field(default_factory=dict)
     
     model_config = ConfigDict(extra="forbid")
-
 
 class RuntimeSkillMaterialization(BaseModel):
     """The runtime-facing rendering of a resolved skill snapshot."""

@@ -104,16 +104,13 @@ REGISTERED_TEMPORAL_WORKFLOW_TYPES = (
     "MoonMind.MergeAutomation",
 )
 
-
 class TemporalWorkerBootstrapError(ValueError):
     """Raised when the worker topology cannot be resolved safely."""
-
 
 def list_registered_workflow_types() -> tuple[str, ...]:
     """Return the workflow types owned by the workflow fleet."""
 
     return REGISTERED_TEMPORAL_WORKFLOW_TYPES
-
 
 @dataclass(frozen=True, slots=True)
 class TemporalWorkerTopology:
@@ -134,7 +131,6 @@ class TemporalWorkerTopology:
     def to_payload(self) -> dict[str, Any]:
         return asdict(self)
 
-
 def normalize_worker_fleet(fleet: str) -> str:
     """Return a canonical fleet name or fail closed."""
 
@@ -146,7 +142,6 @@ def normalize_worker_fleet(fleet: str) -> str:
         )
     return normalized
 
-
 def _artifact_secrets(app_settings: AppSettings) -> tuple[str, ...]:
     if app_settings.workflow.temporal_artifact_backend == "s3":
         return (
@@ -156,7 +151,6 @@ def _artifact_secrets(app_settings: AppSettings) -> tuple[str, ...]:
             "TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY",
         )
     return ()
-
 
 def _required_secrets_for_fleet(
     fleet: str, *, app_settings: AppSettings
@@ -174,7 +168,6 @@ def _required_secrets_for_fleet(
         return ("JULES_API_URL", "JULES_API_KEY")
     return ()
 
-
 def _concurrency_limit_for_fleet(
     fleet: str, *, temporal_settings: TemporalSettings
 ) -> int | None:
@@ -187,7 +180,6 @@ def _concurrency_limit_for_fleet(
         AGENT_RUNTIME_FLEET: temporal_settings.agent_runtime_worker_concurrency,
     }[fleet]
 
-
 def _fleet_entry(
     catalog: TemporalActivityCatalog, *, fleet: str
 ) -> TemporalWorkerFleet:
@@ -198,7 +190,6 @@ def _fleet_entry(
     raise TemporalWorkerBootstrapError(
         f"Temporal catalog does not define worker fleet '{normalized}'"
     )
-
 
 def build_worker_topology(
     *,
@@ -238,7 +229,6 @@ def build_worker_topology(
         egress_policy=_FLEET_EGRESS_POLICIES[normalized],
     )
 
-
 def build_all_worker_topologies(
     *,
     catalog: TemporalActivityCatalog | None = None,
@@ -259,7 +249,6 @@ def build_all_worker_topologies(
         )
         for fleet in ALLOWED_TEMPORAL_WORKER_FLEETS
     )
-
 
 def build_worker_activity_bindings(
     *,
@@ -298,7 +287,6 @@ def build_worker_activity_bindings(
         fleets=(normalized,),
     )
 
-
 def describe_configured_worker(
     *,
     temporal_settings: TemporalSettings | None = None,
@@ -316,7 +304,6 @@ def describe_configured_worker(
         app_settings=app_cfg,
     )
 
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="moonmind-temporal-worker-bootstrap")
     parser.add_argument(
@@ -329,7 +316,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Emit the resolved worker topology as JSON and exit.",
     )
     return parser
-
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint used by the shared worker launcher."""
@@ -355,10 +341,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     return 0
 
-
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
-
 
 __all__ = [
     "ALLOWED_TEMPORAL_WORKER_FLEETS",

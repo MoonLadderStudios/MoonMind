@@ -18,7 +18,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-
 # ---------------------------------------------------------------------------
 # Per-provider credential paths (relative to mount root)
 # ---------------------------------------------------------------------------
@@ -45,7 +44,6 @@ PROVIDER_CREDENTIAL_PATHS: dict[str, tuple[str, ...]] = {
     "claude_code": _CLAUDE_CREDENTIAL_PATHS,
 }
 
-
 def _verification_result(
     *,
     verified: bool,
@@ -64,7 +62,6 @@ def _verification_result(
         "credentials_found_count": found_count,
         "credentials_missing_count": missing_count,
     }
-
 
 def _build_credential_check_command(
     *,
@@ -131,7 +128,6 @@ def _build_credential_check_command(
         )
         for path in credential_paths
     )
-
 
 async def verify_volume_credentials(
     runtime_id: str,

@@ -21,12 +21,10 @@ from sqlalchemy.sql import func
 
 from api_service.db.models import Base, mutable_json_dict, mutable_json_list
 
-
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     """Return enum labels for SQLAlchemy Enum definitions."""
 
     return [member.value for member in enum_cls]
-
 
 class TaskProposalStatus(str, enum.Enum):
     """Lifecycle states for task proposals."""
@@ -37,14 +35,12 @@ class TaskProposalStatus(str, enum.Enum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
 
-
 class TaskProposalOriginSource(str, enum.Enum):
     """Accepted proposal origin sources for auditing."""
 
     QUEUE = "queue"
     WORKFLOW = "workflow"
     MANUAL = "manual"
-
 
 class TaskProposalReviewPriority(str, enum.Enum):
     """Reviewer-defined triage priority."""
@@ -53,7 +49,6 @@ class TaskProposalReviewPriority(str, enum.Enum):
     NORMAL = "normal"
     HIGH = "high"
     URGENT = "urgent"
-
 
 class TaskProposal(Base):
     """Control-plane record representing a follow-up task proposal."""
@@ -152,7 +147,6 @@ class TaskProposal(Base):
         onupdate=func.now(),
     )
 
-
 class TaskProposalNotification(Base):
     """Audit log for high-signal proposal notification delivery."""
 
@@ -176,7 +170,6 @@ class TaskProposalNotification(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-
 
 __all__ = [
     "TaskProposal",

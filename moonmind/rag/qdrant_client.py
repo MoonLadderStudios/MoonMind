@@ -17,12 +17,10 @@ from moonmind.rag.context_pack import ContextItem
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass(slots=True)
 class SearchResult:
     items: List[ContextItem]
     latency_ms: float
-
 
 class RagQdrantClient:
     """High-level helper that enforces guardrails for vector operations."""

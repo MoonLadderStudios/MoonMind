@@ -11,7 +11,6 @@ from moonmind.schemas.temporal_boundary_models import (
     TemporalBoundaryModelRef,
 )
 
-
 def _model_ref(name: str = "ExampleRequest") -> TemporalBoundaryModelRef:
     return TemporalBoundaryModelRef(
         module="moonmind.schemas.temporal_activity_models",
@@ -19,7 +18,6 @@ def _model_ref(name: str = "ExampleRequest") -> TemporalBoundaryModelRef:
         role="request",
         schemaHome="moonmind.schemas.temporal_activity_models",
     )
-
 
 def test_model_ref_rejects_unknown_fields_and_normalizes_identifiers() -> None:
     ref = TemporalBoundaryModelRef(
@@ -53,7 +51,6 @@ def test_model_ref_rejects_unknown_fields_and_normalizes_identifiers() -> None:
             schemaHome="moonmind.schemas.temporal_activity_models",
         )
 
-
 def test_contract_requires_rationale_for_tracking_status() -> None:
     with pytest.raises(ValidationError, match="rationale is required"):
         TemporalBoundaryContract(
@@ -78,7 +75,6 @@ def test_contract_requires_rationale_for_tracking_status() -> None:
     )
 
     assert contract.rationale == "Boundary is inventoried before broad call-site migration."
-
 
 def test_inventory_preserves_jira_source_and_rejects_duplicate_contracts() -> None:
     contract = TemporalBoundaryContract(

@@ -28,12 +28,10 @@ _DEFAULT_CALLBACK_MAX_PAYLOAD_BYTES = 64 * 1024
 _DEFAULT_CALLBACK_RATE_LIMIT = 30
 _DEFAULT_CALLBACK_RATE_LIMIT_WINDOW_SECONDS = 60
 
-
 @dataclass(slots=True)
 class _CallbackRateLimitBucket:
     timestamps: deque[float]
     window_seconds: int
-
 
 @dataclass(frozen=True, slots=True)
 class _CallbackProfile:
@@ -43,7 +41,6 @@ class _CallbackProfile:
     rate_limit_per_window: int
     rate_limit_window_seconds: int
     capture_artifacts: bool
-
 
 class _CallbackRateLimiter:
     """Simple in-process callback limiter for burst protection."""
@@ -83,9 +80,7 @@ class _CallbackRateLimiter:
         timestamps.append(now)
         return True
 
-
 _callback_rate_limiter = _CallbackRateLimiter()
-
 
 def _bearer_token(authorization_header: str | None) -> str | None:
     raw = str(authorization_header or "").strip()
@@ -95,7 +90,6 @@ def _bearer_token(authorization_header: str | None) -> str | None:
     if scheme.lower() != "bearer" or not token.strip():
         return None
     return token.strip()
-
 
 def _callback_profile(integration_name: str) -> _CallbackProfile:
     normalized = str(integration_name or "").strip().lower()
@@ -123,7 +117,6 @@ def _callback_profile(integration_name: str) -> _CallbackProfile:
         rate_limit_window_seconds=_DEFAULT_CALLBACK_RATE_LIMIT_WINDOW_SECONDS,
         capture_artifacts=False,
     )
-
 
 async def _validate_callback_request(
     *,
@@ -177,7 +170,6 @@ async def _validate_callback_request(
         )
     return payload_bytes
 
-
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TemporalExecutionService:
@@ -200,7 +192,6 @@ async def _get_service(
             settings.temporal.manifest_continue_as_new_phase_threshold
         ),
     )
-
 
 @router.post(
     "/{integration_name}/callbacks/{callback_correlation_key}",
@@ -290,6 +281,5 @@ async def ingest_integration_callback(
         ) from exc
 
     return _serialize_execution(record)
-
 
 __all__ = ["router"]

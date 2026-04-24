@@ -13,7 +13,7 @@ PASS. The MoonSpec artifacts are aligned for a single runtime story and now refl
 | Check | Result | Notes |
 | --- | --- | --- |
 | Single-story scope | PASS | One user story: Remediation Mission Control Surfaces. |
-| Original input preserved | PASS | `spec.md` preserves MM-457, source summary, source coverage IDs, and the full original Jira preset brief from `docs/tmp/jira-orchestration-inputs/MM-457-moonspec-orchestration-input.md`. |
+| Original input preserved | PASS | `spec.md` preserves MM-457, source summary, source coverage IDs, and the full original Jira preset brief from `spec.md` (Input). |
 | Source design coverage | PASS | `DESIGN-REQ-001` through `DESIGN-REQ-008` map to `FR-*` requirements and tasks. |
 | Plan/test strategy | PASS | `plan.md`, `quickstart.md`, and `tasks.md` identify separate backend unit/service tests and frontend integration-style UI tests. |
 | TDD task order | PASS | `tasks.md` keeps API/UI tests and red-first runs before implementation tasks. |

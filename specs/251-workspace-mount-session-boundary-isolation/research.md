@@ -3,7 +3,7 @@
 ## Story Classification
 
 Decision: Treat MM-502 as a single-story runtime verification-first feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-502-moonspec-orchestration-input.md`; `specs/251-workspace-mount-session-boundary-isolation/spec.md`.
+Evidence: `spec.md` (Input); `specs/251-workspace-mount-session-boundary-isolation/spec.md`.
 Rationale: The Jira preset brief defines one independently testable runtime outcome: Docker-backed workload launches stay inside MoonMind-owned task paths and remain isolated from managed-session identity and provider auth state.
 Alternatives considered: Broad design breakdown was rejected because the Jira brief already selects one bounded story.
 Test implications: Unit tests plus at least one hermetic integration boundary are required because the story touches dispatcher/runtime isolation behavior.
@@ -59,7 +59,7 @@ Test implications: Add a hermetic integration test that exercises the dispatcher
 ## FR-007 Traceability
 
 Decision: implemented_verified.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-502-moonspec-orchestration-input.md`; `specs/251-workspace-mount-session-boundary-isolation/spec.md`; `plan.md`; `research.md`; `contracts/workload-isolation-contract.md`; `quickstart.md`.
+Evidence: `spec.md` (Input); `specs/251-workspace-mount-session-boundary-isolation/spec.md`; `plan.md`; `research.md`; `contracts/workload-isolation-contract.md`; `quickstart.md`.
 Rationale: The feature-local MoonSpec artifact set now preserves MM-502 and the original Jira preset brief for downstream work and verification.
 Alternatives considered: Preserve the Jira key only in the source brief. Rejected because the story explicitly requires downstream traceability.
 Test implications: Final traceability review only.

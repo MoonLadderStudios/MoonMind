@@ -30,14 +30,12 @@ from pr_resolve_contract import (  # noqa: E402
 )
 from pr_resolve_finalize import evaluate_finalize_action  # noqa: E402
 
-
 def _run_snapshot(snapshot_script: Path, pr: str | None, snapshot_path: Path) -> None:
     cmd = [sys.executable, str(snapshot_script)]
     cmd.extend(["--snapshot-path", str(snapshot_path)])
     if pr:
         cmd.extend(["--pr", pr])
     subprocess.run(cmd, check=True)
-
 
 def _read_snapshot(path: Path) -> dict[str, Any]:
     try:
@@ -49,7 +47,6 @@ def _read_snapshot(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError(f"snapshot must be a JSON object: {path}")
     return payload
-
 
 def _write_result(
     result_path: Path,
@@ -92,7 +89,6 @@ def _write_result(
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
-
 def evaluate_full_state(snapshot: dict[str, Any]) -> dict[str, str]:
     decision = evaluate_finalize_action(snapshot)
     action = normalize_text(decision.get("action"))
@@ -123,7 +119,6 @@ def evaluate_full_state(snapshot: dict[str, Any]) -> dict[str, str]:
         "reason": reason or "unknown_blocker",
         "next_step": remediation_next_step(reason),
     }
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -199,7 +194,6 @@ def main() -> None:
         result_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         print(str(exc), file=sys.stderr)
         sys.exit(EXIT_CODE_FAILED)
-
 
 if __name__ == "__main__":
     main()

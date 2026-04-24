@@ -9,7 +9,6 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
 )
 
-
 @activity.defn(name="integration.openclaw.execute")
 async def openclaw_execute_activity(
     request: AgentExecutionRequest,
@@ -22,7 +21,6 @@ async def openclaw_execute_activity(
     from moonmind.openclaw.execute import run_openclaw_execution
 
     return await run_openclaw_execution(request)
-
 
 __all__ = [
     "openclaw_execute_activity",

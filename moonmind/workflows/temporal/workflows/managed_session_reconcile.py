@@ -11,9 +11,7 @@ with workflow.unsafe.imports_passed_through():
         build_default_activity_catalog,
     )
 
-
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
-
 
 @workflow.defn(name="MoonMind.ManagedSessionReconcile")
 class MoonMindManagedSessionReconcileWorkflow:

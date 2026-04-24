@@ -6,7 +6,6 @@ from typing import Any, Mapping, MutableMapping
 
 from moonmind.utils.metrics import _MetricsEmitter, get_metrics_emitter
 
-
 class WorkerMetrics:
     """Thin wrapper around the shared Spec workflow StatsD emitter."""
 
@@ -125,6 +124,5 @@ class WorkerMetrics:
                 if value is not None:
                     tags[key] = value
         return tags
-
 
 __all__ = ["WorkerMetrics"]

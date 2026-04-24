@@ -7,13 +7,11 @@ from requests.exceptions import HTTPError
 
 from moonmind.planning import JiraStoryPlanner, JiraStoryPlannerError, StoryDraft
 
-
 def test_init_requires_mandatory_fields():
     with pytest.raises(ValueError):
         JiraStoryPlanner(plan_text="", jira_project_key="PROJ")
     with pytest.raises(ValueError):
         JiraStoryPlanner(plan_text="plan", jira_project_key="")
-
 
 def test_init_loads_credentials(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
@@ -25,7 +23,6 @@ def test_init_loads_credentials(monkeypatch):
     assert planner.jira_api_key == "key"
     assert planner.jira_username == "user"
     assert planner.jira_url == "https://example.atlassian.net"
-
 
 def test_build_prompt(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
@@ -51,7 +48,6 @@ def test_build_prompt(monkeypatch):
         Message(role="system", content=expected_system),
         Message(role="user", content=sample_plan),
     ]
-
 
 def test_build_prompt_no_story_points(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
@@ -79,7 +75,6 @@ def test_build_prompt_no_story_points(monkeypatch):
         Message(role="user", content="plan"),
     ]
 
-
 def _mock_gemini_response(text: str) -> MagicMock:
     """Helper to create a mock response object for the Google model."""
     part_mock = MagicMock()
@@ -91,7 +86,6 @@ def _mock_gemini_response(text: str) -> MagicMock:
     response_mock = MagicMock()
     response_mock.candidates = [candidate_mock]
     return response_mock
-
 
 def test_call_llm_success(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
@@ -124,7 +118,6 @@ def test_call_llm_success(monkeypatch):
         )
     ]
 
-
 def test_call_llm_invalid_json(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
     monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
@@ -141,7 +134,6 @@ def test_call_llm_invalid_json(monkeypatch):
     ):
         with pytest.raises(JiraStoryPlannerError):
             planner._call_llm(prompt)
-
 
 def test_call_llm_json_code_block(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
@@ -174,7 +166,6 @@ def test_call_llm_json_code_block(monkeypatch):
         )
     ]
 
-
 def test_call_llm_model_error(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
     monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
@@ -191,7 +182,6 @@ def test_call_llm_model_error(monkeypatch):
     ):
         with pytest.raises(JiraStoryPlannerError):
             planner._call_llm(prompt)
-
 
 def test_get_jira_client_mapping(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
@@ -215,7 +205,6 @@ def test_get_jira_client_mapping(monkeypatch):
     )
     assert client is fake_client
 
-
 def test_get_jira_client_auth_error(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
     monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
@@ -231,7 +220,6 @@ def test_get_jira_client_auth_error(monkeypatch):
             planner._get_jira_client()
 
     assert "Failed to authenticate with Jira" in str(exc.value)
-
 
 def test_resolve_story_points_field(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
@@ -257,7 +245,6 @@ def test_resolve_story_points_field(monkeypatch):
     assert second_id == "customfield_10016"
     fake_jira.get_all_fields.assert_called_once()
 
-
 def test_resolve_story_points_field_missing(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
     monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
@@ -270,7 +257,6 @@ def test_resolve_story_points_field_missing(monkeypatch):
 
     with pytest.raises(JiraStoryPlannerError):
         planner._resolve_story_points_field(fake_jira)
-
 
 def test_create_issues_dry_run(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
@@ -285,7 +271,6 @@ def test_create_issues_dry_run(monkeypatch):
 
     mock_client.assert_not_called()
     assert result == drafts
-
 
 def test_create_issues_skip_story_points(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
@@ -314,7 +299,6 @@ def test_create_issues_skip_story_points(monkeypatch):
     mock_sp.assert_not_called()
     assert result[0].key is None
 
-
 def test_create_issues_bulk_success(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
     monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
@@ -337,7 +321,6 @@ def test_create_issues_bulk_success(monkeypatch):
 
     assert [d.key for d in result] == ["PROJ-1", "PROJ-2"]
     fake_jira.issue_create_bulk.assert_called_once()
-
 
 def test_create_issues_create_issues_fallback(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
@@ -363,7 +346,6 @@ def test_create_issues_create_issues_fallback(monkeypatch):
     fake_jira.create_issues.assert_called_once()
     fake_jira.create_issue.assert_not_called()
 
-
 def test_create_issues_bulk_partial_failure(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
     monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
@@ -387,7 +369,6 @@ def test_create_issues_bulk_partial_failure(monkeypatch):
     fake_jira.issue_create_bulk.assert_called_once()
     fake_jira.create_issue.assert_called_once()
 
-
 def test_create_issues_http_error(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
     monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
@@ -406,7 +387,6 @@ def test_create_issues_http_error(monkeypatch):
     assert result[0].key is None
     fake_jira.create_issues.assert_called_once()
     fake_jira.create_issue.assert_called_once()
-
 
 def test_plan_logs_metrics(monkeypatch, caplog):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")

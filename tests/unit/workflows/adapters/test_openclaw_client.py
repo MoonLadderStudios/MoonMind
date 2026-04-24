@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from moonmind.workflows.adapters.openclaw_client import parse_sse_lines_for_deltas
 
-
 def test_parse_sse_lines_extracts_delta_content() -> None:
     lines = [
         "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}",
@@ -14,14 +13,12 @@ def test_parse_sse_lines_extracts_delta_content() -> None:
     ]
     assert parse_sse_lines_for_deltas(lines) == ["Hello", " world"]
 
-
 def test_parse_sse_skips_malformed_json() -> None:
     lines = [
         "data: not-json",
         "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}",
     ]
     assert parse_sse_lines_for_deltas(lines) == ["x"]
-
 
 def test_parse_sse_done_stops() -> None:
     lines = [

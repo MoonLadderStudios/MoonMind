@@ -5,7 +5,7 @@
 **Status**: Draft  
 **Input**: User description: "Use the Jira preset brief for MM-476 as the canonical Moon Spec orchestration input.
 
-Source: `docs/tmp/jira-orchestration-inputs/MM-476-moonspec-orchestration-input.md`
+Source: `spec.md` (Input)
 
 # MM-476 MoonSpec Orchestration Input
 

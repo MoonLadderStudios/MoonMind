@@ -18,7 +18,6 @@ from moonmind.core.artifacts import (
 )
 from moonmind.schemas._validation import require_non_blank
 
-
 class ArtifactRefModel(BaseModel):
     """JSON-serializable artifact reference passed through workflows."""
 
@@ -32,7 +31,6 @@ class ArtifactRefModel(BaseModel):
     encryption: str = Field(..., alias="encryption")
     diagnostics: Optional[dict[str, Any]] = None
 
-
 class CompactArtifactRefModel(BaseModel):
     """Bounded artifact reference for execution-level convenience projections."""
 
@@ -40,7 +38,6 @@ class CompactArtifactRefModel(BaseModel):
 
     artifact_ref_v: int = Field(1, alias="artifact_ref_v")
     artifact_id: str = Field(..., alias="artifact_id")
-
 
 class ArtifactExecutionLinkModel(BaseModel):
     """Execution linkage metadata associated with an artifact."""
@@ -56,7 +53,6 @@ class ArtifactExecutionLinkModel(BaseModel):
     created_by_activity_type: Optional[str] = None
     created_by_worker: Optional[str] = None
 
-
 class ArtifactUploadModel(BaseModel):
     """Upload descriptor for local-dev upload completion."""
 
@@ -68,7 +64,6 @@ class ArtifactUploadModel(BaseModel):
     expires_at: datetime
     max_size_bytes: int
     required_headers: dict[str, str] = Field(default_factory=dict)
-
 
 class ArtifactCreateExecutionLinkRequest(BaseModel):
     """Optional initial execution linkage for artifact creation."""
@@ -82,7 +77,6 @@ class ArtifactCreateExecutionLinkRequest(BaseModel):
     label: Optional[str] = None
     created_by_activity_type: Optional[str] = None
     created_by_worker: Optional[str] = None
-
 
 class CreateArtifactRequest(BaseModel):
     """Create a pending artifact and return upload details."""
@@ -102,7 +96,6 @@ class CreateArtifactRequest(BaseModel):
         TemporalArtifactEncryption.NONE
     )
 
-
 class CreateArtifactResponse(BaseModel):
     """Creation response payload with artifact ref and upload hints."""
 
@@ -112,7 +105,6 @@ class CreateArtifactResponse(BaseModel):
     upload: ArtifactUploadModel
     diagnostics: Optional[dict[str, Any]] = None
 
-
 class CompleteArtifactPartModel(BaseModel):
     """Multipart completion part descriptor (reserved for compatibility)."""
 
@@ -121,14 +113,12 @@ class CompleteArtifactPartModel(BaseModel):
     part_number: int
     etag: str
 
-
 class PresignUploadPartRequest(BaseModel):
     """Request payload for multipart part presign."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     part_number: int = Field(..., ge=1)
-
 
 class PresignUploadPartResponse(BaseModel):
     """Response payload for multipart part presign."""
@@ -140,14 +130,12 @@ class PresignUploadPartResponse(BaseModel):
     expires_at: datetime
     required_headers: dict[str, str] = Field(default_factory=dict)
 
-
 class CompleteArtifactRequest(BaseModel):
     """Request body for multipart completion compatibility."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     parts: list[CompleteArtifactPartModel] = Field(default_factory=list)
-
 
 class LinkArtifactRequest(BaseModel):
     """Link an existing artifact to one execution reference."""
@@ -162,14 +150,12 @@ class LinkArtifactRequest(BaseModel):
     created_by_activity_type: Optional[str] = None
     created_by_worker: Optional[str] = None
 
-
 class PinArtifactRequest(BaseModel):
     """Request body for explicit artifact pinning."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     reason: Optional[str] = None
-
 
 class ArtifactMetadataModel(BaseModel):
     """Expanded metadata model returned by artifact metadata endpoints."""
@@ -199,14 +185,12 @@ class ArtifactMetadataModel(BaseModel):
     download_url: Optional[str] = None
     download_expires_at: Optional[datetime] = None
 
-
 class ArtifactListResponse(BaseModel):
     """List response envelope for execution-scoped artifact queries."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     artifacts: list[ArtifactMetadataModel] = Field(default_factory=list)
-
 
 class ArtifactSessionGroupModel(BaseModel):
     """Server-defined grouping of task-scoped session artifacts."""
@@ -216,7 +200,6 @@ class ArtifactSessionGroupModel(BaseModel):
     group_key: str
     title: str
     artifacts: list[ArtifactMetadataModel] = Field(default_factory=list)
-
 
 class ArtifactSessionProjectionModel(BaseModel):
     """Minimal task-scoped session continuity projection."""
@@ -231,7 +214,6 @@ class ArtifactSessionProjectionModel(BaseModel):
     latest_checkpoint_ref: Optional[ArtifactRefModel] = None
     latest_control_event_ref: Optional[ArtifactRefModel] = None
     latest_reset_boundary_ref: Optional[ArtifactRefModel] = None
-
 
 class ArtifactSessionControlRequest(BaseModel):
     """Operator control request for one task-scoped artifact session."""
@@ -250,7 +232,6 @@ class ArtifactSessionControlRequest(BaseModel):
         if self.action == "send_follow_up" and self.message is None:
             raise ValueError("message is required when action=send_follow_up")
 
-
 class ArtifactSessionControlResponse(BaseModel):
     """Control response envelope with the refreshed session projection."""
 
@@ -258,7 +239,6 @@ class ArtifactSessionControlResponse(BaseModel):
 
     action: Literal["send_follow_up", "clear_session"]
     projection: ArtifactSessionProjectionModel
-
 
 class PresignDownloadResponse(BaseModel):
     """Presigned-download response payload."""

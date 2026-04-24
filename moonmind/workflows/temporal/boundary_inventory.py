@@ -9,7 +9,6 @@ from moonmind.schemas.temporal_boundary_models import (
     TemporalBoundaryModelRole,
 )
 
-
 def _model(
     *,
     module: str,
@@ -23,12 +22,10 @@ def _model(
         schemaHome=module,
     )
 
-
 _TEMPORAL_ACTIVITY_MODELS = "moonmind.schemas.temporal_activity_models"
 _TEMPORAL_MODELS = "moonmind.schemas.temporal_models"
 _MANAGED_SESSION_MODELS = "moonmind.schemas.managed_session_models"
 _AGENT_RUNTIME_MODELS = "moonmind.schemas.agent_runtime_models"
-
 
 _CONTRACTS: tuple[TemporalBoundaryContract, ...] = (
     TemporalBoundaryContract(
@@ -227,25 +224,21 @@ _CONTRACTS: tuple[TemporalBoundaryContract, ...] = (
     ),
 )
 
-
 _INVENTORY = TemporalBoundaryInventory(
     sourceIssueKey="MM-327",
     boardScope="TOOL",
     contracts=_CONTRACTS,
 )
 
-
 def get_temporal_boundary_inventory() -> TemporalBoundaryInventory:
     """Return the deterministic MM-327 Temporal boundary inventory."""
 
     return _INVENTORY.model_copy(deep=True)
 
-
 def iter_temporal_boundary_contracts() -> tuple[TemporalBoundaryContract, ...]:
     """Return covered Temporal boundary contracts in deterministic order."""
 
     return tuple(contract.model_copy(deep=True) for contract in _INVENTORY.contracts)
-
 
 __all__ = [
     "get_temporal_boundary_inventory",

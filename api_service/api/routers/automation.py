@@ -27,14 +27,12 @@ from moonmind.workflows.automation.repositories import AutomationRepository
 
 router = APIRouter(prefix="/api/workflows", tags=["Automation"])
 
-
 async def _get_repository(
     session: AsyncSession = Depends(get_async_session),
 ) -> AutomationRepository:
     """Dependency wiring the workflow automation repository."""
 
     return get_automation_repository(session)
-
 
 def _phase_sort_key(state: models.AutomationTaskState) -> tuple[datetime, str, int]:
     """Ordering helper prioritising chronological execution."""
@@ -43,7 +41,6 @@ def _phase_sort_key(state: models.AutomationTaskState) -> tuple[datetime, str, i
     if timestamp is None:
         timestamp = datetime.min.replace(tzinfo=UTC, microsecond=0)
     return (timestamp, state.phase.value, state.attempt)
-
 
 def _serialize_phase_state(
     state: models.AutomationTaskState,
@@ -72,7 +69,6 @@ def _serialize_phase_state(
         shadow_mode_requested=skill_meta.get("shadowModeRequested"),
     )
 
-
 def _serialize_artifact_summary(
     artifact: models.AutomationArtifact,
 ) -> AutomationArtifactSummary:
@@ -87,7 +83,6 @@ def _serialize_artifact_summary(
         source_phase=artifact.source_phase,
     )
 
-
 def _artifact_download_hint(
     request: Request, artifact: models.AutomationArtifact
 ) -> str | None:
@@ -101,7 +96,6 @@ def _artifact_download_hint(
         )
     )
 
-
 def _serialize_artifact_detail(
     artifact: models.AutomationArtifact,
     *,
@@ -112,7 +106,6 @@ def _serialize_artifact_detail(
         **summary.model_dump(),
         download_url=_artifact_download_hint(request, artifact) if request else None,
     )
-
 
 def _serialize_run_detail(
     run: models.AutomationRun,
@@ -137,7 +130,6 @@ def _serialize_run_detail(
         phases=phases,
         artifacts=artifact_summaries,
     )
-
 
 def _resolve_allowed_repositories(user: User) -> set[str] | None:
     """Return the repository slugs the user is permitted to access."""
@@ -172,7 +164,6 @@ def _resolve_allowed_repositories(user: User) -> set[str] | None:
 
     return None
 
-
 def _ensure_run_access(run: models.AutomationRun, user: User) -> None:
     """Guard against users accessing runs outside their allowed repositories."""
 
@@ -189,7 +180,6 @@ def _ensure_run_access(run: models.AutomationRun, user: User) -> None:
                 "message": "You do not have permission to access this automation run.",
             },
         )
-
 
 def _resolve_artifact_file(storage_path: str) -> Path:
     """Resolve artifact storage paths inside the configured artifacts root."""
@@ -212,7 +202,6 @@ def _resolve_artifact_file(storage_path: str) -> Path:
         ) from exc
     return candidate
 
-
 @router.get("/runs/{run_id}", response_model=AutomationRunDetail)
 async def get_automation_run(
     run_id: UUID,
@@ -234,7 +223,6 @@ async def get_automation_run(
     run, task_states, artifacts = run_detail
     _ensure_run_access(run, user)
     return _serialize_run_detail(run, task_states, artifacts)
-
 
 @router.get(
     "/runs/{run_id}/artifacts/{artifact_id}",
@@ -273,7 +261,6 @@ async def get_automation_artifact(
     _ensure_run_access(run, user)
 
     return _serialize_artifact_detail(artifact, request=request)
-
 
 @router.get(
     "/runs/{run_id}/artifacts/{artifact_id}/download",

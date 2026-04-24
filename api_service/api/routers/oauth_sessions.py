@@ -57,7 +57,6 @@ _TERMINAL_ATTACH_STATUSES = (
 )
 _oauth_terminal_pty_adapter_factory = create_docker_exec_pty_adapter
 
-
 def _make_terminal_output_sender(websocket: WebSocket):
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
@@ -68,7 +67,6 @@ def _make_terminal_output_sender(websocket: WebSocket):
 
     return _send_terminal_output
 
-
 async def _close_for_pty_io_error(
     websocket: WebSocket,
 ) -> tuple[bool, str]:
@@ -78,7 +76,6 @@ async def _close_for_pty_io_error(
     )
     await websocket.close(code=1011)
     return True, "pty_disconnected"
-
 
 async def _handle_oauth_terminal_ws_message(
     message,
@@ -136,7 +133,6 @@ async def _handle_oauth_terminal_ws_message(
         return True, "client_closed"
     return False, None
 
-
 async def _persist_oauth_terminal_close_metadata(
     session_id: str,
     *,
@@ -160,28 +156,22 @@ async def _persist_oauth_terminal_close_metadata(
             session_obj.disconnected_at = _utcnow()
             await db.commit()
 
-
 def _hash_attach_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
 
 def _as_aware_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
 
-
 def _oauth_session_is_expired(session: ManagedAgentOAuthSession) -> bool:
     return session.expires_at is not None and _as_aware_utc(session.expires_at) <= _utcnow()
 
-
 def _oauth_default(runtime_id: str, key: str) -> str | None:
     return get_provider_default(runtime_id, key)
-
 
 def _provider_profile_summary(
     profile: ManagedAgentProviderProfile | None,
@@ -201,7 +191,6 @@ def _provider_profile_summary(
         rate_limit_policy=profile.rate_limit_policy.value,
     )
 
-
 def _oauth_session_response(
     session: ManagedAgentOAuthSession,
     *,
@@ -220,7 +209,6 @@ def _oauth_session_response(
         created_at=session.created_at,
         profile_summary=_provider_profile_summary(profile),
     )
-
 
 async def _get_profile_for_session(
     db: AsyncSession,
@@ -244,7 +232,6 @@ async def _get_profile_for_session(
         )
     )
     return result.scalars().first()
-
 
 async def _expire_stale_active_sessions(
     db: AsyncSession, *, profile_id: str
@@ -423,7 +410,6 @@ async def cancel_oauth_session(
     
     return {"status": "cancelled"}
 
-
 @router.post(
     "/{session_id}/terminal/attach",
     response_model=OAuthTerminalAttachResponse,
@@ -480,7 +466,6 @@ async def attach_oauth_terminal(
         attach_token=token,
         expires_at=session_obj.expires_at,
     )
-
 
 @router.websocket("/{session_id}/terminal/ws")
 async def oauth_terminal_websocket(
@@ -750,7 +735,6 @@ async def finalize_oauth_session(
     
     return {"status": "succeeded"}
 
-
 async def _stop_oauth_auth_runner(session_obj: ManagedAgentOAuthSession) -> None:
     if not session_obj.container_name:
         return
@@ -770,18 +754,15 @@ async def _stop_oauth_auth_runner(session_obj: ManagedAgentOAuthSession) -> None
             exc_info=True,
         )
 
-
 async def _complete_oauth_session_workflow(session_id: str) -> None:
     from api_service.services.oauth_session_service import complete_oauth_session_workflow
 
     await complete_oauth_session_workflow(session_id)
 
-
 async def _fail_oauth_session_workflow(session_id: str, reason: str) -> None:
     from api_service.services.oauth_session_service import fail_oauth_session_workflow
 
     await fail_oauth_session_workflow(session_id, reason)
-
 
 @router.get("/history/{profile_id}")
 async def get_session_history(
@@ -813,7 +794,6 @@ async def get_session_history(
         }
         for s in sessions
     ]
-
 
 @router.post("/{session_id}/reconnect", response_model=OAuthSessionResponse, status_code=status.HTTP_201_CREATED)
 async def reconnect_oauth_session(

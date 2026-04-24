@@ -1,4 +1,4 @@
-# Implementation Plan: Fully implement Phase 6 from docs/tmp/009-LiveLogsPlan.md
+# Implementation Plan: Fully implement Phase 6 from docs/ManagedAgents/LiveLogs.md
 
 ## Technical Context
 Phase 6 marks the deprecation and removal of legacy `tmate` and PTY/terminal-based observability hooks from the backend and frontend. 

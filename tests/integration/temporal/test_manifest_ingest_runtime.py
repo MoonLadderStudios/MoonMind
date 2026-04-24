@@ -30,7 +30,6 @@ from moonmind.workflows.temporal.service import TemporalExecutionService
 # Kept for local dev verification; requires app-level fix.
 pytestmark = [pytest.mark.integration]
 
-
 @asynccontextmanager
 async def _db(tmp_path: Path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/manifest_ingest_integration.db"
@@ -42,7 +41,6 @@ async def _db(tmp_path: Path):
         yield session_maker
     finally:
         await engine.dispose()
-
 
 def _make_manifest_params(
     user_id: str,
@@ -64,11 +62,9 @@ def _make_manifest_params(
         "manifestNodes": nodes,
     }
 
-
 # ---------------------------------------------------------------------------
 # T010: ManifestIngest startup and child-run orchestration
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_manifest_ingest_create_persists_projection_with_node_counts(tmp_path):
@@ -104,7 +100,6 @@ async def test_manifest_ingest_create_persists_projection_with_node_counts(tmp_p
             assert detail is not None
             assert detail.workflow_type == TemporalWorkflowType.MANIFEST_INGEST
             assert detail.owner_id == user_id
-
 
 @pytest.mark.asyncio
 async def test_manifest_ingest_child_lineage_preserved_across_db_reads(tmp_path):
@@ -157,7 +152,6 @@ async def test_manifest_ingest_child_lineage_preserved_across_db_reads(tmp_path)
             assert lineage["manifestIngestWorkflowId"] == parent.workflow_id
             assert lineage["manifestArtifactRef"] == "art_manifest_parent"
 
-
 @pytest.mark.asyncio
 async def test_manifest_idempotent_create_returns_existing_without_side_effects(
     tmp_path,
@@ -201,11 +195,9 @@ async def test_manifest_idempotent_create_returns_existing_without_side_effects(
             assert second.workflow_id == first.workflow_id
             assert second.run_id == first.run_id
 
-
 # ---------------------------------------------------------------------------
 # T024: Run-index pagination and large-ingest rollover
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_large_fan_out_child_runs_all_persist_with_lineage(tmp_path):
@@ -261,7 +253,6 @@ async def test_large_fan_out_child_runs_all_persist_with_lineage(tmp_path):
                 page_size=50,
             )
             assert len(result.items) == fan_out_count
-
 
 @pytest.mark.asyncio
 async def test_manifest_execution_list_pagination(tmp_path):

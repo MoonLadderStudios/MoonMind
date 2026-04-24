@@ -3,7 +3,7 @@
 **Feature Branch**: `117-task-dep-phase1`
 **Created**: 2026-03-29
 **Status**: Draft
-**Input**: User description: "Fully implement Phase 1 from docs/tmp/011-TaskDependenciesPlan.md"
+**Input**: User description: "Fully implement Phase 1 from docs/Tasks/TaskDependencies.md"
 
 ## Source Document Requirements
 

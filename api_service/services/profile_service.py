@@ -16,7 +16,6 @@ from api_service.db.models import (  # User model might be needed for context or
     UserProfile,
 )
 
-
 class ProfileService:
     async def get_profile_by_user_id(
         self, db_session: AsyncSession, user_id: uuid.UUID
@@ -141,7 +140,6 @@ class ProfileService:
             )
 
         return UserProfileRead.model_validate(profile)  # Use UserProfileRead
-
 
 # Optional: A function to get the service instance, useful for dependency injection
 # async def get_profile_service() -> ProfileService:

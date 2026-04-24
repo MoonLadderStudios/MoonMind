@@ -13,9 +13,7 @@ from moonmind.workflows.temporal.activity_runtime import (
 )
 from moonmind.workloads.registry import RunnerProfileRegistry
 
-
 WORKSPACE_ROOT = Path("/work/agent_jobs")
-
 
 def _profile_payload() -> dict[str, object]:
     return {
@@ -35,7 +33,6 @@ def _profile_payload() -> dict[str, object]:
         "timeout_seconds": 300,
         "max_timeout_seconds": 600,
     }
-
 
 def _helper_profile_payload() -> dict[str, object]:
     return {
@@ -69,7 +66,6 @@ def _helper_profile_payload() -> dict[str, object]:
         },
     }
 
-
 def _request_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "profileId": "local-python",
@@ -84,7 +80,6 @@ def _request_payload(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
-
 
 class _FakeLauncher:
     def __init__(self) -> None:
@@ -162,11 +157,9 @@ class _FakeLauncher:
             },
         )
 
-
 class _FailingRegistry:
     def validate_request(self, _request: object) -> object:
         raise AssertionError("registry validation should not run")
-
 
 class _FailingLauncher:
     async def run(self, _validated: object) -> object:
@@ -177,7 +170,6 @@ class _FailingLauncher:
 
     async def stop_helper(self, _validated: object, *, reason: str) -> object:
         raise AssertionError("launcher should not run")
-
 
 @pytest.mark.asyncio
 async def test_workload_run_activity_validates_request_and_calls_launcher() -> None:
@@ -199,7 +191,6 @@ async def test_workload_run_activity_validates_request_and_calls_launcher() -> N
     assert result["profileId"] == "local-python"
     assert result["status"] == "succeeded"
     assert result["labels"]["moonmind.kind"] == "workload"
-
 
 @pytest.mark.asyncio
 async def test_workload_run_activity_preserves_session_context_as_workload_metadata() -> None:
@@ -229,7 +220,6 @@ async def test_workload_run_activity_preserves_session_context_as_workload_metad
         "sourceTurnId": "turn-7",
     }
     assert "session.summary" not in (result.get("outputRefs") or {})
-
 
 @pytest.mark.asyncio
 async def test_workload_run_activity_starts_helper_by_tool_name() -> None:
@@ -261,7 +251,6 @@ async def test_workload_run_activity_starts_helper_by_tool_name() -> None:
     assert result["status"] == "ready"
     assert result["labels"]["moonmind.kind"] == "bounded_service"
     assert result["metadata"]["helper"]["readiness"]["status"] == "ready"
-
 
 @pytest.mark.asyncio
 async def test_workload_run_activity_stops_helper_by_tool_name() -> None:
@@ -295,14 +284,12 @@ async def test_workload_run_activity_stops_helper_by_tool_name() -> None:
     assert result["labels"]["moonmind.kind"] == "bounded_service"
     assert result["metadata"]["helper"]["teardown"]["reason"] == "owner_task_canceled"
 
-
 @pytest.mark.asyncio
 async def test_workload_run_activity_requires_runtime_dependencies() -> None:
     activities = TemporalAgentRuntimeActivities()
 
     with pytest.raises(TemporalActivityRuntimeError, match="workload registry"):
         await activities.workload_run(_request_payload())
-
 
 @pytest.mark.asyncio
 async def test_workload_run_activity_denies_when_workflow_docker_disabled() -> None:
@@ -320,7 +307,6 @@ async def test_workload_run_activity_denies_when_workflow_docker_disabled() -> N
     assert "policy_denied" in message
     assert exc_info.value.type == "docker_workflows_disabled"
     assert exc_info.value.non_retryable is True
-
 
 @pytest.mark.asyncio
 async def test_workload_run_activity_denies_unrestricted_tool_when_mode_is_profiles() -> None:
@@ -348,7 +334,6 @@ async def test_workload_run_activity_denies_unrestricted_tool_when_mode_is_profi
     assert exc_info.value.type == "docker_workflow_mode_forbidden"
     assert "profiles" in str(exc_info.value)
 
-
 class _CapturingRegistry:
     def __init__(self, validated: object) -> None:
         self.validated = validated
@@ -362,7 +347,6 @@ class _CapturingRegistry:
     ) -> object:
         self.calls.append((request, workflow_docker_mode))
         return self.validated
-
 
 @pytest.mark.asyncio
 async def test_workload_run_activity_passes_active_workflow_mode_to_registry() -> None:

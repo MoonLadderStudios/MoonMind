@@ -16,7 +16,6 @@ from moonmind.workflows.skills.approval_policy import (
 
 logger = logging.getLogger(__name__)
 
-
 async def step_review_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Execute a step review via LLM.
 
@@ -77,6 +76,5 @@ async def step_review_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
     })
 
     return verdict.to_payload()
-
 
 __all__ = ["step_review_activity"]

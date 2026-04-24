@@ -42,7 +42,6 @@ ALL_JIRA_ACTIONS: tuple[JiraActionName, ...] = (
 _JIRA_PROJECT_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]+$")
 _JIRA_ISSUE_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]+-\d+$")
 
-
 def normalize_action_name(value: str) -> str:
     """Normalize configured action names with or without the jira. prefix."""
 
@@ -51,12 +50,10 @@ def normalize_action_name(value: str) -> str:
         normalized = normalized[5:]
     return normalized
 
-
 class JiraBaseModel(BaseModel):
     """Base model for Jira tool requests."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
 
 class JiraProjectScopedRequest(JiraBaseModel):
     """Base request with a Jira project key."""
@@ -73,7 +70,6 @@ class JiraProjectScopedRequest(JiraBaseModel):
             raise ValueError("projectKey must match a Jira project-key pattern")
         return normalized
 
-
 class JiraIssueScopedRequest(JiraBaseModel):
     """Base request with a Jira issue key."""
 
@@ -89,7 +85,6 @@ class JiraIssueScopedRequest(JiraBaseModel):
             raise ValueError("issueKey must match a Jira issue-key pattern")
         return normalized
 
-
 class CreateIssueRequest(JiraProjectScopedRequest):
     issue_type_id: str = Field(..., alias="issueTypeId")
     summary: str = Field(..., min_length=1, alias="summary")
@@ -104,7 +99,6 @@ class CreateIssueRequest(JiraProjectScopedRequest):
             raise ValueError("issueTypeId is required")
         return normalized
 
-
 class CreateSubtaskRequest(CreateIssueRequest):
     parent_issue_key: str = Field(..., alias="parentIssueKey")
 
@@ -117,7 +111,6 @@ class CreateSubtaskRequest(CreateIssueRequest):
         if not _JIRA_ISSUE_KEY_RE.fullmatch(normalized):
             raise ValueError("parentIssueKey must match a Jira issue-key pattern")
         return normalized
-
 
 class CreateIssueLinkRequest(JiraBaseModel):
     blocks_issue_key: str = Field(..., alias="blocksIssueKey")
@@ -149,16 +142,13 @@ class CreateIssueLinkRequest(JiraBaseModel):
             raise ValueError("blocksIssueKey and blockedIssueKey must differ")
         return value
 
-
 class EditIssueRequest(JiraIssueScopedRequest):
     fields: dict[str, Any] = Field(default_factory=dict, alias="fields")
     update: dict[str, Any] = Field(default_factory=dict, alias="update")
 
-
 class GetIssueRequest(JiraIssueScopedRequest):
     fields: list[str] = Field(default_factory=list, alias="fields")
     expand: list[str] = Field(default_factory=list, alias="expand")
-
 
 class SearchIssuesRequest(JiraBaseModel):
     jql: str = Field(..., min_length=1, alias="jql")
@@ -184,10 +174,8 @@ class SearchIssuesRequest(JiraBaseModel):
             return None
         return str(value).strip()
 
-
 class GetTransitionsRequest(JiraIssueScopedRequest):
     expand_fields: bool = Field(False, alias="expandFields")
-
 
 class TransitionIssueRequest(JiraIssueScopedRequest):
     transition_id: str = Field(..., alias="transitionId")
@@ -202,14 +190,11 @@ class TransitionIssueRequest(JiraIssueScopedRequest):
             raise ValueError("transitionId is required")
         return normalized
 
-
 class AddCommentRequest(JiraIssueScopedRequest):
     body: str | dict[str, Any] = Field(..., alias="body")
 
-
 class ListCreateIssueTypesRequest(JiraProjectScopedRequest):
     pass
-
 
 class GetCreateFieldsRequest(JiraProjectScopedRequest):
     issue_type_id: str = Field(..., alias="issueTypeId")
@@ -222,10 +207,8 @@ class GetCreateFieldsRequest(JiraProjectScopedRequest):
             raise ValueError("issueTypeId is required")
         return normalized
 
-
 class GetEditMetadataRequest(JiraIssueScopedRequest):
     pass
-
 
 class VerifyConnectionRequest(JiraBaseModel):
     project_key: str | None = Field(None, alias="projectKey")

@@ -26,11 +26,9 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
 )
 
-
 # ---------------------------------------------------------------------------
 # 1. Enum member value contract tests
 # ---------------------------------------------------------------------------
-
 
 class TestProviderCredentialSourceEnum:
     """ProviderCredentialSource must match the DB enum type created by migration 053758f254f3."""
@@ -55,7 +53,6 @@ class TestProviderCredentialSourceEnum:
         expected = {"oauth_volume", "secret_ref", "none"}
         actual = {m.value for m in ProviderCredentialSource}
         assert actual == expected
-
 
 class TestRuntimeMaterializationModeEnum:
     """RuntimeMaterializationMode must match the DB enum type created by migration 053758f254f3."""
@@ -87,13 +84,11 @@ class TestRuntimeMaterializationModeEnum:
         actual = {m.value for m in RuntimeMaterializationMode}
         assert actual == expected
 
-
 # ---------------------------------------------------------------------------
 # 2. Data migration mapping logic
 #    The migration maps old managedagentauthmode values to providercredentialsource.
 #    We test the mapping rule as a pure function to document the contract.
 # ---------------------------------------------------------------------------
-
 
 def _migrate_auth_mode(old_value: str) -> str:
     """Replicates the CASE WHEN mapping in migration 053758f254f3 upgrade().
@@ -111,7 +106,6 @@ def _migrate_auth_mode(old_value: str) -> str:
         return ProviderCredentialSource.SECRET_REF.value
     else:
         return ProviderCredentialSource.NONE.value
-
 
 class TestAuthModeMigrationMapping:
     """The USING CASE migration mapping in 053758f254f3 must translate legacy auth_mode values."""
@@ -134,12 +128,10 @@ class TestAuthModeMigrationMapping:
             # Must be a valid ProviderCredentialSource value
             assert result in {m.value for m in ProviderCredentialSource}
 
-
 # ---------------------------------------------------------------------------
 # 3. ORM round-trip: ManagedAgentOAuthSession.auth_mode using SQLite
 #    Verifies that the ORM accepts and returns ProviderCredentialSource values.
 # ---------------------------------------------------------------------------
-
 
 @pytest.fixture()
 def _sqlite_db(tmp_path):
@@ -160,7 +152,6 @@ def _sqlite_db(tmp_path):
     engine, session_maker = asyncio.run(_setup())
     yield session_maker
     asyncio.run(_teardown(engine))
-
 
 @pytest.mark.asyncio
 async def test_oauth_session_accepts_oauth_volume(_sqlite_db):
@@ -185,7 +176,6 @@ async def test_oauth_session_accepts_oauth_volume(_sqlite_db):
         assert row.auth_mode == ProviderCredentialSource.OAUTH_VOLUME
         assert row.auth_mode == "oauth_volume"
 
-
 @pytest.mark.asyncio
 async def test_oauth_session_accepts_secret_ref(_sqlite_db):
     """ManagedAgentOAuthSession must accept SECRET_REF as auth_mode."""
@@ -209,7 +199,6 @@ async def test_oauth_session_accepts_secret_ref(_sqlite_db):
         assert row.auth_mode == ProviderCredentialSource.SECRET_REF
         assert row.auth_mode == "secret_ref"
 
-
 @pytest.mark.asyncio
 async def test_oauth_session_accepts_none_credential_source(_sqlite_db):
     """ManagedAgentOAuthSession must accept NONE as auth_mode."""
@@ -232,7 +221,6 @@ async def test_oauth_session_accepts_none_credential_source(_sqlite_db):
         row = result.scalar_one()
         assert row.auth_mode == ProviderCredentialSource.NONE
         assert row.auth_mode == "none"
-
 
 @pytest.mark.asyncio
 async def test_provider_profile_stores_credential_source_and_materialization_mode(_sqlite_db):
@@ -258,7 +246,6 @@ async def test_provider_profile_stores_credential_source_and_materialization_mod
         assert row.credential_source == ProviderCredentialSource.OAUTH_VOLUME
         assert row.runtime_materialization_mode == RuntimeMaterializationMode.OAUTH_HOME
 
-
 @pytest.mark.asyncio
 async def test_provider_profile_composite_mode_is_default(_sqlite_db):
     """credential_source defaults to NONE and runtime_materialization_mode defaults to COMPOSITE."""
@@ -281,18 +268,15 @@ async def test_provider_profile_composite_mode_is_default(_sqlite_db):
         assert row.credential_source == ProviderCredentialSource.NONE
         assert row.runtime_materialization_mode == RuntimeMaterializationMode.COMPOSITE
 
-
 # ---------------------------------------------------------------------------
 # 4. Migration graph: exactly one head
 # ---------------------------------------------------------------------------
-
 
 VERSIONS_DIR = os.path.join(
     os.path.dirname(__file__),
     "..", "..", "..",
     "api_service", "migrations", "versions",
 )
-
 
 def _parse_migration_graph():
     """Read all migration files and return (revisions, down_revisions_referenced)."""
@@ -314,7 +298,6 @@ def _parse_migration_graph():
                     if d and d != "None":
                         down_revisions.add(d)
     return revisions, down_revisions
-
 
 import pytest
 

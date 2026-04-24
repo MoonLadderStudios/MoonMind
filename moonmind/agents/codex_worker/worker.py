@@ -274,12 +274,10 @@ _JULES_PROVIDER_CANCEL_UNSUPPORTED_MESSAGE = (
     "provider-side cancellation unsupported; MoonMind canceled without remote cancel"
 )
 
-
 def _normalize_instruction_text_for_comparison(value: str | None) -> str:
     """Normalize instruction text for objective/step deduplication checks."""
 
     return re.sub(r"\s+", " ", str(value or "").strip())
-
 
 def _is_resolve_pr_objective_text(value: str | None) -> bool:
     """Return True when instructions target pull-request resolution."""
@@ -288,7 +286,6 @@ def _is_resolve_pr_objective_text(value: str | None) -> bool:
     if not text:
         return False
     return _RESOLVE_PR_OBJECTIVE_PATTERN.search(text) is not None
-
 
 def _normalize_proposal_tags(values: object) -> list[str]:
     """Normalize proposal tags into a stable lowercase unique list."""
@@ -305,7 +302,6 @@ def _normalize_proposal_tags(values: object) -> list[str]:
         seen.add(token)
     return normalized
 
-
 def _extract_proposal_signal(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Extract signal metadata from proposal payload or origin metadata."""
 
@@ -320,7 +316,6 @@ def _extract_proposal_signal(payload: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(signal, Mapping):
                 return dict(signal)
     return {}
-
 
 def _ensure_task_request_repository(
     payload: dict[str, Any],
@@ -346,7 +341,6 @@ def _ensure_task_request_repository(
     payload["repository"] = repository
     return True
 
-
 def _ensure_run_quality_title(title: str) -> str:
     """Normalize the run_quality title prefix."""
 
@@ -355,7 +349,6 @@ def _ensure_run_quality_title(title: str) -> str:
         normalized = normalized or "Run quality proposal"
         normalized = f"[run_quality] {normalized}"
     return normalized.strip()
-
 
 def _append_tag_slug(title: str, tags: Sequence[str]) -> str:
     """Append a sorted tag slug marker used for deduping run_quality proposals."""
@@ -369,14 +362,11 @@ def _append_tag_slug(title: str, tags: Sequence[str]) -> str:
         return title
     return f"{title} (tags: {slug_text})"
 
-
 class QueueClientError(RuntimeError):
     """Raised when queue API requests fail."""
 
-
 class JobCancellationRequested(RuntimeError):
     """Raised when a claimed job has an active cancellation request."""
-
 
 @dataclass(frozen=True, slots=True)
 class CodexWorkerConfig:
@@ -1100,7 +1090,6 @@ class CodexWorkerConfig:
             step_log_max_bytes=step_log_max_bytes,
         )
 
-
 @dataclass(frozen=True, slots=True)
 class ClaimedJob:
     """Normalized job returned by queue claim API."""
@@ -1110,7 +1099,6 @@ class ClaimedJob:
     payload: dict[str, Any]
     attempt: int = 1
     max_attempts: int = 3
-
 
 @dataclass(frozen=True, slots=True)
 class QueueSystemStatus:
@@ -1123,7 +1111,6 @@ class QueueSystemStatus:
     requested_at: datetime | None
     updated_at: datetime | None
 
-
 @dataclass(frozen=True, slots=True)
 class QueueClaimResult:
     """Structured claim response including optional job and system metadata."""
@@ -1131,14 +1118,12 @@ class QueueClaimResult:
     job: ClaimedJob | None
     system: QueueSystemStatus
 
-
 @dataclass(frozen=True, slots=True)
 class QueueHeartbeatResult:
     """Structured heartbeat response with job payload and pause metadata."""
 
     job: dict[str, Any]
     system: QueueSystemStatus
-
 
 @dataclass(frozen=True, slots=True)
 class PreparedTaskWorkspace:
@@ -1160,7 +1145,6 @@ class PreparedTaskWorkspace:
     repo_command_env: dict[str, str] | None
     publish_command_env: dict[str, str] | None
 
-
 @dataclass(frozen=True, slots=True)
 class InputAttachmentMaterializationTarget:
     """One declared task input attachment with its canonical target binding."""
@@ -1173,7 +1157,6 @@ class InputAttachmentMaterializationTarget:
     step_ref: str | None = None
     step_ordinal: int | None = None
 
-
 @dataclass(frozen=True, slots=True)
 class ProposalSubmissionReport:
     """Compact proposal-submission output used by task finish summaries."""
@@ -1184,7 +1167,6 @@ class ProposalSubmissionReport:
     submitted_count: int
     errors: list[str]
 
-
 @dataclass(frozen=True, slots=True)
 class FinishOutcome:
     """Terminal finish outcome persisted with each queue job."""
@@ -1192,7 +1174,6 @@ class FinishOutcome:
     code: str
     stage: str
     reason: str
-
 
 @dataclass(frozen=True, slots=True)
 class JulesRuntimeTaskRecord:
@@ -1213,7 +1194,6 @@ class JulesRuntimeTaskRecord:
     error: str | None
     status_history: tuple[str, ...]
     provider_status_history: tuple[str, ...]
-
 
 @dataclass(slots=True)
 class JulesSoftwareRunState:
@@ -1245,7 +1225,6 @@ class JulesSoftwareRunState:
     jules_error: str | None
     next_poll_monotonic: float
 
-
 @dataclass(frozen=True, slots=True)
 class LiveSessionHandle:
     """Worker-owned live session context for active queue job execution."""
@@ -1256,7 +1235,6 @@ class LiveSessionHandle:
     config_path: Path | None
     log_path: Path
     status: str
-
 
 @dataclass(frozen=True, slots=True)
 class TaskAuthContext:
@@ -1269,14 +1247,12 @@ class TaskAuthContext:
     repo_command_env: dict[str, str] | None
     publish_command_env: dict[str, str] | None
 
-
 @dataclass(frozen=True, slots=True)
 class ContainerCacheVolume:
     """Normalized cache volume mount for container task execution."""
 
     name: str
     target: str
-
 
 @dataclass(frozen=True, slots=True)
 class ContainerTaskSpec:
@@ -1293,7 +1269,6 @@ class ContainerTaskSpec:
     memory: str | None
     cache_volumes: tuple[ContainerCacheVolume, ...]
 
-
 @dataclass(frozen=True, slots=True)
 class ResolvedTaskStep:
     """Runtime-resolved step metadata for execute-stage iteration."""
@@ -1306,7 +1281,6 @@ class ResolvedTaskStep:
     effective_skill_args: dict[str, Any]
     has_step_instructions: bool
 
-
 @dataclass(frozen=True, slots=True)
 class StepGateResult:
     """Outcome of an optional per-step execution gate check."""
@@ -1315,14 +1289,12 @@ class StepGateResult:
     message: str | None = None
     artifacts: tuple[ArtifactUpload, ...] = ()
 
-
 @dataclass(frozen=True, slots=True)
 class StepGateSpec:
     """Resolved gate contract for a step skill."""
 
     gate_type: str
     source_path: Path
-
 
 @dataclass(frozen=True, slots=True)
 class PublishPreflightResult:
@@ -1337,7 +1309,6 @@ class PublishPreflightResult:
     verification_skip_reason: dict[str, str] | None
     report_path: Path
 
-
 @dataclass(frozen=True, slots=True)
 class StepLogReadResult:
     """Bounded step-log read output with truncation metadata."""
@@ -1346,7 +1317,6 @@ class StepLogReadResult:
     source_delta_bytes: int
     truncated: bool
     omitted_bytes: int
-
 
 @dataclass(frozen=True, slots=True)
 class StepLogCopyResult:
@@ -1359,7 +1329,6 @@ class StepLogCopyResult:
     full_log_path: Path | None = None
     metadata_path: Path | None = None
 
-
 @dataclass(frozen=True, slots=True)
 class StepTranscriptIntegrityResult:
     """Structured integrity-check outcome for one step transcript."""
@@ -1367,7 +1336,6 @@ class StepTranscriptIntegrityResult:
     passed: bool
     message: str | None = None
     run_quality_reason: dict[str, Any] | None = None
-
 
 class QueueApiClient:
     """HTTP client wrapper for queue and artifact endpoints."""
@@ -1773,7 +1741,6 @@ class QueueApiClient:
             for chunk in iter(lambda: handle.read(8192), b""):
                 digest.update(chunk)
         return f"sha256:{digest.hexdigest()}"
-
 
 class CodexWorker:
     """Single-worker daemon that claims and executes queue jobs."""
@@ -11704,7 +11671,6 @@ class CodexWorker:
         except Exception:
             # Event publication failures should not break terminal job transitions.
             return
-
 
 __all__ = [
     "ClaimedJob",

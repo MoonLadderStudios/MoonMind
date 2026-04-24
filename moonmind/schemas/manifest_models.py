@@ -7,12 +7,10 @@ from typing import Any, Dict, List, Optional
 import yaml
 from pydantic import BaseModel, Field, RootModel, model_validator
 
-
 class SecretRef(BaseModel):
     provider: str
     key: str
     extra: Dict[str, Any] = Field(default_factory=dict)
-
 
 class AuthItem(BaseModel):
     value: Optional[str] = None
@@ -24,10 +22,8 @@ class AuthItem(BaseModel):
             raise ValueError("Exactly one of value or secretRef must be provided")
         return self
 
-
 class Defaults(RootModel[Dict[str, Any]]):
     root: Dict[str, Any] = Field(default_factory=dict)
-
 
 class Reader(BaseModel):
     name: Optional[str] = None
@@ -36,12 +32,10 @@ class Reader(BaseModel):
     init: Dict[str, Any] = Field(default_factory=dict)
     load_data: List[Dict[str, Any]] = Field(default_factory=list)
 
-
 class Spec(BaseModel):
     defaults: Optional[Defaults] = None
     auth: Dict[str, AuthItem] = Field(default_factory=dict)
     readers: List[Reader]
-
 
 class Manifest(BaseModel):
     apiVersion: str
@@ -60,7 +54,6 @@ class Manifest(BaseModel):
             raise TypeError("model_validate_yaml expects a path or YAML string")
         parsed = yaml.safe_load(content)
         return cls.model_validate(parsed)
-
 
 def export_schema(path: PathLike) -> None:
     path = Path(path)

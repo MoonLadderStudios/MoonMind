@@ -21,7 +21,6 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.utils.logging import scrub_github_tokens
 
-
 TERMINAL_BLOCKER_KINDS = {
     "pull_request_closed",
     "stale_revision",
@@ -48,11 +47,9 @@ _TOKEN_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)(token|password|authorization|cookie)=\S+"
 )
 
-
 def _compact_text(value: object) -> str | None:
     candidate = str(value or "").strip()
     return candidate or None
-
 
 def sanitize_blocker_summary(value: str | None) -> str:
     """Return a compact blocker summary safe for workflow state and UI."""
@@ -61,7 +58,6 @@ def sanitize_blocker_summary(value: str | None) -> str:
     text = re.sub(r"(?i)\btoken=\[REDACTED\]", "token:<redacted>", text)
     text = _TOKEN_ASSIGNMENT_PATTERN.sub(r"\1:<redacted>", text)
     return (text or "External readiness is blocked.")[:500]
-
 
 def _blocker_from_mapping(payload: Mapping[str, Any]) -> ReadinessBlockerModel:
     kind = str(payload.get("kind") or "external_state_unavailable").strip()
@@ -76,11 +72,9 @@ def _blocker_from_mapping(payload: Mapping[str, Any]) -> ReadinessBlockerModel:
         }
     )
 
-
 def _is_non_blocking_blocker(payload: Mapping[str, Any]) -> bool:
     kind = str(payload.get("kind") or "").strip()
     return kind in NON_BLOCKING_BLOCKER_KINDS
-
 
 def _default_blocker(kind: str, summary: str, *, retryable: bool, source: str) -> dict[str, Any]:
     return {
@@ -89,7 +83,6 @@ def _default_blocker(kind: str, summary: str, *, retryable: bool, source: str) -
         "retryable": retryable,
         "source": source,
     }
-
 
 def classify_readiness(
     payload: Mapping[str, Any],
@@ -214,7 +207,6 @@ def classify_readiness(
         }
     )
 
-
 def deterministic_resolver_idempotency_key(
     *,
     parent_workflow_id: str,
@@ -239,7 +231,6 @@ def deterministic_resolver_idempotency_key(
     )
     return f"resolver:pr:{pr_prefix}:head:{head_prefix}:h:{digest}"
 
-
 def legacy_resolver_idempotency_key(
     *,
     parent_workflow_id: str,
@@ -249,7 +240,6 @@ def legacy_resolver_idempotency_key(
 ) -> str:
     # Preserve the exact pre-hash child workflow id for workflow replay.
     return f"resolver:{parent_workflow_id}:pr:{pr_number}:head:{head_sha}"
-
 
 def build_resolver_run_request(
     *,
@@ -326,7 +316,6 @@ def build_resolver_run_request(
         "initial_parameters": initial_parameters,
     }
 
-
 def build_continue_as_new_input(
     *,
     start_input: Mapping[str, Any] | MergeAutomationStartInput,
@@ -365,7 +354,6 @@ def build_continue_as_new_input(
     payload["expireAt"] = expire_at
     return payload
 
-
 def _parse_expire_at(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -381,7 +369,6 @@ def _parse_expire_at(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed
-
 
 def _effective_expire_at(
     start_input: MergeAutomationStartInput,

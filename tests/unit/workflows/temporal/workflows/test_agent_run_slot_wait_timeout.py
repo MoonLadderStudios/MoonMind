@@ -18,7 +18,6 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     _SLOT_WAIT_MAX_RESETS,
 )
 
-
 class TestSlotWaitRetryBehavior:
     """Verify the slot-wait code path uses a timeout+retry loop."""
 

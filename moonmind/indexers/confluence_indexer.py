@@ -7,7 +7,6 @@ from llama_index.readers.confluence import ConfluenceReader
 
 # from llama_index.vector_stores import VectorStore # This line will be removed
 
-
 class ConfluenceIndexer:
     def __init__(
         self,

@@ -4,7 +4,7 @@
 
 ## Input
 
-Single-story feature specification from `specs/185-auth-operator-diagnostics/spec.md` generated from Jira issue `MM-336` and the preserved preset brief in `docs/tmp/jira-orchestration-inputs/MM-336-moonspec-orchestration-input.md`.
+Single-story feature specification from `specs/185-auth-operator-diagnostics/spec.md` generated from Jira issue `MM-336` and the preserved preset brief in `spec.md` (Input).
 
 ## Summary
 
@@ -36,7 +36,7 @@ This story adds safe operator diagnostics to existing OAuth session and managed 
 - IX Resilient by Default: PASS. Failure diagnostics are sanitized and classified without hiding failure state.
 - X Continuous Improvement: PASS. Verification evidence is captured in spec artifacts.
 - XI Spec-Driven Development: PASS. Implementation follows this single-story MoonSpec.
-- XII Canonical Docs Separation: PASS. Work tracking remains under specs/docs/tmp.
+- XII Canonical Docs Separation: PASS. Work tracking remains under specs/local-only handoffs.
 - XIII Pre-Release Compatibility: PASS. Internal contracts are updated directly without compatibility aliases.
 
 ## Project Structure

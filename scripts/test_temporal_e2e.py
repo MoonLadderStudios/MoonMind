@@ -6,7 +6,6 @@ import requests
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
-
 def wait_for_api():
     print(f"Waiting for API at {API_URL}/health ...")
     for _ in range(30):
@@ -19,7 +18,6 @@ def wait_for_api():
             print(f"Health check request failed: {exc}. Retrying...")
         time.sleep(2)
     return False
-
 
 def main():
     if not wait_for_api():
@@ -101,7 +99,6 @@ def main():
             print(f"Failed to cancel: {cancel_resp.status_code}")
 
     print("\\nE2E Test Completed.")
-
 
 if __name__ == "__main__":
     main()

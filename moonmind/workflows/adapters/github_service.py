@@ -17,11 +17,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
-
 # ---------------------------------------------------------------------------
 # Result models (provider-agnostic replacements for Jules-prefixed models)
 # ---------------------------------------------------------------------------
-
 
 class CreatePRResult(BaseModel):
     """Result from ``repo.create_pr``."""
@@ -33,7 +31,6 @@ class CreatePRResult(BaseModel):
     summary: str = Field(..., alias="summary")
     head_sha: Optional[str] = Field(None, alias="headSha")
 
-
 class MergePRResult(BaseModel):
     """Result from ``repo.merge_pr``."""
 
@@ -43,7 +40,6 @@ class MergePRResult(BaseModel):
     merged: bool = Field(..., alias="merged")
     merge_sha: Optional[str] = Field(None, alias="mergeSha")
     summary: str = Field(..., alias="summary")
-
 
 class PullRequestReadinessResult(BaseModel):
     """Compact readiness evidence for one pull request revision."""
@@ -62,7 +58,6 @@ class PullRequestReadinessResult(BaseModel):
     policy_allowed: bool | None = Field(True, alias="policyAllowed")
     blockers: list[dict[str, Any]] = Field(default_factory=list, alias="blockers")
 
-
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -70,7 +65,6 @@ class PullRequestReadinessResult(BaseModel):
 _GITHUB_PR_URL_RE = re.compile(
     r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)"
 )
-
 
 class GitHubService:
     """Thin wrapper around the GitHub REST API for pull-request operations.
@@ -782,7 +776,6 @@ class GitHubService:
                 "github-actions",
             }
         )
-
 
 __all__ = [
     "CreatePRResult",

@@ -1,12 +1,12 @@
 # Verification: Finish Task Remediation Desired-State Implementation
 
 **Date**: 2026-04-23
-**Original Request Source**: `spec.md` Input and `docs/tmp/jira-orchestration-inputs/MM-483-moonspec-orchestration-input.md`
+**Original Request Source**: `spec.md` Input and `spec.md` (Input)
 **Verdict**: ADDITIONAL_WORK_NEEDED
 
 ## Completed Coverage
 
-- MM-483 canonical Jira preset brief is preserved in `docs/tmp/jira-orchestration-inputs/MM-483-moonspec-orchestration-input.md` and `specs/242-finish-task-remediation/spec.md`.
+- MM-483 canonical Jira preset brief is preserved in `spec.md` (Input) and `specs/242-finish-task-remediation/spec.md`.
 - Input classified as one runtime story and MoonSpec artifacts were created for specify, plan, research, data model, contracts, quickstart, tasks, and verification.
 - Canonical remediation action registry now exposes the documented dotted action kinds:
   - `execution.pause`

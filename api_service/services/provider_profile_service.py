@@ -10,7 +10,6 @@ from moonmind.utils.logging import redact_profile_file_templates, redact_sensiti
 
 logger = logging.getLogger(__name__)
 
-
 async def normalize_runtime_default_profile(
     *,
     session: AsyncSession,
@@ -64,7 +63,6 @@ async def normalize_runtime_default_profile(
         await session.flush()
 
     return selected_id
-
 
 def _manager_profile_payload(row: ManagedAgentProviderProfile) -> dict[str, Any]:
     return {

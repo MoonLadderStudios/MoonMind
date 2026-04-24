@@ -16,7 +16,6 @@ from moonmind.manifest import (
 )
 from moonmind.schemas import Manifest
 
-
 class ManifestSyncService:
     def __init__(self, logger: Optional[logging.Logger] = None) -> None:
         self.logger = logger or logging.getLogger(__name__)

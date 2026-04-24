@@ -1,6 +1,6 @@
 # Temporal Production Routing Policy
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-RoutingPolicy.md`](../tmp/remaining-work/Temporal-RoutingPolicy.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 ## Purpose
 This document defines how backend routing is handled across the `queue`, `system`, and `temporal` execution sources.

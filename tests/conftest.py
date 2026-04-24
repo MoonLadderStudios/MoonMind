@@ -15,7 +15,6 @@ _DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
 settings.workflow.test_mode = True
 settings.workflow.enable_task_proposals = False
 
-
 @pytest.fixture
 def disabled_env_keys(monkeypatch):
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled", raising=False)
@@ -28,7 +27,6 @@ def disabled_env_keys(monkeypatch):
     monkeypatch.setattr(settings.openai, "openai_api_key", "sk-test", raising=False)
     monkeypatch.setattr(settings.google, "google_api_key", "g-test", raising=False)
     yield
-
 
 @pytest.fixture
 def keycloak_mode(monkeypatch):
@@ -85,7 +83,6 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
 import atexit
 import subprocess
 
-
 def _kill_owned_temporal_servers() -> None:
     """Terminate ``temporal-test-server`` subprocesses owned by this process."""
     my_pid = os.getpid()
@@ -105,6 +102,5 @@ def _kill_owned_temporal_servers() -> None:
         # Best-effort cleanup: if `pgrep` is unavailable, fails, or output is unexpected,
         # we silently ignore it to avoid disrupting test shutdown.
         pass
-
 
 atexit.register(_kill_owned_temporal_servers)

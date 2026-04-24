@@ -11,15 +11,15 @@ MM-361 replaces the placeholder Codex OAuth auth runner with a short-lived, sess
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Pydantic v2, Temporal Python SDK, pytest, existing OAuth provider registry, existing OAuth session workflow/activity catalog, existing terminal bridge runtime helpers  
-**Storage**: Existing OAuth session database row and workflow/activity payloads only; no new persistent storage  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` with focused pytest targets for OAuth activities, terminal bridge runtime, provider registry, and OAuth session workflow behavior  
-**Integration Testing**: `./tools/test_integration.sh` for compose-backed `integration_ci` coverage, with focused Temporal OAuth session coverage in `tests/integration/temporal/test_oauth_session.py` when Docker is available  
-**Target Platform**: MoonMind API service and Temporal worker/runtime containers on Linux with Docker-controlled workload boundaries  
-**Project Type**: Backend orchestration/runtime feature with Temporal workflow and activity boundaries  
-**Performance Goals**: Auth runner startup remains bounded by the existing OAuth runner activity timeout; cleanup remains idempotent and retry-safe; failure reporting remains compact and secret-free  
-**Constraints**: Preserve `MM-361` traceability; do not expose generic Docker exec or ordinary managed task terminal access; do not leak raw credential contents into workflow history, browser responses, logs, or artifacts; avoid compatibility aliases for internal pre-release contracts  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: Pydantic v2, Temporal Python SDK, pytest, existing OAuth provider registry, existing OAuth session workflow/activity catalog, existing terminal bridge runtime helpers 
+**Storage**: Existing OAuth session database row and workflow/activity payloads only; no new persistent storage 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` with focused pytest targets for OAuth activities, terminal bridge runtime, provider registry, and OAuth session workflow behavior 
+**Integration Testing**: `./tools/test_integration.sh` for compose-backed `integration_ci` coverage, with focused Temporal OAuth session coverage in `tests/integration/temporal/test_oauth_session.py` when Docker is available 
+**Target Platform**: MoonMind API service and Temporal worker/runtime containers on Linux with Docker-controlled workload boundaries 
+**Project Type**: Backend orchestration/runtime feature with Temporal workflow and activity boundaries 
+**Performance Goals**: Auth runner startup remains bounded by the existing OAuth runner activity timeout; cleanup remains idempotent and retry-safe; failure reporting remains compact and secret-free 
+**Constraints**: Preserve `MM-361` traceability; do not expose generic Docker exec or ordinary managed task terminal access; do not leak raw credential contents into workflow history, browser responses, logs, or artifacts; avoid compatibility aliases for internal pre-release contracts 
 **Scale/Scope**: One independently testable story focused on Codex OAuth auth runner bootstrap PTY lifecycle; managed Codex task execution and Claude/Gemini parity remain out of scope
 
 ## Constitution Check
@@ -37,7 +37,7 @@ MM-361 replaces the placeholder Codex OAuth auth runner with a short-lived, sess
 - IX Resilient by Default: PASS. Cleanup is idempotent, failures are explicit, and activity retries remain bounded.
 - X Continuous Improvement: PASS. MoonSpec artifacts and verification will record outcomes and blocked integration evidence when applicable.
 - XI Spec-Driven Development: PASS. MM-361 has isolated spec and planning artifacts before implementation.
-- XII Canonical Docs Separation: PASS. Implementation planning remains under `specs/` and `docs/tmp`; canonical docs are source requirements, not migration logs.
+- XII Canonical Docs Separation: PASS. Implementation planning remains under `specs/` and `local-only handoffs`; canonical docs are source requirements, not migration logs.
 - XIII Pre-Release Compatibility: PASS. No compatibility aliases are planned; unsupported internal runtime values should fail fast. Existing Temporal activity invocation compatibility is preserved by keeping the worker-bound request shape compatible and resolving provider bootstrap data at the activity/runtime boundary.
 
 ## Project Structure
@@ -52,7 +52,7 @@ specs/192-oauth-runner-bootstrap-pty/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── oauth-runner-bootstrap-pty.md
+│ └── oauth-runner-bootstrap-pty.md
 └── tasks.md
 ```
 
@@ -61,8 +61,8 @@ specs/192-oauth-runner-bootstrap-pty/
 ```text
 moonmind/workflows/temporal/runtime/
 ├── providers/
-│   ├── base.py
-│   └── registry.py
+│ ├── base.py
+│ └── registry.py
 └── terminal_bridge.py
 
 moonmind/workflows/temporal/activities/
