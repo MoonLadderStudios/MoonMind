@@ -222,6 +222,23 @@ def test_extract_query_terms_keeps_domain_words() -> None:
     assert "profile" in terms
     assert "workflow" in terms
 
+def test_record_context_metadata_marks_durable_authority(
+    mock_request: AgentExecutionRequest,
+) -> None:
+    ContextInjectionService._record_context_metadata(
+        request=mock_request,
+        artifact_ref="artifacts/context/rag-context-abc123.json",
+        transport="direct",
+        items_count=2,
+    )
+
+    moonmind_meta = mock_request.parameters["metadata"]["moonmind"]
+    assert moonmind_meta["retrievedContextArtifactPath"] == "artifacts/context/rag-context-abc123.json"
+    assert moonmind_meta["latestContextPackRef"] == "artifacts/context/rag-context-abc123.json"
+    assert moonmind_meta["retrievalDurabilityAuthority"] == "artifact_ref"
+    assert moonmind_meta["sessionContinuityCacheStatus"] == "advisory_only"
+
+
 def test_persisted_context_artifact_uses_workspace_context_directory(mock_request: AgentExecutionRequest, tmp_path) -> None:
     service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})
     pack = ContextPack(

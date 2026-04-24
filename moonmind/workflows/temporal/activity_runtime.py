@@ -66,6 +66,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     ManagedRunRecord,
     ManagedRuntimeProfile,
+    extract_durable_retrieval_metadata,
 )
 from moonmind.schemas.workload_models import WorkloadResult, parse_workload_request
 from moonmind.workloads.tool_bridge import (
@@ -3790,17 +3791,33 @@ class TemporalAgentRuntimeActivities:
             )
             instruction_ref = str(request.instruction_ref or "").strip()
             if instruction_ref:
-                return self._prepare_managed_codex_turn_text(
+                prepared = self._prepare_managed_codex_turn_text(
                     instruction_ref,
                     parameters=request.parameters,
                 )
+                if payload.get("includePreparedRequestMetadata"):
+                    return {
+                        "instructions": prepared,
+                        "durableRetrievalMetadata": extract_durable_retrieval_metadata(
+                            request.parameters
+                        ),
+                    }
+                return prepared
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         instructions = str(parameters.get("instructions") or "").strip()
         if instructions:
-            return self._prepare_managed_codex_turn_text(
+            prepared = self._prepare_managed_codex_turn_text(
                 instructions,
                 parameters=parameters,
             )
+            if payload.get("includePreparedRequestMetadata"):
+                return {
+                    "instructions": prepared,
+                    "durableRetrievalMetadata": extract_durable_retrieval_metadata(
+                        request.parameters
+                    ),
+                }
+            return prepared
         raise TemporalActivityRuntimeError(
             "request.instructionRef or request.parameters.instructions is required"
         )

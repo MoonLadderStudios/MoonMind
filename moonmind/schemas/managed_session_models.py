@@ -967,6 +967,7 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
         ge=1,
     )
     environment: dict[str, str] = Field(default_factory=dict, alias="environment")
+    metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
     github_credential: ManagedGitHubCredentialDescriptor | None = Field(
         None,
         alias="githubCredential",
@@ -1153,8 +1154,14 @@ class CodexManagedSessionRecord(BaseModel):
     stderr_log_offset: int | None = Field(None, alias="stderrLogOffset", ge=0)
     last_log_at: datetime | None = Field(None, alias="lastLogAt")
     error_message: str | None = Field(None, alias="errorMessage")
+    metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
     started_at: datetime = Field(..., alias="startedAt")
     updated_at: datetime | None = Field(None, alias="updatedAt")
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
 
     @model_validator(mode="after")
     def _normalize(self) -> "CodexManagedSessionRecord":

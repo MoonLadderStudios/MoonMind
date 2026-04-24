@@ -257,8 +257,11 @@ class ContextInjectionService:
             moonmind_meta = {}
             metadata["moonmind"] = moonmind_meta
         moonmind_meta["retrievedContextArtifactPath"] = artifact_ref
+        moonmind_meta["latestContextPackRef"] = artifact_ref
         moonmind_meta["retrievedContextTransport"] = str(transport or "")
         moonmind_meta["retrievedContextItemCount"] = int(items_count)
+        moonmind_meta["retrievalDurabilityAuthority"] = "artifact_ref"
+        moonmind_meta["sessionContinuityCacheStatus"] = "advisory_only"
 
     @staticmethod
     def _repository_filter_value(repository: str) -> str:

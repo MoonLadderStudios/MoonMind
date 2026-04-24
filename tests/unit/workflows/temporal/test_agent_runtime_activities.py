@@ -2429,6 +2429,60 @@ async def test_agent_runtime_prepare_turn_instructions_includes_context_artifact
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_returns_durable_retrieval_metadata_when_requested(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    def _fake_retrieve(self, request):
+        return (
+            ContextPack(
+                items=[ContextItem(score=0.9, source="docs/spec.md", text="retrieved text")],
+                filters={"repo": "moonmind"},
+                budgets={},
+                usage={"tokens": 8, "latency_ms": 4},
+                transport="direct",
+                context_text="Retrieved context snippet",
+                retrieved_at="2026-04-24T00:00:00Z",
+                telemetry_id="tid-1",
+            ),
+            None,
+        )
+
+    monkeypatch.setattr("moonmind.rag.context_injection.asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack",
+        _fake_retrieve,
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "instructionRef": "artifact:instructions",
+                "parameters": {"publishMode": "none"},
+            },
+            "workspacePath": str(tmp_path),
+            "includePreparedRequestMetadata": True,
+        }
+    )
+
+    assert isinstance(result, dict)
+    assert "BEGIN_RETRIEVED_CONTEXT" in result["instructions"]
+    assert result["durableRetrievalMetadata"]["latestContextPackRef"].startswith(
+        "artifacts/context/"
+    )
+    assert result["durableRetrievalMetadata"]["retrievalDurabilityAuthority"] == "artifact_ref"
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_requires_workspace_for_instruction_ref() -> None:
     activities = TemporalAgentRuntimeActivities()
 

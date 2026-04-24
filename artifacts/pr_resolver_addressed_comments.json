@@ -1,52 +1,17 @@
 [
   {
-    "id": 3136037593,
-    "disposition": "addressed",
-    "rationale": "Simplified _report_publication_metadata with declared-key comprehensions and guarded declared_outputs access in the MM-504 follow-up commit."
-  },
-  {
-    "id": 4168576905,
+    "id": 4169355740,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; no separate actionable request beyond the inline comment already addressed."
+    "rationale": "Bot review summary explicitly reported no feedback to address."
   },
   {
-    "id": 3136058092,
+    "id": 3136724270,
     "disposition": "addressed",
-    "rationale": "Removed the duplicate dockerMode alias so workflowDockerMode remains the single canonical mode field across launcher metadata, tests, and MM-504 spec artifacts."
+    "rationale": "Prepared turn instructions now return compact durable retrieval metadata, the adapter merges it into the original request before launch, and regression tests cover the launch-metadata path."
   },
   {
-    "id": 4168605098,
+    "id": 4169380905,
     "disposition": "not-applicable",
-    "rationale": "Top-level Codex review wrapper only; the actionable inline feedback was handled separately."
-  },
-  {
-    "id": 3136402860,
-    "disposition": "addressed",
-    "rationale": "Removed the redundant os.environ argument when computing the retrieval capability note state."
-  },
-  {
-    "id": 3136402866,
-    "disposition": "addressed",
-    "rationale": "Dropped the redundant str() coercion and now normalize the instruction with `instruction or \"\"`."
-  },
-  {
-    "id": 4169026231,
-    "disposition": "not-applicable",
-    "rationale": "This is the automated review summary, not an actionable code comment."
-  },
-  {
-    "id": 3136412472,
-    "disposition": "addressed",
-    "rationale": "Managed Codex retrieval guidance now treats gateway transport as unavailable until there is a usable authenticated managed-session path, so the prompt no longer advertises a 401-only capability."
-  },
-  {
-    "id": 3136412479,
-    "disposition": "addressed",
-    "rationale": "The launcher now passes the run-scoped materialized environment into workspace preparation so the capability note reflects the actual launch environment rather than process-global defaults."
-  },
-  {
-    "id": 4169038612,
-    "disposition": "not-applicable",
-    "rationale": "This is the Codex review wrapper comment; the actionable suggestions were tracked in the individual review comments above."
+    "rationale": "Automated review wrapper comment contained no standalone actionable feedback beyond the addressed inline thread."
   }
 ]
