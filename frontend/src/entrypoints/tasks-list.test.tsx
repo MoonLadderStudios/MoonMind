@@ -85,6 +85,24 @@ describe('Tasks List Entrypoint', () => {
             rawState: 'waiting_on_dependencies',
             createdAt: '2026-03-28T00:00:00Z',
           },
+          {
+            taskId: 'task-awaiting',
+            source: 'temporal',
+            title: 'Awaiting task',
+            status: 'awaiting_action',
+            state: 'awaiting_external',
+            rawState: 'awaiting_external',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-finalizing',
+            source: 'temporal',
+            title: 'Finalizing task',
+            status: 'running',
+            state: 'finalizing',
+            rawState: 'finalizing',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
         ],
       }),
     } as Response);
@@ -113,11 +131,28 @@ describe('Tasks List Entrypoint', () => {
 
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
 
     const waitingPills = screen.getAllByText('waiting_on_dependencies');
     expect(waitingPills.length).toBeGreaterThan(0);
     for (const pill of waitingPills) {
       expect(pill.closest('span')?.dataset.effect).toBeUndefined();
+    }
+
+    const nonExecutingStatusPills = Array.from(
+      document.querySelectorAll<HTMLElement>('.queue-table-cell-status span.status, .queue-card-status span.status'),
+    );
+
+    const awaitingPills = nonExecutingStatusPills.filter((pill) => pill.textContent === 'awaiting_external');
+    expect(awaitingPills.length).toBeGreaterThan(0);
+    for (const pill of awaitingPills) {
+      expect(pill.dataset.effect).toBeUndefined();
+    }
+
+    const finalizingPills = nonExecutingStatusPills.filter((pill) => pill.textContent === 'finalizing');
+    expect(finalizingPills.length).toBeGreaterThan(0);
+    for (const pill of finalizingPills) {
+      expect(pill.dataset.effect).toBeUndefined();
     }
   });
 

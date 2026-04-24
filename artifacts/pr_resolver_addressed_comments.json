@@ -73,5 +73,25 @@
     "id": 4167008311,
     "disposition": "not-applicable",
     "rationale": "Top-level bot review summary only; the actionable inline comments from this review were addressed separately."
+  },
+  {
+    "id": 3134781723,
+    "disposition": "addressed",
+    "rationale": "Split the long pseudo-selector assertion into a named predicate and standalone expectation in mission-control.test.tsx."
+  },
+  {
+    "id": 3134781727,
+    "disposition": "addressed",
+    "rationale": "Reworked the awaiting_external check to assert directly against rendered status-pill hosts instead of a conditional closest() lookup that could skip coverage."
+  },
+  {
+    "id": 3134781729,
+    "disposition": "addressed",
+    "rationale": "Applied the same direct rendered-host assertion strategy to finalizing pills so the regression guard cannot silently pass."
+  },
+  {
+    "id": 4167072074,
+    "disposition": "not-applicable",
+    "rationale": "Top-level review summary only; the actionable items are tracked and addressed by the three inline review comments above."
   }
 ]
