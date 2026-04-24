@@ -397,17 +397,17 @@ describe('Mission Control shared entry', () => {
 
 
   it('defines the shared MM-488 executing shimmer modifier contract', async () => {
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*1510ms/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*1650ms/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-band-width:\s*24%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-band-height:\s*180%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-halo-width-multiplier:\s*10/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-core-width-multiplier:\s*9\.1667/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-halo-peak-width-multiplier:\s*10\.18/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-core-peak-width-multiplier:\s*9\.48/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-start-x:\s*-135%/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-start-y:\s*-160%/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-end-x:\s*135%/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-end-y:\s*160%/);
+    expect(missionControlCss).not.toContain('--mm-executing-sweep-halo-peak-width-multiplier');
+    expect(missionControlCss).not.toContain('--mm-executing-sweep-core-peak-width-multiplier');
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-start-x:\s*135%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-start-y:\s*160%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-end-x:\s*-135%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-end-y:\s*-160%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-x:\s*-12%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-y:\s*-10%/);
 
@@ -422,7 +422,7 @@ describe('Mission Control shared entry', () => {
     expect(shimmerBlock).toContain('isolation: isolate');
     expect(shimmerBlock).not.toContain('animation-delay:');
     expect(shimmerBlock).toContain('var(--mm-executing-sweep-cycle-duration)');
-    expect(shimmerBlock).toContain('cubic-bezier(0.28, 0.78, 0.24, 1)');
+    expect(shimmerBlock).toContain('linear infinite');
     expect(shimmerBlock).toContain('rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity))');
     expect(shimmerBlock).toContain('rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity))');
     expect(shimmerBlock).toMatch(
@@ -432,7 +432,8 @@ describe('Mission Control shared entry', () => {
       /background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),\s*calc\(var\(--mm-executing-sweep-start-x\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-x\)\)\s*calc\(var\(--mm-executing-sweep-start-y\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-y\)\)/,
     );
 
-    expect(missionControlCss).toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?52%\s*\{[\s\S]*?background-position:\s*50% 50%,\s*calc\(50% \+ var\(--mm-executing-sweep-layer-offset-x\)\)\s*calc\(50% \+ var\(--mm-executing-sweep-layer-offset-y\)\);[\s\S]*?background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-peak-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\),[\s\S]*?100%\s*\{[\s\S]*?background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\),[\s\S]*?calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-core-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\);/);
+    expect(missionControlCss).not.toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?52%\s*\{/);
+    expect(missionControlCss).toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?0%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),[\s\S]*?100%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-end-x\)\s*var\(--mm-executing-sweep-end-y\),[\s\S]*?background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\),[\s\S]*?calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-core-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\);/);
     expect(missionControlCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-state="executing"\]\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing[\s\S]*?animation: none;/,
     );

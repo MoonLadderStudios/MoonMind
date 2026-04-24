@@ -75,7 +75,7 @@ layers:
   sweep_band:
     role: moving luminous diagonal band
     shape: soft-edged stripe
-    travel: left-to-right
+    travel: top-left-to-bottom-right
     angle_deg: -18
     blend_intent: brighten, not wash out
 
@@ -91,16 +91,17 @@ layers:
 ```yaml
 motion:
   cycle:
-    duration_ms: 1450
+    duration_ms: 1650
     repeat: infinite
-    repeat_delay_ms: 220
-    easing: cubic-bezier(0.22, 1, 0.36, 1)
+    repeat_delay_ms: 0
+    easing: linear
 
   path:
-    start_x_pct: -135
-    center_x_pct: 50
-    end_x_pct: 135
-    y_behavior: fixed
+    start_x_pct: 135
+    start_y_pct: 160
+    end_x_pct: -135
+    end_y_pct: -160
+    y_behavior: diagonal_travel
     angle_deg: -18
 
   band:
@@ -111,13 +112,14 @@ motion:
     blur_px: 6
 
   pacing:
-    entry: quick_but_soft
+    entry: continuous
     midpoint: brightest_at_text_centerline
-    exit: smooth_fade
+    exit: continuous
 
   continuity:
     allow_overlap_between_cycles: false
-    idle_gap_present: true
+    idle_gap_present: false
+    center_pause_present: false
 ```
 
 ## Theme Binding
@@ -247,6 +249,7 @@ implementation_shape:
     preferred: pseudo-element overlay
     acceptable: nested span overlay
     avoid: extra wrapper that changes layout
+    note: oversized CSS background layers may need inverse background-position values so the visible sweep starts at the top-left and exits at the bottom-right
 
   overlay_elements:
     - ::before as trailing_halo
@@ -264,7 +267,7 @@ acceptance_criteria:
   - the executing pill remains readable at all times during the sweep
   - the shimmer never escapes the rounded bounds of the pill
   - the shimmer produces no measurable layout shift
-  - one complete sweep occurs roughly every 1.6 to 1.8 seconds including delay
+  - one complete sweep occurs roughly every 1.6 to 1.8 seconds with no center pause or idle delay
   - the brightest moment occurs near the center of the pill, not at the edges
   - the effect looks intentional in both light and dark themes
   - reduced-motion users see a static active treatment with no animated sweep
@@ -275,16 +278,20 @@ acceptance_criteria:
 
 ```yaml
 effect_tokens:
-  --mm-executing-sweep-duration: 1450ms
-  --mm-executing-sweep-delay: 220ms
+  --mm-executing-sweep-cycle-duration: 1650ms
   --mm-executing-sweep-angle: -18deg
   --mm-executing-sweep-band-width: 24%
+  --mm-executing-sweep-band-height: 180%
+  --mm-executing-sweep-halo-width-multiplier: 10
+  --mm-executing-sweep-core-width-multiplier: 9.1667
   --mm-executing-sweep-core-opacity: 0.34
   --mm-executing-sweep-halo-opacity: 0.14
-  --mm-executing-sweep-blur: 6px
-  --mm-executing-sweep-start-x: -135%
-  --mm-executing-sweep-end-x: 135%
-  --mm-executing-sweep-radius-inset: 1px
+  --mm-executing-sweep-start-x: 135%
+  --mm-executing-sweep-start-y: 160%
+  --mm-executing-sweep-end-x: -135%
+  --mm-executing-sweep-end-y: -160%
+  --mm-executing-sweep-layer-offset-x: -12%
+  --mm-executing-sweep-layer-offset-y: -10%
 ```
 
 ## Non-Goals
