@@ -12,6 +12,16 @@
   {
     "id": 4167397793,
     "disposition": "not-applicable",
-    "rationale": "Top-level bot review summary only restated the two inline comments and required no separate change."
+    "rationale": "Top-level Gemini review summary only restated the inline comments and required no separate change."
+  },
+  {
+    "id": 3135074437,
+    "disposition": "addressed",
+    "rationale": "Report hydration now ignores incomplete report.primary and report.summary artifacts and only projects COMPLETE artifacts."
+  },
+  {
+    "id": 4167425940,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Codex review wrapper contained no standalone actionable feedback beyond the inline comment already addressed."
   }
 ]

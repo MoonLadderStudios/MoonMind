@@ -1468,6 +1468,13 @@ def _build_execution_artifact_ref_model(artifact: Any) -> ArtifactRefModel:
     )
 
 
+def _select_complete_execution_artifact(artifacts: list[Any]) -> Any | None:
+    for artifact in artifacts:
+        if getattr(artifact, "status", None) is TemporalArtifactStatus.COMPLETE:
+            return artifact
+    return None
+
+
 async def _hydrate_execution_report_projection(
     execution: ExecutionModel,
     *,
@@ -1498,7 +1505,7 @@ async def _hydrate_execution_report_projection(
                 latest_only=True,
             ),
         )
-        primary_artifact = primary_artifacts[0] if primary_artifacts else None
+        primary_artifact = _select_complete_execution_artifact(primary_artifacts)
         if primary_artifact is None:
             return execution.model_copy(
                 update={
@@ -1508,7 +1515,7 @@ async def _hydrate_execution_report_projection(
                 }
             )
 
-        summary_artifact = summary_artifacts[0] if summary_artifacts else None
+        summary_artifact = _select_complete_execution_artifact(summary_artifacts)
 
         primary_ref_model = _build_execution_artifact_ref_model(primary_artifact)
         summary_ref_model = (

@@ -250,6 +250,29 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
             latest_summary_ref = report_projection['latestReportSummaryRef']
             assert latest_summary_ref['artifact_ref_v'] == 1
             assert latest_summary_ref['artifact_id'] == summary_artifact.artifact_id
+
+            pending_primary_artifact, _pending_primary_upload = await artifact_service.create(
+                principal=str(shared_user_id),
+                content_type='text/markdown',
+                size_bytes=len(b'# pending report'),
+                link={
+                    'namespace': execution['namespace'],
+                    'workflow_id': workflow_id,
+                    'run_id': execution['runId'],
+                    'link_type': 'report.primary',
+                    'label': 'Pending primary report',
+                },
+                metadata_json={
+                    'report_type': 'security_pentest_report',
+                    'report_scope': 'final',
+                },
+            )
+
+            pending_report_describe_response = await client.get(f"/api/executions/{workflow_id}")
+            assert pending_report_describe_response.status_code == 200
+            pending_report_projection = pending_report_describe_response.json()['reportProjection']
+            assert pending_primary_artifact.status is TemporalArtifactStatus.PENDING_UPLOAD
+            assert pending_report_projection == {'hasReport': False}
             query_state[workflow_id] = {
                 "get_progress": {
                     "runId": "run-query-latest",

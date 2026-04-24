@@ -3817,6 +3817,7 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
 
     primary_artifact = SimpleNamespace(
         artifact_id='art-primary',
+        status=TemporalArtifactStatus.COMPLETE,
         sha256='sha-primary',
         size_bytes=128,
         content_type='text/markdown',
@@ -3830,6 +3831,7 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
     )
     summary_artifact = SimpleNamespace(
         artifact_id='art-summary',
+        status=TemporalArtifactStatus.COMPLETE,
         sha256='sha-summary',
         size_bytes=64,
         content_type='application/json',
@@ -3902,6 +3904,72 @@ def test_describe_execution_report_projection_degrades_safely_when_no_report_exi
     user = _override_user_dependencies(app, is_superuser=True)
 
     artifact_service = SimpleNamespace(list_for_execution=AsyncMock(return_value=[]))
+
+    with patch(
+        'api_service.api.routers.executions.get_temporal_artifact_service',
+        return_value=artifact_service,
+    ):
+        with TestClient(app) as test_client:
+            response = test_client.get('/api/executions/mm:wf-1')
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert artifact_service.list_for_execution.await_args_list == [
+        call(
+            namespace='moonmind',
+            workflow_id='mm:wf-1',
+            run_id='run-2',
+            principal=str(user.id),
+            link_type='report.primary',
+            latest_only=True,
+        ),
+        call(
+            namespace='moonmind',
+            workflow_id='mm:wf-1',
+            run_id='run-2',
+            principal=str(user.id),
+            link_type='report.summary',
+            latest_only=True,
+        ),
+    ]
+    assert payload['reportProjection'] == {'hasReport': False}
+
+
+def test_describe_execution_report_projection_ignores_incomplete_report_artifacts() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record()
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        get=AsyncMock(return_value=None),
+        rollback=AsyncMock(),
+    )
+    _override_temporal_client(app)
+    user = _override_user_dependencies(app, is_superuser=True)
+
+    pending_primary = SimpleNamespace(
+        artifact_id='art-primary-pending',
+        status=TemporalArtifactStatus.PENDING_UPLOAD,
+        sha256='sha-primary-pending',
+        size_bytes=256,
+        content_type='text/markdown',
+        encryption=TemporalArtifactEncryption.NONE,
+        metadata_json={'report_type': 'security_pentest_report', 'report_scope': 'final'},
+    )
+    pending_summary = SimpleNamespace(
+        artifact_id='art-summary-pending',
+        status=TemporalArtifactStatus.PENDING_UPLOAD,
+        sha256='sha-summary-pending',
+        size_bytes=64,
+        content_type='application/json',
+        encryption=TemporalArtifactEncryption.NONE,
+        metadata_json={'report_type': 'security_pentest_report', 'report_scope': 'final'},
+    )
+    artifact_service = SimpleNamespace(
+        list_for_execution=AsyncMock(side_effect=[[pending_primary], [pending_summary]])
+    )
 
     with patch(
         'api_service.api.routers.executions.get_temporal_artifact_service',
