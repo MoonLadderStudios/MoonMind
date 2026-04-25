@@ -6,13 +6,22 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
+from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.services.deployment_operations import (
     DeploymentOperationError,
     DeploymentOperationsService,
     DeploymentStackPolicy,
+    DeploymentUpdateSubmission,
+)
+from moonmind.config.settings import settings
+from moonmind.workflows.tasks.routing import TemporalSubmitDisabledError
+from moonmind.workflows.temporal import (
+    TemporalExecutionService,
+    TemporalExecutionValidationError,
 )
 
 
@@ -91,6 +100,27 @@ def _get_deployment_service() -> DeploymentOperationsService:
     return DeploymentOperationsService()
 
 
+def _get_temporal_execution_service(
+    session: AsyncSession = Depends(get_async_session),
+) -> TemporalExecutionService:
+    return TemporalExecutionService(
+        session,
+        namespace=settings.temporal.namespace,
+        integration_task_queue=settings.temporal.activity_integrations_task_queue,
+        integration_poll_initial_seconds=(
+            settings.temporal.integration_poll_initial_seconds
+        ),
+        integration_poll_max_seconds=settings.temporal.integration_poll_max_seconds,
+        integration_poll_jitter_ratio=settings.temporal.integration_poll_jitter_ratio,
+        run_continue_as_new_step_threshold=(
+            settings.temporal.run_continue_as_new_step_threshold
+        ),
+        run_continue_as_new_wait_cycle_threshold=(
+            settings.temporal.run_continue_as_new_wait_cycle_threshold
+        ),
+    )
+
+
 def _require_admin(user: User) -> None:
     if bool(getattr(user, "is_superuser", False)):
         return
@@ -142,11 +172,12 @@ def _stack_state(policy: DeploymentStackPolicy) -> DeploymentStackStateResponse:
 async def submit_deployment_update(
     payload: DeploymentUpdateRequest,
     service: DeploymentOperationsService = Depends(_get_deployment_service),
+    execution_service: TemporalExecutionService = Depends(_get_temporal_execution_service),
     user: User = Depends(get_current_user()),
 ) -> DeploymentUpdateResponse:
     _require_admin(user)
     try:
-        service.validate_update_request(
+        policy = service.validate_update_request(
             stack=payload.stack,
             repository=payload.image.repository,
             reference=payload.image.reference,
@@ -155,7 +186,37 @@ async def submit_deployment_update(
         )
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
-    return DeploymentUpdateResponse(**service.queue_update(stack=payload.stack))
+    try:
+        queued = await service.queue_update(
+            execution_service=execution_service,
+            policy=policy,
+            submission=DeploymentUpdateSubmission(
+                stack=policy.stack,
+                repository=payload.image.repository,
+                reference=payload.image.reference,
+                mode=payload.mode,
+                remove_orphans=payload.remove_orphans,
+                wait=payload.wait,
+                run_smoke_check=payload.run_smoke_check,
+                pause_work=payload.pause_work,
+                prune_old_images=payload.prune_old_images,
+                reason=payload.reason,
+                requested_by_user_id=getattr(user, "id", None),
+            ),
+        )
+    except TemporalSubmitDisabledError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "temporal_submit_disabled", "message": str(exc)},
+        ) from exc
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "deployment_update_queue_invalid", "message": str(exc)},
+        ) from exc
+    except DeploymentOperationError as exc:
+        raise _policy_error(exc) from exc
+    return DeploymentUpdateResponse(**queued)
 
 
 @router.get("/stacks/{stack}", response_model=DeploymentStackStateResponse)

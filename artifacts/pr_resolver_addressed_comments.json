@@ -1,37 +1,27 @@
 [
   {
-    "id": 4176110163,
+    "id": 3142703165,
+    "disposition": "addressed",
+    "rationale": "The update endpoint now queues with the normalized policy stack by passing policy.stack through DeploymentUpdateSubmission."
+  },
+  {
+    "id": 4176254410,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary; individual actionable comments were classified separately."
+    "rationale": "Top-level automated review summary; actionable child feedback is tracked separately."
   },
   {
-    "id": 3142549713,
+    "id": 3142707227,
     "disposition": "addressed",
-    "rationale": "Changed the repository metadata response type check to dict for the default_branch extraction."
+    "rationale": "queue_update now creates a Temporal MoonMind.Run execution record through TemporalExecutionService before returning QUEUED metadata."
   },
   {
-    "id": 3142549717,
+    "id": 3142707228,
     "disposition": "addressed",
-    "rationale": "Made the repository metadata request best-effort so branch pagination still succeeds if metadata lookup fails."
+    "rationale": "Queued run inputs now use the canonical stack from deployment policy, with regression coverage for whitespace-normalized stack input."
   },
   {
-    "id": 3142549722,
-    "disposition": "addressed",
-    "rationale": "Allowed default branch auto-selection to run when the selected repository changes even if a previous branch is selected."
-  },
-  {
-    "id": 3142550006,
-    "disposition": "addressed",
-    "rationale": "Added backend regression coverage proving branch options are returned when the metadata endpoint fails."
-  },
-  {
-    "id": 4176110370,
+    "id": 4176257392,
     "disposition": "not-applicable",
-    "rationale": "Automated review wrapper with no separate actionable request beyond the inline comments already addressed."
-  },
-  {
-    "id": 3142571198,
-    "disposition": "addressed",
-    "rationale": "Added an explicit comment explaining that metadata failures are intentionally ignored so branch discovery can continue without default-branch metadata."
+    "rationale": "Top-level Codex review wrapper with no standalone requested code change."
   }
 ]

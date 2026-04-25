@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from uuid import uuid4
+from typing import Any, Protocol
+from uuid import UUID
 
 
 _IMAGE_REFERENCE_PATTERN = re.compile(
@@ -36,6 +37,41 @@ class DeploymentStackPolicy:
     @property
     def configured_image(self) -> str:
         return f"{self.repository}:{self.configured_reference}"
+
+
+@dataclass(frozen=True)
+class DeploymentUpdateSubmission:
+    stack: str
+    repository: str
+    reference: str
+    mode: str
+    remove_orphans: bool
+    wait: bool
+    run_smoke_check: bool
+    pause_work: bool
+    prune_old_images: bool
+    reason: str
+    requested_by_user_id: UUID | str | None
+
+
+class DeploymentExecutionCreator(Protocol):
+    async def create_execution(
+        self,
+        *,
+        workflow_type: str,
+        owner_id: UUID | str | None,
+        owner_type: str | None = None,
+        title: str | None,
+        input_artifact_ref: str | None,
+        plan_artifact_ref: str | None,
+        manifest_artifact_ref: str | None,
+        failure_policy: str | None,
+        initial_parameters: dict[str, Any] | None,
+        idempotency_key: str | None,
+        repository: str | None = None,
+        integration: str | None = None,
+        summary: str | None = None,
+    ) -> Any: ...
 
 
 DEFAULT_DEPLOYMENT_POLICIES: dict[str, DeploymentStackPolicy] = {
@@ -104,13 +140,112 @@ class DeploymentOperationsService:
             )
         return policy
 
-    def queue_update(self, *, stack: str) -> dict[str, str]:
-        run_id = f"depupd_{uuid4().hex}"
-        workflow_id = f"MoonMind.DeploymentUpdate/{stack}/{run_id}"
+    async def queue_update(
+        self,
+        *,
+        execution_service: DeploymentExecutionCreator,
+        policy: DeploymentStackPolicy,
+        submission: DeploymentUpdateSubmission,
+    ) -> dict[str, str]:
+        initial_parameters = self._build_initial_parameters(
+            policy=policy,
+            submission=submission,
+        )
+        execution = await execution_service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=submission.requested_by_user_id,
+            owner_type="user",
+            title=f"Update deployment stack {policy.stack}",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy="fail_fast",
+            initial_parameters=initial_parameters,
+            idempotency_key=self._idempotency_key(
+                policy=policy,
+                submission=submission,
+            ),
+            repository=None,
+            integration="deployment.update_compose_stack",
+            summary=(
+                f"Policy-gated deployment update for {policy.stack} to "
+                f"{submission.repository}:{submission.reference}."
+            ),
+        )
+        workflow_id = str(getattr(execution, "workflow_id", "") or "").strip()
+        run_id = str(getattr(execution, "run_id", "") or "").strip()
+        if not workflow_id or not run_id:
+            raise DeploymentOperationError(
+                "deployment_update_queue_failed",
+                "Deployment update workflow was not created.",
+            )
+        deployment_update_run_id = f"depupd_{run_id.replace('-', '')}"
         return {
-            "deploymentUpdateRunId": run_id,
+            "deploymentUpdateRunId": deployment_update_run_id,
             "taskId": workflow_id,
             "workflowId": workflow_id,
             "status": "QUEUED",
         }
 
+    def _build_initial_parameters(
+        self,
+        *,
+        policy: DeploymentStackPolicy,
+        submission: DeploymentUpdateSubmission,
+    ) -> dict[str, Any]:
+        return {
+            "task": {
+                "instructions": (
+                    "Run the policy-gated deployment update operation for "
+                    f"stack '{policy.stack}' using the typed "
+                    "deployment.update_compose_stack tool contract."
+                ),
+                "operation": {
+                    "type": "deployment.update",
+                    "source": "api.v1.operations.deployment.update",
+                    "jiraIssue": "MM-518",
+                },
+                "plan": [
+                    {
+                        "id": "update-moonmind-deployment",
+                        "title": "Update MoonMind deployment",
+                        "tool": {
+                            "type": "skill",
+                            "name": "deployment.update_compose_stack",
+                            "version": "1.0.0",
+                        },
+                        "inputs": {
+                            "stack": policy.stack,
+                            "image": {
+                                "repository": submission.repository,
+                                "reference": submission.reference,
+                            },
+                            "mode": submission.mode,
+                            "removeOrphans": submission.remove_orphans,
+                            "wait": submission.wait,
+                            "runSmokeCheck": submission.run_smoke_check,
+                            "pauseWork": submission.pause_work,
+                            "pruneOldImages": submission.prune_old_images,
+                            "reason": submission.reason,
+                        },
+                    }
+                ],
+            }
+        }
+
+    def _idempotency_key(
+        self,
+        *,
+        policy: DeploymentStackPolicy,
+        submission: DeploymentUpdateSubmission,
+    ) -> str:
+        return "|".join(
+            [
+                "deployment-update",
+                policy.stack,
+                submission.repository,
+                submission.reference,
+                submission.mode,
+                submission.reason.strip(),
+            ]
+        )[:128]

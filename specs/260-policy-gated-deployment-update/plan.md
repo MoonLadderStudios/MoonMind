@@ -5,14 +5,14 @@
 
 ## Summary
 
-Implement `MM-518` by adding a typed FastAPI deployment operations surface under `/api/v1/operations/deployment`, backed by a policy service that validates administrator authorization, allowlisted stack/repository/reference/mode/options, and required reason before returning queued deployment run metadata. Read-only endpoints expose typed current stack state and image target policy without caller-controlled host paths, Compose files, runner images, or shell command text. Test strategy is API-router coverage plus service validation through the router, with final full unit-suite verification.
+Implement `MM-518` by adding a typed FastAPI deployment operations surface under `/api/v1/operations/deployment`, backed by a policy service that validates administrator authorization, allowlisted stack/repository/reference/mode/options, and required reason before creating a queued Temporal `MoonMind.Run` deployment operation record. Read-only endpoints expose typed current stack state and image target policy without caller-controlled host paths, Compose files, runner images, or shell command text. Test strategy is API-router coverage plus service validation through the router, with final full unit-suite verification.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
 | FR-001 | implemented_verified | `api_service/api/routers/deployment_operations.py`, `tests/unit/api/routers/test_deployment_operations.py` | no new implementation | final verify |
-| FR-002 | implemented_verified | update response model and submit test in `tests/unit/api/routers/test_deployment_operations.py` | no new implementation | final verify |
+| FR-002 | implemented_verified | update response model, Temporal execution creation, and submit test in `tests/unit/api/routers/test_deployment_operations.py` | no new implementation | final verify |
 | FR-003 | implemented_verified | `_require_admin`, non-admin rejection test | no new implementation | final verify |
 | FR-004 | implemented_verified | dedicated deployment route and admin check independent of task submission routes | no new implementation | final verify |
 | FR-005 | implemented_verified | `DeploymentOperationsService.validate_update_request`, invalid input tests | no new implementation | final verify |
@@ -33,7 +33,7 @@ Implement `MM-518` by adding a typed FastAPI deployment operations surface under
 
 **Language/Version**: Python 3.12  
 **Primary Dependencies**: FastAPI, Pydantic v2, existing `get_current_user()` auth dependency  
-**Storage**: No new persistent storage; policy-backed deterministic responses for this story  
+**Storage**: Existing Temporal execution records only; no new persistent storage or tables  
 **Unit Testing**: pytest through `./tools/test_unit.sh`  
 **Integration Testing**: FastAPI `TestClient` router tests in unit tier; no compose-backed dependency required for this policy/API story  
 **Target Platform**: MoonMind API service on Linux containers  
