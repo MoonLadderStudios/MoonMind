@@ -1,17 +1,37 @@
 [
   {
-    "id": 3142403429,
+    "id": 3142513612,
     "disposition": "addressed",
-    "rationale": "Truncated merge automation child workflow memo targetRuntime to 80 characters and targetSkill to 160 characters, with regression coverage."
+    "rationale": "Refactored update_profile to avoid full UserProfile ORM materialization, avoid refresh/model validation on encrypted columns, and return a sanitized response after compact SQL updates."
   },
   {
-    "id": 4175995633,
+    "id": 3142513615,
+    "disposition": "addressed",
+    "rationale": "Moved logging to a module-level import and logger in profile_service.py."
+  },
+  {
+    "id": 3142513618,
+    "disposition": "addressed",
+    "rationale": "Shared user-existence checks and default profile construction between sanitized and full profile creation paths."
+  },
+  {
+    "id": 3142513619,
+    "disposition": "addressed",
+    "rationale": "Replaced inline imports with a module logger and returned generic 500 details for profile create/update commit failures."
+  },
+  {
+    "id": 4176082419,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the two actionable child comments were handled individually."
+    "rationale": "Review body summary only; individual actionable review comments were handled separately."
   },
   {
-    "id": 3142403433,
+    "id": 4176085869,
+    "disposition": "not-applicable",
+    "rationale": "Automated Codex review body without actionable findings; the actionable inline Codex comment was handled separately."
+  },
+  {
+    "id": 3142518114,
     "disposition": "addressed",
-    "rationale": "Removed the try/except around workflow.patched in MoonMindRunWorkflow._update_memo so the patch marker follows the standard deterministic workflow pattern."
+    "rationale": "Normalized blank API key inputs to None and made sanitized key-set flags require non-empty stored values."
   }
 ]
