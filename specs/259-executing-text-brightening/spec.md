@@ -44,14 +44,14 @@ The cleanest patch: implement the glyph-span component and keep the existing bro
 
 - The visible status may be blank, null, or whitespace and must fall back to an em dash label.
 - The visible status may include spaces or extended graphemes in the future and must not split surrogate pairs or grapheme clusters when platform support exists.
-- The existing physical shimmer travels right-to-left, so glyph phase order must match that direction.
+- The visible physical shimmer travels left-to-right/top-left-to-bottom-right, so glyph phase order must match that direction.
 - Multiple executing rows may be visible at once; the effect must remain CSS-driven instead of requiring a JavaScript animation loop.
 
 ## Assumptions
 
 - This story applies the glyph-span component to the task-list table and card status pills requested by the source input.
 - Existing detail and proposal status-pill surfaces can keep the prior shared status-pill plumbing unless a later story expands the glyph effect there.
-- The current sweep token direction (`135%` to `-135%`) means the visible beam travels right-to-left.
+- The current oversized sweep background uses inverse background-position values, but the visible beam travels left-to-right/top-left-to-bottom-right.
 
 ## Source Design Requirements
 

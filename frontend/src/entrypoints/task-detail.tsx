@@ -4,6 +4,7 @@ import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
+import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { formatRuntimeLabel } from '../utils/formatters';
@@ -3917,13 +3918,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           <div className="toolbar-identity-row">
             <p className="page-meta">Task {taskId || '—'}</p>
             {execution ? (
-              <span
-                {...executionStatusPillProps(
-                  execution.rawState || execution.state || execution.status,
-                )}
-              >
-                {execution.rawState || execution.state || execution.status || '—'}
-              </span>
+              <ExecutionStatusPill status={execution.rawState || execution.state || execution.status} />
             ) : null}
           </div>
         </div>
