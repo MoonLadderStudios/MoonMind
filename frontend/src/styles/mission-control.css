@@ -54,6 +54,9 @@
   --mm-executing-sweep-layer-offset-y: -10%;
   --mm-executing-sweep-core-opacity: 0.34;
   --mm-executing-sweep-halo-opacity: 0.14;
+  --mm-executing-letter-sweep-width: 84%;
+  --mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32);
+  --mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, rgb(var(--mm-panel)) 32%);
   --mm-font-headline: var(--mm-font-sans);
   --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
@@ -1338,22 +1341,42 @@ tr[data-proposal-id].proposal-consuming td {
 
 .status-running[data-state="executing"][data-effect="shimmer-sweep"]::after,
 .status-running.is-executing::after {
-  content: '';
+  content: "executing";
   position: absolute;
   inset: 0;
   z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: inherit;
+  border-radius: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  white-space: inherit;
+  color: transparent;
   pointer-events: none;
-  background-image: linear-gradient(
-    var(--mm-executing-sweep-angle),
-    transparent 0 38%,
-    rgb(255 255 255 / 0.82) 50%,
-    transparent 62%
-  );
+  background-image:
+    linear-gradient(
+      var(--mm-executing-sweep-angle),
+      transparent 0 30%,
+      var(--mm-executing-letter-halo) 42%,
+      var(--mm-executing-letter-bright) 50%,
+      var(--mm-executing-letter-halo) 58%,
+      transparent 70%
+    );
+  background-clip: text;
   background-repeat: no-repeat;
-  background-size: calc(var(--mm-executing-sweep-band-width) * 4) var(--mm-executing-sweep-band-height);
+  background-size: var(--mm-executing-letter-sweep-width) var(--mm-executing-sweep-band-height);
   background-position: var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y);
   animation: mm-status-pill-shimmer-letters var(--mm-executing-sweep-cycle-duration) linear infinite;
-  mix-blend-mode: overlay;
+  filter: drop-shadow(0 0 3px rgb(var(--mm-accent-2) / 0.28));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.status-running[data-state="executing"][data-effect="shimmer-sweep"][data-shimmer-label]::after {
+  content: attr(data-shimmer-label);
 }
 
 @keyframes mm-status-pill-shimmer {

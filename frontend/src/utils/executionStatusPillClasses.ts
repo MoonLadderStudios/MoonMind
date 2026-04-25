@@ -16,6 +16,7 @@ export type ExecutionStatusPillProps = Readonly<{
   className: string;
   'data-state'?: 'executing';
   'data-effect'?: 'shimmer-sweep';
+  'data-shimmer-label'?: string;
 }>;
 
 function normalizedExecutionStatusKey(status: string | null | undefined): string {
@@ -44,6 +45,12 @@ function executionStatusBaseClasses(key: string): string {
   return 'status status-neutral';
 }
 
+function executionStatusVisibleLabel(status: string | null | undefined): string {
+  return String(status || 'executing')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
 export function executionStatusPillProps(status: string | null | undefined): ExecutionStatusPillProps {
   const key = normalizedExecutionStatusKey(status);
   const className = executionStatusBaseClasses(key);
@@ -53,6 +60,7 @@ export function executionStatusPillProps(status: string | null | undefined): Exe
       className: `${className} is-executing`,
       'data-state': 'executing',
       'data-effect': 'shimmer-sweep',
+      'data-shimmer-label': executionStatusVisibleLabel(status),
     };
   }
 

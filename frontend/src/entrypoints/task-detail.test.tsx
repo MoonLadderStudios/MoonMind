@@ -407,6 +407,7 @@ describe('Task Detail Entrypoint', () => {
     expect(toolbarStatus?.dataset.effect).toBe('shimmer-sweep');
     expect(toolbarStatus?.className).toContain('is-executing');
     expect(toolbarStatus?.className).toContain('status-running');
+    expect(toolbarStatus?.dataset.shimmerLabel).toBe('executing');
     expect(toolbarStatus?.childElementCount).toBe(0);
     expect(toolbarStatus?.textContent).toBe('executing');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');

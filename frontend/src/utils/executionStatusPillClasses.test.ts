@@ -11,6 +11,7 @@ describe('executionStatusPillProps', () => {
       className: 'status status-running is-executing',
       'data-state': 'executing',
       'data-effect': 'shimmer-sweep',
+      'data-shimmer-label': 'executing',
     });
 
     expect(executionStatusPillProps('running')).toEqual({
