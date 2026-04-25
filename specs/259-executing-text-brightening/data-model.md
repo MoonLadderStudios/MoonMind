@@ -16,7 +16,7 @@ Validation rules:
 ## Glyph Wave
 
 - **glyphs**: visible label split into graphemes.
-- **phase index**: glyph order adjusted to match the current right-to-left sweep direction.
+- **phase index**: glyph order adjusted to match the current left-to-right/top-left-to-bottom-right visible sweep direction.
 - **delay**: millisecond CSS custom property derived from `(phaseIndex + edgePadding) / (glyphCount + edgePadding * 2) * 1650`.
 
 State transitions:

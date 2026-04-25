@@ -473,6 +473,7 @@ def test_build_repository_branch_options_uses_github_lookup(monkeypatch) -> None
                 ),
             ],
             None,
+            "main",
         ),
     )
 
@@ -488,10 +489,15 @@ def test_build_repository_branch_options_uses_github_lookup(monkeypatch) -> None
             },
         ],
         "error": None,
+        "defaultBranch": "main",
     }
 
 def test_fetch_github_branch_options_follows_pagination(monkeypatch) -> None:
     responses = [
+        {
+            "json": {"default_branch": "main"},
+            "links": {},
+        },
         {
             "json": [{"name": "main"}, {"name": "feature/page-one"}],
             "links": {"next": {"url": "https://api.github.com/page/2"}},
@@ -536,18 +542,28 @@ def test_fetch_github_branch_options_follows_pagination(monkeypatch) -> None:
 
     monkeypatch.setattr(dashboard_view_model.httpx, "Client", FakeClient)
 
-    options, error = dashboard_view_model._fetch_github_branch_options(
+    options, error, default_branch = dashboard_view_model._fetch_github_branch_options(
         "ghp_test_token",
         "Octo/Repo",
     )
 
     assert error is None
+    assert default_branch == "main"
     assert [option.value for option in options] == [
         "main",
         "feature/page-one",
         "feature/page-two",
     ]
     assert calls == [
+        {
+            "url": "https://api.github.com/repos/Octo/Repo",
+            "headers": {
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer ghp_test_token",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            "params": None,
+        },
         {
             "url": "https://api.github.com/repos/Octo/Repo/branches",
             "headers": {
@@ -568,6 +584,64 @@ def test_fetch_github_branch_options_follows_pagination(monkeypatch) -> None:
         },
     ]
 
+def test_fetch_github_branch_options_keeps_branches_when_metadata_fails(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload: object, *, fail: bool = False) -> None:
+            self._payload = payload
+            self._fail = fail
+            self.links = {}
+
+        def raise_for_status(self) -> None:
+            if self._fail:
+                raise dashboard_view_model.httpx.HTTPError("metadata failed")
+
+        def json(self) -> object:
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            params: dict[str, int] | None = None,
+        ) -> FakeResponse:
+            calls.append({"url": url, "params": params})
+            if url == "https://api.github.com/repos/Octo/Repo":
+                return FakeResponse({}, fail=True)
+            return FakeResponse([{"name": "main"}, {"name": "feature/page-one"}])
+
+    monkeypatch.setattr(dashboard_view_model.httpx, "Client", FakeClient)
+
+    options, error, default_branch = dashboard_view_model._fetch_github_branch_options(
+        "ghp_test_token",
+        "Octo/Repo",
+    )
+
+    assert error is None
+    assert default_branch is None
+    assert [option.value for option in options] == ["main", "feature/page-one"]
+    assert calls == [
+        {"url": "https://api.github.com/repos/Octo/Repo", "params": None},
+        {
+            "url": "https://api.github.com/repos/Octo/Repo/branches",
+            "params": {"per_page": 100},
+        },
+    ]
+
 def test_build_repository_branch_options_sanitizes_errors(monkeypatch) -> None:
     monkeypatch.setattr(settings.github, "github_token", "ghp_secret_token")
     monkeypatch.setattr(settings.github, "github_enabled", True)
@@ -577,6 +651,7 @@ def test_build_repository_branch_options_sanitizes_errors(monkeypatch) -> None:
         lambda token, repository: (
             [],
             "GitHub failed with ghp_secret_token",
+            None,
         ),
     )
 

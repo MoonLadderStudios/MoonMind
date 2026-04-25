@@ -412,9 +412,9 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-y:\s*-10%/);
     expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-width:\s*84%/);
     expect(missionControlCss).toMatch(/--mm-executing-letter-edge-padding:\s*3/);
-    expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-direction:\s*-1/);
+    expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-direction:\s*1/);
     expect(missionControlCss).toContain('--mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32)');
-    expect(missionControlCss).toContain('--mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, rgb(var(--mm-panel)) 32%)');
+    expect(missionControlCss).toContain('--mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, white 32%)');
 
     const shimmerBlock = cssRuleBlocks(
       missionControlCss,

@@ -1043,8 +1043,10 @@ async def startup_event():
                             f"Default user {default_user.email} (ID: {default_user.id}) ensured."
                         )
                         profile_service = ProfileService()
-                        existing_profile = await profile_service.get_profile_by_user_id(
-                            db_session=db_session, user_id=default_user.id
+                        existing_profile = (
+                            await profile_service.get_sanitized_profile_by_user_id(
+                                db_session=db_session, user_id=default_user.id
+                            )
                         )
                         if existing_profile:
                             logger.info(

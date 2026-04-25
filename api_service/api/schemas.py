@@ -35,6 +35,18 @@ class UserProfileBaseSchema(BaseModel):
         alias="anthropic_api_key_encrypted",
     )
 
+    @field_validator(
+        "google_api_key",
+        "openai_api_key",
+        "anthropic_api_key",
+        mode="before",
+    )
+    @classmethod
+    def _empty_api_key_is_unset(cls, value: Any) -> Any:
+        if value == "":
+            return None
+        return value
+
 class UserProfileRead(
     UserProfileBaseSchema
 ):  # Renamed UserProfileSchema to UserProfileRead
@@ -51,6 +63,7 @@ class UserProfileReadSanitized(BaseModel):
 
     id: int
     user_id: uuid.UUID
+    email: str | None = None
     google_api_key_set: bool = False
     openai_api_key_set: bool = False
     anthropic_api_key_set: bool = False

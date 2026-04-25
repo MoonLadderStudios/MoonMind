@@ -133,6 +133,7 @@ class DashboardBranchListResponse(BaseModel):
 
     items: list[DashboardBranchOption] = Field(default_factory=list)
     error: str | None = Field(None)
+    default_branch: str | None = Field(None, alias="defaultBranch")
 
 class _ValidatedSkillZip(BaseModel):
     skill_name: str

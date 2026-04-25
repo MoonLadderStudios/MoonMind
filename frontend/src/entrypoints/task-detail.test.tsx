@@ -408,7 +408,11 @@ describe('Task Detail Entrypoint', () => {
     expect(toolbarStatus?.className).toContain('is-executing');
     expect(toolbarStatus?.className).toContain('status-running');
     expect(toolbarStatus?.dataset.shimmerLabel).toBe('executing');
-    expect(toolbarStatus?.childElementCount).toBe(0);
+    expect(toolbarStatus?.getAttribute('aria-label')).toBe('executing');
+    expect(toolbarStatus?.querySelector('.status-letter-wave')?.getAttribute('aria-hidden')).toBe('true');
+    const glyphs = Array.from(toolbarStatus?.querySelectorAll<HTMLElement>('.status-letter-wave__glyph') || []);
+    expect(glyphs).toHaveLength('executing'.length);
+    expect(glyphs.map((glyph) => glyph.textContent).join('')).toBe('executing');
     expect(toolbarStatus?.textContent).toBe('executing');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');

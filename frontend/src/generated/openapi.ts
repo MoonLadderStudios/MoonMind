@@ -3314,6 +3314,8 @@ export interface components {
             items?: components["schemas"]["DashboardBranchOption"][];
             /** Error */
             error?: string | null;
+            /** Defaultbranch */
+            defaultBranch?: string | null;
         };
         /**
          * DashboardBranchOption
@@ -6503,6 +6505,8 @@ export interface components {
              * Format: uuid
              */
             user_id: string;
+            /** Email */
+            email?: string | null;
             /**
              * Google Api Key Set
              * @default false
