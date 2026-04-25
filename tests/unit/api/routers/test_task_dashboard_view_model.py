@@ -473,6 +473,7 @@ def test_build_repository_branch_options_uses_github_lookup(monkeypatch) -> None
                 ),
             ],
             None,
+            "main",
         ),
     )
 
@@ -488,10 +489,15 @@ def test_build_repository_branch_options_uses_github_lookup(monkeypatch) -> None
             },
         ],
         "error": None,
+        "defaultBranch": "main",
     }
 
 def test_fetch_github_branch_options_follows_pagination(monkeypatch) -> None:
     responses = [
+        {
+            "json": {"default_branch": "main"},
+            "links": {},
+        },
         {
             "json": [{"name": "main"}, {"name": "feature/page-one"}],
             "links": {"next": {"url": "https://api.github.com/page/2"}},
@@ -536,18 +542,28 @@ def test_fetch_github_branch_options_follows_pagination(monkeypatch) -> None:
 
     monkeypatch.setattr(dashboard_view_model.httpx, "Client", FakeClient)
 
-    options, error = dashboard_view_model._fetch_github_branch_options(
+    options, error, default_branch = dashboard_view_model._fetch_github_branch_options(
         "ghp_test_token",
         "Octo/Repo",
     )
 
     assert error is None
+    assert default_branch == "main"
     assert [option.value for option in options] == [
         "main",
         "feature/page-one",
         "feature/page-two",
     ]
     assert calls == [
+        {
+            "url": "https://api.github.com/repos/Octo/Repo",
+            "headers": {
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer ghp_test_token",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            "params": None,
+        },
         {
             "url": "https://api.github.com/repos/Octo/Repo/branches",
             "headers": {
@@ -577,6 +593,7 @@ def test_build_repository_branch_options_sanitizes_errors(monkeypatch) -> None:
         lambda token, repository: (
             [],
             "GitHub failed with ghp_secret_token",
+            None,
         ),
     )
 

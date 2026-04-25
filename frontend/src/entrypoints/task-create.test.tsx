@@ -446,6 +446,7 @@ describe("Task Create Entrypoint", () => {
                   source: "github",
                 },
               ],
+              defaultBranch: "main",
               error: null,
             }),
           } as Response);
@@ -5902,6 +5903,9 @@ describe("Task Create Entrypoint", () => {
         ),
       ),
     ).toBe(true);
+    await waitFor(() => {
+      expect((branchInput as HTMLInputElement).value).toBe("main");
+    });
 
     fireEvent.change(branchInput, {
       target: { value: "feature/create-page" },

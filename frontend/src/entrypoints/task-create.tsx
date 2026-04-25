@@ -293,6 +293,7 @@ interface BranchListResponse {
     source?: string | null;
   }>;
   error?: string | null;
+  defaultBranch?: string | null;
 }
 
 function resolveDefaultProviderProfileId(
@@ -1548,7 +1549,7 @@ async function responseErrorMessage(
 async function readBranchOptions(
   branchLookupEndpoint: string,
   repository: string,
-): Promise<BranchOption[]> {
+): Promise<{ items: BranchOption[]; defaultBranch: string }> {
   const response = await fetch(
     configuredBranchLookupUrl(branchLookupEndpoint, repository),
     { headers: { Accept: "application/json" } },
@@ -1562,7 +1563,7 @@ async function readBranchOptions(
   if (payload.error) {
     throw new Error(payload.error);
   }
-  return (payload.items || [])
+  const items = (payload.items || [])
     .map((item) => {
       const value = String(item.value || "").trim();
       if (!value) {
@@ -1575,6 +1576,10 @@ async function readBranchOptions(
       };
     })
     .filter((item): item is BranchOption => item !== null);
+  return {
+    items,
+    defaultBranch: String(payload.defaultBranch || "").trim(),
+  };
 }
 
 function localJiraErrorMessage(error: unknown, fallback: string): string {
@@ -2275,6 +2280,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [repository, setRepository] = useState(defaultRepository);
   const [providerProfile, setProviderProfile] = useState("");
   const [branch, setBranch] = useState("");
+  const branchDefaultAppliedRepositoryRef = useRef("");
   const [publishMode, setPublishMode] = useState(
     normalizePublishModeForSubmit(defaultPublishMode),
   );
@@ -3863,7 +3869,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       readBranchOptions(branchLookupEndpoint || "", branchLookupRepository),
   });
   const branchOptions = useMemo(() => {
-    const items = branchOptionsQuery.data || [];
+    const items = branchOptionsQuery.data?.items || [];
     const seen = new Set<string>();
     return items.filter((item) => {
       const key = item.value;
@@ -3877,8 +3883,36 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const selectedBranchIsStale = Boolean(
     branch.trim() &&
       branchOptionsQuery.isSuccess &&
-      !(branchOptionsQuery.data || []).some((item) => item.value === branch.trim()),
+      !(branchOptionsQuery.data?.items || []).some(
+        (item) => item.value === branch.trim(),
+      ),
   );
+  useEffect(() => {
+    if (!branchOptionsQuery.isSuccess || branch.trim()) {
+      return;
+    }
+    const defaultBranch = String(
+      branchOptionsQuery.data?.defaultBranch || "",
+    ).trim();
+    if (
+      !defaultBranch ||
+      !branchOptions.some((item) => item.value === defaultBranch)
+    ) {
+      return;
+    }
+    const defaultKey = `${branchLookupRepository}:${defaultBranch}`;
+    if (branchDefaultAppliedRepositoryRef.current === defaultKey) {
+      return;
+    }
+    branchDefaultAppliedRepositoryRef.current = defaultKey;
+    setBranch(defaultBranch);
+  }, [
+    branch,
+    branchLookupRepository,
+    branchOptions,
+    branchOptionsQuery.data?.defaultBranch,
+    branchOptionsQuery.isSuccess,
+  ]);
   const branchControlDisabled =
     !selectedRepositoryForBranchLookup.trim() ||
     !branchLookupEndpoint ||

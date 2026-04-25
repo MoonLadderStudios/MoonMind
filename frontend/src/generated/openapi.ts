@@ -3314,6 +3314,8 @@ export interface components {
             items?: components["schemas"]["DashboardBranchOption"][];
             /** Error */
             error?: string | null;
+            /** Defaultbranch */
+            defaultBranch?: string | null;
         };
         /**
          * DashboardBranchOption
