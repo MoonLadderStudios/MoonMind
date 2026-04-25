@@ -9,7 +9,11 @@ import {
   normalizeObservabilityEvent,
   TaskDetailPage,
 } from './task-detail';
-import { taskEditHref, taskRerunHref } from '../lib/temporalTaskEditing';
+import {
+  taskEditForRerunHref,
+  taskEditHref,
+  taskRerunHref,
+} from '../lib/temporalTaskEditing';
 import { BootPayload } from '../boot/parseBootPayload';
 import { MockInstance } from 'vitest';
 
@@ -1104,6 +1108,9 @@ describe('Task Detail Entrypoint', () => {
 
   it('builds canonical Temporal task editing routes', () => {
     expect(taskEditHref('mm:wf 1')).toBe('/tasks/new?editExecutionId=mm%3Awf%201');
+    expect(taskEditForRerunHref('mm:wf 1')).toBe(
+      '/tasks/new?rerunExecutionId=mm%3Awf%201&mode=edit',
+    );
     expect(taskRerunHref('mm:wf 1')).toBe('/tasks/new?rerunExecutionId=mm%3Awf%201');
   });
 
@@ -1162,13 +1169,13 @@ describe('Task Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Task Actions' })).toBeTruthy();
     });
-    expect(screen.getByRole('link', { name: 'Edit' }).getAttribute('href')).toBe(
+    expect(screen.getByRole('link', { name: 'Edit task' }).getAttribute('href')).toBe(
       '/tasks/new?editExecutionId=test-123',
     );
     expect(screen.getByRole('link', { name: 'Rerun' }).getAttribute('href')).toBe(
       '/tasks/new?rerunExecutionId=test-123',
     );
-    const editLink = screen.getByRole('link', { name: 'Edit' });
+    const editLink = screen.getByRole('link', { name: 'Edit task' });
     const rerunLink = screen.getByRole('link', { name: 'Rerun' });
     editLink.addEventListener('click', (event) => event.preventDefault());
     rerunLink.addEventListener('click', (event) => event.preventDefault());
@@ -1303,6 +1310,60 @@ describe('Task Detail Entrypoint', () => {
     promptSpy.mockRestore();
   });
 
+  it('shows failed task Edit task and Rerun entry points when capabilities allow them', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Failed task',
+      summary: 'Execution summary',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canEditForRerun: true,
+        canRerun: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Task Actions' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Edit task' }).getAttribute('href')).toBe(
+      '/tasks/new?rerunExecutionId=test-123&mode=edit',
+    );
+    expect(screen.getByRole('link', { name: 'Rerun' }).getAttribute('href')).toBe(
+      '/tasks/new?rerunExecutionId=test-123',
+    );
+  });
+
   it('omits Temporal task editing entry points when the flag is off', async () => {
     const actionPayload: BootPayload = {
       ...mockPayload,
@@ -1351,7 +1412,7 @@ describe('Task Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByText('Flagged off task')).toBeTruthy();
     });
-    expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Edit task' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Rerun' })).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Task Actions' })).toBeNull();
   });

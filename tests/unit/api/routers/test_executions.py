@@ -4366,7 +4366,32 @@ def test_describe_execution_exposes_temporal_task_editing_contract(
     assert body["planArtifactRef"] == "artifact://plan/current"
     assert body["inputParameters"]["targetRuntime"] == "codex_cli"
     assert body["actions"]["canUpdateInputs"] is True
+    assert body["actions"]["canEditForRerun"] is False
     assert body["actions"]["canRerun"] is False
+
+def test_describe_execution_exposes_edit_for_rerun_for_failed_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED
+    )
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["actions"]["canUpdateInputs"] is False
+    assert body["actions"]["canEditForRerun"] is True
+    assert body["actions"]["canRerun"] is True
 
 def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
     monkeypatch: pytest.MonkeyPatch,
@@ -4386,6 +4411,11 @@ def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
     )
 
     manifest_actions = _serialize_execution(manifest_record).actions
+    assert manifest_actions.can_edit_for_rerun is False
+    assert (
+        manifest_actions.disabled_reasons["canEditForRerun"]
+        == "unsupported_workflow_type"
+    )
     assert manifest_actions.can_rerun is False
     assert manifest_actions.disabled_reasons["canRerun"] == "unsupported_workflow_type"
 
@@ -4409,6 +4439,11 @@ def test_temporal_task_editing_actions_require_original_snapshot(
 
     actions = _serialize_execution(record).actions
 
+    assert actions.can_edit_for_rerun is False
+    assert (
+        actions.disabled_reasons["canEditForRerun"]
+        == "original_task_input_snapshot_missing"
+    )
     assert actions.can_rerun is False
     assert (
         actions.disabled_reasons["canRerun"]

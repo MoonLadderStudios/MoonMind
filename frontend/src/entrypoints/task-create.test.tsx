@@ -1898,10 +1898,12 @@ describe("Task Create Entrypoint", () => {
   it("resolves task submit mode with rerun taking precedence over edit", () => {
     expect(resolveTaskSubmitPageMode("")).toEqual({
       mode: "create",
+      intent: "create",
       executionId: null,
     });
     expect(resolveTaskSubmitPageMode("?editExecutionId=mm%3Aedit")).toEqual({
       mode: "edit",
+      intent: "edit",
       executionId: "mm:edit",
     });
     expect(
@@ -1910,6 +1912,14 @@ describe("Task Create Entrypoint", () => {
       ),
     ).toEqual({
       mode: "rerun",
+      intent: "rerun",
+      executionId: "mm:rerun",
+    });
+    expect(
+      resolveTaskSubmitPageMode("?rerunExecutionId=mm%3Arerun&mode=edit"),
+    ).toEqual({
+      mode: "rerun",
+      intent: "edit-for-rerun",
       executionId: "mm:rerun",
     });
   });

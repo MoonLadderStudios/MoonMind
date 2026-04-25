@@ -622,6 +622,7 @@ class ExecutionActionCapabilityModel(BaseModel):
 
     can_set_title: bool = Field(False, alias="canSetTitle")
     can_update_inputs: bool = Field(False, alias="canUpdateInputs")
+    can_edit_for_rerun: bool = Field(False, alias="canEditForRerun")
     can_rerun: bool = Field(False, alias="canRerun")
     can_approve: bool = Field(False, alias="canApprove")
     can_pause: bool = Field(False, alias="canPause")

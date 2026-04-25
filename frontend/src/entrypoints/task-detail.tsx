@@ -9,6 +9,7 @@ import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge'
 import { formatRuntimeLabel } from '../utils/formatters';
 import {
   recordTemporalTaskEditingClientEvent,
+  taskEditForRerunHref,
   taskEditHref,
   taskRerunHref,
 } from '../lib/temporalTaskEditing';
@@ -330,6 +331,7 @@ const ExecutionDetailSchema = z
       .object({
         canSetTitle: z.boolean().optional(),
         canUpdateInputs: z.boolean().optional(),
+        canEditForRerun: z.boolean().optional(),
         canRerun: z.boolean().optional(),
         canApprove: z.boolean().optional(),
         canPause: z.boolean().optional(),
@@ -3859,7 +3861,11 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     cancelMutation.isPending ||
     createRemediationMutation.isPending ||
     remediationApprovalMutation.isPending;
-  const editHref = workflowId ? taskEditHref(workflowId) : '';
+  const editHref = workflowId
+    ? actions?.canEditForRerun
+      ? taskEditForRerunHref(workflowId)
+      : taskEditHref(workflowId)
+    : '';
   const rerunHref = workflowId ? taskRerunHref(workflowId) : '';
   const onTaskEditingNavigation = (
     event: MouseEvent<HTMLAnchorElement>,
@@ -3877,7 +3883,8 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   };
   const isTerminalExecution = TERMINAL_STATES.has(execution?.rawState || execution?.state || '');
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
-  const hasTaskEditingActions = taskEditingOn && Boolean(actions?.canUpdateInputs || actions?.canRerun);
+  const canShowEditTask = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
+  const hasTaskEditingActions = taskEditingOn && Boolean(canShowEditTask || actions?.canRerun);
   const hasTaskActions = Boolean(actions?.canSetTitle || hasTaskEditingActions || canCreateRemediation);
   const taskInstructions = execution?.taskInstructions?.trim() || '';
   const hasTaskInstructions = taskInstructions.length > 0;
@@ -4365,14 +4372,14 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     Rename
                   </button>
                 ) : null}
-                {taskEditingOn && actions.canUpdateInputs && editHref ? (
+                {taskEditingOn && canShowEditTask && editHref ? (
                   <a
                     className="button secondary"
                     href={editHref}
                     aria-disabled={busy}
                     onClick={(event) => onTaskEditingNavigation(event, 'detail_edit_click')}
                   >
-                    Edit
+                    Edit task
                   </a>
                 ) : null}
                 {taskEditingOn && actions.canRerun && rerunHref ? (
