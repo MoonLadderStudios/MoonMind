@@ -114,6 +114,11 @@ def _breakdown_source_path(value: Any) -> str:
         path = _string(source.get("referencePath") or source.get("path"))
         if path:
             return path
+    source_document = _string(
+        value.get("sourceDocument") or value.get("source_document")
+    )
+    if source_document:
+        return source_document
     return ""
 
 def _story_source_reference(
@@ -124,6 +129,8 @@ def _story_source_reference(
     source_ref = story.get("sourceReference") or story.get("source_reference")
     if isinstance(source_ref, Mapping):
         reference = dict(source_ref)
+    elif isinstance(source_ref, str):
+        reference = {"path": source_ref}
     else:
         reference = {}
     path = _string(reference.get("path") or fallback_path)
