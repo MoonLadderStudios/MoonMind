@@ -25,3 +25,4 @@
 
 - `npm run ui:typecheck` and `npm run ui:test -- ...` fail in this environment with shell lookup errors for `tsc`/`vitest`, but the same local binaries succeed when invoked directly from `./node_modules/.bin`.
 - `npm run api:types:check` reports the intended generated OpenAPI diff for the new `canEditForRerun` field.
+- Implementation-stage reruns on 2026-04-25 confirmed the current code passes the required unit, component integration, type, OpenAPI generation, and diff checks. Red-first failure confirmation could not be replayed without reverting already-committed production code, so T003 and T006 remain unchecked in `tasks.md` rather than fabricating TDD evidence.

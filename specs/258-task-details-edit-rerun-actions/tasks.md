@@ -26,14 +26,14 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Verify the active feature directory contains one story and required design artifacts in `specs/258-task-details-edit-rerun-actions/spec.md`, `specs/258-task-details-edit-rerun-actions/plan.md`, `specs/258-task-details-edit-rerun-actions/research.md`, `specs/258-task-details-edit-rerun-actions/data-model.md`, `specs/258-task-details-edit-rerun-actions/contracts/task-details-actions.md`, and `specs/258-task-details-edit-rerun-actions/quickstart.md`
+- [X] T001 Verify the active feature directory contains one story and required design artifacts in `specs/258-task-details-edit-rerun-actions/spec.md`, `specs/258-task-details-edit-rerun-actions/plan.md`, `specs/258-task-details-edit-rerun-actions/research.md`, `specs/258-task-details-edit-rerun-actions/data-model.md`, `specs/258-task-details-edit-rerun-actions/contracts/task-details-actions.md`, and `specs/258-task-details-edit-rerun-actions/quickstart.md`
 
 ## Phase 2: Foundational
 
-- [ ] T002 [P] Add or refresh red-first API capability assertions for REQ-001, REQ-002, REQ-003, SCN-003, and SCN-004 in `tests/unit/api/routers/test_executions.py`
+- [X] T002 [P] Add or refresh red-first API capability assertions for REQ-001, REQ-002, REQ-003, SCN-003, and SCN-004 in `tests/unit/api/routers/test_executions.py`
 - [ ] T003 Confirm the API capability assertions fail before implementation by running `./tools/test_unit.sh tests/unit/api/routers/test_executions.py` for `tests/unit/api/routers/test_executions.py`
-- [ ] T004 [P] Add or refresh red-first Task Details route/rendering assertions for REQ-004, REQ-005, REQ-006, REQ-007, SCN-001, and SCN-002 in `frontend/src/entrypoints/task-detail.test.tsx`
-- [ ] T005 [P] Add or refresh red-first create-page route mode assertions for REQ-005 in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T004 [P] Add or refresh red-first Task Details route/rendering assertions for REQ-004, REQ-005, REQ-006, REQ-007, SCN-001, and SCN-002 in `frontend/src/entrypoints/task-detail.test.tsx`
+- [X] T005 [P] Add or refresh red-first create-page route mode assertions for REQ-005 in `frontend/src/entrypoints/task-create.test.tsx`
 - [ ] T006 Confirm frontend red-first assertions fail before implementation by running `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` for `frontend/src/entrypoints/task-detail.test.tsx` and `frontend/src/entrypoints/task-create.test.tsx`
 
 ## Phase 3: Story - Show Task Details Recovery Actions
@@ -52,18 +52,23 @@
 - Frontend component integration coverage validates Task Details behavior through rendered React entrypoints and mocked execution detail payloads.
 - No new hermetic `integration_ci` test is required unless a compose-backed execution-detail fixture is introduced.
 
-- [ ] T007 Implement `can_edit_for_rerun` in `moonmind/schemas/temporal_models.py` for REQ-001
-- [ ] T008 Implement terminal-state `canEditForRerun` capability calculation and disabled reasons in `api_service/api/routers/executions.py` for REQ-001, REQ-002, REQ-003, SCN-003, and SCN-004
-- [ ] T009 Implement Task Details **Edit task** and **Rerun** additive rendering in `frontend/src/entrypoints/task-detail.tsx` for REQ-004, REQ-006, REQ-007, SCN-001, and SCN-002
-- [ ] T010 Implement edit-for-rerun route helper and `mode=edit` parsing in `frontend/src/lib/temporalTaskEditing.ts` and `frontend/src/entrypoints/task-create.tsx` for REQ-005
-- [ ] T011 Regenerate OpenAPI frontend types in `frontend/src/generated/openapi.ts` with `npm run api:types` for REQ-001
-- [ ] T012 Run story validation with `./tools/test_unit.sh tests/unit/api/routers/test_executions.py` and `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T013 Run type validation with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
+- [X] T007 Implement `can_edit_for_rerun` in `moonmind/schemas/temporal_models.py` for REQ-001
+- [X] T008 Implement terminal-state `canEditForRerun` capability calculation and disabled reasons in `api_service/api/routers/executions.py` for REQ-001, REQ-002, REQ-003, SCN-003, and SCN-004
+- [X] T009 Implement Task Details **Edit task** and **Rerun** additive rendering in `frontend/src/entrypoints/task-detail.tsx` for REQ-004, REQ-006, REQ-007, SCN-001, and SCN-002
+- [X] T010 Implement edit-for-rerun route helper and `mode=edit` parsing in `frontend/src/lib/temporalTaskEditing.ts` and `frontend/src/entrypoints/task-create.tsx` for REQ-005
+- [X] T011 Regenerate OpenAPI frontend types in `frontend/src/generated/openapi.ts` with `npm run api:types` for REQ-001
+- [X] T012 Run story validation with `./tools/test_unit.sh tests/unit/api/routers/test_executions.py` and `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
+- [X] T013 Run type validation with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
 
 ## Final Phase: Polish And Verification
 
-- [ ] T014 Run `git diff --check` and review `frontend/src/generated/openapi.ts` for only the expected `canEditForRerun` contract addition
-- [ ] T015 Run `/moonspec-verify specs/258-task-details-edit-rerun-actions` and record the final verdict in `specs/258-task-details-edit-rerun-actions/verification.md`
+- [X] T014 Run `git diff --check` and review `frontend/src/generated/openapi.ts` for only the expected `canEditForRerun` contract addition
+- [X] T015 Run `/moonspec-verify specs/258-task-details-edit-rerun-actions` and record the final verdict in `specs/258-task-details-edit-rerun-actions/verification.md`
+
+## Implementation Evidence Notes
+
+- Current verification passed for T012/T013/T014: `./tools/test_unit.sh tests/unit/api/routers/test_executions.py`, `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`, `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`, `npm run api:types`, and `git diff --check`.
+- T003 and T006 remain unchecked because fail-first confirmation cannot be honestly reproduced after the production implementation was already committed; rerunning the tests now confirms the expected passing behavior.
 
 ## Dependencies And Execution Order
 
