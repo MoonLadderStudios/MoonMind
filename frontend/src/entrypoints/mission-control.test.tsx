@@ -410,6 +410,9 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).toMatch(/--mm-executing-sweep-end-y:\s*-160%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-x:\s*-12%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-y:\s*-10%/);
+    expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-width:\s*84%/);
+    expect(missionControlCss).toContain('--mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32)');
+    expect(missionControlCss).toContain('--mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, rgb(var(--mm-panel)) 32%)');
 
     const shimmerBlock = cssRuleBlocks(
       missionControlCss,
@@ -456,11 +459,23 @@ describe('Mission Control shared entry', () => {
         rule.selector.includes('shimmer-sweep') &&
         rule.selector.includes('::after'),
     );
-    expect(shimmerAfterBlock).toContain('mix-blend-mode: overlay');
+    expect(shimmerAfterBlock).not.toContain('mix-blend-mode: overlay');
+    expect(shimmerAfterBlock).not.toContain('rgb(255 255 255');
+    expect(shimmerAfterBlock).toContain('content: "executing"');
+    expect(shimmerAfterBlock).toContain('background-clip: text');
+    expect(shimmerAfterBlock).toContain('-webkit-background-clip: text');
+    expect(shimmerAfterBlock).toContain('-webkit-text-fill-color: transparent');
+    expect(shimmerAfterBlock).toContain('var(--mm-executing-letter-halo)');
+    expect(shimmerAfterBlock).toContain('var(--mm-executing-letter-bright)');
+    expect(shimmerAfterBlock).toContain('background-size: var(--mm-executing-letter-sweep-width) var(--mm-executing-sweep-band-height)');
+    expect(shimmerAfterBlock).toContain('filter: drop-shadow(0 0 3px rgb(var(--mm-accent-2) / 0.28))');
     expect(shimmerAfterBlock).toContain('animation: mm-status-pill-shimmer-letters');
     expect(shimmerAfterBlock).toContain('var(--mm-executing-sweep-cycle-duration)');
     expect(shimmerAfterBlock).toContain('linear infinite');
-    expect(shimmerAfterBlock).toContain("content: ''");
+    expect(cssRuleBlock(
+      missionControlCss,
+      '.status-running[data-state="executing"][data-effect="shimmer-sweep"][data-shimmer-label]::after',
+    )).toContain('content: attr(data-shimmer-label)');
     expect(missionControlCss).toMatch(
       /@keyframes mm-status-pill-shimmer-letters\s*\{[\s\S]*?0%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\)[\s\S]*?100%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-end-x\)\s*var\(--mm-executing-sweep-end-y\)/,
     );

@@ -125,6 +125,7 @@ describe('Tasks List Entrypoint', () => {
       expect(pill.dataset.state).toBe('executing');
       expect(pill.className).toContain('is-executing');
       expect(pill.className).toContain('status-running');
+      expect(pill.dataset.shimmerLabel).toBe('executing');
       expect(pill.childElementCount).toBe(0);
       expect(pill.textContent).toBe('executing');
     }
