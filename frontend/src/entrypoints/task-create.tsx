@@ -1215,6 +1215,10 @@ function attachmentFilePickerLabel(
   return `Step ${stepNumber} ${noun} file picker`;
 }
 
+function attachmentLimitMessage(policy: AttachmentPolicy): string {
+  return `Up to ${policy.maxCount} files across all steps, ${formatAttachmentBytes(policy.maxBytes)} each, ${formatAttachmentBytes(policy.totalBytes)} total.`;
+}
+
 function validateAttachmentFiles(
   files: File[],
   policy: AttachmentPolicy,
@@ -3568,6 +3572,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       selectedStepAttachmentFiles[localId] || [],
       files,
     );
+    const nextSelectedFiles = [
+      ...selectedObjectiveAttachmentFiles,
+      ...Object.entries(selectedStepAttachmentFiles).flatMap(([stepId, items]) =>
+        stepId === localId ? mergedFilesForBinding : items,
+      ),
+      ...(selectedStepAttachmentFiles[localId] ? [] : mergedFilesForBinding),
+    ];
+    const nextTotalCount = nextSelectedFiles.length + persistedAttachmentRefs.length;
+    if (nextTotalCount > attachmentPolicy.maxCount) {
+      setSubmitMessage(attachmentLimitMessage(attachmentPolicy));
+      return;
+    }
+    setSubmitMessage(null);
     setAttachmentTargetErrors((current) => {
       const next = { ...current };
       delete next[targetKey];
@@ -3599,6 +3616,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       return next;
     });
+  }
+
+  function updateObjectiveAttachments(files: File[]) {
+    const nextTotalCount =
+      files.length +
+      Object.values(selectedStepAttachmentFiles).flat().length +
+      persistedAttachmentRefs.length;
+    if (nextTotalCount > attachmentPolicy.maxCount) {
+      setSubmitMessage(attachmentLimitMessage(attachmentPolicy));
+      return;
+    }
+    setSubmitMessage(null);
+    clearAttachmentTargetError(attachmentTargetKey("objective"));
+    setSelectedObjectiveAttachmentFiles(files);
+    updatePresetReapplyStateForObjective(templateFeatureRequest, files);
   }
 
   function removePersistedObjectiveAttachment(artifactId: string) {
@@ -5800,9 +5832,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                             }}
                           />
                         </div>
-                        <p className="small">
-                          {`Up to ${attachmentPolicy.maxCount} files across all steps, ${formatAttachmentBytes(attachmentPolicy.maxBytes)} each, ${formatAttachmentBytes(attachmentPolicy.totalBytes)} total.`}
-                        </p>
                         {jiraIntegration?.enabled ? (
                           <button
                             type="button"
@@ -6119,23 +6148,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       multiple
                       aria-label="Feature Request / Initial Instructions attachments"
                       onChange={(event) => {
-                        const nextFiles = Array.from(
-                          event.currentTarget.files || [],
+                        updateObjectiveAttachments(
+                          Array.from(event.currentTarget.files || []),
                         );
-                        clearAttachmentTargetError(
-                          attachmentTargetKey("objective"),
-                        );
-                        setSelectedObjectiveAttachmentFiles(nextFiles);
-                        updatePresetReapplyStateForObjective(
-                          templateFeatureRequest,
-                          nextFiles,
-                        );
+                        event.currentTarget.value = "";
                       }}
                     />
                   </label>
-                  <p className="small">
-                    {`Up to ${attachmentPolicy.maxCount} files across the objective and all steps, ${formatAttachmentBytes(attachmentPolicy.maxBytes)} each, ${formatAttachmentBytes(attachmentPolicy.totalBytes)} total.`}
-                  </p>
                   {jiraIntegration?.enabled ? (
                     <button
                       type="button"
@@ -6599,6 +6618,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         </label>
         <p
           id="queue-submit-message"
+          role={submitMessage ? "alert" : undefined}
+          aria-live={submitMessage ? "assertive" : undefined}
           className={
             submitMessage
               ? "queue-submit-message notice error"
