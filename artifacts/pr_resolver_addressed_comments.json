@@ -23,5 +23,10 @@
     "id": 4176257392,
     "disposition": "not-applicable",
     "rationale": "Top-level Codex review wrapper with no standalone requested code change."
+  },
+  {
+    "id": 3142727783,
+    "disposition": "addressed",
+    "rationale": "Moved the Protocol stub ellipsis onto its own method body so the line is no longer reported as an ineffective statement."
   }
 ]

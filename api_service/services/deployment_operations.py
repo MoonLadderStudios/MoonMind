@@ -71,7 +71,8 @@ class DeploymentExecutionCreator(Protocol):
         repository: str | None = None,
         integration: str | None = None,
         summary: str | None = None,
-    ) -> Any: ...
+    ) -> Any:
+        ...
 
 
 DEFAULT_DEPLOYMENT_POLICIES: dict[str, DeploymentStackPolicy] = {
