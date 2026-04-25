@@ -16,11 +16,14 @@ router = APIRouter()
 async def get_profile_service() -> ProfileService:
     return ProfileService()
 
-def _build_sanitized_response(profile) -> UserProfileReadSanitized:
+def _build_sanitized_response(
+    profile, *, email: str | None = None
+) -> UserProfileReadSanitized:
     """Build a sanitized response with key-set boolean flags."""
     return UserProfileReadSanitized(
         id=profile.id,
         user_id=profile.user_id,
+        email=email,
         google_api_key_set=bool(getattr(profile, "google_api_key", None)),
         openai_api_key_set=bool(getattr(profile, "openai_api_key", None)),
         anthropic_api_key_set=bool(getattr(profile, "anthropic_api_key", None)),
@@ -39,10 +42,10 @@ async def get_current_user_profile(
     """
     if user.id is None:
         raise HTTPException(status_code=400, detail="User ID is missing.")
-    profile = await profile_service.get_or_create_profile(
+    profile = await profile_service.get_or_create_sanitized_profile(
         db_session=db, user_id=user.id
     )
-    return _build_sanitized_response(profile)
+    return profile.model_copy(update={"email": getattr(user, "email", None)})
 
 @router.put("/me", response_model=UserProfileReadSanitized)
 async def update_current_user_profile(
@@ -60,4 +63,6 @@ async def update_current_user_profile(
     updated_profile = await profile_service.update_profile(
         db_session=db, user_id=user.id, profile_data=profile_update_data
     )
-    return _build_sanitized_response(updated_profile)
+    return _build_sanitized_response(
+        updated_profile, email=getattr(user, "email", None)
+    )

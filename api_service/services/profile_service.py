@@ -9,6 +9,7 @@ from sqlalchemy.future import select
 from api_service.api.schemas import (
     UserProfileCreateSchema,
     UserProfileRead,
+    UserProfileReadSanitized,
     UserProfileUpdate,
 )
 from api_service.db.models import (  # User model might be needed for context or future validation
@@ -28,6 +29,74 @@ class ProfileService:
             select(UserProfile).where(UserProfile.user_id == user_id)
         )
         return result.scalars().first()
+
+    async def get_sanitized_profile_by_user_id(
+        self, db_session: AsyncSession, user_id: uuid.UUID
+    ) -> UserProfileReadSanitized | None:
+        """Return profile metadata without decrypting stored secret columns."""
+        result = await db_session.execute(
+            select(
+                UserProfile.id.label("id"),
+                UserProfile.user_id.label("user_id"),
+                UserProfile.google_api_key_encrypted.is_not(None).label(
+                    "google_api_key_set"
+                ),
+                UserProfile.openai_api_key_encrypted.is_not(None).label(
+                    "openai_api_key_set"
+                ),
+                UserProfile.anthropic_api_key_encrypted.is_not(None).label(
+                    "anthropic_api_key_set"
+                ),
+            ).where(UserProfile.user_id == user_id)
+        )
+        row = result.mappings().first()
+        if row is None:
+            return None
+        return UserProfileReadSanitized(**row)
+
+    async def get_or_create_sanitized_profile(
+        self, db_session: AsyncSession, user_id: uuid.UUID
+    ) -> UserProfileReadSanitized:
+        """
+        Retrieves a user's profile metadata, or creates an empty profile if missing.
+
+        This path intentionally avoids loading encrypted secret columns because the
+        Settings profile panel only needs stable identity metadata and key-set flags.
+        """
+        profile = await self.get_sanitized_profile_by_user_id(db_session, user_id)
+        if profile is not None:
+            return profile
+
+        user_exists = await db_session.get(User, user_id)
+        if not user_exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with id {user_id} not found. Cannot create profile.",
+            )
+
+        new_profile = UserProfile(user_id=user_id)
+        db_session.add(new_profile)
+        try:
+            await db_session.commit()
+        except Exception as e:
+            import logging
+
+            logging.error(
+                "Failed to commit transaction while creating profile", exc_info=True
+            )
+            await db_session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to create profile: {str(e)}",
+            )
+
+        profile = await self.get_sanitized_profile_by_user_id(db_session, user_id)
+        if profile is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create profile.",
+            )
+        return profile
 
     async def get_or_create_profile(
         self, db_session: AsyncSession, user_id: uuid.UUID

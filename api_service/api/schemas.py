@@ -51,6 +51,7 @@ class UserProfileReadSanitized(BaseModel):
 
     id: int
     user_id: uuid.UUID
+    email: str | None = None
     google_api_key_set: bool = False
     openai_api_key_set: bool = False
     anthropic_api_key_set: bool = False

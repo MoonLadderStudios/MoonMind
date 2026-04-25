@@ -42,7 +42,11 @@ MOCK_PROFILE_READ_SCHEMA = UserProfileRead(**MOCK_PROFILE_DATA)
 
 # Sanitized version for GET endpoint response testing
 MOCK_PROFILE_READ_SANITIZED_SCHEMA = UserProfileReadSanitized(
-    id=MOCK_PROFILE_DATA["id"], user_id=MOCK_PROFILE_DATA["user_id"]
+    id=MOCK_PROFILE_DATA["id"],
+    user_id=MOCK_PROFILE_DATA["user_id"],
+    google_api_key_set=True,
+    openai_api_key_set=True,
+    anthropic_api_key_set=True,
 )
 
 @pytest.fixture
@@ -53,6 +57,9 @@ def mock_db_session():
 def mock_profile_service():
     service = AsyncMock(spec=ProfileService)
     service.get_or_create_profile = AsyncMock(return_value=MOCK_PROFILE_READ_SCHEMA)
+    service.get_or_create_sanitized_profile = AsyncMock(
+        return_value=MOCK_PROFILE_READ_SANITIZED_SCHEMA
+    )
     service.update_profile = AsyncMock(return_value=MOCK_PROFILE_READ_SCHEMA)
     return service
 
@@ -64,13 +71,14 @@ async def test_get_current_user_profile_success(mock_db_session, mock_profile_se
     )
 
     # Assert
-    mock_profile_service.get_or_create_profile.assert_called_once_with(
+    mock_profile_service.get_or_create_sanitized_profile.assert_called_once_with(
         db_session=mock_db_session, user_id=USER_ID
     )
     # The result is now a UserProfileReadSanitized with key-set flags
     assert isinstance(result, UserProfileReadSanitized)
     assert result.id == MOCK_PROFILE_DATA["id"]
     assert result.user_id == MOCK_PROFILE_DATA["user_id"]
+    assert result.email == MOCK_USER.email
     assert result.google_api_key_set is True  # test data has google_api_key set
     assert result.openai_api_key_set is True  # test data has openai_api_key set
     assert result.anthropic_api_key_set is True
@@ -92,7 +100,7 @@ async def test_get_current_user_profile_user_id_none(
         )
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
     assert exc_info.value.detail == "User ID is missing."
-    mock_profile_service.get_or_create_profile.assert_not_called()
+    mock_profile_service.get_or_create_sanitized_profile.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_update_current_user_profile_success(
@@ -116,6 +124,7 @@ async def test_update_current_user_profile_success(
     assert result.google_api_key_set is True
     assert result.openai_api_key_set is True
     assert result.anthropic_api_key_set is True
+    assert result.email == MOCK_USER.email
     mock_profile_service.update_profile.assert_called_once_with(
         db_session=mock_db_session, user_id=USER_ID, profile_data=update_data
     )
