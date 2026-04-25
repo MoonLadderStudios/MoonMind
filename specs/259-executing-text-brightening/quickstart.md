@@ -8,6 +8,14 @@ npm run ui:lint
 npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/mission-control.test.tsx
 ```
 
+If the managed workspace path prevents `npm run` from resolving local binaries, use the equivalent repository-local binaries:
+
+```bash
+./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json
+./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src
+./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/mission-control.test.tsx
+```
+
 ## Full Unit Validation
 
 ```bash

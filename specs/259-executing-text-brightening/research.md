@@ -47,3 +47,19 @@ Evidence: Existing host animation is already disabled under `prefers-reduced-mot
 Rationale: Letter brightening is non-essential motion and should stop when users request reduced motion.
 Alternatives considered: Keep glyph color pulse with animation. Rejected by accessibility requirement.
 Test implications: CSS test asserts reduced-motion glyph suppression.
+
+## DESIGN-REQ-007 Centralized Status Detection
+
+Decision: Keep executing detection delegated to `executionStatusPillProps()` from inside `ExecutionStatusPill`.
+Evidence: `frontend/src/components/ExecutionStatusPill.tsx` calls `executionStatusPillProps(status)` before deciding whether to render plain text or glyph-wave markup.
+Rationale: The existing helper is the shared selector contract for `data-state="executing"`, `data-effect="shimmer-sweep"`, `data-shimmer-label`, and non-executing isolation. Reusing it avoids duplicating state normalization inside the component.
+Alternatives considered: Recompute executing status in the component. Rejected because it would create a second state-classification path.
+Test implications: Task-list integration tests assert the existing executing metadata remains present and non-executing pills remain plain.
+
+## DESIGN-REQ-008 Task-List Table And Card Replacement
+
+Decision: Replace only the requested task-list table and card status span call sites with `ExecutionStatusPill` while preserving status source precedence.
+Evidence: `frontend/src/entrypoints/tasks-list.tsx` renders `ExecutionStatusPill` in both `.queue-table-cell-status` and `.queue-card-status` with `row.rawState || row.state || row.status`.
+Rationale: The source request selected the two task-list surfaces and explicitly said data plumbing should not change.
+Alternatives considered: Update every status-pill surface in the app. Rejected as broader than the selected single story.
+Test implications: Task-list integration tests inspect both table and card executing pills for glyph markup and non-executing pills for plain rendering.

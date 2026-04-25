@@ -13,7 +13,7 @@ Add a task-list `ExecutionStatusPill` component that keeps status normalization 
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | implemented_verified | `frontend/src/styles/mission-control.css`, `frontend/src/entrypoints/mission-control.test.tsx` | complete | CSS unit test passed |
+| FR-001 | implemented_verified | `docs/UI/EffectShimmerSweep.md`, `frontend/src/styles/mission-control.css`, `frontend/src/entrypoints/mission-control.test.tsx` | complete | CSS unit test passed |
 | FR-002 | implemented_verified | `frontend/src/components/ExecutionStatusPill.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx` | complete | integration test passed |
 | FR-003 | implemented_verified | CSS keyframes and no timer/state animation in `ExecutionStatusPill.tsx` | complete | typecheck + lint passed |
 | FR-004 | implemented_verified | `.status-letter-wave__glyph` render assertions | complete | integration test passed |
@@ -38,6 +38,14 @@ Add a task-list `ExecutionStatusPill` component that keeps status normalization 
 **Performance Goals**: No JavaScript animation loop; CSS animation should scale across many task rows.  
 **Constraints**: Preserve existing status source precedence, non-executing state isolation, reduced-motion behavior, and centralized status metadata.  
 **Scale/Scope**: One small component, two task-list render call sites, shared stylesheet, focused frontend tests, and MoonSpec artifacts.
+
+## Test Strategy
+
+**Unit Strategy**: Mission Control CSS contract tests in `frontend/src/entrypoints/mission-control.test.tsx` verify the host physical sweep remains, glyph-wave styles use the shared duration, brightening keyframes are present, and reduced-motion disables glyph animation, shadow, and filter.
+
+**Integration Strategy**: Task-list render tests in `frontend/src/entrypoints/tasks-list.test.tsx` verify table and card executing pills receive the glyph layer, accessible parent label, hidden visual spans, per-glyph delays, and existing executing metadata while non-executing statuses remain plain.
+
+**Final Validation Strategy**: Run the focused UI tests, the full frontend Vitest suite, TypeScript typecheck, ESLint, and `./tools/test_unit.sh` where feasible. In this managed workspace, local binaries under `./node_modules/.bin` are the reliable equivalent for `npm run` commands when colon-containing paths break npm's PATH-based bin lookup.
 
 ## Constitution Check
 
