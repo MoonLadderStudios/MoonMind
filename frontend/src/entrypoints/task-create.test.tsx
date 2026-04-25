@@ -4164,6 +4164,23 @@ describe("Task Create Entrypoint", () => {
     expect(screen.queryByText("one.png")).toBeNull();
   });
 
+  it("preserves unrelated submit warnings when adding valid attachments", async () => {
+    renderForEdit("mm:edit-123", withAttachmentPolicy());
+
+    const legacyWarning =
+      "This older task used separate starting and target branches. The new form submits one branch, so review it before saving or rerunning.";
+    expect(await screen.findByText(legacyWarning)).toBeTruthy();
+
+    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
+      target: {
+        files: [new File(["one"], "one.png", { type: "image/png" })],
+      },
+    });
+
+    expect(await screen.findByText("one.png")).toBeTruthy();
+    expect(screen.getByText(legacyWarning)).toBeTruthy();
+  });
+
   it("keeps step upload failures target-scoped with retry and remove actions", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

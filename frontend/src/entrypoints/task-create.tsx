@@ -3572,19 +3572,20 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       selectedStepAttachmentFiles[localId] || [],
       files,
     );
-    const nextSelectedFiles = [
-      ...selectedObjectiveAttachmentFiles,
-      ...Object.entries(selectedStepAttachmentFiles).flatMap(([stepId, items]) =>
-        stepId === localId ? mergedFilesForBinding : items,
-      ),
-      ...(selectedStepAttachmentFiles[localId] ? [] : mergedFilesForBinding),
-    ];
-    const nextTotalCount = nextSelectedFiles.length + persistedAttachmentRefs.length;
+    const previousStepFiles = selectedStepAttachmentFiles[localId] || [];
+    const nextTotalCount =
+      selectedAttachmentFiles.length -
+      previousStepFiles.length +
+      mergedFilesForBinding.length +
+      persistedAttachmentRefs.length;
+    const limitMessage = attachmentLimitMessage(attachmentPolicy);
     if (nextTotalCount > attachmentPolicy.maxCount) {
-      setSubmitMessage(attachmentLimitMessage(attachmentPolicy));
+      setSubmitMessage(limitMessage);
       return;
     }
-    setSubmitMessage(null);
+    if (submitMessage === limitMessage) {
+      setSubmitMessage(null);
+    }
     setAttachmentTargetErrors((current) => {
       const next = { ...current };
       delete next[targetKey];
@@ -3619,15 +3620,18 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   function updateObjectiveAttachments(files: File[]) {
+    const limitMessage = attachmentLimitMessage(attachmentPolicy);
     const nextTotalCount =
       files.length +
       Object.values(selectedStepAttachmentFiles).flat().length +
       persistedAttachmentRefs.length;
     if (nextTotalCount > attachmentPolicy.maxCount) {
-      setSubmitMessage(attachmentLimitMessage(attachmentPolicy));
+      setSubmitMessage(limitMessage);
       return;
     }
-    setSubmitMessage(null);
+    if (submitMessage === limitMessage) {
+      setSubmitMessage(null);
+    }
     clearAttachmentTargetError(attachmentTargetKey("objective"));
     setSelectedObjectiveAttachmentFiles(files);
     updatePresetReapplyStateForObjective(templateFeatureRequest, files);
