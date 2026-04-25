@@ -13,7 +13,7 @@ import {
 } from '../components/settings/ProviderProfilesManager';
 
 interface ProfileData {
-  id?: string;
+  id?: string | number;
   email?: string;
 }
 

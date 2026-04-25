@@ -6505,6 +6505,8 @@ export interface components {
              * Format: uuid
              */
             user_id: string;
+            /** Email */
+            email?: string | null;
             /**
              * Google Api Key Set
              * @default false
