@@ -14,6 +14,7 @@ else:
     from playwright.sync_api import expect, sync_playwright
 
 from api_service.api.routers.profile import get_profile_service
+from api_service.api.schemas import UserProfileReadSanitized
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
@@ -32,7 +33,7 @@ class DummyProfileService:
 
     async def update_profile(self, db_session: AsyncSession, user_id, profile_data):
         self.update_called_with = profile_data
-        return None
+        return UserProfileReadSanitized(id=1, user_id=user_id)
 
 TEST_JOB_ID = "123e4567-e89b-12d3-a456-426614174000"
 TEST_OPENAI_API_KEY = "test-openai-api-key"

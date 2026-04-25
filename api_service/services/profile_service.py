@@ -1,21 +1,26 @@
+import logging
 import uuid
 from typing import Optional
 
 from fastapi import HTTPException, status
+from sqlalchemy import and_, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-# Updated import to use UserProfileRead and UserProfileUpdate
 from api_service.api.schemas import (
     UserProfileCreateSchema,
     UserProfileRead,
     UserProfileReadSanitized,
     UserProfileUpdate,
 )
-from api_service.db.models import (  # User model might be needed for context or future validation
-    User,
-    UserProfile,
-)
+from api_service.db.models import User, UserProfile
+
+logger = logging.getLogger(__name__)
+
+
+def _key_is_set(column):
+    return and_(column.is_not(None), func.length(column) > 0)
+
 
 class ProfileService:
     async def get_profile_by_user_id(
@@ -30,6 +35,19 @@ class ProfileService:
         )
         return result.scalars().first()
 
+    async def _get_profile_identity_by_user_id(
+        self, db_session: AsyncSession, user_id: uuid.UUID
+    ) -> dict | None:
+        """Return profile identity columns without loading encrypted secret fields."""
+        result = await db_session.execute(
+            select(
+                UserProfile.id.label("id"),
+                UserProfile.user_id.label("user_id"),
+            ).where(UserProfile.user_id == user_id)
+        )
+        row = result.mappings().first()
+        return dict(row) if row is not None else None
+
     async def get_sanitized_profile_by_user_id(
         self, db_session: AsyncSession, user_id: uuid.UUID
     ) -> UserProfileReadSanitized | None:
@@ -38,14 +56,14 @@ class ProfileService:
             select(
                 UserProfile.id.label("id"),
                 UserProfile.user_id.label("user_id"),
-                UserProfile.google_api_key_encrypted.is_not(None).label(
-                    "google_api_key_set"
+                _key_is_set(UserProfile.google_api_key_encrypted).label(
+                    "google_api_key_set",
                 ),
-                UserProfile.openai_api_key_encrypted.is_not(None).label(
-                    "openai_api_key_set"
+                _key_is_set(UserProfile.openai_api_key_encrypted).label(
+                    "openai_api_key_set",
                 ),
-                UserProfile.anthropic_api_key_encrypted.is_not(None).label(
-                    "anthropic_api_key_set"
+                _key_is_set(UserProfile.anthropic_api_key_encrypted).label(
+                    "anthropic_api_key_set",
                 ),
             ).where(UserProfile.user_id == user_id)
         )
@@ -53,6 +71,49 @@ class ProfileService:
         if row is None:
             return None
         return UserProfileReadSanitized(**row)
+
+    async def _ensure_user_exists(
+        self, db_session: AsyncSession, user_id: uuid.UUID
+    ) -> None:
+        user_exists = await db_session.get(User, user_id)
+        if not user_exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with id {user_id} not found. Cannot create profile.",
+            )
+
+    def _new_profile(self, user_id: uuid.UUID) -> UserProfile:
+        profile = UserProfile(user_id=user_id)
+        new_profile_data = UserProfileCreateSchema()
+        for key_in_schema, value in new_profile_data.model_dump(
+            exclude_unset=False, by_alias=True
+        ).items():
+            if hasattr(profile, key_in_schema):
+                setattr(profile, key_in_schema, value)
+        return profile
+
+    async def _commit_profile_creation(
+        self, db_session: AsyncSession, user_id: uuid.UUID
+    ) -> UserProfileReadSanitized:
+        try:
+            await db_session.commit()
+        except Exception:
+            logger.error(
+                "Failed to commit transaction while creating profile", exc_info=True
+            )
+            await db_session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create profile.",
+            )
+
+        profile = await self.get_sanitized_profile_by_user_id(db_session, user_id)
+        if profile is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create profile.",
+            )
+        return profile
 
     async def get_or_create_sanitized_profile(
         self, db_session: AsyncSession, user_id: uuid.UUID
@@ -67,85 +128,37 @@ class ProfileService:
         if profile is not None:
             return profile
 
-        user_exists = await db_session.get(User, user_id)
-        if not user_exists:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User with id {user_id} not found. Cannot create profile.",
-            )
-
-        new_profile = UserProfile(user_id=user_id)
+        await self._ensure_user_exists(db_session, user_id)
+        new_profile = self._new_profile(user_id)
         db_session.add(new_profile)
-        try:
-            await db_session.commit()
-        except Exception as e:
-            import logging
-
-            logging.error(
-                "Failed to commit transaction while creating profile", exc_info=True
-            )
-            await db_session.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to create profile: {str(e)}",
-            )
-
-        profile = await self.get_sanitized_profile_by_user_id(db_session, user_id)
-        if profile is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create profile.",
-            )
-        return profile
+        return await self._commit_profile_creation(db_session, user_id)
 
     async def get_or_create_profile(
         self, db_session: AsyncSession, user_id: uuid.UUID
     ) -> UserProfileRead:
         """
         Retrieves a user's profile by user_id, or creates a new one if it doesn't exist.
-        The `user_id` is expected to be validated and exist in the `User` table upstream.
+        The `user_id` is expected to be validated and exist in the `User`
+        table upstream.
         """
         profile = await self.get_profile_by_user_id(db_session, user_id)
 
         if not profile:
-            # Ensure the user actually exists before creating a profile for them.
-            # This check might be optional if user_id validity is guaranteed by the caller.
-            user_exists = await db_session.get(User, user_id)
-            if not user_exists:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"User with id {user_id} not found. Cannot create profile.",
-                )
-
-            # Create a new profile with default (empty) values initially
-            # UserProfileCreateSchema can be used here if specific creation defaults are desired
-            # For now, directly creating UserProfile model instance
-            new_profile_data = (
-                UserProfileCreateSchema()
-            )  # Provides default values if any (e.g. None for keys)
-
-            profile = UserProfile(user_id=user_id)
-            # Initialize all keys from schema defaults (which should be None)
-            # This ensures that if new keys are added to the schema and model,
-            # they are initialized here during profile creation.
-            for key_in_schema, value in new_profile_data.model_dump(exclude_unset=False, by_alias=True).items():
-                if hasattr(profile, key_in_schema):
-                    setattr(profile, key_in_schema, value)
+            await self._ensure_user_exists(db_session, user_id)
+            profile = self._new_profile(user_id)
 
             db_session.add(profile)
             try:
                 await db_session.commit()
                 await db_session.refresh(profile)
-            except Exception as e:
-                import logging
-
-                logging.error(
+            except Exception:
+                logger.error(
                     "Failed to commit transaction while creating profile", exc_info=True
                 )
                 await db_session.rollback()
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to create profile: {str(e)}",
+                    detail="Failed to create profile.",
                 )
 
         return UserProfileRead.model_validate(profile)  # Use UserProfileRead
@@ -160,55 +173,74 @@ class ProfileService:
         db_session: AsyncSession,
         user_id: uuid.UUID,
         profile_data: UserProfileUpdate,
-    ) -> UserProfileRead:  # Use UserProfileUpdate and UserProfileRead
+    ) -> UserProfileReadSanitized:
         """
         Updates an existing user's profile.
         If the profile doesn't exist, it will first be created.
         """
-        profile = await self.get_profile_by_user_id(db_session, user_id)
+        profile = await self._get_profile_identity_by_user_id(db_session, user_id)
         update_data = profile_data.model_dump(exclude_unset=True, by_alias=True)
 
-        # Safety check: `get_profile_by_user_id` should return a profile for the
-        # provided user_id. This guard protects against potential data
-        # inconsistencies where a profile might be associated with a different
-        # user.
-        if profile and profile.user_id != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cannot update another user's profile.",
-            )
-
         if not profile:
-            user_exists = await db_session.get(User, user_id)
-            if not user_exists:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"User with id {user_id} not found. Cannot create or update profile.",
-                )
+            try:
+                await self._ensure_user_exists(db_session, user_id)
+            except HTTPException as exc:
+                if exc.status_code == status.HTTP_404_NOT_FOUND:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=(
+                            f"User with id {user_id} not found. Cannot create or "
+                            "update profile."
+                        ),
+                    )
+                raise
 
-            profile = UserProfile(user_id=user_id)
+            profile = self._new_profile(user_id)
             self._apply_update_data_to_profile(profile, update_data)
             db_session.add(profile)
 
         else:  # Profile exists, update it
             if not update_data:
-                # If no data to update, just return the current profile
-                return UserProfileRead.model_validate(profile)  # Use UserProfileRead
+                profile = await self.get_sanitized_profile_by_user_id(
+                    db_session, user_id
+                )
+                if profile is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Profile for user with id {user_id} not found.",
+                    )
+                return profile
 
-            self._apply_update_data_to_profile(profile, update_data)
-
-        try:
-            await db_session.commit()  # Commit changes (either new profile or updates)
-            await db_session.refresh(profile)
-        except Exception as e:
-            await db_session.rollback()
-            # Log error e
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to update profile: {str(e)}",
+            await db_session.execute(
+                update(UserProfile)
+                .where(UserProfile.user_id == user_id)
+                .values(**update_data)
             )
 
-        return UserProfileRead.model_validate(profile)  # Use UserProfileRead
+        try:
+            await db_session.commit()
+        except Exception:
+            logger.error(
+                "Failed to commit transaction while updating profile", exc_info=True
+            )
+            await db_session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update profile.",
+            )
+
+        profile = await self.get_sanitized_profile_by_user_id(db_session, user_id)
+        if profile is None:
+            if update_data:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to update profile.",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Profile for user with id {user_id} not found.",
+            )
+        return profile
 
 # Optional: A function to get the service instance, useful for dependency injection
 # async def get_profile_service() -> ProfileService:

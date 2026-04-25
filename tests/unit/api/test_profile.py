@@ -11,7 +11,6 @@ from api_service.api.routers.profile import (
     update_current_user_profile,
 )
 from api_service.api.schemas import (
-    UserProfileRead,
     UserProfileReadSanitized,
     UserProfileUpdate,
 )
@@ -34,11 +33,7 @@ MOCK_USER = DBUser(
 MOCK_PROFILE_DATA = {
     "id": 1,
     "user_id": USER_ID,
-    "google_api_key": "test_google_key",
-    "openai_api_key": "test_openai_key",
-    "anthropic_api_key": "test_anthropic_key",
 }
-MOCK_PROFILE_READ_SCHEMA = UserProfileRead(**MOCK_PROFILE_DATA)
 
 # Sanitized version for GET endpoint response testing
 MOCK_PROFILE_READ_SANITIZED_SCHEMA = UserProfileReadSanitized(
@@ -56,11 +51,10 @@ def mock_db_session():
 @pytest.fixture
 def mock_profile_service():
     service = AsyncMock(spec=ProfileService)
-    service.get_or_create_profile = AsyncMock(return_value=MOCK_PROFILE_READ_SCHEMA)
     service.get_or_create_sanitized_profile = AsyncMock(
         return_value=MOCK_PROFILE_READ_SANITIZED_SCHEMA
     )
-    service.update_profile = AsyncMock(return_value=MOCK_PROFILE_READ_SCHEMA)
+    service.update_profile = AsyncMock(return_value=MOCK_PROFILE_READ_SANITIZED_SCHEMA)
     return service
 
 @pytest.mark.asyncio
