@@ -1,12 +1,12 @@
 [
   {
-    "id": 3139932227,
+    "id": 4174326656,
     "disposition": "addressed",
-    "rationale": "Added transition: var(--mm-control-transition) to .queue-page-size-selector and covered it with the Mission Control CSS test."
+    "rationale": "Generalized the edit-for-rerun notice so it applies to any previous terminal task, not only failed tasks."
   },
   {
-    "id": 4172986718,
+    "id": 3141003480,
     "disposition": "addressed",
-    "rationale": "Top-level review summary duplicated the inline transition concern, which is fixed by the page size selector CSS/test update."
+    "rationale": "Updated frontend/src/entrypoints/task-create.tsx to say the original run remains unchanged without referring specifically to failed runs."
   }
 ]

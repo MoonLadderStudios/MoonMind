@@ -1,12 +1,19 @@
 export type TaskSubmitPageMode = 'create' | 'edit' | 'rerun';
+export type TaskSubmitPageIntent =
+  | 'create'
+  | 'edit'
+  | 'rerun'
+  | 'edit-for-rerun';
 
 export type TaskSubmitPageModeResolution = {
   mode: TaskSubmitPageMode;
+  intent: TaskSubmitPageIntent;
   executionId: string | null;
 };
 
 export type TemporalTaskEditingActions = {
   canUpdateInputs?: boolean;
+  canEditForRerun?: boolean;
   canRerun?: boolean;
   disabledReasons?: Record<string, string>;
 };
@@ -108,7 +115,7 @@ export type TemporalTaskEditingTelemetryEvent =
 
 export type TemporalTaskEditingTelemetryPayload = {
   event: TemporalTaskEditingTelemetryEvent;
-  mode?: TaskSubmitPageMode | 'detail';
+  mode?: TaskSubmitPageIntent | 'detail';
   workflowId?: string | null;
   updateName?: TemporalTaskEditUpdateName;
   result?: 'success' | 'failure';
@@ -179,6 +186,10 @@ export function taskEditHref(workflowId: string): string {
   return `${taskCreateHref()}?editExecutionId=${encodeURIComponent(workflowId)}`;
 }
 
+export function taskEditForRerunHref(workflowId: string): string {
+  return `${taskCreateHref()}?rerunExecutionId=${encodeURIComponent(workflowId)}&mode=edit`;
+}
+
 export function taskRerunHref(workflowId: string): string {
   return `${taskCreateHref()}?rerunExecutionId=${encodeURIComponent(workflowId)}`;
 }
@@ -190,13 +201,20 @@ export function resolveTaskSubmitPageMode(
     typeof search === 'string' ? new URLSearchParams(search) : search;
   const rerunExecutionId = String(params.get('rerunExecutionId') || '').trim();
   if (rerunExecutionId) {
-    return { mode: 'rerun', executionId: rerunExecutionId };
+    if (String(params.get('mode') || '').trim().toLowerCase() === 'edit') {
+      return {
+        mode: 'rerun',
+        intent: 'edit-for-rerun',
+        executionId: rerunExecutionId,
+      };
+    }
+    return { mode: 'rerun', intent: 'rerun', executionId: rerunExecutionId };
   }
   const editExecutionId = String(params.get('editExecutionId') || '').trim();
   if (editExecutionId) {
-    return { mode: 'edit', executionId: editExecutionId };
+    return { mode: 'edit', intent: 'edit', executionId: editExecutionId };
   }
-  return { mode: 'create', executionId: null };
+  return { mode: 'create', intent: 'create', executionId: null };
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
