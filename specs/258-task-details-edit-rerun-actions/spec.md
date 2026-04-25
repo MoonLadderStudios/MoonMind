@@ -6,9 +6,21 @@
 **Input**: Add the Edit and Rerun buttons as described in `docs/UI/TaskDetailsPage.md` to the Task Details page and ensure they are present with the appropriate task statuses.
 **Source Design**: `docs/UI/TaskDetailsPage.md`
 
-## User Story 1 - Show Task Details Recovery Actions (Priority: P1)
+## User Story - Show Task Details Recovery Actions (Priority: P1)
 
 As an operator inspecting a task execution, I need the Task Details page to show **Edit task** and **Rerun** when the backend says those actions are available so I can either revise the original task for a new run or rerun it unchanged from the same page.
+
+### Summary
+
+Task Details must expose recovery actions from explicit backend capabilities instead of hiding edit-for-rerun behind live input update state.
+
+### Goal
+
+Operators can see and use the correct **Edit task** and **Rerun** actions for failed and other eligible task statuses without mutating the original terminal execution.
+
+### Independent Test
+
+Load Task Details with mocked execution detail records for failed, running, missing-snapshot, and unsupported workflow-type cases and verify the visible links and hrefs match the capability contract.
 
 ### Acceptance Scenarios
 
