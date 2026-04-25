@@ -440,14 +440,33 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?background-position:\s*50% 50%,[\s\S]*?calc\(50% \+ \(var\(--mm-executing-sweep-layer-offset-x\) \/ 2\)\)\s*calc\(50% \+ \(var\(--mm-executing-sweep-layer-offset-y\) \/ 2\)\);[\s\S]*?background-size:\s*160% var\(--mm-executing-sweep-band-height\),\s*140% var\(--mm-executing-sweep-band-height\);/,
     );
-    const shimmerPseudoSelector = cssRuleBlockMatching(
+    const shimmerBeforeSelector = cssRuleBlockMatching(
       missionControlCss,
       (rule) =>
         rule.selector.includes('status-running') &&
         rule.selector.includes('shimmer-sweep') &&
-        (rule.selector.includes('::before') || rule.selector.includes('::after')),
+        rule.selector.includes('::before'),
     );
-    expect(shimmerPseudoSelector).toBe('');
+    expect(shimmerBeforeSelector).toBe('');
+
+    const shimmerAfterBlock = cssRuleBlockMatching(
+      missionControlCss,
+      (rule) =>
+        rule.selector.includes('status-running') &&
+        rule.selector.includes('shimmer-sweep') &&
+        rule.selector.includes('::after'),
+    );
+    expect(shimmerAfterBlock).toContain('mix-blend-mode: overlay');
+    expect(shimmerAfterBlock).toContain('animation: mm-status-pill-shimmer-letters');
+    expect(shimmerAfterBlock).toContain('var(--mm-executing-sweep-cycle-duration)');
+    expect(shimmerAfterBlock).toContain('linear infinite');
+    expect(shimmerAfterBlock).toContain("content: ''");
+    expect(missionControlCss).toMatch(
+      /@keyframes mm-status-pill-shimmer-letters\s*\{[\s\S]*?0%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\)[\s\S]*?100%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-end-x\)\s*var\(--mm-executing-sweep-end-y\)/,
+    );
+    expect(missionControlCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.status-running\[data-state="executing"\]\[data-effect="shimmer-sweep"\]::after,\s*\.status-running\.is-executing::after[\s\S]*?display: none/,
+    );
   });
 
   it('enforces MM-430 additive shared styling modifiers', async () => {

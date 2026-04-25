@@ -338,7 +338,7 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
 
     assert config["system"]["supportedTaskRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
     assert config["system"]["defaultTaskRuntime"] == "claude_code"
-    assert config["system"]["defaultTaskModel"] == "Sonnet 4.6"
+    assert config["system"]["defaultTaskModel"] == "claude-opus-4-7"
 
 def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.workflow, "github_repository", "Octo/Repo")
@@ -600,7 +600,7 @@ def test_build_runtime_config_uses_repo_runtime_model_defaults(monkeypatch) -> N
 
     assert config["system"]["defaultTaskModelByRuntime"]["codex_cli"] == "gpt-5.4"
     assert config["system"]["defaultTaskModelByRuntime"]["gemini_cli"] == "gemini-3.1-pro-preview"
-    assert config["system"]["defaultTaskModelByRuntime"]["claude_code"] == "Sonnet 4.6"
+    assert config["system"]["defaultTaskModelByRuntime"]["claude_code"] == "claude-opus-4-7"
 
 def test_normalize_status_maps_temporal_waits_to_awaiting_action() -> None:
     assert dashboard_view_model.normalize_status("temporal", "awaiting_external") == "awaiting_action"

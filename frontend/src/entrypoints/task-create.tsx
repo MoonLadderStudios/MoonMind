@@ -2380,9 +2380,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             "This execution cannot be edited here because only MoonMind.Run is supported.",
           );
         }
-        if (pageMode.mode === "edit" && execution.actions?.canUpdateInputs !== true) {
+        if (pageMode.intent === "edit" && execution.actions?.canUpdateInputs !== true) {
           throw new Error(
             "This execution does not currently allow editing its inputs.",
+          );
+        }
+        if (
+          pageMode.intent === "edit-for-rerun" &&
+          execution.actions?.canEditForRerun !== true
+        ) {
+          throw new Error(
+            "This execution does not currently allow editing for rerun.",
           );
         }
         if (pageMode.mode === "rerun" && execution.actions?.canRerun !== true) {
@@ -2420,7 +2428,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         );
         recordTemporalTaskEditingClientEvent({
           event: "draft_reconstruction_success",
-          mode: pageMode.mode,
+          mode: pageMode.intent,
           workflowId,
         });
         return {
@@ -2431,7 +2439,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       } catch (error) {
         recordTemporalTaskEditingClientEvent({
           event: "draft_reconstruction_failure",
-          mode: pageMode.mode,
+          mode: pageMode.intent,
           workflowId,
           reason: error instanceof Error ? error.message : "unknown",
         });
@@ -5300,21 +5308,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   const pageTitle =
-    pageMode.mode === "edit"
+    pageMode.intent === "edit" || pageMode.intent === "edit-for-rerun"
       ? "Edit Task"
       : pageMode.mode === "rerun"
         ? "Rerun Task"
         : "Create Task";
   const primaryCta =
-    pageMode.mode === "edit"
+    pageMode.intent === "edit"
       ? "Save Changes"
+      : pageMode.intent === "edit-for-rerun"
+        ? "Run edited task"
       : pageMode.mode === "rerun"
         ? "Rerun Task"
         : "Create";
   const showPrimaryCtaArrow = pageMode.mode === "create";
   const primaryCtaTooltip =
-    pageMode.mode === "edit"
+    pageMode.intent === "edit"
       ? "Save changes to this task draft"
+      : pageMode.intent === "edit-for-rerun"
+        ? "Start a new run from this edited task draft"
       : pageMode.mode === "rerun"
         ? "Start a new run from this task draft"
         : "Create this task";
@@ -5356,6 +5368,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       {modeLoadError ? (
         <p className="notice error" role="alert">
           {modeLoadError}
+        </p>
+      ) : null}
+
+      {pageMode.intent === "edit-for-rerun" && !modeLoadError ? (
+        <p className="notice" role="status">
+          You are editing a previous task. Your changes will create a new run.
+          The original run will remain unchanged.
         </p>
       ) : null}
 

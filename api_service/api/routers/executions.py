@@ -1768,6 +1768,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                 for action in (
                     "setTitle",
                     "updateInputs",
+                    "editForRerun",
                     "rerun",
                     "approve",
                     "pause",
@@ -1814,20 +1815,23 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             "can_send_message",
         },
         "finalizing": {"can_cancel"},
-        "completed": {"can_rerun"},
-        "failed": {"can_rerun"},
-        "canceled": {"can_rerun"},
+        "completed": {"can_edit_for_rerun", "can_rerun"},
+        "failed": {"can_edit_for_rerun", "can_rerun"},
+        "canceled": {"can_edit_for_rerun", "can_rerun"},
+        "terminated": {"can_edit_for_rerun", "can_rerun"},
+        "timed_out": {"can_edit_for_rerun", "can_rerun"},
     }
     enabled = state_actions.get(raw_state, set())
     if workflow_type_value != "MoonMind.Run" or not temporal_task_editing_enabled:
-        enabled = enabled - {"can_update_inputs", "can_rerun"}
+        enabled = enabled - {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}
     elif not _task_input_snapshot_ref_from_memo(
         dict(getattr(record, "memo", None) or {})
     ):
-        enabled = enabled - {"can_update_inputs", "can_rerun"}
+        enabled = enabled - {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}
     capability_values = {
         "can_set_title": "canSetTitle",
         "can_update_inputs": "canUpdateInputs",
+        "can_edit_for_rerun": "canEditForRerun",
         "can_rerun": "canRerun",
         "can_approve": "canApprove",
         "can_pause": "canPause",
@@ -1841,7 +1845,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     for field_name, alias in capability_values.items():
         if field_name in enabled:
             continue
-        if field_name in {"can_update_inputs", "can_rerun"}:
+        if field_name in {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}:
             if workflow_type_value != "MoonMind.Run":
                 disabled_reasons[alias] = "unsupported_workflow_type"
                 continue
@@ -1857,6 +1861,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     return ExecutionActionCapabilityModel(
         can_set_title="can_set_title" in enabled,
         can_update_inputs="can_update_inputs" in enabled,
+        can_edit_for_rerun="can_edit_for_rerun" in enabled,
         can_rerun="can_rerun" in enabled,
         can_approve="can_approve" in enabled,
         can_pause="can_pause" in enabled,

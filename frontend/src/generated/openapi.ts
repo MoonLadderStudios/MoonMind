@@ -3387,6 +3387,11 @@ export interface components {
              */
             canUpdateInputs: boolean;
             /**
+             * Caneditforrerun
+             * @default false
+             */
+            canEditForRerun: boolean;
+            /**
              * Canrerun
              * @default false
              */
