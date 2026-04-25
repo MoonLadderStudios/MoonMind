@@ -12,7 +12,7 @@ Treat the existing EXECUTING shimmer as the physical sweep layer, then add a sec
 
 In MoonMind, the browser equivalent should usually not be "rerender React every 32 ms." In the browser, CSS animation is the better default: it is declarative, cheaper for many table rows, and can be synchronized with your existing shimmer duration variable.
 
-Recommended implementation: split only EXECUTING into glyph spans. CSS alone cannot target "the third letter of this text node," so true per-letter brightening requires wrapping each visible grapheme in a span. Because EXECUTING is short, the DOM cost is tiny. Replace the two status spans in frontend/src/entrypoints/tasks-list.tsx with a small ExecutionStatusPill component. Use Intl.Segmenter when available, aria-label on the parent, aria-hidden on the glyph span, CSS animation delays per glyph, the existing --mm-executing-sweep-cycle-duration: 1650ms token, and a reduced-motion override. If the visible beam moves right-to-left, set SWEEP_DIRECTION to 'rtl'.
+Recommended implementation: split only EXECUTING into glyph spans. CSS alone cannot target "the third letter of this text node," so true per-letter brightening requires wrapping each visible grapheme in a span. Because EXECUTING is short, the DOM cost is tiny. Replace the two status spans in frontend/src/entrypoints/tasks-list.tsx with a small ExecutionStatusPill component. Use Intl.Segmenter when available, aria-label on the parent, aria-hidden on the glyph span, CSS-derived animation delays per glyph, the existing --mm-executing-sweep-cycle-duration: 1650ms token, and a reduced-motion override. If the visible beam direction changes, update the CSS --mm-executing-letter-sweep-direction token with the sweep geometry.
 
 The cleanest patch: implement the glyph-span component and keep the existing broad shimmer. Existing status detection remains centralized in executionStatusPillProps(); the existing shimmer remains the background/beam layer; the new glyph spans become the foreground Codex-like letter-brightening layer; the animation stays CSS-driven and phase-locked through --mm-executing-sweep-cycle-duration; accessibility remains clean because the visible glyph spans are hidden from screen readers.
 ```
@@ -93,7 +93,7 @@ The cleanest patch: implement the glyph-span component and keep the existing bro
 ### Measurable Outcomes
 
 - **SC-001**: Tests verify exactly the task-list executing table and card pills receive glyph-wave markup while non-executing pills do not.
-- **SC-002**: Tests verify executing glyphs expose per-glyph `--mm-letter-delay` values and preserve full visible text.
+- **SC-002**: Tests verify executing glyphs expose per-glyph index/count values used by CSS delay calculation and preserve full visible text.
 - **SC-003**: Tests verify the CSS includes glyph brightening keyframes, shared-duration animation, and reduced-motion suppression.
 - **SC-004**: Typecheck and lint pass for the new component and task-list integration.
 - **SC-005**: The final verification report maps all in-scope `DESIGN-REQ-*` items to implementation and test evidence.

@@ -15,7 +15,7 @@ It renders:
 
 - The executing host continues to use `mm-status-pill-shimmer` and `--mm-executing-sweep-cycle-duration`.
 - `.status-letter-wave` is the foreground visual layer above the physical sweep.
-- `.status-letter-wave__glyph` uses `animation-name: mm-executing-letter-brighten`, `animation-duration: var(--mm-executing-sweep-cycle-duration, 1650ms)`, and `animation-delay: var(--mm-letter-delay, 0ms)`.
+- `.status-letter-wave__glyph` uses `animation-name: mm-executing-letter-brighten`, `animation-duration: var(--mm-executing-sweep-cycle-duration, 1650ms)`, and `animation-delay` derived from `--mm-executing-sweep-cycle-duration`, `--mm-executing-letter-edge-padding`, `--mm-executing-letter-sweep-direction`, `--mm-letter-count`, and `--mm-letter-index`.
 - Reduced motion disables glyph animation, text shadow, and filter.
 
 ## Task-List Integration Contract

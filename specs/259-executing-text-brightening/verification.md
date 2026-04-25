@@ -12,7 +12,7 @@
 | FR-002, FR-004, DESIGN-REQ-003 | `frontend/src/components/ExecutionStatusPill.tsx` renders `.status-letter-wave__glyph` spans for executing labels; `frontend/src/entrypoints/tasks-list.test.tsx` verifies one glyph per `executing` letter in table and card pills. | PASS |
 | FR-003, DESIGN-REQ-002 | The component computes static CSS custom-property delays only; repeated motion is CSS keyframes in `mission-control.css`. No timer or animation loop is introduced. | PASS |
 | FR-005 | `ExecutionStatusPill.tsx` uses `Intl.Segmenter` when available and falls back to `Array.from`. Typecheck passed. | PASS |
-| FR-006, DESIGN-REQ-004 | Glyph CSS uses `var(--mm-executing-sweep-cycle-duration, 1650ms)` and render tests verify each glyph receives `--mm-letter-delay`. | PASS |
+| FR-006, DESIGN-REQ-004 | Glyph CSS uses `var(--mm-executing-sweep-cycle-duration, 1650ms)` and render tests verify each glyph receives index/count values for CSS delay calculation. | PASS |
 | FR-007, DESIGN-REQ-005 | Executing parent pill has `aria-label`; visual glyph wrapper has `aria-hidden="true"` and preserves full `textContent`. | PASS |
 | FR-008, DESIGN-REQ-006 | Reduced-motion CSS disables glyph animation, text shadow, and filter. | PASS |
 | FR-009, DESIGN-REQ-007 | `ExecutionStatusPill` delegates status metadata to `executionStatusPillProps()`. Existing executing metadata assertions still pass. | PASS |

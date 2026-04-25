@@ -2,12 +2,9 @@ import { useMemo, type CSSProperties } from 'react';
 
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 
-const SHIMMER_DURATION_MS = 1650;
-const SHIMMER_EDGE_PADDING_CHARS = 3;
-const SWEEP_DIRECTION: 'ltr' | 'rtl' = 'rtl';
-
 type GlyphStyle = CSSProperties & {
-  '--mm-letter-delay'?: string;
+  '--mm-letter-count'?: number;
+  '--mm-letter-index'?: number;
 };
 
 type SegmenterLike = new (
@@ -46,21 +43,16 @@ export function ExecutionStatusPill({ status }: { status: string | null | undefi
   }
 
   const count = Math.max(glyphs.length, 1);
-  const totalSweepCells = count + SHIMMER_EDGE_PADDING_CHARS * 2;
 
   return (
     <span {...pillProps} aria-label={label}>
       <span className="status-letter-wave" aria-hidden="true">
         {glyphs.map((glyph, index) => {
-          const phaseIndex = SWEEP_DIRECTION === 'ltr' ? index : count - 1 - index;
-          const delayMs =
-            ((phaseIndex + SHIMMER_EDGE_PADDING_CHARS) / totalSweepCells) * SHIMMER_DURATION_MS;
-
           return (
             <span
               key={`${index}-${glyph}`}
               className="status-letter-wave__glyph"
-              style={{ '--mm-letter-delay': `${Math.round(delayMs)}ms` } as GlyphStyle}
+              style={{ '--mm-letter-count': count, '--mm-letter-index': index } as GlyphStyle}
             >
               {glyph === ' ' ? '\u00A0' : glyph}
             </span>

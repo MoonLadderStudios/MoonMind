@@ -132,7 +132,10 @@ describe('Tasks List Entrypoint', () => {
       const glyphs = Array.from(pill.querySelectorAll<HTMLElement>('.status-letter-wave__glyph'));
       expect(glyphs).toHaveLength('executing'.length);
       expect(glyphs.map((glyph) => glyph.textContent).join('')).toBe('executing');
-      expect(glyphs.every((glyph) => glyph.style.getPropertyValue('--mm-letter-delay').endsWith('ms'))).toBe(true);
+      expect(glyphs.map((glyph) => glyph.style.getPropertyValue('--mm-letter-index'))).toEqual(
+        Array.from({ length: 'executing'.length }, (_, index) => String(index)),
+      );
+      expect(glyphs.every((glyph) => glyph.style.getPropertyValue('--mm-letter-count') === String('executing'.length))).toBe(true);
     }
 
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');

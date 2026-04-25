@@ -1,27 +1,32 @@
 [
   {
-    "id": 3142198018,
+    "id": 3142465771,
     "disposition": "addressed",
-    "rationale": "Valid step and objective attachment selection now only clears the attachment-limit submit message, preserving legacy branch warnings and other unrelated submit warnings."
+    "rationale": "Moved glyph delay computation to CSS so animation-delay is derived from --mm-executing-sweep-cycle-duration instead of a hard-coded JS duration."
   },
   {
-    "id": 3142198421,
-    "disposition": "addressed",
-    "rationale": "Step attachment counting now uses the existing selected attachment count and step delta instead of constructing a temporary aggregate array, and unrelated submit messages are preserved."
-  },
-  {
-    "id": 3142198423,
-    "disposition": "addressed",
-    "rationale": "Objective attachment selection now clears submitMessage only when it matches the attachment limit message, so unrelated validation errors remain visible."
-  },
-  {
-    "id": 4175812006,
+    "id": 4176042279,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary with no separate actionable request."
+    "rationale": "Automated review summary with no separate actionable request beyond the inline comments."
   },
   {
-    "id": 4175812328,
+    "id": 3142466094,
+    "disposition": "addressed",
+    "rationale": "Removed SHIMMER_DURATION_MS from the component and made glyph delay use the shared CSS sweep duration token."
+  },
+  {
+    "id": 3142466095,
+    "disposition": "addressed",
+    "rationale": "Removed the hard-coded SWEEP_DIRECTION component constant and introduced the CSS --mm-executing-letter-sweep-direction token alongside the sweep geometry."
+  },
+  {
+    "id": 3142466096,
+    "disposition": "addressed",
+    "rationale": "Removed will-change from per-glyph spans to avoid unnecessary layer promotion across task lists."
+  },
+  {
+    "id": 4176042510,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary; the actionable inline feedback from the same review is addressed separately."
+    "rationale": "Automated review summary; its actionable points are covered by the inline comment dispositions."
   }
 ]
