@@ -83,14 +83,31 @@ def _pr_resolver_status(payload: dict[str, Any]) -> str:
     if status:
         return status
 
-    final = payload.get("final")
-    if isinstance(final, dict):
+    final = _pr_resolver_final_payload(payload)
+    if final:
         return str(
             final.get("state")
             or final.get("status")
             or final.get("merge_outcome")
             or ""
         ).strip().lower()
+    return ""
+
+
+def _pr_resolver_final_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the nested final-state payload when resolver artifacts include one."""
+
+    final = payload.get("final")
+    return final if isinstance(final, dict) else {}
+
+
+def _first_stripped_text(*values: Any) -> str:
+    """Return the first non-empty value after string normalization."""
+
+    for value in values:
+        candidate = str(value or "").strip()
+        if candidate:
+            return candidate
     return ""
 
 
@@ -308,18 +325,16 @@ def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
         metadata["mergeAutomationDisposition"] = (
             "already_merged" if reason == "already_merged" else "merged"
         )
-    final_payload = payload.get("final")
-    final = final_payload if isinstance(final_payload, dict) else {}
-    head_sha = str(
-        payload.get("headSha")
-        or payload.get("head_sha")
-        or payload.get("latestHeadSha")
-        or payload.get("latest_head_sha")
-        or final.get("headRefOid")
-        or final.get("head_sha")
-        or final.get("headSha")
-        or ""
-    ).strip()
+    final = _pr_resolver_final_payload(payload)
+    head_sha = _first_stripped_text(
+        payload.get("headSha"),
+        payload.get("head_sha"),
+        payload.get("latestHeadSha"),
+        payload.get("latest_head_sha"),
+        final.get("headRefOid"),
+        final.get("head_sha"),
+        final.get("headSha"),
+    )
     if head_sha:
         metadata["headSha"] = head_sha
     return metadata

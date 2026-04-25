@@ -1537,6 +1537,7 @@ async def test_fetch_result_maps_final_state_merged_pr_resolver_artifact_metadat
         (
             "{\n"
             '  "generatedAt": "2026-04-25T15:34:55.886536Z",\n'
+            '  "headSha": "   ",\n'
             '  "final": {\n'
             '    "state": "MERGED",\n'
             '    "mergedAt": "2026-04-25T15:34:22Z",\n'
