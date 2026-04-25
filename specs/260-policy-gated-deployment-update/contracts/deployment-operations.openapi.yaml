@@ -1,0 +1,43 @@
+openapi: 3.1.0
+info:
+  title: Policy-Gated Deployment Operations API
+  version: 0.1.0
+paths:
+  /api/v1/operations/deployment/update:
+    post:
+      summary: Submit a policy-gated deployment update
+      responses:
+        "202":
+          description: Deployment update queued
+        "403":
+          description: Caller is not an administrator
+        "422":
+          description: Request violates deployment policy or schema
+  /api/v1/operations/deployment/stacks/{stack}:
+    get:
+      summary: Read current deployment state for an allowlisted stack
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Typed deployment stack state
+        "422":
+          description: Stack is not allowlisted
+  /api/v1/operations/deployment/image-targets:
+    get:
+      summary: List allowed image targets for an allowlisted stack
+      parameters:
+        - name: stack
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Typed allowed image target policy
+        "422":
+          description: Stack is not allowlisted

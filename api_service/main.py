@@ -32,6 +32,9 @@ from api_service.api.routers import (
 from api_service.api.routers.provider_profiles import router as provider_profiles_router
 from api_service.api.routers.chat import router as chat_router
 from api_service.api.routers.context_protocol import router as context_protocol_router
+from api_service.api.routers.deployment_operations import (
+    router as deployment_operations_router,
+)
 from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.execution_integrations import (
     router as execution_integrations_router,
@@ -439,6 +442,7 @@ app.include_router(provider_profiles_router, prefix="/api/v1")
 app.include_router(oauth_sessions_router, prefix="/api/v1")
 app.include_router(secrets_router, prefix="/api/v1/secrets")
 app.include_router(proxy_router, prefix="/api/v1")
+app.include_router(deployment_operations_router)
 app.include_router(executions_router)
 app.include_router(execution_integrations_router)
 app.include_router(automation_router)
