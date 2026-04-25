@@ -312,7 +312,7 @@ effect_tokens:
   --mm-executing-sweep-end-y: -160%
   --mm-executing-sweep-layer-offset-x: -12%
   --mm-executing-sweep-layer-offset-y: -10%
-  --mm-executing-letter-cycle-duration: 1500ms
+  --mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)
 ```
 
 ## Non-Goals
