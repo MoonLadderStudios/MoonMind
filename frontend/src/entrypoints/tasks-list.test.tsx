@@ -125,8 +125,17 @@ describe('Tasks List Entrypoint', () => {
       expect(pill.dataset.state).toBe('executing');
       expect(pill.className).toContain('is-executing');
       expect(pill.className).toContain('status-running');
-      expect(pill.childElementCount).toBe(0);
+      expect(pill.dataset.shimmerLabel).toBe('executing');
+      expect(pill.getAttribute('aria-label')).toBe('executing');
       expect(pill.textContent).toBe('executing');
+      expect(pill.querySelector('.status-letter-wave')?.getAttribute('aria-hidden')).toBe('true');
+      const glyphs = Array.from(pill.querySelectorAll<HTMLElement>('.status-letter-wave__glyph'));
+      expect(glyphs).toHaveLength('executing'.length);
+      expect(glyphs.map((glyph) => glyph.textContent).join('')).toBe('executing');
+      expect(glyphs.map((glyph) => glyph.style.getPropertyValue('--mm-letter-index'))).toEqual(
+        Array.from({ length: 'executing'.length }, (_, index) => String(index)),
+      );
+      expect(glyphs.every((glyph) => glyph.style.getPropertyValue('--mm-letter-count') === String('executing'.length))).toBe(true);
     }
 
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');

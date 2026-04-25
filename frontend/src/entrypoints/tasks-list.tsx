@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
 import { formatRuntimeLabel, formatTaskSkills } from '../utils/formatters';
-import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
+import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 
 const POLL_MS_DEFAULT = 5000;
@@ -537,7 +537,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                   <tbody>
                     {sortedItems.map((row) => {
                       const depsSummary = dependencyListSummary(row);
-                      const statusPillProps = executionStatusPillProps(row.rawState || row.state || row.status);
                       return (
                         <tr key={row.taskId}>
                           <td className="queue-table-cell-id">
@@ -551,9 +550,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                           </td>
                           <td className="queue-table-cell-compact">{row.repository || '—'}</td>
                           <td className="queue-table-cell-status">
-                            <span {...statusPillProps}>
-                              {row.rawState || row.state || row.status || '—'}
-                            </span>
+                            <ExecutionStatusPill status={row.rawState || row.state || row.status} />
                           </td>
                           <td className="queue-table-cell-title">
                             <div>{row.title}</div>
@@ -573,7 +570,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               <ul className="queue-card-list" data-layout="card" role="list">
                 {sortedItems.map((row) => {
                       const depsSummary = dependencyListSummary(row);
-                      const statusPillProps = executionStatusPillProps(row.rawState || row.state || row.status);
                       return (
                   <li key={row.taskId} className="queue-card">
                     <div className="queue-card-header">
@@ -594,9 +590,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                         </p>
                       </div>
                       <div className="queue-card-status">
-                        <span {...statusPillProps}>
-                          {row.rawState || row.state || row.status || '—'}
-                        </span>
+                        <ExecutionStatusPill status={row.rawState || row.state || row.status} />
                       </div>
                     </div>
                     <dl className="queue-card-fields">

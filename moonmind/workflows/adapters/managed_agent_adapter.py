@@ -73,6 +73,44 @@ _PR_RESOLVER_BLOCKED_STATUSES: frozenset[str] = frozenset(
 )
 _PR_RESOLVER_MERGED_STATUSES: frozenset[str] = frozenset({"merged"})
 
+
+def _pr_resolver_status(payload: dict[str, Any]) -> str:
+    """Return the normalized terminal status from known resolver artifacts."""
+
+    status = str(
+        payload.get("status") or payload.get("merge_outcome") or ""
+    ).strip().lower()
+    if status:
+        return status
+
+    final = _pr_resolver_final_payload(payload)
+    if final:
+        return str(
+            final.get("state")
+            or final.get("status")
+            or final.get("merge_outcome")
+            or ""
+        ).strip().lower()
+    return ""
+
+
+def _pr_resolver_final_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the nested final-state payload when resolver artifacts include one."""
+
+    final = payload.get("final")
+    return final if isinstance(final, dict) else {}
+
+
+def _first_stripped_text(*values: Any) -> str:
+    """Return the first non-empty value after string normalization."""
+
+    for value in values:
+        candidate = str(value or "").strip()
+        if candidate:
+            return candidate
+    return ""
+
+
 @dataclass(frozen=True, slots=True)
 class ManagedProfileLaunchContext:
     """Resolved managed-profile launch context shared across adapters."""
@@ -258,9 +296,7 @@ def _derive_pr_resolver_failure(
     if payload is None:
         return None, None
 
-    status = str(
-        payload.get("status") or payload.get("merge_outcome") or ""
-    ).strip().lower()
+    status = _pr_resolver_status(payload)
     if status not in _PR_RESOLVER_FAILURE_STATUSES:
         return None, None
 
@@ -282,22 +318,23 @@ def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
     if payload is None:
         return {}
 
-    status = str(
-        payload.get("status") or payload.get("merge_outcome") or ""
-    ).strip().lower()
+    status = _pr_resolver_status(payload)
     reason = str(payload.get("final_reason") or payload.get("reason") or "").strip()
     metadata: dict[str, Any] = {}
     if status in _PR_RESOLVER_MERGED_STATUSES:
         metadata["mergeAutomationDisposition"] = (
             "already_merged" if reason == "already_merged" else "merged"
         )
-    head_sha = str(
-        payload.get("headSha")
-        or payload.get("head_sha")
-        or payload.get("latestHeadSha")
-        or payload.get("latest_head_sha")
-        or ""
-    ).strip()
+    final = _pr_resolver_final_payload(payload)
+    head_sha = _first_stripped_text(
+        payload.get("headSha"),
+        payload.get("head_sha"),
+        payload.get("latestHeadSha"),
+        payload.get("latest_head_sha"),
+        final.get("headRefOid"),
+        final.get("head_sha"),
+        final.get("headSha"),
+    )
     if head_sha:
         metadata["headSha"] = head_sha
     return metadata

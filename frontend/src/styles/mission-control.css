@@ -54,6 +54,11 @@
   --mm-executing-sweep-layer-offset-y: -10%;
   --mm-executing-sweep-core-opacity: 0.34;
   --mm-executing-sweep-halo-opacity: 0.14;
+  --mm-executing-letter-sweep-width: 84%;
+  --mm-executing-letter-edge-padding: 3;
+  --mm-executing-letter-sweep-direction: -1;
+  --mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32);
+  --mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, rgb(var(--mm-panel)) 32%);
   --mm-font-headline: var(--mm-font-sans);
   --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
@@ -1336,26 +1341,6 @@ tr[data-proposal-id].proposal-consuming td {
   animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite;
 }
 
-.status-running[data-state="executing"][data-effect="shimmer-sweep"]::after,
-.status-running.is-executing::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  background-image: linear-gradient(
-    var(--mm-executing-sweep-angle),
-    transparent 0 38%,
-    rgb(255 255 255 / 0.82) 50%,
-    transparent 62%
-  );
-  background-repeat: no-repeat;
-  background-size: calc(var(--mm-executing-sweep-band-width) * 4) var(--mm-executing-sweep-band-height);
-  background-position: var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y);
-  animation: mm-status-pill-shimmer-letters var(--mm-executing-sweep-cycle-duration) linear infinite;
-  mix-blend-mode: overlay;
-}
-
 @keyframes mm-status-pill-shimmer {
   0% {
     background-position:
@@ -1376,12 +1361,49 @@ tr[data-proposal-id].proposal-consuming td {
   }
 }
 
-@keyframes mm-status-pill-shimmer-letters {
+.status-letter-wave {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  white-space: pre;
+}
+
+.status-letter-wave__glyph {
+  display: inline-block;
+  color: inherit;
+  --mm-letter-phase-forward: calc((1 + var(--mm-executing-letter-sweep-direction)) / 2 * var(--mm-letter-index, 0));
+  --mm-letter-phase-reverse: calc((1 - var(--mm-executing-letter-sweep-direction)) / 2 * (var(--mm-letter-count, 1) - 1 - var(--mm-letter-index, 0)));
+  --mm-letter-phase: calc(var(--mm-letter-phase-forward) + var(--mm-letter-phase-reverse));
+  --mm-letter-delay-ratio: calc((var(--mm-letter-phase) + var(--mm-executing-letter-edge-padding)) / (var(--mm-letter-count, 1) + (var(--mm-executing-letter-edge-padding) * 2)));
+  animation-name: mm-executing-letter-brighten;
+  animation-duration: var(--mm-executing-sweep-cycle-duration, 1650ms);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-delay: calc(var(--mm-executing-sweep-cycle-duration, 1650ms) * var(--mm-letter-delay-ratio));
+}
+
+@keyframes mm-executing-letter-brighten {
   0% {
-    background-position: var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y);
+    color: var(--mm-executing-letter-bright, currentColor);
+    text-shadow:
+      0 0 0.28rem var(--mm-executing-letter-halo, rgb(var(--mm-accent-2) / 0.32)),
+      0 0 0.7rem var(--mm-executing-letter-halo, rgb(var(--mm-accent-2) / 0.32));
+    filter: brightness(1.22);
   }
+
+  5% {
+    color: var(--mm-executing-letter-bright, currentColor);
+    text-shadow:
+      0 0 0.2rem var(--mm-executing-letter-halo, rgb(var(--mm-accent-2) / 0.24)),
+      0 0 0.46rem var(--mm-executing-letter-halo, rgb(var(--mm-accent-2) / 0.24));
+    filter: brightness(1.14);
+  }
+
+  12%,
   100% {
-    background-position: var(--mm-executing-sweep-end-x) var(--mm-executing-sweep-end-y);
+    text-shadow: none;
+    filter: brightness(1);
   }
 }
 
@@ -1395,9 +1417,10 @@ tr[data-proposal-id].proposal-consuming td {
     background-size: 160% var(--mm-executing-sweep-band-height), 140% var(--mm-executing-sweep-band-height);
   }
 
-  .status-running[data-state="executing"][data-effect="shimmer-sweep"]::after,
-  .status-running.is-executing::after {
-    display: none;
+  .status-letter-wave__glyph {
+    animation: none !important;
+    text-shadow: none !important;
+    filter: none !important;
   }
 }
 
