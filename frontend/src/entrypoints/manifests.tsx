@@ -290,17 +290,17 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
   };
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
-      <header className="border-b border-gray-200 pb-4 mb-6">
-        <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Manifests</h2>
-        <p className="text-sm text-gray-500 mt-1">Run a manifest and monitor recent executions in one place.</p>
+    <div className="stack manifests-page">
+      <header className="toolbar">
+        <div>
+          <h2 className="page-title">Manifests</h2>
+          <p className="page-meta">Run a manifest and monitor recent executions in one place.</p>
+        </div>
       </header>
 
-      <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-100">
-        <div className="mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">Run Manifest</h3>
-        </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
+      <section className="panel panel--controls" aria-labelledby="manifests-run-title">
+        <h3 className="page-title" id="manifests-run-title">Run Manifest</h3>
+        <form onSubmit={handleSubmit}>
           <label>
             Source Kind
             <select
@@ -349,7 +349,7 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
 
           <details>
             <summary>Advanced options</summary>
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="manifests-advanced-grid">
               <label className="checkbox">
                 <input
                   type="checkbox"
@@ -397,19 +397,17 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
             )}
           </p>
         </form>
-      </div>
+      </section>
 
-      <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-100">
-        <div className="mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">Recent Runs</h3>
-        </div>
+      <section className="panel panel--data" aria-labelledby="manifests-recent-title">
+        <h3 className="page-title" id="manifests-recent-title">Recent Runs</h3>
         {isLoading ? (
-          <p className="text-gray-500 italic animate-pulse">Loading manifest jobs...</p>
+          <p className="loading">Loading manifest jobs...</p>
         ) : isError ? (
-          <div className="p-4 rounded-md bg-red-50 text-red-700 border border-red-200 mb-4">{(error as Error).message}</div>
+          <div className="notice error">{(error as Error).message}</div>
         ) : (
           <>
-            <div className="grid gap-4 md:grid-cols-3 mb-4">
+            <div className="manifests-filter-grid">
               <label>
                 Filter by status
                 <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
@@ -479,7 +477,7 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
             />
           </>
         )}
-      </div>
+      </section>
     </div>
   );
 }
