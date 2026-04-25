@@ -133,7 +133,7 @@ class TestResolveEffectiveModelRuntimeDefault:
         [
             ("codex_cli", "gpt-5.4"),
             ("gemini_cli", "gemini-3.1-pro-preview"),
-            ("claude_code", "Sonnet 4.6"),
+            ("claude_code", "claude-opus-4-7"),
         ],
     )
     def test_runtime_default_for_each_canonical_id(self, runtime_id, expected_model):

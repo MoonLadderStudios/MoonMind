@@ -662,7 +662,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "is_default": True,
             "provider_id": "anthropic",
             "provider_label": "Anthropic",
-            "default_model": None,  # inherits runtime default: Sonnet 4.6
+            "default_model": None,  # inherits runtime default: claude-opus-4-7
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": get_provider_default("claude_code", "volume_ref"),

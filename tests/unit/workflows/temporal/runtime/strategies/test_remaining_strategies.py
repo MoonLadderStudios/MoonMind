@@ -84,7 +84,7 @@ class TestClaudeCodeBuildCommand:
         # When no profile default_model is set, the claude_code runtime default applies.
         assert cmd == [
             "claude",
-            "--model", "Sonnet 4.6",
+            "--model", "claude-opus-4-7",
             "-p", "--dangerously-skip-permissions", "Refactor this",
         ]
 
@@ -124,7 +124,7 @@ class TestClaudeCodeBuildCommand:
         request = _make_request()
         cmd = s.build_command(profile, request)
         # No instruction_ref but runtime default model still applies.
-        assert cmd == ["claude", "--model", "Sonnet 4.6", "-p", "--dangerously-skip-permissions"]
+        assert cmd == ["claude", "--model", "claude-opus-4-7", "-p", "--dangerously-skip-permissions"]
 
     def test_anthropic_model_env_suppresses_model_flag(self) -> None:
         """When ANTHROPIC_MODEL is in env_overrides (MiniMax profile), --model must be omitted."""
