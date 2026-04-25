@@ -1,27 +1,17 @@
 [
   {
-    "id": 3142198018,
+    "id": 3142406589,
     "disposition": "addressed",
-    "rationale": "Valid step and objective attachment selection now only clears the attachment-limit submit message, preserving legacy branch warnings and other unrelated submit warnings."
+    "rationale": "Centralized nested final-state artifact extraction in _pr_resolver_final_payload so status and metadata parsing share the same lookup."
   },
   {
-    "id": 3142198421,
+    "id": 3142406592,
     "disposition": "addressed",
-    "rationale": "Step attachment counting now uses the existing selected attachment count and step delta instead of constructing a temporary aggregate array, and unrelated submit messages are preserved."
+    "rationale": "Added _first_stripped_text so headSha selection skips whitespace-only candidates and falls through to valid nested final SHA values, with adapter tests covering the case."
   },
   {
-    "id": 3142198423,
+    "id": 4175998021,
     "disposition": "addressed",
-    "rationale": "Objective attachment selection now clears submitMessage only when it matches the attachment limit message, so unrelated validation errors remain visible."
-  },
-  {
-    "id": 4175812006,
-    "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary with no separate actionable request."
-  },
-  {
-    "id": 4175812328,
-    "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary; the actionable inline feedback from the same review is addressed separately."
+    "rationale": "Review summary covered by the same final-payload helper and robust SHA selection changes."
   }
 ]
