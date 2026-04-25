@@ -28,5 +28,20 @@
     "id": 4176042510,
     "disposition": "not-applicable",
     "rationale": "Automated review summary; its actionable points are covered by the inline comment dispositions."
+  },
+  {
+    "id": 3142406589,
+    "disposition": "addressed",
+    "rationale": "Centralized nested final-state artifact extraction in _pr_resolver_final_payload so status and metadata parsing share the same lookup."
+  },
+  {
+    "id": 3142406592,
+    "disposition": "addressed",
+    "rationale": "Added _first_stripped_text so headSha selection skips whitespace-only candidates and falls through to valid nested final SHA values, with adapter tests covering the case."
+  },
+  {
+    "id": 4175998021,
+    "disposition": "addressed",
+    "rationale": "Review summary covered by the same final-payload helper and robust SHA selection changes."
   }
 ]
