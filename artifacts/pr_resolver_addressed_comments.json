@@ -1,32 +1,27 @@
 [
   {
-    "id": 3141071210,
-    "disposition": "not-applicable",
-    "rationale": "The referenced activity-runtime values are already defined before use: info is read from the Temporal activity context, metadata/moonmind_metadata are extracted from result metadata, and summary_payload is built before reportOutput is read."
-  },
-  {
-    "id": 3141071212,
-    "disposition": "not-applicable",
-    "rationale": "TemporalActivityRuntimeError is defined in moonmind/workflows/temporal/activity_runtime.py and is already available in this module."
-  },
-  {
-    "id": 4174446344,
-    "disposition": "not-applicable",
-    "rationale": "This review summary repeats the two Gemini inline comments; both underlying concerns are not applicable to the current code."
-  },
-  {
-    "id": 3141083599,
+    "id": 3142198018,
     "disposition": "addressed",
-    "rationale": "Persisted lastAssistantText is now bounded to 4 KiB with truncation metadata before session-store validation, with focused controller test coverage."
+    "rationale": "Valid step and objective attachment selection now only clears the attachment-limit submit message, preserving legacy branch warnings and other unrelated submit warnings."
   },
   {
-    "id": 3141083600,
+    "id": 3142198421,
     "disposition": "addressed",
-    "rationale": "The Create page now reconstructs reportOutputEnabled for edit/rerun mode and submits reportOutput.enabled=false when the report checkbox is unchecked, with focused draft reconstruction coverage."
+    "rationale": "Step attachment counting now uses the existing selected attachment count and step delta instead of constructing a temporary aggregate array, and unrelated submit messages are preserved."
   },
   {
-    "id": 4174464058,
+    "id": 3142198423,
+    "disposition": "addressed",
+    "rationale": "Objective attachment selection now clears submitMessage only when it matches the attachment limit message, so unrelated validation errors remain visible."
+  },
+  {
+    "id": 4175812006,
     "disposition": "not-applicable",
-    "rationale": "This is the Codex review container comment and contains no actionable code finding beyond the separate inline comments."
+    "rationale": "Top-level automated review summary with no separate actionable request."
+  },
+  {
+    "id": 4175812328,
+    "disposition": "not-applicable",
+    "rationale": "Top-level automated review summary; the actionable inline feedback from the same review is addressed separately."
   }
 ]

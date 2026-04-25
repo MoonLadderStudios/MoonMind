@@ -3558,12 +3558,13 @@ describe("Task Create Entrypoint", () => {
         ],
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    expect(await screen.findByText("Too many attachments (5/4).")).toBeTruthy();
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/artifacts"),
-    ).toBe(false);
+      await screen.findByText(
+        "Up to 4 files across all steps, 1.0 MB each, 2.0 MB total.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("one.png")).toBeNull();
   });
 
   it("externalizes oversized edited input before sending UpdateInputs", async () => {
@@ -4137,6 +4138,47 @@ describe("Task Create Entrypoint", () => {
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url) === "/api/artifacts"),
     ).toBe(false);
+  });
+
+  it("shows attachment limits only as an error toast when adding too many files", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    const limitMessage =
+      "Up to 4 files across all steps, 1.0 MB each, 2.0 MB total.";
+    expect(screen.queryByText(limitMessage)).toBeNull();
+
+    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
+      target: {
+        files: [
+          new File(["one"], "one.png", { type: "image/png" }),
+          new File(["two"], "two.png", { type: "image/png" }),
+          new File(["three"], "three.png", { type: "image/png" }),
+          new File(["four"], "four.png", { type: "image/png" }),
+          new File(["five"], "five.png", { type: "image/png" }),
+        ],
+      },
+    });
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText(limitMessage)).toBeTruthy();
+    expect(screen.queryByText("one.png")).toBeNull();
+  });
+
+  it("preserves unrelated submit warnings when adding valid attachments", async () => {
+    renderForEdit("mm:edit-123", withAttachmentPolicy());
+
+    const legacyWarning =
+      "This older task used separate starting and target branches. The new form submits one branch, so review it before saving or rerunning.";
+    expect(await screen.findByText(legacyWarning)).toBeTruthy();
+
+    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
+      target: {
+        files: [new File(["one"], "one.png", { type: "image/png" })],
+      },
+    });
+
+    expect(await screen.findByText("one.png")).toBeTruthy();
+    expect(screen.getByText(legacyWarning)).toBeTruthy();
   });
 
   it("keeps step upload failures target-scoped with retry and remove actions", async () => {
