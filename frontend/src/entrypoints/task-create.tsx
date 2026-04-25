@@ -5345,8 +5345,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
       {pageMode.intent === "edit-for-rerun" && !modeLoadError ? (
         <p className="notice" role="status">
-          You are editing a failed task. Your changes will create a new run.
-          The original failed run will remain unchanged.
+          You are editing a previous task. Your changes will create a new run.
+          The original run will remain unchanged.
         </p>
       ) : null}
 
