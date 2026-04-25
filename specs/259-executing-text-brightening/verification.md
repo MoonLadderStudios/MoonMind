@@ -31,6 +31,12 @@
 
 Note: Direct `npm run ui:typecheck` and `npm run ui:lint` could not resolve local binaries in this managed workspace path. The equivalent local binaries passed, matching the repository test runner's managed-path workaround.
 
+## MoonSpec Alignment Evidence
+
+- `specs/259-executing-text-brightening/speckit_analyze_report.md`: PASS
+  - Single-story scope, source requirement preservation, planning coverage, design artifacts, task ordering, and verification evidence were aligned after task generation.
+  - The repository-level prerequisite helper path is absent, and the `.specify` helper rejects the managed branch name; active feature resolution used `.specify/feature.json`.
+
 ## Source Design Coverage
 
 - DESIGN-REQ-001: PASS
