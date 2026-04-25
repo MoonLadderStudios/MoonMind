@@ -35,6 +35,7 @@ _SSH_GIT_RE = re.compile(
     r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$"
 )
 _GITHUB_REPOSITORY_DISCOVERY_URL = "https://api.github.com/user/repos"
+_GITHUB_REPOSITORY_METADATA_URL_TEMPLATE = "https://api.github.com/repos/{repository}"
 _GITHUB_BRANCH_DISCOVERY_URL_TEMPLATE = "https://api.github.com/repos/{repository}/branches"
 _GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS = 5.0
 _GITHUB_REPOSITORY_DISCOVERY_CACHE_TTL_SECONDS = 60.0
@@ -42,7 +43,7 @@ _GITHUB_REPOSITORY_OPTIONS_CACHE: dict[
     str, tuple[float, tuple["RepositoryOption", ...], str | None]
 ] = {}
 _GITHUB_BRANCH_OPTIONS_CACHE: dict[
-    str, tuple[float, tuple["BranchOption", ...], str | None]
+    str, tuple[float, tuple["BranchOption", ...], str | None, str | None]
 ] = {}
 
 _JIRA_CREATE_PAGE_SOURCES = {
@@ -204,12 +205,12 @@ def _fetch_github_repository_options(
 def _fetch_github_branch_options(
     token: str,
     repository: str,
-) -> tuple[list[BranchOption], str | None]:
+) -> tuple[list[BranchOption], str | None, str | None]:
     """Fetch credential-visible GitHub branches without exposing secrets."""
 
     normalized_repository = _normalize_repository_value(repository)
     if not token or not normalized_repository:
-        return [], None
+        return [], None, None
     headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {token}",
@@ -217,6 +218,7 @@ def _fetch_github_branch_options(
     }
     options: list[BranchOption] = []
     seen: set[str] = set()
+    default_branch: str | None = None
     next_url: str | None = _GITHUB_BRANCH_DISCOVERY_URL_TEMPLATE.format(
         repository=normalized_repository
     )
@@ -225,6 +227,22 @@ def _fetch_github_branch_options(
         with httpx.Client(
             timeout=_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
         ) as client:
+            try:
+                metadata_response = client.get(
+                    _GITHUB_REPOSITORY_METADATA_URL_TEMPLATE.format(
+                        repository=normalized_repository
+                    ),
+                    headers=headers,
+                )
+                metadata_response.raise_for_status()
+                metadata = metadata_response.json()
+                if isinstance(metadata, dict):
+                    default_branch = (
+                        str(metadata.get("default_branch") or "").strip() or None
+                    )
+            except (httpx.HTTPError, ValueError):
+                # Branch discovery can still succeed without default-branch metadata.
+                pass
             while next_url:
                 response = client.get(
                     next_url,
@@ -251,9 +269,9 @@ def _fetch_github_branch_options(
                         )
                 next_url = response.links.get("next", {}).get("url")
     except (httpx.HTTPError, ValueError):
-        return [], "GitHub branch lookup is unavailable."
+        return [], "GitHub branch lookup is unavailable.", None
 
-    return options, None
+    return options, None, default_branch
 
 def _github_repository_options_cache_key(token: str) -> str:
     return sha256(token.encode("utf-8")).hexdigest()
@@ -281,18 +299,23 @@ def _get_cached_github_repository_options(
 def _get_cached_github_branch_options(
     token: str,
     repository: str,
-) -> tuple[list[BranchOption], str | None]:
+) -> tuple[list[BranchOption], str | None, str | None]:
     now = time.monotonic()
     cache_key = _github_branch_options_cache_key(token, repository)
     cached = _GITHUB_BRANCH_OPTIONS_CACHE.get(cache_key)
     if cached:
-        cached_at, cached_options, cached_error = cached
+        cached_at, cached_options, cached_error, cached_default_branch = cached
         if now - cached_at < _GITHUB_REPOSITORY_DISCOVERY_CACHE_TTL_SECONDS:
-            return list(cached_options), cached_error
+            return list(cached_options), cached_error, cached_default_branch
 
-    options, error = _fetch_github_branch_options(token, repository)
-    _GITHUB_BRANCH_OPTIONS_CACHE[cache_key] = (now, tuple(options), error)
-    return options, error
+    options, error, default_branch = _fetch_github_branch_options(token, repository)
+    _GITHUB_BRANCH_OPTIONS_CACHE[cache_key] = (
+        now,
+        tuple(options),
+        error,
+        default_branch,
+    )
+    return options, error, default_branch
 
 def _is_create_page_path(initial_path: str) -> bool:
     normalized_path = urlparse(initial_path or "").path.rstrip("/")
@@ -357,7 +380,7 @@ def build_repository_branch_options(repository: str) -> dict[str, Any]:
             "error": "GitHub branch lookup is unavailable.",
         }
 
-    options, error = _get_cached_github_branch_options(
+    options, error, default_branch = _get_cached_github_branch_options(
         github_token,
         normalized_repository,
     )
@@ -366,6 +389,7 @@ def build_repository_branch_options(repository: str) -> dict[str, Any]:
     return {
         "items": [option.to_payload() for option in options],
         "error": error,
+        "defaultBranch": default_branch,
     }
 
 def _jira_create_page_enabled() -> bool:
