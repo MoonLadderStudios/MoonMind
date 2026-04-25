@@ -114,11 +114,10 @@ def _breakdown_source_path(value: Any) -> str:
         path = _string(source.get("referencePath") or source.get("path"))
         if path:
             return path
-    source_document = _string(
-        value.get("sourceDocument") or value.get("source_document")
-    )
-    if source_document:
-        return source_document
+    for key in ("sourceDocument", "source_document"):
+        path = _string(value.get(key))
+        if path:
+            return path
     return ""
 
 def _story_source_reference(

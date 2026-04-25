@@ -1,37 +1,12 @@
 [
   {
-    "id": 4176110163,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary; individual actionable comments were classified separately."
-  },
-  {
-    "id": 3142549713,
+    "id": 3142669162,
     "disposition": "addressed",
-    "rationale": "Changed the repository metadata response type check to dict for the default_branch extraction."
+    "rationale": "Updated _breakdown_source_path to normalize sourceDocument and source_document independently, so whitespace-only sourceDocument no longer blocks the fallback key."
   },
   {
-    "id": 3142549717,
+    "id": 4176225378,
     "disposition": "addressed",
-    "rationale": "Made the repository metadata request best-effort so branch pagination still succeeds if metadata lookup fails."
-  },
-  {
-    "id": 3142549722,
-    "disposition": "addressed",
-    "rationale": "Allowed default branch auto-selection to run when the selected repository changes even if a previous branch is selected."
-  },
-  {
-    "id": 3142550006,
-    "disposition": "addressed",
-    "rationale": "Added backend regression coverage proving branch options are returned when the metadata endpoint fails."
-  },
-  {
-    "id": 4176110370,
-    "disposition": "not-applicable",
-    "rationale": "Automated review wrapper with no separate actionable request beyond the inline comments already addressed."
-  },
-  {
-    "id": 3142571198,
-    "disposition": "addressed",
-    "rationale": "Added an explicit comment explaining that metadata failures are intentionally ignored so branch discovery can continue without default-branch metadata."
+    "rationale": "Resolved the review summary's requested robustness improvement with code and regression coverage."
   }
 ]

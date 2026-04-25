@@ -277,7 +277,8 @@ async def test_create_jira_issues_accepts_string_source_reference_from_breakdown
 async def test_create_jira_issues_uses_source_document_as_breakdown_fallback_path():
     service = _FakeJiraService()
     breakdown = {
-        "sourceDocument": "docs/Designs/RuntimeTypes.md",
+        "sourceDocument": " ",
+        "source_document": "docs/Designs/RuntimeTypes.md",
         "stories": [
             {
                 "id": "STORY-001",
