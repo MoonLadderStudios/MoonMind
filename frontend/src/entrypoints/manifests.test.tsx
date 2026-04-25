@@ -5,6 +5,10 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { ManifestsPage } from './manifests';
 
+// The default fixture seeds two manifest executions: one completed
+// `nightly-docs` run and one in-flight `registry-refresh` run with a `fetch`
+// stage. Tests that exercise the empty state or specific manifests override
+// `fetchSpy` locally with their own implementation.
 describe('Manifests Entrypoint', () => {
   const mockPayload: BootPayload = {
     page: 'manifests',

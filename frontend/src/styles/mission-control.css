@@ -674,6 +674,26 @@ h1 {
   gap: 0.8rem;
 }
 
+.manifests-page > .panel {
+  margin-top: 0;
+}
+
+.manifests-page form {
+  max-width: none;
+}
+
+.manifests-page .page-title + form,
+.manifests-page .page-title + .manifests-filter-grid {
+  margin-top: 0.7rem;
+}
+
+.manifests-advanced-grid,
+.manifests-filter-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+
 .task-list-utility-cluster {
   justify-content: flex-end;
 }
