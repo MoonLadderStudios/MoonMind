@@ -69,6 +69,7 @@ export type TemporalSubmissionDraft = {
   legacyBranchWarning: string | null;
   publishMode: string | null;
   mergeAutomationEnabled: boolean;
+  reportOutputEnabled: boolean;
   taskInstructions: string;
   primarySkill: string | null;
   inputAttachments: TemporalTaskInputAttachmentRef[];
@@ -499,6 +500,18 @@ function nullableStringValue(...values: unknown[]): string | null {
   return stringValue(...values) || null;
 }
 
+function booleanEnabledValue(...values: unknown[]): boolean {
+  return values.some((value) => {
+    if (value === true) {
+      return true;
+    }
+    if (typeof value !== 'string') {
+      return false;
+    }
+    return ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase());
+  });
+}
+
 function skillSelectorNames(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.map((item) => stringValue(item)).filter(Boolean);
@@ -689,6 +702,11 @@ export function buildTemporalSubmissionDraftFromExecution(
   const artifactMergeAutomation = objectValue(artifactParams.mergeAutomation);
   const taskMergeAutomation = objectValue(task.mergeAutomation);
   const artifactTaskMergeAutomation = objectValue(artifactTask.mergeAutomation);
+  const reportOutput = objectValue(params.reportOutput);
+  const artifactReportOutput = objectValue(artifactParams.reportOutput);
+  const taskReportOutput = objectValue(task.reportOutput);
+  const artifactTaskReportOutput = objectValue(artifactTask.reportOutput);
+  const snapshotReportOutput = objectValue(snapshotDraft.reportOutput);
   const tool = objectValue(task.tool);
   const skill = objectValue(task.skill);
   const artifactTool = objectValue(artifactTask.tool);
@@ -794,6 +812,13 @@ export function buildTemporalSubmissionDraftFromExecution(
         artifactMergeAutomation.enabled ||
         taskMergeAutomation.enabled ||
         artifactTaskMergeAutomation.enabled,
+    ),
+    reportOutputEnabled: booleanEnabledValue(
+      snapshotReportOutput.enabled,
+      reportOutput.enabled,
+      artifactReportOutput.enabled,
+      taskReportOutput.enabled,
+      artifactTaskReportOutput.enabled,
     ),
     taskInstructions:
       Object.keys(snapshotDraft).length > 0

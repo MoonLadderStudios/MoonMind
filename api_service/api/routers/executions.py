@@ -2368,6 +2368,96 @@ def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
         normalized["prBaseBranch"] = normalized["baseBranch"]
     return normalized
 
+_REPORT_OUTPUT_STRING_KEYS = frozenset(
+    {
+        "reportType",
+        "report_type",
+        "title",
+        "description",
+        "primaryPath",
+        "primary_path",
+    }
+)
+_REPORT_OUTPUT_MAX_STRING_CHARS = 512
+
+def _normalize_report_output_payload(
+    *raw_payloads: Any,
+) -> dict[str, Any]:
+    for raw_payload in raw_payloads:
+        report_payload = _coerce_mapping(raw_payload)
+        if not report_payload:
+            continue
+        try:
+            enabled = _coerce_bool(report_payload.get("enabled"), default=False)
+            required = _coerce_bool(report_payload.get("required"), default=True)
+        except ValueError as exc:
+            raise _invalid_task_request(
+                f"reportOutput boolean value is invalid: {exc}"
+            ) from exc
+        if not enabled:
+            return {"enabled": False}
+
+        raw_report_type = (
+            report_payload.get("reportType")
+            or report_payload.get("report_type")
+            or "agent_run_report"
+        )
+        if not isinstance(raw_report_type, str):
+            raise _invalid_task_request("reportOutput.reportType must be a string.")
+        report_type = raw_report_type.strip() or "agent_run_report"
+        if len(report_type) > _REPORT_OUTPUT_MAX_STRING_CHARS:
+            raise _invalid_task_request(
+                f"reportOutput.reportType must be "
+                f"{_REPORT_OUTPUT_MAX_STRING_CHARS} characters or fewer."
+            )
+        normalized: dict[str, Any] = {
+            "enabled": True,
+            "required": required,
+            "reportType": report_type,
+        }
+        for key in _REPORT_OUTPUT_STRING_KEYS:
+            if key in {"reportType", "report_type"}:
+                continue
+            value = report_payload.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise _invalid_task_request(f"reportOutput.{key} must be a string.")
+            text = value.strip()
+            if not text:
+                continue
+            if len(text) > _REPORT_OUTPUT_MAX_STRING_CHARS:
+                raise _invalid_task_request(
+                    f"reportOutput.{key} must be "
+                    f"{_REPORT_OUTPUT_MAX_STRING_CHARS} characters or fewer."
+                )
+            canonical_key = {
+                "primary_path": "primaryPath",
+            }.get(key, key)
+            normalized[canonical_key] = text
+        return normalized
+    return {}
+
+def _report_output_instruction(report_output: Mapping[str, Any]) -> str:
+    if not _coerce_bool(report_output.get("enabled"), default=False):
+        return ""
+    primary_path = str(report_output.get("primaryPath") or "").strip()
+    path_sentence = (
+        f" Also write the same report to `{primary_path}` when the runtime "
+        "workspace makes that path available."
+        if primary_path
+        else ""
+    )
+    return (
+        "\n\nMoonMind report output contract:\n"
+        "- Finish with a concise final report suitable for a `report.primary` artifact.\n"
+        "- Include outcome, commands or tools run, key evidence, failures or "
+        "skipped work, and recommended next action.\n"
+        "- Do not include secrets, raw credentials, cookies, tokens, or full "
+        "environment dumps.\n"
+        f"{path_sentence}"
+    )
+
 def _task_publish_skill_id(
     task_payload: Mapping[str, Any],
     normalized_tool: Mapping[str, Any] | None,
@@ -3031,6 +3121,12 @@ async def _create_execution_from_task_request(
     story_output_payload = _normalize_story_output_payload(
         task_payload.get("storyOutput") or task_payload.get("story_output")
     )
+    report_output_payload = _normalize_report_output_payload(
+        task_payload.get("reportOutput"),
+        task_payload.get("report_output"),
+        payload.get("reportOutput"),
+        payload.get("report_output"),
+    )
     normalized_tool = _normalize_task_tool(task_payload)
     publish_payload = _resolve_task_publish_payload(
         payload=payload,
@@ -3047,10 +3143,16 @@ async def _create_execution_from_task_request(
     propose_tasks = _coerce_bool(task_payload.get("proposeTasks"), default=False)
     normalized_task_for_planner: dict[str, Any] = {}
     instructions = str(task_payload.get("instructions") or "").strip()
+    if report_output_payload.get("enabled"):
+        instructions = (
+            instructions + _report_output_instruction(report_output_payload)
+        ).strip()
     if depends_on:
         normalized_task_for_planner["dependsOn"] = depends_on
     if instructions:
         normalized_task_for_planner["instructions"] = instructions
+    if report_output_payload:
+        normalized_task_for_planner["reportOutput"] = dict(report_output_payload)
     normalized_task_for_planner["proposeTasks"] = propose_tasks
     if normalized_proposal_policy is not None:
         normalized_task_for_planner["proposalPolicy"] = normalized_proposal_policy
@@ -3204,6 +3306,8 @@ async def _create_execution_from_task_request(
     }
     if story_output_payload:
         initial_parameters["storyOutput"] = dict(story_output_payload)
+    if report_output_payload:
+        initial_parameters["reportOutput"] = dict(report_output_payload)
     if merge_automation_payload:
         initial_parameters["mergeAutomation"] = dict(merge_automation_payload)
     if instructions:

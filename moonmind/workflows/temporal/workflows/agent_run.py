@@ -489,6 +489,11 @@ class MoonMindAgentRun:
             metadata.setdefault("taskRunId", task_run_id)
 
         step_ledger_context = _request_step_ledger_context(request)
+        report_output_context = (
+            request.parameters.get("reportOutput")
+            if isinstance(request.parameters, Mapping)
+            else None
+        )
         if step_ledger_context is not None:
             moonmind_payload = (
                 metadata.get("moonmind")
@@ -496,6 +501,14 @@ class MoonMindAgentRun:
                 else {}
             )
             moonmind_payload["stepLedger"] = step_ledger_context
+            metadata["moonmind"] = moonmind_payload
+        if isinstance(report_output_context, Mapping):
+            moonmind_payload = (
+                metadata.get("moonmind")
+                if isinstance(metadata.get("moonmind"), dict)
+                else {}
+            )
+            moonmind_payload["reportOutput"] = dict(report_output_context)
             metadata["moonmind"] = moonmind_payload
 
         return result.model_copy(update={"metadata": metadata})

@@ -3397,9 +3397,70 @@ class TemporalAgentRuntimeActivities:
             "provider_error_code": result_dict.get("provider_error_code") or result_dict.get("providerErrorCode"),
             "metrics": result_dict.get("metrics") or {},
         }
+        report_output = (
+            moonmind_metadata.get("reportOutput")
+            if isinstance(moonmind_metadata.get("reportOutput"), Mapping)
+            else {}
+        )
+        try:
+            report_output_enabled = _coerce_bool(
+                report_output.get("enabled"), default=False
+            )
+            report_output_required = _coerce_bool(
+                report_output.get("required"), default=True
+            )
+        except ValueError as exc:
+            logger.warning("Invalid reportOutput contract: %s", exc)
+            report_output_enabled = False
+            report_output_required = True
+
+        def _report_execution_identity() -> tuple[str, str, str]:
+            execution_ref = (
+                report_output.get("executionRef")
+                if isinstance(report_output.get("executionRef"), Mapping)
+                else {}
+            )
+            if info is not None:
+                namespace = str(execution_ref.get("namespace") or info.namespace)
+                workflow_id = str(
+                    execution_ref.get("workflow_id")
+                    or execution_ref.get("workflowId")
+                    or info.workflow_id
+                )
+                run_id = str(
+                    execution_ref.get("run_id")
+                    or execution_ref.get("runId")
+                    or info.workflow_run_id
+                )
+                return namespace, workflow_id, run_id
+            return (
+                str(execution_ref.get("namespace") or "default"),
+                str(
+                    execution_ref.get("workflow_id")
+                    or execution_ref.get("workflowId")
+                    or ""
+                ),
+                str(execution_ref.get("run_id") or execution_ref.get("runId") or ""),
+            )
+
+        def _report_body() -> str:
+            assistant_text = ""
+            for key in ("assistantText", "lastAssistantText"):
+                value = metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    assistant_text = value.strip()
+                    break
+            summary_text = str(summary_payload.get("summary") or "").strip()
+            body = assistant_text or summary_text
+            if not body:
+                body = "Agent run completed without a textual report body."
+            if body.lstrip().startswith("#"):
+                return body.rstrip() + "\n"
+            title = str(report_output.get("title") or "Final report").strip()
+            return f"# {title}\n\n{body.rstrip()}\n"
 
         try:
-            published_refs: dict[str, str] = {}
+            published_refs: dict[str, Any] = {}
             if instruction_ref:
                 published_refs["inputInstructionsRef"] = await _write_reference_artifact(
                     link_type="input.instructions",
@@ -3436,6 +3497,93 @@ class TemporalAgentRuntimeActivities:
                     **step_artifact_metadata,
                 },
             )
+            if report_output_enabled:
+                namespace, workflow_id, run_id = _report_execution_identity()
+                if not workflow_id or not run_id:
+                    raise TemporalActivityRuntimeError(
+                        "reportOutput enabled but executionRef is incomplete"
+                    )
+                report_type = str(
+                    report_output.get("reportType")
+                    or report_output.get("report_type")
+                    or "agent_run_report"
+                ).strip() or "agent_run_report"
+                report_bundle = await self._artifact_service.publish_report_bundle(
+                    principal="system:agent_runtime",
+                    namespace=namespace,
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    report_type=report_type,
+                    report_scope="final",
+                    primary={
+                        "payload": _report_body(),
+                        "content_type": "text/markdown",
+                        "label": "Final report",
+                        "metadata": {
+                            "artifact_type": report_type,
+                            "title": str(
+                                report_output.get("title") or "Final report"
+                            ).strip()
+                            or "Final report",
+                            "description": str(
+                                report_output.get("description") or ""
+                            ).strip()
+                            or "Agent-authored final report",
+                            "producer": "activity:agent_runtime.publish_artifacts",
+                            "render_hint": "text",
+                            "name": "final-report.md",
+                            **step_artifact_metadata,
+                        },
+                    },
+                    summary={
+                        "payload": str(summary_payload.get("summary") or "").strip()
+                        or "Report generated.",
+                        "content_type": "text/plain",
+                        "label": "Report summary",
+                        "metadata": {
+                            "artifact_type": report_type,
+                            "title": "Report summary",
+                            "producer": "activity:agent_runtime.publish_artifacts",
+                            "render_hint": "text",
+                            "name": "report-summary.txt",
+                            **step_artifact_metadata,
+                        },
+                    },
+                    structured={
+                        "payload": {
+                            "summary": summary_payload.get("summary") or "",
+                            "output_refs": summary_payload.get("output_refs") or [],
+                            "diagnostics_ref": agent_result_ref.artifact_id,
+                            "failure_class": summary_payload.get("failure_class"),
+                            "provider_error_code": summary_payload.get(
+                                "provider_error_code"
+                            ),
+                        },
+                        "content_type": "application/json",
+                        "label": "Report structured output",
+                        "metadata": {
+                            "artifact_type": report_type,
+                            "title": "Structured report data",
+                            "producer": "activity:agent_runtime.publish_artifacts",
+                            "render_hint": "json",
+                            "name": "report-structured.json",
+                            **step_artifact_metadata,
+                        },
+                    },
+                    step_id=step_artifact_metadata.get("step_id"),
+                    attempt=step_artifact_metadata.get("attempt"),
+                    scope=step_artifact_metadata.get("scope") or "final",
+                )
+                published_refs["reportBundle"] = report_bundle
+                primary_report_ref = report_bundle.get("primary_report_ref")
+                if isinstance(primary_report_ref, Mapping):
+                    primary_report_id = str(
+                        primary_report_ref.get("artifact_id")
+                        or primary_report_ref.get("artifactId")
+                        or ""
+                    ).strip()
+                    if primary_report_id:
+                        published_refs["primaryReportRef"] = primary_report_id
             # Enrich result with the diagnostics ref
             if isinstance(result, Mapping):
                 enriched = dict(result)
@@ -3481,6 +3629,8 @@ class TemporalAgentRuntimeActivities:
                 "agent_runtime.publish_artifacts failed to publish managed-session artifacts",
                 exc_info=True,
             )
+            if report_output_enabled and report_output_required:
+                raise
             return result
 
     def _require_session_controller(

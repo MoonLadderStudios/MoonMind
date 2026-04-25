@@ -3522,6 +3522,76 @@ async def test_controller_send_turn_persists_failed_turn_status(tmp_path: Path) 
     assert updated.error_message == "turn execution failed"
 
 @pytest.mark.asyncio
+async def test_controller_send_turn_bounds_persisted_last_assistant_text(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ok",
+            status="busy",
+            workspacePath="/work/repo",
+            sessionWorkspacePath="/work/session",
+            artifactSpoolPath="/work/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "vendor-turn-1",
+                "status": "completed",
+                "metadata": {"assistantText": "x" * 12000},
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    response = await controller.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="thread-1",
+            instructions="Write a long report",
+        )
+    )
+
+    updated = store.load("sess-1")
+    assert response.status == "completed"
+    assert updated is not None
+    assert updated.metadata["lastAssistantTextTruncated"] is True
+    assert updated.metadata["lastAssistantTextOriginalChars"] == 8190
+    assert len(str(updated.metadata["lastAssistantText"]).encode("utf-8")) <= 4096
+
+@pytest.mark.asyncio
 async def test_controller_interrupt_turn_preserves_failed_runtime_result(
     tmp_path: Path,
 ) -> None:

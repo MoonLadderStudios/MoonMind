@@ -3819,6 +3819,45 @@ class MoonMindRunWorkflow:
             parameters["metadata"] = self._json_mapping(
                 raw_metadata, path=f"node[{node_id}].metadata"
             )
+        raw_report_output = (
+            node_inputs.get("reportOutput")
+            or node_inputs.get("report_output")
+            or (
+                workflow_parameters.get("reportOutput")
+                if isinstance(workflow_parameters, Mapping)
+                else None
+            )
+            or (
+                workflow_parameters.get("report_output")
+                if isinstance(workflow_parameters, Mapping)
+                else None
+            )
+        )
+        if isinstance(raw_report_output, Mapping):
+            report_output = self._json_mapping(
+                raw_report_output,
+                path=f"node[{node_id}].reportOutput",
+            )
+            if _coerce_bool(report_output.get("enabled"), default=False):
+                report_output["executionRef"] = {
+                    "namespace": wf_info.namespace,
+                    "workflow_id": wf_info.workflow_id,
+                    "run_id": wf_info.run_id,
+                }
+                parameters["reportOutput"] = report_output
+                metadata_payload = (
+                    parameters.get("metadata")
+                    if isinstance(parameters.get("metadata"), dict)
+                    else {}
+                )
+                moonmind_payload = (
+                    metadata_payload.get("moonmind")
+                    if isinstance(metadata_payload.get("moonmind"), dict)
+                    else {}
+                )
+                moonmind_payload["reportOutput"] = report_output
+                metadata_payload["moonmind"] = moonmind_payload
+                parameters["metadata"] = metadata_payload
         selected_skill = str(node_inputs.get("selectedSkill") or "").strip()
         if selected_skill:
             metadata_payload = (
