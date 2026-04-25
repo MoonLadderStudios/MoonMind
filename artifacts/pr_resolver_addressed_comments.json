@@ -1,47 +1,17 @@
 [
   {
-    "id": 3142465771,
+    "id": 3142403429,
     "disposition": "addressed",
-    "rationale": "Moved glyph delay computation to CSS so animation-delay is derived from --mm-executing-sweep-cycle-duration instead of a hard-coded JS duration."
+    "rationale": "Truncated merge automation child workflow memo targetRuntime to 80 characters and targetSkill to 160 characters, with regression coverage."
   },
   {
-    "id": 4176042279,
+    "id": 4175995633,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary with no separate actionable request beyond the inline comments."
+    "rationale": "Review summary only; the two actionable child comments were handled individually."
   },
   {
-    "id": 3142466094,
+    "id": 3142403433,
     "disposition": "addressed",
-    "rationale": "Removed SHIMMER_DURATION_MS from the component and made glyph delay use the shared CSS sweep duration token."
-  },
-  {
-    "id": 3142466095,
-    "disposition": "addressed",
-    "rationale": "Removed the hard-coded SWEEP_DIRECTION component constant and introduced the CSS --mm-executing-letter-sweep-direction token alongside the sweep geometry."
-  },
-  {
-    "id": 3142466096,
-    "disposition": "addressed",
-    "rationale": "Removed will-change from per-glyph spans to avoid unnecessary layer promotion across task lists."
-  },
-  {
-    "id": 4176042510,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary; its actionable points are covered by the inline comment dispositions."
-  },
-  {
-    "id": 3142406589,
-    "disposition": "addressed",
-    "rationale": "Centralized nested final-state artifact extraction in _pr_resolver_final_payload so status and metadata parsing share the same lookup."
-  },
-  {
-    "id": 3142406592,
-    "disposition": "addressed",
-    "rationale": "Added _first_stripped_text so headSha selection skips whitespace-only candidates and falls through to valid nested final SHA values, with adapter tests covering the case."
-  },
-  {
-    "id": 4175998021,
-    "disposition": "addressed",
-    "rationale": "Review summary covered by the same final-payload helper and robust SHA selection changes."
+    "rationale": "Removed the try/except around workflow.patched in MoonMindRunWorkflow._update_memo so the patch marker follows the standard deterministic workflow pattern."
   }
 ]

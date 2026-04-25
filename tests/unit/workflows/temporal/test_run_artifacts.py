@@ -67,6 +67,7 @@ def test_initialize_from_payload_tracks_declared_dependencies(
         "upsert_memo",
         lambda memo: captured_memo.append(dict(memo)),
     )
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
 
     workflow._update_memo()
 
@@ -2019,6 +2020,7 @@ def test_update_memo_persists_pull_request_url_under_canonical_key(
         "upsert_memo",
         lambda memo: captured_memo.append(dict(memo)),
     )
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
 
     workflow._update_memo()
 

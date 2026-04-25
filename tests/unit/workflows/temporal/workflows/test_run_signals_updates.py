@@ -386,6 +386,7 @@ async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):
     monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
     monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
     monkeypatch.setattr(workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
     monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
     workflow_info = type(
         "WorkflowInfo",
@@ -463,6 +464,7 @@ async def test_wait_for_dependencies_raises_dependency_specific_failure(monkeypa
     monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
     monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
     monkeypatch.setattr(workflow, "upsert_memo", lambda memo: None)
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
     monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
     workflow_info = type(
         "WorkflowInfo",
@@ -499,6 +501,7 @@ async def test_wait_for_dependencies_can_be_bypassed_by_operator_signal(monkeypa
     monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
     monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
     monkeypatch.setattr(workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
     monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
     workflow_info = type(
         "WorkflowInfo",
@@ -575,6 +578,7 @@ async def test_wait_for_dependencies_reconciles_again_after_timeout(monkeypatch)
     monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
     monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
     monkeypatch.setattr(workflow, "upsert_memo", lambda memo: None)
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
     monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
     workflow_info = type(
         "WorkflowInfo",
@@ -611,6 +615,7 @@ async def test_skip_dependency_wait_unblocks_dependency_gate(monkeypatch):
     monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
     monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
     monkeypatch.setattr(workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
     monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
     workflow_info = type(
         "WorkflowInfo",

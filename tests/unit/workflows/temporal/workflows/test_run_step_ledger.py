@@ -355,6 +355,7 @@ def test_run_queries_remain_available_after_completion(
 
 def test_run_memo_updates_remain_compact(monkeypatch: pytest.MonkeyPatch) -> None:
     memo_updates = _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
     workflow = MoonMindRunWorkflow()
     now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
 
@@ -374,6 +375,22 @@ def test_run_memo_updates_remain_compact(monkeypatch: pytest.MonkeyPatch) -> Non
     assert "steps" not in latest_memo
     assert "progress" not in latest_memo
     assert "checks" not in latest_memo
+
+def test_run_memo_surfaces_runtime_and_skill_visibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memo_updates = _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+
+    workflow._title = "Resolve PR #1633"
+    workflow._summary = "Execution initialized."
+    workflow._target_runtime = "codex_cli"
+    workflow._target_skill = "pr-resolver"
+    workflow._update_memo()
+
+    assert memo_updates[-1]["targetRuntime"] == "codex_cli"
+    assert memo_updates[-1]["targetSkill"] == "pr-resolver"
 
 def test_run_groups_child_lineage_and_evidence_into_step_row(
     monkeypatch: pytest.MonkeyPatch,

@@ -222,7 +222,7 @@ async def test_run_integration_poll_completion_invokes_patched_with_stable_id(
     )
 
     assert patch_calls, "workflow.patched should be evaluated for integration poll completion"
-    assert set(patch_calls) == {INTEGRATION_POLL_LOOP_PATCH}
+    assert INTEGRATION_POLL_LOOP_PATCH in patch_calls
     assert mock_run_workflow._external_status == "completed"
 
 @pytest.mark.asyncio

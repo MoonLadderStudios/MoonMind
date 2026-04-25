@@ -962,6 +962,8 @@ def _serialize_execution(
             _coerce_temporal_scalar(search_attributes.get("mm_target_runtime"))
             or _coerce_temporal_scalar(search_attributes.get("mm_runtime"))
             or _coerce_temporal_scalar(search_attributes.get("runtime"))
+            or _coerce_temporal_scalar(memo.get("targetRuntime"))
+            or _coerce_temporal_scalar(memo.get("target_runtime"))
         ) or None
 
     task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
@@ -996,6 +998,10 @@ def _serialize_execution(
             or _coerce_temporal_scalar(search_attributes.get("mm_skill"))
             or _coerce_temporal_scalar(search_attributes.get("skillId"))
             or _coerce_temporal_scalar(search_attributes.get("skill"))
+            or _coerce_temporal_scalar(memo.get("targetSkill"))
+            or _coerce_temporal_scalar(memo.get("target_skill"))
+            or _coerce_temporal_scalar(memo.get("skillId"))
+            or _coerce_temporal_scalar(memo.get("skill"))
         ) or None
 
     task_payload = params.get("task")
