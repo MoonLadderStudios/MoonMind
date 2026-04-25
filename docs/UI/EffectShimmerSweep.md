@@ -88,7 +88,7 @@ layers:
   text_brightening:
     role: foreground glyph emphasis as the sweep crosses the label
     shape: short per-glyph brightness pulse with neighboring halo
-    travel: phase_locked_to_sweep_band
+    travel: visually_aligned_to_sweep_band
     emphasis: subtle
     required_for_hosts_with_glyph_markup: true
 ```
@@ -268,7 +268,7 @@ implementation_shape:
     glyph_brightening:
       strategy: split_visible_label_into_grapheme_spans
       animation: css_only
-      timing: use_sweep_cycle_duration
+      timing: use_shorter_letter_cycle_duration
       edge_padding_chars: 3
       accessibility:
         parent_exposes_complete_label: true
@@ -298,7 +298,7 @@ acceptance_criteria:
 
 ```yaml
 effect_tokens:
-  --mm-executing-sweep-cycle-duration: 1650ms
+  --mm-executing-sweep-cycle-duration: 1800ms
   --mm-executing-sweep-angle: -18deg
   --mm-executing-sweep-band-width: 24%
   --mm-executing-sweep-band-height: 180%
@@ -312,6 +312,7 @@ effect_tokens:
   --mm-executing-sweep-end-y: -160%
   --mm-executing-sweep-layer-offset-x: -12%
   --mm-executing-sweep-layer-offset-y: -10%
+  --mm-executing-letter-cycle-duration: 1500ms
 ```
 
 ## Non-Goals
