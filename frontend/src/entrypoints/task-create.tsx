@@ -6467,6 +6467,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           />
           Propose Tasks
         </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={produceReport}
+            aria-label="Produce report artifact"
+            onChange={(event) => setProduceReport(event.target.checked)}
+          />
+          Report
+        </label>
         </section>
 
         {pageMode.mode === "create" ? (
@@ -6679,15 +6688,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 ) : null}
               </select>
             </div>
-            <label className="checkbox queue-inline-selector queue-inline-selector--report">
-              <input
-                type="checkbox"
-                checked={produceReport}
-                aria-label="Produce report artifact"
-                onChange={(event) => setProduceReport(event.target.checked)}
-              />
-              Report
-            </label>
             <button
               type="submit"
               className={

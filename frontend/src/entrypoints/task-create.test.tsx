@@ -5680,6 +5680,7 @@ describe("Task Create Entrypoint", () => {
     const repoInput = screen.getByLabelText(/GitHub Repo/);
     const branchSelect = screen.getByLabelText("Branch");
     const publishModeSelect = screen.getByLabelText("Publish Mode");
+    const reportToggle = screen.getByLabelText("Produce report artifact");
     const stepExtension = addStepButton.closest(".queue-step-extension");
     const floatingBar = createButton.closest(".queue-floating-bar");
     const floatingBarRow = createButton.closest(".queue-floating-bar-row");
@@ -5701,9 +5702,13 @@ describe("Task Create Entrypoint", () => {
     expect(publishModeSelect.closest(".queue-floating-bar-row")).toBe(
       floatingBarRow,
     );
+    expect(reportToggle.closest(".queue-floating-bar")).toBeNull();
     expect(createButton.closest('[data-canonical-create-section="Submit"]')).toBe(
       submitSection,
     );
+    expect(
+      reportToggle.closest('[data-canonical-create-section="Execution controls"]'),
+    ).not.toBeNull();
     expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBe(
       submitSection,
     );
@@ -5751,6 +5756,12 @@ describe("Task Create Entrypoint", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
+      screen
+        .getByRole("checkbox", { name: "Propose Tasks" })
+        .compareDocumentPosition(reportToggle) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
       addStepButton.compareDocumentPosition(createButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -5775,6 +5786,9 @@ describe("Task Create Entrypoint", () => {
     expect(within(floatingBar as HTMLElement).getByLabelText("Publish Mode")).toBe(
       screen.getByLabelText("Publish Mode"),
     );
+    expect(
+      within(floatingBar as HTMLElement).queryByLabelText("Produce report artifact"),
+    ).toBeNull();
     expect(within(floatingBar as HTMLElement).getByRole("button", { name: "Create" })).toBe(
       createButton,
     );
