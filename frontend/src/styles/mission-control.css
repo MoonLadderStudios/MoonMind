@@ -1339,46 +1339,6 @@ tr[data-proposal-id].proposal-consuming td {
   animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite;
 }
 
-.status-running[data-state="executing"][data-effect="shimmer-sweep"]::after,
-.status-running.is-executing::after {
-  content: "executing";
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: inherit;
-  border-radius: inherit;
-  font: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
-  white-space: inherit;
-  color: transparent;
-  pointer-events: none;
-  background-image:
-    linear-gradient(
-      var(--mm-executing-sweep-angle),
-      transparent 0 30%,
-      var(--mm-executing-letter-halo) 42%,
-      var(--mm-executing-letter-bright) 50%,
-      var(--mm-executing-letter-halo) 58%,
-      transparent 70%
-    );
-  background-clip: text;
-  background-repeat: no-repeat;
-  background-size: var(--mm-executing-letter-sweep-width) var(--mm-executing-sweep-band-height);
-  background-position: var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y);
-  animation: mm-status-pill-shimmer-letters var(--mm-executing-sweep-cycle-duration) linear infinite;
-  filter: drop-shadow(0 0 3px rgb(var(--mm-accent-2) / 0.28));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.status-running[data-state="executing"][data-effect="shimmer-sweep"][data-shimmer-label]::after {
-  content: attr(data-shimmer-label);
-}
-
 @keyframes mm-status-pill-shimmer {
   0% {
     background-position:
@@ -1399,12 +1359,46 @@ tr[data-proposal-id].proposal-consuming td {
   }
 }
 
-@keyframes mm-status-pill-shimmer-letters {
+.status-letter-wave {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  white-space: pre;
+}
+
+.status-letter-wave__glyph {
+  display: inline-block;
+  color: inherit;
+  will-change: filter, text-shadow, color;
+  animation-name: mm-executing-letter-brighten;
+  animation-duration: var(--mm-executing-sweep-cycle-duration, 1650ms);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-delay: var(--mm-letter-delay, 0ms);
+}
+
+@keyframes mm-executing-letter-brighten {
   0% {
-    background-position: var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y);
+    color: var(--mm-executing-letter-bright, currentColor);
+    text-shadow:
+      0 0 0.28rem var(--mm-executing-letter-halo, rgb(var(--mm-accent-2) / 0.32)),
+      0 0 0.7rem var(--mm-executing-letter-halo, rgb(var(--mm-accent-2) / 0.32));
+    filter: brightness(1.22);
   }
+
+  5% {
+    color: var(--mm-executing-letter-bright, currentColor);
+    text-shadow:
+      0 0 0.2rem var(--mm-executing-letter-halo, rgb(var(--mm-accent-2) / 0.24)),
+      0 0 0.46rem var(--mm-executing-letter-halo, rgb(var(--mm-accent-2) / 0.24));
+    filter: brightness(1.14);
+  }
+
+  12%,
   100% {
-    background-position: var(--mm-executing-sweep-end-x) var(--mm-executing-sweep-end-y);
+    text-shadow: none;
+    filter: brightness(1);
   }
 }
 
@@ -1418,9 +1412,10 @@ tr[data-proposal-id].proposal-consuming td {
     background-size: 160% var(--mm-executing-sweep-band-height), 140% var(--mm-executing-sweep-band-height);
   }
 
-  .status-running[data-state="executing"][data-effect="shimmer-sweep"]::after,
-  .status-running.is-executing::after {
-    display: none;
+  .status-letter-wave__glyph {
+    animation: none !important;
+    text-shadow: none !important;
+    filter: none !important;
   }
 }
 

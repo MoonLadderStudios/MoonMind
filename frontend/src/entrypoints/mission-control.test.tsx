@@ -459,28 +459,18 @@ describe('Mission Control shared entry', () => {
         rule.selector.includes('shimmer-sweep') &&
         rule.selector.includes('::after'),
     );
-    expect(shimmerAfterBlock).not.toContain('mix-blend-mode: overlay');
-    expect(shimmerAfterBlock).not.toContain('rgb(255 255 255');
-    expect(shimmerAfterBlock).toContain('content: "executing"');
-    expect(shimmerAfterBlock).toContain('background-clip: text');
-    expect(shimmerAfterBlock).toContain('-webkit-background-clip: text');
-    expect(shimmerAfterBlock).toContain('-webkit-text-fill-color: transparent');
-    expect(shimmerAfterBlock).toContain('var(--mm-executing-letter-halo)');
-    expect(shimmerAfterBlock).toContain('var(--mm-executing-letter-bright)');
-    expect(shimmerAfterBlock).toContain('background-size: var(--mm-executing-letter-sweep-width) var(--mm-executing-sweep-band-height)');
-    expect(shimmerAfterBlock).toContain('filter: drop-shadow(0 0 3px rgb(var(--mm-accent-2) / 0.28))');
-    expect(shimmerAfterBlock).toContain('animation: mm-status-pill-shimmer-letters');
-    expect(shimmerAfterBlock).toContain('var(--mm-executing-sweep-cycle-duration)');
-    expect(shimmerAfterBlock).toContain('linear infinite');
-    expect(cssRuleBlock(
-      missionControlCss,
-      '.status-running[data-state="executing"][data-effect="shimmer-sweep"][data-shimmer-label]::after',
-    )).toContain('content: attr(data-shimmer-label)');
+    expect(shimmerAfterBlock).toBe('');
+    expect(cssRuleBlock(missionControlCss, '.status-letter-wave')).toContain('z-index: 2');
+    const glyphBlock = cssRuleBlock(missionControlCss, '.status-letter-wave__glyph');
+    expect(glyphBlock).toContain('animation-name: mm-executing-letter-brighten');
+    expect(glyphBlock).toContain('var(--mm-executing-sweep-cycle-duration, 1650ms)');
+    expect(glyphBlock).toContain('animation-delay: var(--mm-letter-delay, 0ms)');
+    expect(glyphBlock).toContain('will-change: filter, text-shadow, color');
     expect(missionControlCss).toMatch(
-      /@keyframes mm-status-pill-shimmer-letters\s*\{[\s\S]*?0%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\)[\s\S]*?100%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-end-x\)\s*var\(--mm-executing-sweep-end-y\)/,
+      /@keyframes mm-executing-letter-brighten\s*\{[\s\S]*?0%\s*\{[\s\S]*?var\(--mm-executing-letter-bright[\s\S]*?5%\s*\{[\s\S]*?brightness\(1\.14\)[\s\S]*?12%,\s*100%\s*\{[\s\S]*?brightness\(1\)/,
     );
     expect(missionControlCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.status-running\[data-state="executing"\]\[data-effect="shimmer-sweep"\]::after,\s*\.status-running\.is-executing::after[\s\S]*?display: none/,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.status-letter-wave__glyph\s*\{[\s\S]*?animation: none !important;[\s\S]*?text-shadow: none !important;[\s\S]*?filter: none !important;/,
     );
   });
 

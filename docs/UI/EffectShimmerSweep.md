@@ -63,7 +63,7 @@ principles:
 
 ## Visual Model
 
-The effect is composed of three layers.
+The effect is composed of three layers, with an optional fourth foreground text layer on hosts that can safely render the label as glyph spans.
 
 ```yaml
 layers:
@@ -84,6 +84,13 @@ layers:
     shape: wider and dimmer than the core band
     travel: locked_to_sweep_band
     emphasis: subtle
+
+  text_brightening:
+    role: foreground glyph emphasis as the sweep crosses the label
+    shape: short per-glyph brightness pulse with neighboring halo
+    travel: phase_locked_to_sweep_band
+    emphasis: subtle
+    required_for_hosts_with_glyph_markup: true
 ```
 
 ## Motion Profile
@@ -258,6 +265,18 @@ implementation_shape:
   text_strategy:
     text_must_render_above_overlay: true
     text_color_shift_during_pass: minimal_only
+    glyph_brightening:
+      strategy: split_visible_label_into_grapheme_spans
+      animation: css_only
+      timing: use_sweep_cycle_duration
+      edge_padding_chars: 3
+      accessibility:
+        parent_exposes_complete_label: true
+        visual_glyphs_are_hidden_from_assistive_tech: true
+      avoid:
+        - javascript_animation_loop
+        - font_weight_animation
+        - rerendering_react_on_frame_interval
 ```
 
 ## Acceptance Criteria
@@ -269,6 +288,7 @@ acceptance_criteria:
   - the shimmer produces no measurable layout shift
   - one complete sweep occurs roughly every 1.6 to 1.8 seconds with no center pause or idle delay
   - the brightest moment occurs near the center of the pill, not at the edges
+  - supported glyph-rendered hosts brighten letters in sequence on the same timing as the sweep
   - the effect looks intentional in both light and dark themes
   - reduced-motion users see a static active treatment with no animated sweep
   - non-executing states never inherit the shimmer accidentally
