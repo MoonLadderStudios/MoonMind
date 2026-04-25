@@ -2625,6 +2625,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           : normalizedDraftPublishMode,
       );
     }
+    setProduceReport(draft.reportOutputEnabled);
     const reconstructedSteps = createStepStateEntriesFromTemporalDraft(draft);
     setSteps(reconstructedSteps);
     setShowAdvancedStepOptions(hasAdvancedStepOptionValues(reconstructedSteps));
@@ -5091,12 +5092,16 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       publish: {
         mode: effectivePublishMode,
       },
-      ...(produceReport
+      ...(produceReport || pageMode.mode !== "create"
         ? {
             reportOutput: {
-              enabled: true,
-              required: true,
-              reportType: "agent_run_report",
+              enabled: produceReport,
+              ...(produceReport
+                ? {
+                    required: true,
+                    reportType: "agent_run_report",
+                  }
+                : {}),
             },
           }
         : {}),
@@ -5127,12 +5132,16 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           : {}),
         targetRuntime: normalizedRuntime,
         publishMode: effectivePublishMode,
-        ...(produceReport
+        ...(produceReport || pageMode.mode !== "create"
           ? {
               reportOutput: {
-                enabled: true,
-                required: true,
-                reportType: "agent_run_report",
+                enabled: produceReport,
+                ...(produceReport
+                  ? {
+                      required: true,
+                      reportType: "agent_run_report",
+                    }
+                  : {}),
               },
             }
           : {}),

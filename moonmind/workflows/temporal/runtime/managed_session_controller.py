@@ -66,7 +66,25 @@ _GITHUB_TOKEN_GIT_CREDENTIAL_HELPER = (
 _SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
 _CONTAINER_LOG_EXCERPT_TAIL_LINES = 40
 _CONTAINER_LOG_EXCERPT_MAX_CHARS = 2000
+_LAST_ASSISTANT_TEXT_METADATA_MAX_BYTES = 4 * 1024
 logger = logging.getLogger(__name__)
+
+def _last_assistant_text_metadata(value: str) -> dict[str, Any]:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return {}
+    encoded = normalized.encode("utf-8")
+    if len(encoded) <= _LAST_ASSISTANT_TEXT_METADATA_MAX_BYTES:
+        return {"lastAssistantText": normalized}
+    truncated = encoded[:_LAST_ASSISTANT_TEXT_METADATA_MAX_BYTES].decode(
+        "utf-8",
+        errors="ignore",
+    )
+    return {
+        "lastAssistantText": truncated,
+        "lastAssistantTextTruncated": True,
+        "lastAssistantTextOriginalChars": len(normalized),
+    }
 
 def _managed_session_docker_network(
     request_environment: Mapping[str, str] | None = None,
@@ -1745,7 +1763,7 @@ class DockerCodexManagedSessionController:
                 record_metadata = dict(record.metadata)
                 assistant_text = terminal_response.metadata.get("assistantText")
                 if isinstance(assistant_text, str) and assistant_text.strip():
-                    record_metadata["lastAssistantText"] = assistant_text.strip()
+                    record_metadata.update(_last_assistant_text_metadata(assistant_text))
                 updated_record = await self._session_store.update(
                     request.session_id,
                     session_epoch=terminal_response.session_state.session_epoch,

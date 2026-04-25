@@ -2673,6 +2673,24 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
+  it("reconstructs enabled report output from Temporal input parameters", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:report-output",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        reportOutput: {
+          enabled: true,
+          reportType: "agent_run_report",
+        },
+        task: {
+          instructions: "Produce a final report.",
+        },
+      },
+    });
+
+    expect(draft.reportOutputEnabled).toBe(true);
+  });
+
   it("fails draft reconstruction when instructions are missing", () => {
     expect(() =>
       buildTemporalSubmissionDraftFromExecution({

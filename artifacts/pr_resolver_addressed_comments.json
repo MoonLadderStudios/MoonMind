@@ -1,12 +1,32 @@
 [
   {
-    "id": 3139932227,
-    "disposition": "addressed",
-    "rationale": "Added transition: var(--mm-control-transition) to .queue-page-size-selector and covered it with the Mission Control CSS test."
+    "id": 3141071210,
+    "disposition": "not-applicable",
+    "rationale": "The referenced activity-runtime values are already defined before use: info is read from the Temporal activity context, metadata/moonmind_metadata are extracted from result metadata, and summary_payload is built before reportOutput is read."
   },
   {
-    "id": 4172986718,
+    "id": 3141071212,
+    "disposition": "not-applicable",
+    "rationale": "TemporalActivityRuntimeError is defined in moonmind/workflows/temporal/activity_runtime.py and is already available in this module."
+  },
+  {
+    "id": 4174446344,
+    "disposition": "not-applicable",
+    "rationale": "This review summary repeats the two Gemini inline comments; both underlying concerns are not applicable to the current code."
+  },
+  {
+    "id": 3141083599,
     "disposition": "addressed",
-    "rationale": "Top-level review summary duplicated the inline transition concern, which is fixed by the page size selector CSS/test update."
+    "rationale": "Persisted lastAssistantText is now bounded to 4 KiB with truncation metadata before session-store validation, with focused controller test coverage."
+  },
+  {
+    "id": 3141083600,
+    "disposition": "addressed",
+    "rationale": "The Create page now reconstructs reportOutputEnabled for edit/rerun mode and submits reportOutput.enabled=false when the report checkbox is unchecked, with focused draft reconstruction coverage."
+  },
+  {
+    "id": 4174464058,
+    "disposition": "not-applicable",
+    "rationale": "This is the Codex review container comment and contains no actionable code finding beyond the separate inline comments."
   }
 ]
