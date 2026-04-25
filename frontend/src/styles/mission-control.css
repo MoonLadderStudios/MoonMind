@@ -56,9 +56,9 @@
   --mm-executing-sweep-halo-opacity: 0.14;
   --mm-executing-letter-sweep-width: 84%;
   --mm-executing-letter-edge-padding: 3;
-  --mm-executing-letter-sweep-direction: -1;
+  --mm-executing-letter-sweep-direction: 1;
   --mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32);
-  --mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, rgb(var(--mm-panel)) 32%);
+  --mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, white 32%);
   --mm-font-headline: var(--mm-font-sans);
   --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }

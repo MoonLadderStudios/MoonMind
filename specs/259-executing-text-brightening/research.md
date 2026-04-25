@@ -26,10 +26,10 @@ Test implications: Task-list integration verifies executing label becomes one gl
 
 ## DESIGN-REQ-004 Timing And Direction
 
-Decision: Use the CSS token duration with a 1650ms fallback in styles and calculate delays against `1650` ms in component code. Set direction to right-to-left to match current sweep start/end tokens.
+Decision: Use the CSS token duration with a 1650ms fallback in styles and calculate delays against `1650` ms in component code. Set direction to left-to-right/top-left-to-bottom-right to match the visible sweep described by the canonical UI design.
 Evidence: Existing CSS moves from `--mm-executing-sweep-start-x: 135%` to `--mm-executing-sweep-end-x: -135%`.
 Rationale: The foreground wave should feel phase-locked with the physical sweep.
-Alternatives considered: Left-to-right phase order. Rejected for current token geometry.
+Alternatives considered: Right-to-left phase order. Rejected because the visible sweep direction is left-to-right/top-left-to-bottom-right even though oversized background-position tokens move inversely.
 Test implications: Render tests assert every glyph receives a millisecond delay; CSS tests assert the shared duration token.
 
 ## DESIGN-REQ-005 Accessibility
