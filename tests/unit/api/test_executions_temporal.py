@@ -210,6 +210,73 @@ def test_list_executions_source_temporal_merges_canonical_parameters(
         assert item["targetRuntime"] == "codex"
         assert item["targetSkill"] == "fix-ci"
 
+def test_list_executions_source_temporal_uses_memo_runtime_and_skill_for_child_runs(
+    client,
+) -> None:
+    """Child workflows can lack canonical DB parameters but still publish compact memo visibility."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    test_client, _service, _user, mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    mock_result = MagicMock()
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = []
+    mock_result.scalars.return_value = mock_scalars
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        async def _memo():
+            return {
+                "entry": "run",
+                "title": "Resolve PR #1633",
+                "summary": "Resolver child workflow for merge automation.",
+                "targetRuntime": "codex_cli",
+                "targetSkill": "pr-resolver",
+            }
+
+        mock_wf = SimpleNamespace()
+        mock_wf.id = "resolver:pr:1633:head:1045fd00767c:h:f144d66e268f79fd:1"
+        mock_wf.run_id = "run-1"
+        mock_wf.namespace = "moonmind"
+        mock_wf.workflow_type = "MoonMind.Run"
+        mock_wf.status = 2  # COMPLETED
+        mock_wf.memo = _memo
+        mock_wf.search_attributes = {
+            "mm_entry": b'["run"]',
+            "mm_owner_type": b'["user"]',
+            "mm_owner_id": b'["user-123"]',
+            "mm_repo": b'["MoonLadderStudios/Tactics"]',
+        }
+        mock_wf.start_time = datetime.now(UTC)
+        mock_wf.execution_time = mock_wf.start_time
+        mock_wf.close_time = mock_wf.start_time
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = [mock_wf]
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = lambda **kwargs: mock_iterator
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=1))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "workflowType": "MoonMind.Run"},
+        )
+
+        assert response.status_code == 200
+        item = response.json()["items"][0]
+        assert item["targetRuntime"] == "codex_cli"
+        assert item["targetSkill"] == "pr-resolver"
+        assert item["repository"] == "MoonLadderStudios/Tactics"
+
 def test_list_executions_source_temporal_orders_scheduled_runs_by_latest_scheduled_time(
     client,
 ) -> None:

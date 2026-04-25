@@ -429,6 +429,13 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
     assert search_attributes["mm_owner_type"] == ["user"]
     assert search_attributes["mm_owner_id"] == ["wf-parent"]
     assert search_attributes["mm_repo"] == ["MoonLadderStudios/MoonMind"]
+    assert child_kwargs["memo"] == {
+        "entry": "run",
+        "title": "Resolve PR #350",
+        "summary": "Resolver child workflow for merge automation.",
+        "targetRuntime": "codex",
+        "targetSkill": "pr-resolver",
+    }
 
 @pytest.mark.asyncio
 async def test_merge_automation_resolver_child_uses_legacy_id_before_patch_marker(

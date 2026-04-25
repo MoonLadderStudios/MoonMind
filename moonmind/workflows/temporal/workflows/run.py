@@ -236,6 +236,8 @@ class MoonMindRunWorkflow:
         self._entry: Optional[str] = None
         self._repo: Optional[str] = None
         self._integration: Optional[str] = None
+        self._target_runtime: Optional[str] = None
+        self._target_skill: Optional[str] = None
         self._close_status: Optional[str] = None
         self._title: Optional[str] = None
         self._summary: str = "Execution initialized."
@@ -1553,6 +1555,8 @@ class MoonMindRunWorkflow:
             "initialParameters",
             "initial_parameters",
         )
+        self._target_runtime = self._runtime_visibility_from_parameters(parameters)
+        self._target_skill = self._skill_visibility_from_parameters(parameters)
         task_parameters = self._mapping_value(parameters, "task")
         self._declared_dependencies = normalize_dependency_ids(
             task_parameters.get("dependsOn")
@@ -1590,6 +1594,57 @@ class MoonMindRunWorkflow:
             self._scheduled_for = scheduled_for
 
         return workflow_type, parameters, input_ref, plan_ref, scheduled_for
+
+    def _runtime_visibility_from_parameters(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> str | None:
+        task_payload = self._mapping_value(parameters, "task") or {}
+        task_runtime_payload = (
+            self._mapping_value(task_payload, "runtime")
+            if isinstance(task_payload, Mapping)
+            else {}
+        ) or {}
+        runtime_payload = self._mapping_value(parameters, "runtime") or {}
+        return (
+            self._coerce_text(parameters.get("targetRuntime"), max_chars=80)
+            or self._coerce_text(task_runtime_payload.get("mode"), max_chars=80)
+            or self._coerce_text(task_runtime_payload.get("targetRuntime"), max_chars=80)
+            or self._coerce_text(runtime_payload.get("mode"), max_chars=80)
+            or self._coerce_text(runtime_payload.get("targetRuntime"), max_chars=80)
+        )
+
+    def _skill_visibility_from_parameters(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> str | None:
+        direct = (
+            self._coerce_text(parameters.get("targetSkill"), max_chars=160)
+            or self._coerce_text(parameters.get("target_skill"), max_chars=160)
+            or self._coerce_text(parameters.get("skillId"), max_chars=160)
+            or self._coerce_text(parameters.get("skill"), max_chars=160)
+        )
+        if direct:
+            return direct
+        task_payload = self._mapping_value(parameters, "task") or {}
+        if not isinstance(task_payload, Mapping):
+            return None
+        tool_payload = self._mapping_value(task_payload, "tool") or {}
+        skill_payload = self._mapping_value(task_payload, "skill") or {}
+        tool_type = str(
+            tool_payload.get("type") or tool_payload.get("kind") or ""
+        ).strip()
+        if not tool_type or tool_type == "skill":
+            tool_name = (
+                self._coerce_text(tool_payload.get("name"), max_chars=160)
+                or self._coerce_text(tool_payload.get("id"), max_chars=160)
+            )
+            if tool_name:
+                return tool_name
+        return (
+            self._coerce_text(skill_payload.get("id"), max_chars=160)
+            or self._coerce_text(skill_payload.get("name"), max_chars=160)
+        )
 
     async def _run_planning_stage(
         self,
@@ -5021,6 +5076,17 @@ class MoonMindRunWorkflow:
             "title": self._title or "Run",
             "summary": self._summary,
         }
+        try:
+            include_runtime_skill_visibility = workflow.patched(
+                "run-memo-runtime-skill-visibility"
+            )
+        except Exception:
+            include_runtime_skill_visibility = True
+        if include_runtime_skill_visibility:
+            if self._target_runtime:
+                memo_dict["targetRuntime"] = self._target_runtime
+            if self._target_skill:
+                memo_dict["targetSkill"] = self._target_skill
         if self._input_ref:
             memo_dict["input_artifact_ref"] = self._input_ref
         if self._plan_ref:
