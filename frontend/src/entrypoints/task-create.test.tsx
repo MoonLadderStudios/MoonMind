@@ -5929,6 +5929,51 @@ describe("Task Create Entrypoint", () => {
     expect(JSON.stringify(task)).not.toContain("startingBranch");
   });
 
+  it("updates the selected branch to the default when the repository changes", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/github/branches?repository=MoonLadderStudios%2FOtherRepo",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              { value: "develop", label: "develop", source: "github" },
+              { value: "release", label: "release", source: "github" },
+            ],
+            defaultBranch: "develop",
+            error: null,
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const branchInput = (await screen.findByLabelText(
+      "Branch",
+    )) as HTMLInputElement;
+    await waitFor(() => {
+      expect(branchInput.value).toBe("main");
+    });
+
+    fireEvent.change(branchInput, {
+      target: { value: "feature/create-page" },
+    });
+    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+      target: { value: "MoonLadderStudios/OtherRepo" },
+    });
+
+    await waitFor(() => {
+      expect(branchInput.value).toBe("develop");
+    });
+  });
+
   it("keeps branch loading text inside the dropdown only", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

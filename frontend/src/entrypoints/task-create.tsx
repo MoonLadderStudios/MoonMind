@@ -3888,7 +3888,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       ),
   );
   useEffect(() => {
-    if (!branchOptionsQuery.isSuccess || branch.trim()) {
+    const isNewRepository =
+      branchLookupRepository &&
+      !branchDefaultAppliedRepositoryRef.current.startsWith(
+        `${branchLookupRepository}:`,
+      );
+    if (
+      !branchOptionsQuery.isSuccess ||
+      (branch.trim() && !isNewRepository)
+    ) {
       return;
     }
     const defaultBranch = String(

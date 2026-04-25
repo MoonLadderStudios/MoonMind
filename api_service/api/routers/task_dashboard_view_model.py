@@ -227,18 +227,21 @@ def _fetch_github_branch_options(
         with httpx.Client(
             timeout=_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
         ) as client:
-            metadata_response = client.get(
-                _GITHUB_REPOSITORY_METADATA_URL_TEMPLATE.format(
-                    repository=normalized_repository
-                ),
-                headers=headers,
-            )
-            metadata_response.raise_for_status()
-            metadata = metadata_response.json()
-            if isinstance(metadata, Mapping):
-                default_branch = (
-                    str(metadata.get("default_branch") or "").strip() or None
+            try:
+                metadata_response = client.get(
+                    _GITHUB_REPOSITORY_METADATA_URL_TEMPLATE.format(
+                        repository=normalized_repository
+                    ),
+                    headers=headers,
                 )
+                metadata_response.raise_for_status()
+                metadata = metadata_response.json()
+                if isinstance(metadata, dict):
+                    default_branch = (
+                        str(metadata.get("default_branch") or "").strip() or None
+                    )
+            except (httpx.HTTPError, ValueError):
+                pass
             while next_url:
                 response = client.get(
                     next_url,

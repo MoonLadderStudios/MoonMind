@@ -1,17 +1,32 @@
 [
   {
-    "id": 3142403429,
-    "disposition": "addressed",
-    "rationale": "Truncated merge automation child workflow memo targetRuntime to 80 characters and targetSkill to 160 characters, with regression coverage."
-  },
-  {
-    "id": 4175995633,
+    "id": 4176110163,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the two actionable child comments were handled individually."
+    "rationale": "Automated review summary; individual actionable comments were classified separately."
   },
   {
-    "id": 3142403433,
+    "id": 3142549713,
     "disposition": "addressed",
-    "rationale": "Removed the try/except around workflow.patched in MoonMindRunWorkflow._update_memo so the patch marker follows the standard deterministic workflow pattern."
+    "rationale": "Changed the repository metadata response type check to dict for the default_branch extraction."
+  },
+  {
+    "id": 3142549717,
+    "disposition": "addressed",
+    "rationale": "Made the repository metadata request best-effort so branch pagination still succeeds if metadata lookup fails."
+  },
+  {
+    "id": 3142549722,
+    "disposition": "addressed",
+    "rationale": "Allowed default branch auto-selection to run when the selected repository changes even if a previous branch is selected."
+  },
+  {
+    "id": 3142550006,
+    "disposition": "addressed",
+    "rationale": "Added backend regression coverage proving branch options are returned when the metadata endpoint fails."
+  },
+  {
+    "id": 4176110370,
+    "disposition": "not-applicable",
+    "rationale": "Automated review wrapper with no separate actionable request beyond the inline comments already addressed."
   }
 ]
