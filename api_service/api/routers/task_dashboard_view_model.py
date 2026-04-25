@@ -241,6 +241,7 @@ def _fetch_github_branch_options(
                         str(metadata.get("default_branch") or "").strip() or None
                     )
             except (httpx.HTTPError, ValueError):
+                # Branch discovery can still succeed without default-branch metadata.
                 pass
             while next_url:
                 response = client.get(

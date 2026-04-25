@@ -28,5 +28,10 @@
     "id": 4176110370,
     "disposition": "not-applicable",
     "rationale": "Automated review wrapper with no separate actionable request beyond the inline comments already addressed."
+  },
+  {
+    "id": 3142571198,
+    "disposition": "addressed",
+    "rationale": "Added an explicit comment explaining that metadata failures are intentionally ignored so branch discovery can continue without default-branch metadata."
   }
 ]
