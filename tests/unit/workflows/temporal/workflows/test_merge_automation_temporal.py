@@ -429,6 +429,27 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
     assert search_attributes["mm_owner_type"] == ["user"]
     assert search_attributes["mm_owner_id"] == ["wf-parent"]
     assert search_attributes["mm_repo"] == ["MoonLadderStudios/MoonMind"]
+    assert child_kwargs["memo"] == {
+        "entry": "run",
+        "title": "Resolve PR #350",
+        "summary": "Resolver child workflow for merge automation.",
+        "targetRuntime": "codex",
+        "targetSkill": "pr-resolver",
+    }
+
+def test_merge_automation_child_memo_truncates_runtime_and_skill_visibility() -> None:
+    resolver_request = {
+        "title": "Resolve PR #350",
+        "initial_parameters": {
+            "targetRuntime": "r" * 120,
+            "targetSkill": "s" * 220,
+        },
+    }
+
+    memo = MoonMindMergeAutomationWorkflow._resolver_child_memo(resolver_request)
+
+    assert memo["targetRuntime"] == "r" * 80
+    assert memo["targetSkill"] == "s" * 160
 
 @pytest.mark.asyncio
 async def test_merge_automation_resolver_child_uses_legacy_id_before_patch_marker(

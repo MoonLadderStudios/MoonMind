@@ -18,6 +18,7 @@ def _patch_workflow_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "upsert_search_attributes",

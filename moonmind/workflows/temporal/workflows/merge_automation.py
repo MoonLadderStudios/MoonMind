@@ -145,6 +145,55 @@ class MoonMindMergeAutomationWorkflow:
             attributes["mm_repo"] = [self._input.pull_request.repo]
         return attributes
 
+    @staticmethod
+    def _resolver_child_memo(resolver_request: Mapping[str, Any]) -> dict[str, Any]:
+        initial_parameters = resolver_request.get("initial_parameters")
+        if not isinstance(initial_parameters, Mapping):
+            initial_parameters = {}
+        task_payload = initial_parameters.get("task")
+        if not isinstance(task_payload, Mapping):
+            task_payload = {}
+        runtime_payload = task_payload.get("runtime")
+        if not isinstance(runtime_payload, Mapping):
+            runtime_payload = {}
+        tool_payload = task_payload.get("tool")
+        if not isinstance(tool_payload, Mapping):
+            tool_payload = {}
+        skill_payload = task_payload.get("skill")
+        if not isinstance(skill_payload, Mapping):
+            skill_payload = {}
+        target_runtime = (
+            str(
+                initial_parameters.get("targetRuntime")
+                or runtime_payload.get("mode")
+                or runtime_payload.get("targetRuntime")
+                or ""
+            ).strip()[:80]
+            or None
+        )
+        target_skill = (
+            str(
+                tool_payload.get("name")
+                or tool_payload.get("id")
+                or skill_payload.get("id")
+                or skill_payload.get("name")
+                or initial_parameters.get("targetSkill")
+                or ""
+            ).strip()[:160]
+            or None
+        )
+        memo: dict[str, Any] = {
+            "entry": "run",
+            "title": str(resolver_request.get("title") or "Resolve PR").strip()
+            or "Resolve PR",
+            "summary": "Resolver child workflow for merge automation.",
+        }
+        if target_runtime:
+            memo["targetRuntime"] = target_runtime
+        if target_skill:
+            memo["targetSkill"] = target_skill
+        return memo
+
     async def _write_json_artifact(self, *, name: str, payload: dict[str, Any]) -> str | None:
         try:
             artifact_ref, _upload_desc = await workflow.execute_activity(
@@ -530,16 +579,21 @@ class MoonMindMergeAutomationWorkflow:
                     f"{resolver_workflow_id}:{len(self._resolver_child_workflow_ids) + 1}"
                 )
                 self._resolver_child_workflow_ids.append(resolver_workflow_id)
+                child_kwargs: dict[str, Any] = {
+                    "id": resolver_workflow_id,
+                    "task_queue": WORKFLOW_TASK_QUEUE,
+                    "search_attributes": self._resolver_search_attributes(),
+                    "cancellation_type": ChildWorkflowCancellationType.TRY_CANCEL,
+                    "static_summary": "Resolving pull request for merge automation",
+                    "static_details": f"Resolve {self._input.pull_request.url}",
+                }
+                if workflow.patched("merge-automation-resolver-child-visibility-memo"):
+                    child_kwargs["memo"] = self._resolver_child_memo(resolver_request)
                 try:
                     resolver_result = await workflow.execute_child_workflow(
                         "MoonMind.Run",
                         resolver_request,
-                        id=resolver_workflow_id,
-                        task_queue=WORKFLOW_TASK_QUEUE,
-                        search_attributes=self._resolver_search_attributes(),
-                        cancellation_type=ChildWorkflowCancellationType.TRY_CANCEL,
-                        static_summary="Resolving pull request for merge automation",
-                        static_details=f"Resolve {self._input.pull_request.url}",
+                        **child_kwargs,
                     )
                 except CancelledError:
                     self._status = STATE_CANCELED
