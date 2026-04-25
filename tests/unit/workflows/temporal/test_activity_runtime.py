@@ -7,15 +7,19 @@ import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio import activity as temporal_activity
 from temporalio import exceptions as temporal_exceptions
 
 from api_service.db.models import Base
 from moonmind.config.settings import settings
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
+from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.schemas.jules_models import JulesTaskResponse
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
@@ -1915,6 +1919,125 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
             assert "agent_skill.resolve" in bound_types
             assert "agent_skill.materialize" in bound_types
             assert "agent_skill.build_prompt_index" in bound_types
+
+async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(artifact_service=service)
+
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:node-1",
+                    workflow_run_id="child-run-1",
+                ),
+            )
+
+            result = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Completed integration tests.",
+                    metadata={
+                        "assistantText": "# Integration test report\n\nAll tests passed.",
+                        "moonmind": {
+                            "reportOutput": {
+                                "enabled": True,
+                                "required": True,
+                                "reportType": "integration_test_report",
+                                "executionRef": {
+                                    "namespace": "default",
+                                    "workflow_id": "parent-wf",
+                                    "run_id": "parent-run-1",
+                                },
+                            }
+                        },
+                    },
+                )
+            )
+
+            assert result is not None
+            assert result.metadata["primaryReportRef"].startswith("art_")
+            assert result.metadata["reportBundle"]["report_bundle_v"] == 1
+
+            reports = await service.list_for_execution(
+                namespace="default",
+                workflow_id="parent-wf",
+                run_id="parent-run-1",
+                principal="system:agent_runtime",
+                link_type="report.primary",
+                latest_only=True,
+            )
+
+            assert len(reports) == 1
+            assert reports[0].metadata_json["report_type"] == "integration_test_report"
+            assert reports[0].metadata_json["report_scope"] == "final"
+            assert reports[0].metadata_json["is_final_report"] is True
+
+async def test_agent_runtime_publish_artifacts_fails_required_report_on_publish_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FailingReportService:
+        def __init__(self, wrapped: TemporalArtifactService) -> None:
+            self._wrapped = wrapped
+
+        async def create(self, **kwargs: Any) -> Any:
+            return await self._wrapped.create(**kwargs)
+
+        async def write_complete(self, **kwargs: Any) -> Any:
+            return await self._wrapped.write_complete(**kwargs)
+
+        async def publish_report_bundle(self, **_kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("report publication failed")
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=_FailingReportService(service)  # type: ignore[arg-type]
+            )
+
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:node-1",
+                    workflow_run_id="child-run-1",
+                ),
+            )
+
+            with pytest.raises(RuntimeError, match="report publication failed"):
+                await activities.agent_runtime_publish_artifacts(
+                    AgentRunResult(
+                        summary="Completed.",
+                        metadata={
+                            "moonmind": {
+                                "reportOutput": {
+                                    "enabled": True,
+                                    "required": True,
+                                    "reportType": "integration_test_report",
+                                    "executionRef": {
+                                        "namespace": "default",
+                                        "workflow_id": "parent-wf",
+                                        "run_id": "parent-run-1",
+                                    },
+                                }
+                            }
+                        },
+                    )
+                )
 
 async def test_agent_runtime_send_turn_disables_catalog_retries(
     tmp_path: Path,

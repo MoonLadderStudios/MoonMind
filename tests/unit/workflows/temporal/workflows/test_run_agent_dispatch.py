@@ -841,6 +841,48 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         moonmind = metadata.get("moonmind") or {}
         self.assertEqual(moonmind.get("selectedSkill"), "pr-resolver")
 
+    def test_build_agent_execution_request_carries_report_output_contract(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "parent-wf-id"
+            run_id = "parent-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "codex",
+                },
+                node_id="node-report",
+                tool_name="codex",
+                workflow_parameters={
+                    "reportOutput": {
+                        "enabled": True,
+                        "required": True,
+                        "reportType": "integration_test_report",
+                    }
+                },
+            )
+
+        report_output = request.parameters["reportOutput"]
+        self.assertEqual(report_output["reportType"], "integration_test_report")
+        self.assertEqual(
+            report_output["executionRef"],
+            {
+                "namespace": "default",
+                "workflow_id": "parent-wf-id",
+                "run_id": "parent-run-id",
+            },
+        )
+        metadata = request.parameters.get("metadata") or {}
+        self.assertEqual(metadata["moonmind"]["reportOutput"], report_output)
+
     def test_build_agent_execution_request_preserves_retry_feedback_in_instructions_fields(
         self,
     ) -> None:

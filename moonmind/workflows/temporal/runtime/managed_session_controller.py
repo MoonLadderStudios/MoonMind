@@ -1742,6 +1742,10 @@ class DockerCodexManagedSessionController:
         if self._session_store is not None:
             record = self._session_store.load(request.session_id)
             if record is not None:
+                record_metadata = dict(record.metadata)
+                assistant_text = terminal_response.metadata.get("assistantText")
+                if isinstance(assistant_text, str) and assistant_text.strip():
+                    record_metadata["lastAssistantText"] = assistant_text.strip()
                 updated_record = await self._session_store.update(
                     request.session_id,
                     session_epoch=terminal_response.session_state.session_epoch,
@@ -1751,6 +1755,7 @@ class DockerCodexManagedSessionController:
                     status=self._record_status_from_turn_status(terminal_response.status),
                     updated_at=datetime.now(tz=UTC),
                     error_message=self._turn_error_message(terminal_response),
+                    metadata=record_metadata,
                 )
                 if self._session_supervisor is not None:
                     await self._emit_session_event(

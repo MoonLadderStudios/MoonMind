@@ -2274,6 +2274,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [publishMode, setPublishMode] = useState(
     normalizePublishModeForSubmit(defaultPublishMode),
   );
+  const [produceReport, setProduceReport] = useState(false);
   const [priority, setPriority] = useState(0);
   const [maxAttempts, setMaxAttempts] = useState(3);
   const [proposeTasks, setProposeTasks] = useState(() =>
@@ -5090,6 +5091,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       publish: {
         mode: effectivePublishMode,
       },
+      ...(produceReport
+        ? {
+            reportOutput: {
+              enabled: true,
+              required: true,
+              reportType: "agent_run_report",
+            },
+          }
+        : {}),
       ...(branch.trim()
         ? {
             git: {
@@ -5117,6 +5127,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           : {}),
         targetRuntime: normalizedRuntime,
         publishMode: effectivePublishMode,
+        ...(produceReport
+          ? {
+              reportOutput: {
+                enabled: true,
+                required: true,
+                reportType: "agent_run_report",
+              },
+            }
+          : {}),
         ...(shouldSubmitMergeAutomation
           ? { mergeAutomation: { enabled: true } }
           : {}),
@@ -6632,6 +6651,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 ) : null}
               </select>
             </div>
+            <label className="checkbox queue-inline-selector queue-inline-selector--report">
+              <input
+                type="checkbox"
+                checked={produceReport}
+                aria-label="Produce report artifact"
+                onChange={(event) => setProduceReport(event.target.checked)}
+              />
+              Report
+            </label>
             <button
               type="submit"
               className={
