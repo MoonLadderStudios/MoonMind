@@ -1579,6 +1579,65 @@ async def test_fetch_result_maps_final_state_merged_pr_resolver_artifact_metadat
         == "49061ed20f6b2260ba9564e71f4f896e3f96d3df"
     )
 
+
+async def test_fetch_result_maps_outcome_merged_pr_resolver_artifact_metadata(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    artifacts_path = workspace_path / "artifacts"
+    artifacts_path.mkdir(parents=True)
+    (artifacts_path / "pr_resolver_result.json").write_text(
+        (
+            "{\n"
+            '  "pr": 1640,\n'
+            '  "url": "https://github.com/MoonLadderStudios/Tactics/pull/1640",\n'
+            '  "status": "success",\n'
+            '  "outcome": "merged",\n'
+            '  "merged_at": "2026-04-25T20:58:09Z",\n'
+            '  "head_oid": "1abd16796a984860ca922cd1d6d22c42db34be6b"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-outcome-merged",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-outcome-merged",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-outcome-merged", pr_resolver_expected=True
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "merged"
+    assert (
+        result.metadata["headSha"]
+        == "1abd16796a984860ca922cd1d6d22c42db34be6b"
+    )
+
+
 async def test_fetch_result_maps_already_merged_pr_resolver_artifact_metadata(tmp_path: Path):
     from datetime import UTC, datetime
 

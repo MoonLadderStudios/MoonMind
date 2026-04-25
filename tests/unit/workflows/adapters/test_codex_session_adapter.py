@@ -3009,3 +3009,90 @@ async def test_fetch_result_maps_final_state_merged_pr_resolver_artifact_metadat
         result.metadata["headSha"]
         == "49061ed20f6b2260ba9564e71f4f896e3f96d3df"
     )
+
+
+async def test_fetch_result_maps_outcome_merged_pr_resolver_artifact_metadata(
+    tmp_path: Path,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    artifacts_path = workspace_path / "artifacts"
+    artifacts_path.mkdir(parents=True)
+    (artifacts_path / "pr_resolver_result.json").write_text(
+        (
+            "{\n"
+            '  "pr": 1640,\n'
+            '  "url": "https://github.com/MoonLadderStudios/Tactics/pull/1640",\n'
+            '  "status": "success",\n'
+            '  "outcome": "merged",\n'
+            '  "merged_at": "2026-04-25T20:58:09Z",\n'
+            '  "head_oid": "1abd16796a984860ca922cd1d6d22c42db34be6b"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    run_id = "run-result-pr-outcome-merged"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId=run_id,
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="completed",
+            startedAt=datetime.now(tz=UTC),
+            workspacePath=str(workspace_path),
+        )
+    )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_async_noop,
+        launch_session=_async_noop,
+        session_status=_async_noop,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_async_noop,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_async_noop,
+        publish_remote_artifacts=_async_noop,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    adapter._save_run_state(
+        run_id=run_id,
+        agent_id="codex_cli",
+        locator={
+            "sessionId": "sess:wf-task-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        },
+        active_turn_id=None,
+        result={
+            "summary": "Codex managed-session turn completed.",
+            "metadata": {},
+        },
+        status="completed",
+        started_at=datetime.now(tz=UTC),
+    )
+
+    result = await adapter.fetch_result(run_id, pr_resolver_expected=True)
+
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "merged"
+    assert (
+        result.metadata["headSha"]
+        == "1abd16796a984860ca922cd1d6d22c42db34be6b"
+    )

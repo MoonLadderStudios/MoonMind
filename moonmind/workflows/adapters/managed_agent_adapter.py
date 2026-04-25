@@ -78,7 +78,10 @@ def _pr_resolver_status(payload: dict[str, Any]) -> str:
     """Return the normalized terminal status from known resolver artifacts."""
 
     status = str(
-        payload.get("status") or payload.get("merge_outcome") or ""
+        payload.get("merge_outcome")
+        or payload.get("outcome")
+        or payload.get("status")
+        or ""
     ).strip().lower()
     if status:
         return status
@@ -331,9 +334,13 @@ def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
         payload.get("head_sha"),
         payload.get("latestHeadSha"),
         payload.get("latest_head_sha"),
+        payload.get("headOid"),
+        payload.get("head_oid"),
         final.get("headRefOid"),
         final.get("head_sha"),
         final.get("headSha"),
+        final.get("headOid"),
+        final.get("head_oid"),
     )
     if head_sha:
         metadata["headSha"] = head_sha
