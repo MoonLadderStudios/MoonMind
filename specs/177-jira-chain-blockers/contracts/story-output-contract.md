@@ -27,9 +27,12 @@ Supported values:
 
 Source references:
 
-- When `storyBreakdownPath` is present, every story must have
- `sourceReference.path`, or the breakdown payload must provide
+- Canonical `moonspec-breakdown` output must put the source path in each
+ story's `sourceReference.path`, or in the breakdown payload's
  `source.referencePath` / `source.path`.
+- For path-only generated output, `story.create_jira_issues` also accepts a
+ string `sourceReference` value or top-level `sourceDocument` as the source
+ document path and normalizes it before Jira mutation.
 - Missing source references fail before Jira mutation and return fallback
  metadata when fallback is enabled.
 
