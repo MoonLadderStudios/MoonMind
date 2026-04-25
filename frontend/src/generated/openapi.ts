@@ -989,6 +989,57 @@ export interface paths {
         patch: operations["proxy_pass_through_patch"];
         trace?: never;
     };
+    "/api/v1/operations/deployment/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit Deployment Update */
+        post: operations["submit_deployment_update_api_v1_operations_deployment_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/deployment/stacks/{stack}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Deployment Stack State */
+        get: operations["get_deployment_stack_state_api_v1_operations_deployment_stacks__stack__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/deployment/image-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Deployment Image Targets */
+        get: operations["list_deployment_image_targets_api_v1_operations_deployment_image_targets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/remediation": {
         parameters: {
             query?: never;
@@ -3366,6 +3417,86 @@ export interface components {
              */
             markdown?: string | null;
         };
+        /** DeploymentImageRequest */
+        DeploymentImageRequest: {
+            /** Repository */
+            repository: string;
+            /** Reference */
+            reference: string;
+        };
+        /** DeploymentServiceStateModel */
+        DeploymentServiceStateModel: {
+            /** Name */
+            name: string;
+            /** State */
+            state: string;
+            /** Health */
+            health?: string | null;
+        };
+        /** DeploymentStackStateResponse */
+        DeploymentStackStateResponse: {
+            /** Stack */
+            stack: string;
+            /** Projectname */
+            projectName: string;
+            /** Configuredimage */
+            configuredImage: string;
+            /** Runningimages */
+            runningImages: components["schemas"]["RunningImageModel"][];
+            /** Services */
+            services: components["schemas"]["DeploymentServiceStateModel"][];
+            /** Lastupdaterunid */
+            lastUpdateRunId?: string | null;
+        };
+        /** DeploymentUpdateRequest */
+        DeploymentUpdateRequest: {
+            /** Stack */
+            stack: string;
+            image: components["schemas"]["DeploymentImageRequest"];
+            /** Mode */
+            mode: string;
+            /**
+             * Removeorphans
+             * @default false
+             */
+            removeOrphans: boolean;
+            /**
+             * Wait
+             * @default true
+             */
+            wait: boolean;
+            /**
+             * Runsmokecheck
+             * @default false
+             */
+            runSmokeCheck: boolean;
+            /**
+             * Pausework
+             * @default false
+             */
+            pauseWork: boolean;
+            /**
+             * Pruneoldimages
+             * @default false
+             */
+            pruneOldImages: boolean;
+            /** Reason */
+            reason: string;
+        };
+        /** DeploymentUpdateResponse */
+        DeploymentUpdateResponse: {
+            /** Deploymentupdaterunid */
+            deploymentUpdateRunId: string;
+            /** Taskid */
+            taskId: string;
+            /** Workflowid */
+            workflowId: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "QUEUED";
+        };
         /** ErrorModel */
         ErrorModel: {
             /** Detail */
@@ -4112,6 +4243,24 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** ImageTargetModel */
+        ImageTargetModel: {
+            /** Repository */
+            repository: string;
+            /** Allowedreferences */
+            allowedReferences: string[];
+            /** Recenttags */
+            recentTags: string[];
+            /** Digestpinningrecommended */
+            digestPinningRecommended: boolean;
+        };
+        /** ImageTargetsResponse */
+        ImageTargetsResponse: {
+            /** Stack */
+            stack: string;
+            /** Repositories */
+            repositories: components["schemas"]["ImageTargetModel"][];
         };
         /**
          * IntegrationCallbackRequest
@@ -5399,6 +5548,17 @@ export interface components {
             mode: components["schemas"]["RetryWorkflowMode"];
             /** Notes */
             notes?: string | null;
+        };
+        /** RunningImageModel */
+        RunningImageModel: {
+            /** Service */
+            service: string;
+            /** Image */
+            image: string;
+            /** Imageid */
+            imageId?: string | null;
+            /** Digest */
+            digest?: string | null;
         };
         /**
          * ScheduleCreatedResponse
@@ -8790,6 +8950,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_deployment_update_api_v1_operations_deployment_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeploymentUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_deployment_stack_state_api_v1_operations_deployment_stacks__stack__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                stack: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentStackStateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_deployment_image_targets_api_v1_operations_deployment_image_targets_get: {
+        parameters: {
+            query: {
+                stack: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageTargetsResponse"];
                 };
             };
             /** @description Validation Error */

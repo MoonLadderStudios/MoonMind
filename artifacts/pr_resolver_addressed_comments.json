@@ -1,12 +1,37 @@
 [
   {
-    "id": 3142669162,
+    "id": 3142703165,
     "disposition": "addressed",
-    "rationale": "Updated _breakdown_source_path to normalize sourceDocument and source_document independently, so whitespace-only sourceDocument no longer blocks the fallback key."
+    "rationale": "The update endpoint now queues with the normalized policy stack by passing policy.stack through DeploymentUpdateSubmission."
   },
   {
-    "id": 4176225378,
+    "id": 4176254410,
+    "disposition": "not-applicable",
+    "rationale": "Top-level automated review summary; actionable child feedback is tracked separately."
+  },
+  {
+    "id": 3142707227,
     "disposition": "addressed",
-    "rationale": "Resolved the review summary's requested robustness improvement with code and regression coverage."
+    "rationale": "queue_update now creates a Temporal MoonMind.Run execution record through TemporalExecutionService before returning QUEUED metadata."
+  },
+  {
+    "id": 3142707228,
+    "disposition": "addressed",
+    "rationale": "Queued run inputs now use the canonical stack from deployment policy, with regression coverage for whitespace-normalized stack input."
+  },
+  {
+    "id": 4176257392,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Codex review wrapper with no standalone requested code change."
+  },
+  {
+    "id": 3142727783,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol stub ellipsis with raise NotImplementedError."
+  },
+  {
+    "id": 3142733512,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol stub ellipsis with raise NotImplementedError as requested by the code-quality bot."
   }
 ]
