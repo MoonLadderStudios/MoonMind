@@ -54,7 +54,7 @@ const mockPayload: BootPayload = {
         defaultTaskModelByRuntime: {
           codex_cli: "gpt-5.4",
           gemini_cli: "gemini-2.5-pro",
-          claude_code: "claude-3.7-sonnet",
+          claude_code: "claude-opus-4-7",
         },
         defaultTaskEffortByRuntime: {
           codex_cli: "medium",

@@ -62,7 +62,7 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert profile_ids == {"gemini_default", "codex_default", "claude_anthropic"}
     # Standard profiles are seeded with default_model=None so they inherit
     # the runtime default (codex_cli→gpt-5.4, gemini_cli→gemini-3.1-pro-preview,
-    # claude_code→Sonnet 4.6) rather than storing a duplicate value.
+    # claude_code→claude-opus-4-7) rather than storing a duplicate value.
     defaults = {p.profile_id: p.default_model for p in profiles}
     assert defaults["gemini_default"] is None
     assert defaults["codex_default"] is None
