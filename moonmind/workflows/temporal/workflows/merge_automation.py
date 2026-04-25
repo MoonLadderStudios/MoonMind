@@ -168,7 +168,7 @@ class MoonMindMergeAutomationWorkflow:
                 or runtime_payload.get("mode")
                 or runtime_payload.get("targetRuntime")
                 or ""
-            ).strip()
+            ).strip()[:80]
             or None
         )
         target_skill = (
@@ -179,7 +179,7 @@ class MoonMindMergeAutomationWorkflow:
                 or skill_payload.get("name")
                 or initial_parameters.get("targetSkill")
                 or ""
-            ).strip()
+            ).strip()[:160]
             or None
         )
         memo: dict[str, Any] = {

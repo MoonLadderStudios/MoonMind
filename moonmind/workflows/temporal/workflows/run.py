@@ -5076,13 +5076,7 @@ class MoonMindRunWorkflow:
             "title": self._title or "Run",
             "summary": self._summary,
         }
-        try:
-            include_runtime_skill_visibility = workflow.patched(
-                "run-memo-runtime-skill-visibility"
-            )
-        except Exception:
-            include_runtime_skill_visibility = True
-        if include_runtime_skill_visibility:
+        if workflow.patched("run-memo-runtime-skill-visibility"):
             if self._target_runtime:
                 memo_dict["targetRuntime"] = self._target_runtime
             if self._target_skill:

@@ -1,32 +1,17 @@
 [
   {
-    "id": 3141071210,
-    "disposition": "not-applicable",
-    "rationale": "The referenced activity-runtime values are already defined before use: info is read from the Temporal activity context, metadata/moonmind_metadata are extracted from result metadata, and summary_payload is built before reportOutput is read."
-  },
-  {
-    "id": 3141071212,
-    "disposition": "not-applicable",
-    "rationale": "TemporalActivityRuntimeError is defined in moonmind/workflows/temporal/activity_runtime.py and is already available in this module."
-  },
-  {
-    "id": 4174446344,
-    "disposition": "not-applicable",
-    "rationale": "This review summary repeats the two Gemini inline comments; both underlying concerns are not applicable to the current code."
-  },
-  {
-    "id": 3141083599,
+    "id": 3142403429,
     "disposition": "addressed",
-    "rationale": "Persisted lastAssistantText is now bounded to 4 KiB with truncation metadata before session-store validation, with focused controller test coverage."
+    "rationale": "Truncated merge automation child workflow memo targetRuntime to 80 characters and targetSkill to 160 characters, with regression coverage."
   },
   {
-    "id": 3141083600,
-    "disposition": "addressed",
-    "rationale": "The Create page now reconstructs reportOutputEnabled for edit/rerun mode and submits reportOutput.enabled=false when the report checkbox is unchecked, with focused draft reconstruction coverage."
-  },
-  {
-    "id": 4174464058,
+    "id": 4175995633,
     "disposition": "not-applicable",
-    "rationale": "This is the Codex review container comment and contains no actionable code finding beyond the separate inline comments."
+    "rationale": "Review summary only; the two actionable child comments were handled individually."
+  },
+  {
+    "id": 3142403433,
+    "disposition": "addressed",
+    "rationale": "Removed the try/except around workflow.patched in MoonMindRunWorkflow._update_memo so the patch marker follows the standard deterministic workflow pattern."
   }
 ]
