@@ -72,7 +72,7 @@ class DeploymentExecutionCreator(Protocol):
         integration: str | None = None,
         summary: str | None = None,
     ) -> Any:
-        ...
+        raise NotImplementedError
 
 
 DEFAULT_DEPLOYMENT_POLICIES: dict[str, DeploymentStackPolicy] = {

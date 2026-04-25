@@ -27,6 +27,11 @@
   {
     "id": 3142727783,
     "disposition": "addressed",
-    "rationale": "Moved the Protocol stub ellipsis onto its own method body so the line is no longer reported as an ineffective statement."
+    "rationale": "Replaced the Protocol stub ellipsis with raise NotImplementedError."
+  },
+  {
+    "id": 3142733512,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol stub ellipsis with raise NotImplementedError as requested by the code-quality bot."
   }
 ]
