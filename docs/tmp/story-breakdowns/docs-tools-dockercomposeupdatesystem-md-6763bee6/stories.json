@@ -1,0 +1,706 @@
+{
+  "source": {
+    "title": "Docker Compose Deployment Update System",
+    "path": "docs/Tools/DockerComposeUpdateSystem.md",
+    "referencePath": "docs/Tools/DockerComposeUpdateSystem.md",
+    "originalDesign": "# Docker Compose Deployment Update System\n\nStatus: Desired State  \nOwners: MoonMind Engineering  \nLast Updated: 2026-04-25  \nRelated: `docs/UI/SettingsTab.md`, `docs/Tasks/SkillAndPlanContracts.md`, `docs/Temporal/TemporalArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`\n\n---\n\n## 1. Purpose\n\nThis document defines MoonMind's desired-state design for updating a Docker Compose-managed MoonMind deployment from Mission Control.\n\nThe system gives an administrator a simple **Settings → Operations** surface where they choose the target MoonMind image reference, start an audited update operation, watch progress, and inspect the resulting before/after deployment state.\n\nThe update operation is executed as a privileged MoonMind operation, not as arbitrary user-provided shell input. The backend resolves the request into a typed executable tool invocation that performs the equivalent of:\n\n```bash\ndocker compose pull\ndocker compose up -d --remove-orphans --wait\n```\n\nThe system may use an ephemeral updater container or a privileged deployment-control worker to run the Docker commands. That runner is an implementation detail. The operator-facing control is the **target MoonMind image** to deploy.\n\n---\n\n## 2. Summary\n\nThe desired-state model is:\n\n1. Mission Control exposes a **Deployment Update** card under **Settings → Operations**.\n2. The operator chooses a target Docker image tag or digest from an allowlisted MoonMind image repository.\n3. The backend creates an audited deployment-update run.\n4. The run invokes a typed executable tool, `deployment.update_compose_stack`.\n5. The tool updates the stack's desired image reference, runs Docker Compose pull/up, waits for services, verifies health, and writes structured artifacts.\n6. MoonMind records before/after image IDs, service states, command output, health-check results, operator identity, and reason.\n7. The updater runner terminates after verification.\n8. The Operations page shows current deployment state and recent deployment-update actions.\n\nThis system is part of MoonMind's operational control plane. It is not an agent skill, not a runtime-native command, and not a general shell-command execution surface.\n\n---\n\n## 3. Terminology\n\n### Compose stack target\n\nA configured Docker Compose deployment that MoonMind is allowed to operate.\n\nExample:\n\n```json\n{\n  \"stack\": \"moonmind\",\n  \"projectName\": \"moonmind\",\n  \"composeProjectDir\": \"/srv/MoonMind\",\n  \"composeFiles\": [\"docker-compose.yaml\"],\n  \"envFile\": \".env.deploy\"\n}\n```\n\n### Target image\n\nThe MoonMind application image that the administrator wants the stack to run.\n\nExamples:\n\n```text\nghcr.io/moonladderstudios/moonmind:stable\nghcr.io/moonladderstudios/moonmind:20260425.1234\nghcr.io/moonladderstudios/moonmind@sha256:...\n```\n\n### Updater runner image\n\nThe internal image used to execute Docker client commands, such as `docker:29-cli` or a MoonMind-maintained updater image.\n\nThe updater runner image is not normally user-selectable. It is controlled by deployment configuration because it has access to privileged host Docker capabilities.\n\n### Deployment update run\n\nAn audited operation that changes a configured Compose stack from one desired image reference to another.\n\n### Deployment-control worker\n\nA trusted worker or maintenance runtime with the capability to access the host Docker daemon and operate allowlisted Compose stacks.\n\n---\n\n## 4. Goals and non-goals\n\n## 4.1 Goals\n\nThe Docker Compose deployment update system must:\n\n1. let an administrator update MoonMind from Mission Control without SSHing into the host\n2. expose the target MoonMind image tag or digest as the main operator choice\n3. keep the updater runner image internal and deployment-controlled\n4. perform updates through a typed executable tool contract\n5. avoid arbitrary shell input from users\n6. enforce admin authorization and deployment policy\n7. serialize updates so only one update operates on a stack at a time\n8. write durable before/after state and logs as artifacts\n9. verify service health before marking the run successful\n10. support both changed-service recreation and force-recreate-all modes\n11. preserve enough audit data to explain who changed the deployment, when, why, and to what image\n\n## 4.2 Non-goals\n\nThe system does not aim to:\n\n1. expose a general-purpose Docker UI\n2. expose a general-purpose shell runner\n3. let non-admin users control Docker images or Compose flags\n4. let operators choose arbitrary updater runner images by default\n5. replace full GitOps or Kubernetes deployment systems\n6. manage non-allowlisted stacks or host paths\n7. treat deployment updates as agent instruction skills\n8. silently roll back without an explicit, auditable policy\n\n---\n\n## 5. Core invariants\n\nThe following rules are fixed.\n\n1. Deployment updates are executable MoonMind tool invocations.\n2. The UI selects the **target deployment image**, not the privileged updater runner image.\n3. The updater runner image is deployment configuration and must be allowlisted.\n4. Compose stack targets are allowlisted by name and path.\n5. The update tool must not accept arbitrary shell snippets.\n6. The target image repository must be allowlisted.\n7. Tags are allowed, but the resolved digest must be recorded when available.\n8. Digest-pinned image references are preferred for reproducible production updates.\n9. Only one update may run per Compose stack at a time.\n10. Before/after service state must be captured.\n11. Command output and verification output must be written to artifacts.\n12. The run must fail closed when verification cannot prove the desired state.\n13. The operation must remain auditable even if MoonMind services restart during the update.\n\n---\n\n## 6. Settings → Operations UX\n\n## 6.1 Placement\n\nMission Control exposes the deployment update surface under:\n\n```text\nSettings → Operations\n```\n\nThe Operations subsection remains the home for administrative and system-control surfaces. Deployment update belongs beside worker pause/resume, drain/quiesce, and operational audit controls.\n\n## 6.2 Deployment Update card\n\nThe Operations page should include a **Deployment Update** card with the following sections.\n\n### Current deployment\n\nShows:\n\n- stack name\n- Compose project name\n- current configured image reference\n- current running image ID or digest, when available\n- current MoonMind version/build identifier, when available\n- service health summary\n- last deployment-update run and result\n\n### Update target\n\nAllows the administrator to choose:\n\n- allowlisted image repository\n- tag selector, such as `stable`, `latest`, or recent release tags\n- custom tag, if policy allows\n- custom digest, if policy allows\n\nThe UI should prefer digest-pinned or release-tagged updates. Mutable tags such as `latest` should show a warning that the tag may resolve differently over time.\n\n### Update mode\n\nSupports:\n\n- **Restart changed services**: pull images and recreate services whose image or configuration changed\n- **Force recreate all services**: pull images and recreate every service in the allowlisted Compose stack\n\nThe default mode is **Restart changed services**.\n\n### Options\n\nSupports policy-controlled options:\n\n- remove orphan containers\n- wait for services to become healthy\n- run post-update smoke check\n- prune old images after success\n- pause or drain new task work before update\n- resume work after successful update\n\n### Reason and confirmation\n\nBefore execution, the operator must provide a reason and confirm the target state.\n\nThe confirmation modal should show:\n\n- current image reference\n- requested target image reference\n- update mode\n- stack name\n- services expected to be affected\n- warning for mutable tags\n- warning that services may restart\n\n## 6.3 Recent actions\n\nThe Operations page should show recent deployment-update runs with:\n\n- status\n- requested image\n- resolved digest\n- operator\n- reason\n- started/completed timestamps\n- link to run detail\n- link to logs artifact\n- before/after summary\n\n---\n\n## 7. API contract\n\n## 7.1 Submit deployment update\n\nThe UI submits a typed request to the backend.\n\n```http\nPOST /api/v1/operations/deployment/update\n```\n\nExample request:\n\n```json\n{\n  \"stack\": \"moonmind\",\n  \"image\": {\n    \"repository\": \"ghcr.io/moonladderstudios/moonmind\",\n    \"reference\": \"20260425.1234\"\n  },\n  \"mode\": \"changed_services\",\n  \"removeOrphans\": true,\n  \"wait\": true,\n  \"runSmokeCheck\": true,\n  \"pauseWork\": false,\n  \"pruneOldImages\": false,\n  \"reason\": \"Update to the latest tested MoonMind build\"\n}\n```\n\nExample response:\n\n```json\n{\n  \"deploymentUpdateRunId\": \"depupd_01HV...\",\n  \"taskId\": \"task_01HV...\",\n  \"workflowId\": \"MoonMind.DeploymentUpdate/moonmind/01HV...\",\n  \"status\": \"QUEUED\"\n}\n```\n\n## 7.2 Read current deployment state\n\n```http\nGET /api/v1/operations/deployment/stacks/moonmind\n```\n\nExample response:\n\n```json\n{\n  \"stack\": \"moonmind\",\n  \"projectName\": \"moonmind\",\n  \"configuredImage\": \"ghcr.io/moonladderstudios/moonmind:20260425.1234\",\n  \"runningImages\": [\n    {\n      \"service\": \"api\",\n      \"image\": \"ghcr.io/moonladderstudios/moonmind:20260425.1234\",\n      \"imageId\": \"sha256:...\",\n      \"digest\": \"sha256:...\"\n    }\n  ],\n  \"services\": [\n    {\n      \"name\": \"api\",\n      \"state\": \"running\",\n      \"health\": \"healthy\"\n    }\n  ],\n  \"lastUpdateRunId\": \"depupd_01HV...\"\n}\n```\n\n## 7.3 List allowed image targets\n\n```http\nGET /api/v1/operations/deployment/image-targets?stack=moonmind\n```\n\nExample response:\n\n```json\n{\n  \"stack\": \"moonmind\",\n  \"repositories\": [\n    {\n      \"repository\": \"ghcr.io/moonladderstudios/moonmind\",\n      \"allowedReferences\": [\"stable\", \"latest\"],\n      \"recentTags\": [\"20260425.1234\", \"20260424.0901\"],\n      \"digestPinningRecommended\": true\n    }\n  ]\n}\n```\n\nThe backend may obtain recent tags from a registry integration, from deployment metadata, or from a locally configured release catalog.\n\n---\n\n## 8. Executable tool contract\n\n## 8.1 Tool name\n\nDeployment update is represented as a typed executable tool:\n\n```text\ndeployment.update_compose_stack\n```\n\nThis tool is a privileged system operation and must require deployment-control capabilities.\n\n## 8.2 ToolDefinition shape\n\nRepresentative registry entry:\n\n```yaml\nname: \"deployment.update_compose_stack\"\nversion: \"1.0.0\"\ntype: \"skill\"\ndescription: \"Update an allowlisted Docker Compose stack to a desired MoonMind image reference.\"\ninputs:\n  schema:\n    type: object\n    required:\n      - stack\n      - image\n      - reason\n    properties:\n      stack:\n        type: string\n        enum: [\"moonmind\"]\n      image:\n        type: object\n        required: [\"repository\", \"reference\"]\n        properties:\n          repository:\n            type: string\n          reference:\n            type: string\n          resolvedDigest:\n            type: string\n      mode:\n        type: string\n        enum: [\"changed_services\", \"force_recreate\"]\n        default: \"changed_services\"\n      removeOrphans:\n        type: boolean\n        default: true\n      wait:\n        type: boolean\n        default: true\n      runSmokeCheck:\n        type: boolean\n        default: true\n      pauseWork:\n        type: boolean\n        default: false\n      pruneOldImages:\n        type: boolean\n        default: false\n      reason:\n        type: string\noutputs:\n  schema:\n    type: object\n    required:\n      - status\n      - stack\n      - requestedImage\n      - updatedServices\n      - runningServices\n    properties:\n      status:\n        type: string\n        enum: [\"SUCCEEDED\", \"FAILED\", \"PARTIALLY_VERIFIED\"]\n      stack:\n        type: string\n      requestedImage:\n        type: string\n      resolvedDigest:\n        type: string\n      updatedServices:\n        type: array\n        items:\n          type: string\n      runningServices:\n        type: array\n        items:\n          type: object\n      beforeStateArtifactRef:\n        type: string\n      afterStateArtifactRef:\n        type: string\n      commandLogArtifactRef:\n        type: string\n      verificationArtifactRef:\n        type: string\nexecutor:\n  activity_type: \"mm.tool.execute\"\n  selector:\n    mode: \"by_capability\"\nrequirements:\n  capabilities:\n    - \"deployment_control\"\n    - \"docker_admin\"\npolicies:\n  timeouts:\n    start_to_close_seconds: 900\n    schedule_to_close_seconds: 1800\n  retries:\n    max_attempts: 1\n    non_retryable_error_codes:\n      - \"INVALID_INPUT\"\n      - \"PERMISSION_DENIED\"\n      - \"POLICY_VIOLATION\"\n      - \"DEPLOYMENT_LOCKED\"\nsecurity:\n  allowed_roles: [\"admin\"]\n```\n\n## 8.3 Representative plan node\n\nA deployment update run may be represented as a normal MoonMind plan node:\n\n```json\n{\n  \"id\": \"update-moonmind-deployment\",\n  \"title\": \"Update MoonMind deployment\",\n  \"tool\": {\n    \"type\": \"skill\",\n    \"name\": \"deployment.update_compose_stack\",\n    \"version\": \"1.0.0\"\n  },\n  \"inputs\": {\n    \"stack\": \"moonmind\",\n    \"image\": {\n      \"repository\": \"ghcr.io/moonladderstudios/moonmind\",\n      \"reference\": \"20260425.1234\"\n    },\n    \"mode\": \"changed_services\",\n    \"removeOrphans\": true,\n    \"wait\": true,\n    \"runSmokeCheck\": true,\n    \"reason\": \"Update to the latest tested MoonMind build\"\n  }\n}\n```\n\n---\n\n## 9. Desired state storage\n\n## 9.1 Compose image parameterization\n\nThe Docker Compose stack should parameterize the MoonMind image reference through an environment variable rather than requiring YAML rewrites.\n\nExample:\n\n```yaml\nservices:\n  api:\n    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:stable}\n```\n\nThe update tool writes the desired image reference to an allowlisted deployment env file:\n\n```env\nMOONMIND_IMAGE=ghcr.io/moonladderstudios/moonmind:20260425.1234\n```\n\nDigest-pinned example:\n\n```env\nMOONMIND_IMAGE=ghcr.io/moonladderstudios/moonmind@sha256:...\n```\n\n## 9.2 Desired-state persistence rule\n\nThe requested target image must be persisted before Compose is brought up so that the desired state survives service restarts.\n\nThe persisted desired state should record:\n\n- stack\n- image repository\n- requested reference\n- resolved digest, when available\n- operator\n- reason\n- created timestamp\n- source run ID\n\n## 9.3 Mutable tag rule\n\nWhen the requested reference is a mutable tag, the system should resolve and record the digest before or during the update when the registry makes that possible.\n\nThe UI may allow mutable tags, but audit records must distinguish:\n\n```text\nrequested: ghcr.io/moonladderstudios/moonmind:latest\nresolved:  ghcr.io/moonladderstudios/moonmind@sha256:...\n```\n\n---\n\n## 10. Execution lifecycle\n\nThe deployment update workflow follows this lifecycle.\n\n## 10.1 Validate request\n\nThe backend validates:\n\n1. caller is authorized as an administrator\n2. stack name is allowlisted\n3. image repository is allowlisted\n4. image reference is syntactically valid\n5. update mode is permitted by policy\n6. reason is present\n7. requested options are permitted\n\n## 10.2 Acquire deployment lock\n\nThe workflow acquires a lock for the stack.\n\nIf another update is running, the request fails with `DEPLOYMENT_LOCKED` or remains queued according to policy.\n\n## 10.3 Capture before state\n\nThe tool captures and stores:\n\n- Compose config summary\n- service list\n- container IDs\n- image references\n- image IDs and digests, when available\n- service state and health\n- relevant environment state\n\nThe before state is written to an immutable artifact.\n\n## 10.4 Persist desired image\n\nThe tool writes the desired image reference into the allowlisted deployment env file or equivalent deployment-state store.\n\nThe tool must not edit arbitrary files selected by the caller.\n\n## 10.5 Pull images\n\nThe tool runs the equivalent of:\n\n```bash\ndocker compose pull --policy always --ignore-buildable\n```\n\nThe exact flags are implementation-specific and policy-controlled. Pull output is captured in the command log artifact.\n\n## 10.6 Recreate services\n\nFor `mode = changed_services`, the tool runs the equivalent of:\n\n```bash\ndocker compose up -d --remove-orphans --wait\n```\n\nFor `mode = force_recreate`, the tool runs the equivalent of:\n\n```bash\ndocker compose up -d --force-recreate --remove-orphans --wait\n```\n\nIf `removeOrphans` or `wait` are disabled by policy, the command is adjusted accordingly.\n\n## 10.7 Verify desired state\n\nThe tool verifies:\n\n1. expected services are running\n2. services report healthy when health checks exist\n3. running image IDs match the requested target or resolved digest where applicable\n4. post-update smoke checks pass when requested\n5. no unexpected services remain when orphan removal is enabled\n\nVerification output is written to an immutable artifact.\n\n## 10.8 Capture after state\n\nThe tool captures the same state collected before the update and stores it as an after-state artifact.\n\n## 10.9 Release lock and report result\n\nThe workflow releases the deployment lock and writes a structured result containing:\n\n- final status\n- updated services\n- running services\n- requested image\n- resolved digest\n- before artifact ref\n- after artifact ref\n- command log artifact ref\n- verification artifact ref\n\n---\n\n## 11. Updater runner execution model\n\nMoonMind supports two implementation modes.\n\n## 11.1 Privileged deployment-control worker\n\nA trusted worker with `deployment_control` and `docker_admin` capabilities executes Compose commands directly on the deployment host.\n\nThis mode is simple when the worker already runs on the host that owns the Docker daemon.\n\n## 11.2 Ephemeral updater container\n\nA privileged worker starts a one-shot updater container that mounts:\n\n- the host Docker socket\n- the allowlisted Compose project directory\n- any required deployment env file\n\nRepresentative command shape:\n\n```bash\ndocker run --rm \\\n  --name moonmind-updater \\\n  -v /var/run/docker.sock:/var/run/docker.sock \\\n  -v \"$MOONMIND_DIR:$MOONMIND_DIR\" \\\n  -w \"$MOONMIND_DIR\" \\\n  docker:29-cli \\\n  sh -euc 'docker compose pull --policy always --ignore-buildable && docker compose up -d --remove-orphans --wait'\n```\n\nThe updater container is ephemeral and terminates after the update and verification steps complete.\n\n## 11.3 Runner image policy\n\nThe updater runner image must be controlled by deployment configuration.\n\nThe Operations UI must not normally ask the operator to choose the runner image because the runner has privileged Docker access.\n\n---\n\n## 12. Verification model\n\n## 12.1 Compose-level verification\n\nThe system verifies Compose state using:\n\n- `docker compose ps`\n- `docker compose images`\n- container inspect data\n- service health status\n- image IDs and repo digests where available\n\n## 12.2 Application-level verification\n\nThe system should optionally run a MoonMind smoke check after Compose-level health succeeds.\n\nThe smoke check may include:\n\n- API health endpoint\n- frontend reachability\n- Temporal worker registration or poller health\n- database connectivity, if applicable\n- basic task submission readiness, if safe\n\n## 12.3 Verification failure rule\n\nIf services start but verification cannot prove the requested desired state, the run must not be marked `SUCCEEDED`.\n\nThe result should be one of:\n\n- `FAILED`\n- `PARTIALLY_VERIFIED`\n\nThe UI should show the exact failed check and link to artifacts.\n\n---\n\n## 13. Security and policy model\n\n## 13.1 Authorization\n\nOnly administrators may start deployment updates.\n\nDeployment update permissions should be distinct from ordinary task-submission permissions.\n\n## 13.2 Allowlisted stacks\n\nThe backend stores allowlisted stack targets. Caller-provided paths are rejected.\n\nExample deployment policy:\n\n```json\n{\n  \"stacks\": {\n    \"moonmind\": {\n      \"projectName\": \"moonmind\",\n      \"composeProjectDir\": \"/srv/MoonMind\",\n      \"composeFiles\": [\"docker-compose.yaml\"],\n      \"envFile\": \".env.deploy\",\n      \"allowedRepositories\": [\n        \"ghcr.io/moonladderstudios/moonmind\"\n      ],\n      \"allowMutableTags\": true,\n      \"allowCustomDigest\": true,\n      \"allowForceRecreate\": true\n    }\n  }\n}\n```\n\n## 13.3 No arbitrary shell\n\nThe update tool receives typed inputs and assembles known command forms from policy.\n\nThe tool must reject:\n\n- arbitrary shell commands\n- unapproved Compose files\n- unapproved host paths\n- unapproved image repositories\n- unapproved updater runner images\n- unrecognized flags\n\n## 13.4 Docker socket risk\n\nAny runtime with Docker socket access is trusted infrastructure.\n\nMoonMind must not expose Docker socket access to ordinary task runtimes, agent runtimes, repo workspaces, or user-authored tools.\n\n## 13.5 Secret handling\n\nRegistry credentials, if needed, are resolved through the existing secrets/provider-profile model.\n\nSecrets must not be embedded in:\n\n- image reference text\n- UI form defaults\n- command logs\n- deployment env files unless explicitly designed as secret-bearing files with appropriate protections\n\n---\n\n## 14. Audit and artifacts\n\n## 14.1 Audit record\n\nEvery deployment update run records:\n\n- run ID\n- workflow ID\n- task ID, if applicable\n- stack\n- operator identity\n- operator role\n- reason\n- requested image reference\n- resolved digest, when available\n- update mode\n- options\n- start timestamp\n- completion timestamp\n- final status\n- failure reason, when applicable\n\n## 14.2 Required artifacts\n\nEvery run writes:\n\n- before state artifact\n- command log artifact\n- verification artifact\n- after state artifact\n\n## 14.3 Artifact redaction\n\nCommand logs and state captures must redact:\n\n- secrets\n- auth tokens\n- registry credentials\n- environment variables marked sensitive\n\n## 14.4 Operations display\n\nThe Operations page shows a human-readable summary and links to artifacts. Raw command logs should be available only to users with operational-admin permissions.\n\n---\n\n## 15. Failure and rollback semantics\n\n## 15.1 Failure behavior\n\nThe system fails fast on:\n\n- invalid input\n- authorization failure\n- policy violation\n- unavailable deployment lock\n- Compose config validation failure\n- image pull failure\n- service recreation failure\n- verification failure\n\n## 15.2 Retry behavior\n\nDeployment updates should not use automatic multi-attempt retries by default.\n\nA failed update may leave services partially changed. Re-running the update is an explicit operator action that uses the same audited path.\n\n## 15.3 Rollback behavior\n\nRollback is an explicit deployment update to a previous image reference.\n\nThe UI may offer a **Roll back to previous image** action when before-state artifacts contain enough information to construct a safe target image reference.\n\nRollback still requires:\n\n- admin authorization\n- reason\n- confirmation\n- deployment lock\n- before/after artifacts\n- verification\n\nThe system must not silently roll back unless a separately documented policy explicitly enables automatic rollback.\n\n---\n\n## 16. Interaction with task execution\n\nDeployment update is executable operational work and should be represented through MoonMind's tool and plan system.\n\nThe update tool may be invoked by:\n\n- direct Operations UI action\n- scheduled maintenance workflow\n- admin-authored operational task\n- future release-management workflow\n\nAn agent may assist by explaining the update result or summarizing logs, but the privileged update itself is performed by the typed deployment tool.\n\nRepresentative operational sequence:\n\n```text\n1. Pause or drain new task work, if requested.\n2. Update MoonMind deployment.\n3. Verify Compose and application health.\n4. Resume task work, if it was paused.\n5. Summarize before/after state and artifacts.\n```\n\n---\n\n## 17. Interaction with Settings information architecture\n\nThe Settings page remains a single operator-facing location for configuration and administrative controls.\n\nDeployment update belongs in the **Operations** subsection because it is a system-control surface. It should not become a top-level navigation item unless the broader Settings architecture is intentionally revisited.\n\nThe Settings page should continue to use subsection routing such as:\n\n```text\n/tasks/settings?section=operations\n```\n\n---\n\n## 18. UI copy recommendations\n\n## 18.1 Card title\n\n```text\nDeployment Update\n```\n\n## 18.2 Card description\n\n```text\nUpdate the MoonMind Docker Compose deployment by selecting the target image tag or digest. MoonMind will pull the image, recreate affected services, verify health, and record an audit trail.\n```\n\n## 18.3 Mutable tag warning\n\n```text\nThis tag is mutable. MoonMind will record the resolved digest when available, but future uses of the same tag may deploy a different image.\n```\n\n## 18.4 Force recreate warning\n\n```text\nForce recreate restarts every service in the stack, even if its image or configuration has not changed.\n```\n\n## 18.5 Confirmation button\n\n```text\nUpdate MoonMind Deployment\n```\n\n---\n\n## 19. Observability\n\nThe deployment update workflow should expose progress states suitable for Mission Control:\n\n```text\nQUEUED\nVALIDATING\nLOCK_WAITING\nCAPTURING_BEFORE_STATE\nPERSISTING_DESIRED_STATE\nPULLING_IMAGES\nRECREATING_SERVICES\nVERIFYING\nCAPTURING_AFTER_STATE\nSUCCEEDED\nFAILED\nPARTIALLY_VERIFIED\n```\n\nEach state should include a small progress message. Detailed command output belongs in artifacts, not workflow history or ordinary UI state.\n\n---\n\n## 20. Locked decisions\n\nThis document locks the following design decisions.\n\n1. The deployment update UI lives under **Settings → Operations**.\n2. The operator selects the target MoonMind image, not the updater runner image.\n3. Deployment update is implemented as a typed executable tool named `deployment.update_compose_stack`.\n4. The tool is admin-only and capability-gated.\n5. Stack names, Compose paths, image repositories, and runner images are allowlisted.\n6. The tool never accepts arbitrary shell input.\n7. Desired image state is persisted before Compose is brought up.\n8. Before/after state and command logs are written as artifacts.\n9. Verification is required before a run is marked successful.\n10. Rollback is an explicit audited update to a previous target image.\n11. Docker socket access is restricted to trusted deployment-control infrastructure.\n12. Mutable tags are allowed only with explicit audit of the resolved digest when available.\n\n---\n\n## 21. Summary\n\nMoonMind should expose Docker Compose deployment updates as a small, safe, audited Operations workflow.\n\nThe operator experience is simple: choose the target image, choose the update mode, provide a reason, and start the update. The backend handles policy, locking, Docker Compose execution, verification, and artifacts.\n\nThe architectural boundary is equally important: this is an executable deployment-control tool, not an agent skill and not an arbitrary shell surface. That boundary keeps the UX simple while preserving the safety required for a feature that can restart and replace the MoonMind deployment itself.\n"
+  },
+  "extractedAt": "2026-04-25T22:37:56Z",
+  "outputMode": "jira",
+  "designSummary": "The design defines an admin-only Mission Control Settings -> Operations workflow for updating a Docker Compose-managed MoonMind deployment by selecting an allowlisted target MoonMind image. The backend turns that request into a typed privileged deployment.update_compose_stack tool invocation that persists desired image state, serializes per-stack updates, runs policy-controlled Compose pull/up operations, verifies health and image identity, records audit data and artifacts, and exposes progress without becoming a general shell, Docker UI, agent instruction skill, GitOps replacement, or Kubernetes deployment system.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Mission Control Operations update surface",
+      "type": "requirement",
+      "source_section": "1. Purpose; 6. Settings -> Operations UX",
+      "explanation": "Administrators need a Settings -> Operations Deployment Update card that exposes current state, target selection, update mode, options, reason, confirmation, and recent runs."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Target MoonMind image is the operator choice",
+      "type": "constraint",
+      "source_section": "1. Purpose; 5. Core invariants; 20. Locked decisions",
+      "explanation": "The UI and API center on selecting an allowlisted MoonMind target image tag or digest, while the privileged updater runner image remains deployment-controlled configuration."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Admin authorization and deployment policy enforcement",
+      "type": "security",
+      "source_section": "4.1 Goals; 10.1 Validate request; 13. Security and policy model",
+      "explanation": "Only administrators may initiate updates, and stack names, host paths, Compose files, image repositories, modes, flags, and runner images must be checked against deployment policy."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "No arbitrary shell or general Docker UI",
+      "type": "constraint",
+      "source_section": "4.2 Non-goals; 13.3 No arbitrary shell",
+      "explanation": "The feature must not expose user-authored shell snippets, arbitrary Compose paths, unrecognized flags, or a general-purpose Docker control surface."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Typed API contract for update submission and state reads",
+      "type": "integration",
+      "source_section": "7. API contract",
+      "explanation": "The backend exposes typed endpoints for submitting updates, reading current stack state, and listing allowed image targets."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Typed executable tool contract",
+      "type": "integration",
+      "source_section": "8. Executable tool contract",
+      "explanation": "Deployment update is represented by the privileged executable tool deployment.update_compose_stack with schema, capability, timeout, retry, output, and security requirements."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Desired image state persistence before Compose up",
+      "type": "state-model",
+      "source_section": "9. Desired state storage; 20. Locked decisions",
+      "explanation": "The requested image reference must be written to an allowlisted deployment env file or equivalent state store before services are brought up so restarts preserve the target state."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Mutable tags and digest recording",
+      "type": "artifact",
+      "source_section": "9.3 Mutable tag rule; 20. Locked decisions",
+      "explanation": "Mutable tags may be allowed, but resolved digests must be recorded when available and displayed distinctly from the requested reference."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Serialized per-stack update lifecycle",
+      "type": "state-model",
+      "source_section": "5. Core invariants; 10. Execution lifecycle",
+      "explanation": "Only one update may run per Compose stack; the workflow validates, acquires a deployment lock, captures before state, persists desired state, pulls images, recreates services, verifies, captures after state, releases the lock, and reports."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Compose command execution modes",
+      "type": "requirement",
+      "source_section": "10.5 Pull images; 10.6 Recreate services; 11. Updater runner execution model",
+      "explanation": "The tool performs policy-controlled equivalents of docker compose pull and docker compose up, supporting changed-service recreation and force-recreate-all modes."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Privileged runner boundary",
+      "type": "security",
+      "source_section": "11. Updater runner execution model; 13.4 Docker socket risk",
+      "explanation": "Compose commands run only through trusted deployment-control infrastructure, either a privileged worker or ephemeral updater container; Docker socket access is not exposed to ordinary runtimes, agents, repo workspaces, or user-authored tools."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Verification gates success",
+      "type": "requirement",
+      "source_section": "12. Verification model",
+      "explanation": "Compose state, health, image identity/digest matching, optional smoke checks, and orphan cleanup must be verified; unresolved desired state cannot be marked SUCCEEDED."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Durable artifacts and audit record",
+      "type": "artifact",
+      "source_section": "14. Audit and artifacts",
+      "explanation": "Every run records identity, reason, image, options, timestamps, result, failure reason, and immutable before state, command log, verification, and after state artifacts."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Secret redaction and artifact access controls",
+      "type": "security",
+      "source_section": "13.5 Secret handling; 14.3 Artifact redaction; 14.4 Operations display",
+      "explanation": "Registry credentials and sensitive values must not appear in image refs, UI defaults, logs, or deployment env files unless explicitly protected; logs and state captures must redact secrets and raw logs require operational-admin permissions."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Failure and rollback semantics",
+      "type": "migration",
+      "source_section": "15. Failure and rollback semantics",
+      "explanation": "Invalid input, auth/policy failures, lock conflicts, Compose failures, pull/recreate failures, and verification failures fail fast; automatic multi-attempt retries are off by default, and rollback is an explicit audited update."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Task execution and Settings IA integration",
+      "type": "integration",
+      "source_section": "16. Interaction with task execution; 17. Interaction with Settings information architecture",
+      "explanation": "Deployment update is operational tool work invokable from UI, scheduled maintenance, admin tasks, or future release workflows, and remains within Settings Operations rather than becoming top-level navigation."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Operator-facing progress states",
+      "type": "observability",
+      "source_section": "19. Observability",
+      "explanation": "The workflow exposes queue, validation, lock, capture, persistence, pull, recreate, verify, capture-after, success, failure, and partial-verification states with concise messages while detailed output stays in artifacts."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Explicit exclusions remain enforced",
+      "type": "non-goal",
+      "source_section": "4.2 Non-goals",
+      "explanation": "The system must not replace GitOps or Kubernetes, manage non-allowlisted stacks or host paths, treat deployment updates as agent instruction skills, or silently roll back without policy."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Policy-gated deployment update API",
+      "shortName": "deployment-update-api",
+      "jiraIssueType": "Story",
+      "description": "As a MoonMind administrator, I need typed deployment update APIs that enforce deployment policy before any Compose operation can start, so updates can be submitted and inspected without exposing arbitrary host controls.",
+      "sourceReference": {
+        "path": "docs/Tools/DockerComposeUpdateSystem.md",
+        "title": "Docker Compose Deployment Update System",
+        "sections": [
+          "7. API contract",
+          "10.1 Validate request",
+          "13.1 Authorization",
+          "13.2 Allowlisted stacks",
+          "13.3 No arbitrary shell"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "scope": [
+        "POST /api/v1/operations/deployment/update accepts the typed request shape and returns a queued run/workflow identity.",
+        "GET current stack state exposes configured/running image, service state, health, and last run.",
+        "GET image targets returns allowlisted repositories, references, recent tags, and digest recommendation metadata.",
+        "Validation rejects unauthorized callers, unknown stacks, unapproved repositories, invalid references, unpermitted modes/options, and missing reasons."
+      ],
+      "outOfScope": [
+        "Executing Docker Compose commands.",
+        "Rendering the Settings UI.",
+        "Automatic rollback."
+      ],
+      "independentTest": "API-level tests submit valid and invalid deployment update requests against configured policy and assert accepted responses, fail-closed validation errors, current-state output, and image-target output without invoking Docker.",
+      "acceptanceCriteria": [
+        "Admin callers can submit a valid update request and receive deploymentUpdateRunId, taskId or workflowId, and QUEUED status.",
+        "Non-admin callers and ordinary task submitters cannot submit deployment updates.",
+        "Unknown stacks, caller-provided paths, unapproved repositories, unrecognized flags, invalid references, and missing reasons are rejected before workflow/tool execution.",
+        "Current deployment state and allowed image-target endpoints return the documented typed shapes.",
+        "Mutable tag responses identify digest pinning as recommended and preserve requested-reference versus resolved-digest semantics where known.",
+        "The API does not accept arbitrary shell command text, arbitrary Compose file paths, arbitrary host paths, or updater runner image choices."
+      ],
+      "requirements": [
+        "Expose the documented typed backend endpoints.",
+        "Bind request validation to deployment policy and admin authorization.",
+        "Represent unsupported values as explicit errors rather than hidden fallback behavior.",
+        "Keep deployment update permissions distinct from ordinary task submission."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-003",
+          "title": "Admin authorization and deployment policy enforcement",
+          "ownership": "Only administrators may initiate updates, and stack names, host paths, Compose files, image repositories, modes, flags, and runner images must be checked against deployment policy."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "title": "No arbitrary shell or general Docker UI",
+          "ownership": "The feature must not expose user-authored shell snippets, arbitrary Compose paths, unrecognized flags, or a general-purpose Docker control surface."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "title": "Typed API contract for update submission and state reads",
+          "ownership": "The backend exposes typed endpoints for submitting updates, reading current stack state, and listing allowed image targets."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "title": "Mutable tags and digest recording",
+          "ownership": "Mutable tags may be allowed, but resolved digests must be recorded when available and displayed distinctly from the requested reference."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "title": "Explicit exclusions remain enforced",
+          "ownership": "The system must not replace GitOps or Kubernetes, manage non-allowlisted stacks or host paths, treat deployment updates as agent instruction skills, or silently roll back without policy."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Existing authentication and role checks can distinguish administrators from ordinary users."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Typed deployment update tool contract",
+      "shortName": "deployment-tool-contract",
+      "jiraIssueType": "Story",
+      "description": "As an operator of MoonMind workflows, I need deployment.update_compose_stack registered as a typed privileged executable tool, so deployment updates can be orchestrated through the plan/tool system rather than ad hoc shell execution.",
+      "sourceReference": {
+        "path": "docs/Tools/DockerComposeUpdateSystem.md",
+        "title": "Docker Compose Deployment Update System",
+        "sections": [
+          "8. Executable tool contract",
+          "16. Interaction with task execution",
+          "20. Locked decisions"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-004"
+        ]
+      },
+      "scope": [
+        "Register deployment.update_compose_stack with version, input schema, output schema, executor activity type, capability selector, admin security policy, timeout policy, retry policy, and non-retryable error codes.",
+        "Support representative plan-node invocation from operational workflows.",
+        "Make the target image the tool input while keeping runner-image selection outside user inputs."
+      ],
+      "outOfScope": [
+        "Building the full UI.",
+        "Implementing all Compose command execution internals."
+      ],
+      "independentTest": "Tool registry and plan-contract tests resolve deployment.update_compose_stack, validate its schema and capability requirements, and reject plan nodes that attempt unsupported inputs or arbitrary shell execution.",
+      "acceptanceCriteria": [
+        "The tool registry exposes deployment.update_compose_stack version 1.0.0 with the documented required inputs and outputs.",
+        "The tool requires deployment_control and docker_admin capabilities and admin authorization.",
+        "The tool schema accepts stack, image.repository, image.reference, optional resolvedDigest, mode, options, and reason.",
+        "The tool output schema includes status, stack, requestedImage, resolvedDigest, updatedServices, runningServices, and artifact refs.",
+        "Retry policy uses max_attempts 1 with documented non-retryable error codes.",
+        "Plan-node validation supports the representative skill tool invocation and rejects arbitrary shell snippets or runner image overrides."
+      ],
+      "requirements": [
+        "Keep deployment update as executable operational work in the tool/plan system.",
+        "Avoid treating deployment update as an agent instruction bundle.",
+        "Preserve exact target image input semantics without hidden transformations."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-006",
+          "title": "Typed executable tool contract",
+          "ownership": "Deployment update is represented by the privileged executable tool deployment.update_compose_stack with schema, capability, timeout, retry, output, and security requirements."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "title": "Task execution and Settings IA integration",
+          "ownership": "Deployment update is operational tool work invokable from UI, scheduled maintenance, admin tasks, or future release workflows, and remains within Settings Operations rather than becoming top-level navigation."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "title": "Target MoonMind image is the operator choice",
+          "ownership": "The UI and API center on selecting an allowlisted MoonMind target image tag or digest, while the privileged updater runner image remains deployment-controlled configuration."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "title": "No arbitrary shell or general Docker UI",
+          "ownership": "The feature must not expose user-authored shell snippets, arbitrary Compose paths, unrecognized flags, or a general-purpose Docker control surface."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "The existing tool registry supports capability-based selection for privileged executors."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Serialized Compose desired-state execution",
+      "shortName": "compose-update-execution",
+      "jiraIssueType": "Story",
+      "description": "As a deployment administrator, I need MoonMind to persist the requested image and run the policy-controlled Compose update lifecycle under a per-stack lock, so a requested update survives restarts and cannot race with another update.",
+      "sourceReference": {
+        "path": "docs/Tools/DockerComposeUpdateSystem.md",
+        "title": "Docker Compose Deployment Update System",
+        "sections": [
+          "9. Desired state storage",
+          "10. Execution lifecycle",
+          "11. Updater runner execution model"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "scope": [
+        "Acquire and release a per-stack deployment lock.",
+        "Capture before state before mutating desired state.",
+        "Persist the requested image reference to an allowlisted deployment env file or equivalent state store before Compose up.",
+        "Resolve/record digest when available.",
+        "Run policy-controlled docker compose pull and docker compose up equivalents for changed_services and force_recreate modes.",
+        "Support trusted deployment-control worker or ephemeral updater container implementation modes without exposing runner selection to users."
+      ],
+      "outOfScope": [
+        "Rendering detailed progress in the UI.",
+        "Automatic retry loops or rollback."
+      ],
+      "independentTest": "Boundary tests drive the tool executor with a fake deployment policy and fake Compose runner, assert lock serialization, desired-state persistence order, command construction for both modes, digest recording, and rejection of caller-selected files or runner images.",
+      "acceptanceCriteria": [
+        "A second update for the same stack is rejected with DEPLOYMENT_LOCKED or queued only according to explicit policy.",
+        "Before-state capture occurs before desired-state persistence.",
+        "The desired image is persisted before Compose up is invoked.",
+        "changed_services mode runs the documented pull/up behavior without force-recreate.",
+        "force_recreate mode adds force-recreate behavior only when policy permits it.",
+        "removeOrphans and wait options adjust command construction only through recognized policy-controlled flags.",
+        "The executor never edits arbitrary caller-selected files and never accepts caller-selected updater runner images.",
+        "The privileged Docker access path is restricted to deployment-control infrastructure."
+      ],
+      "requirements": [
+        "Serialize update runs per stack.",
+        "Persist desired target state durably before service recreation.",
+        "Perform Compose command construction from typed inputs and policy only.",
+        "Support both privileged worker and ephemeral updater container as implementation modes."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-007",
+          "title": "Desired image state persistence before Compose up",
+          "ownership": "The requested image reference must be written to an allowlisted deployment env file or equivalent state store before services are brought up so restarts preserve the target state."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "title": "Mutable tags and digest recording",
+          "ownership": "Mutable tags may be allowed, but resolved digests must be recorded when available and displayed distinctly from the requested reference."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "title": "Serialized per-stack update lifecycle",
+          "ownership": "Only one update may run per Compose stack; the workflow validates, acquires a deployment lock, captures before state, persists desired state, pulls images, recreates services, verifies, captures after state, releases the lock, and reports."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "title": "Compose command execution modes",
+          "ownership": "The tool performs policy-controlled equivalents of docker compose pull and docker compose up, supporting changed-service recreation and force-recreate-all modes."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "title": "Privileged runner boundary",
+          "ownership": "Compose commands run only through trusted deployment-control infrastructure, either a privileged worker or ephemeral updater container; Docker socket access is not exposed to ordinary runtimes, agents, repo workspaces, or user-authored tools."
+        }
+      ],
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [
+        "A fake or adapter-backed Compose runner can be used in hermetic tests without Docker socket access."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Deployment verification, artifacts, and progress",
+      "shortName": "deployment-verification-audit",
+      "jiraIssueType": "Story",
+      "description": "As an administrator reviewing an update, I need MoonMind to verify the deployed state and preserve audit artifacts, so a run is only successful when the desired state is proven and the before/after evidence is durable.",
+      "sourceReference": {
+        "path": "docs/Tools/DockerComposeUpdateSystem.md",
+        "title": "Docker Compose Deployment Update System",
+        "sections": [
+          "12. Verification model",
+          "14. Audit and artifacts",
+          "19. Observability"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "scope": [
+        "Verify Compose service state, health, image identity/digests, optional smoke checks, and orphan removal expectations.",
+        "Write immutable before state, command log, verification, and after state artifacts.",
+        "Redact secrets from state captures and command logs.",
+        "Record structured audit fields and final status.",
+        "Expose progress states and concise progress messages while keeping command output in artifacts."
+      ],
+      "outOfScope": [
+        "Implementing the visible Settings card.",
+        "Starting rollbacks."
+      ],
+      "independentTest": "Executor tests simulate successful, failed, and partially verified updates and assert status decisions, artifact refs, redaction behavior, audit fields, and progress-state emission without placing command output in workflow history.",
+      "acceptanceCriteria": [
+        "A run is marked SUCCEEDED only when expected services are running, health checks pass when present, image IDs match the requested target or resolved digest where applicable, requested smoke checks pass, and orphan expectations hold.",
+        "If verification cannot prove the requested desired state, the final status is FAILED or PARTIALLY_VERIFIED, never SUCCEEDED.",
+        "Every run writes beforeStateArtifactRef, commandLogArtifactRef, verificationArtifactRef, and afterStateArtifactRef.",
+        "Audit output includes run/workflow/task IDs where applicable, stack, operator identity and role, reason, image request, resolved digest, mode, options, timestamps, final status, and failure reason when applicable.",
+        "Secrets, auth tokens, registry credentials, and sensitive environment variables are redacted from artifacts and logs.",
+        "Progress states include the documented lifecycle values with short messages; detailed command output remains in artifacts."
+      ],
+      "requirements": [
+        "Make verification a success gate.",
+        "Store durable audit and artifact evidence for every run.",
+        "Redact sensitive values before artifact publication or UI display.",
+        "Represent partial verification explicitly."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-012",
+          "title": "Verification gates success",
+          "ownership": "Compose state, health, image identity/digest matching, optional smoke checks, and orphan cleanup must be verified; unresolved desired state cannot be marked SUCCEEDED."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "title": "Durable artifacts and audit record",
+          "ownership": "Every run records identity, reason, image, options, timestamps, result, failure reason, and immutable before state, command log, verification, and after state artifacts."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "title": "Secret redaction and artifact access controls",
+          "ownership": "Registry credentials and sensitive values must not appear in image refs, UI defaults, logs, or deployment env files unless explicitly protected; logs and state captures must redact secrets and raw logs require operational-admin permissions."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "title": "Operator-facing progress states",
+          "ownership": "The workflow exposes queue, validation, lock, capture, persistence, pull, recreate, verify, capture-after, success, failure, and partial-verification states with concise messages while detailed output stays in artifacts."
+        }
+      ],
+      "dependencies": [
+        "STORY-003"
+      ],
+      "assumptions": [
+        "Existing artifact services can store immutable JSON/text artifacts and enforce admin-only raw log access."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Settings Operations deployment update UI",
+      "shortName": "operations-update-ui",
+      "jiraIssueType": "Story",
+      "description": "As a MoonMind administrator, I need a Settings -> Operations Deployment Update card that shows current deployment state and lets me submit a confirmed target image update, so I can update MoonMind without SSH access.",
+      "sourceReference": {
+        "path": "docs/Tools/DockerComposeUpdateSystem.md",
+        "title": "Docker Compose Deployment Update System",
+        "sections": [
+          "6. Settings -> Operations UX",
+          "17. Interaction with Settings information architecture",
+          "18. UI copy recommendations"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "scope": [
+        "Add the Deployment Update card under Settings -> Operations.",
+        "Show current deployment, update target controls, update mode, policy-controlled options, reason entry, confirmation modal, mutable-tag and force-recreate warnings, and recent actions.",
+        "Submit typed API requests and show run links, artifact links, before/after summaries, status, timestamps, operator, reason, requested image, and resolved digest.",
+        "Keep the feature in Settings subsection routing rather than top-level navigation."
+      ],
+      "outOfScope": [
+        "Implementing backend policy enforcement.",
+        "Displaying raw command logs to non-operational-admin users."
+      ],
+      "independentTest": "React/Vitest tests render the Operations section with mocked deployment state and image targets, exercise target selection, warnings, confirmation, submission, recent actions, and permission-aware artifact/log links.",
+      "acceptanceCriteria": [
+        "The Deployment Update card appears under /tasks/settings?section=operations and not as top-level navigation.",
+        "Current deployment shows stack name, Compose project, configured image, running image ID or digest when available, version/build when available, health summary, and last run result.",
+        "Update target controls prefer digest-pinned or release-tagged choices and show a mutable-tag warning for latest or other mutable references.",
+        "Update mode defaults to Restart changed services and offers Force recreate all services only when policy permits it, with the documented warning.",
+        "The operator must enter a reason and confirm current image, target image, mode, stack, expected affected services, mutable tag warning when applicable, and restart warning before submission.",
+        "Recent actions show status, requested image, resolved digest, operator, reason, timestamps, run detail link, logs artifact link, and before/after summary.",
+        "Raw command-log links are hidden or disabled for users without operational-admin permissions."
+      ],
+      "requirements": [
+        "Expose the operator-facing deployment update workflow in Settings Operations.",
+        "Make target MoonMind image the primary UI choice.",
+        "Keep updater runner image internal and absent from ordinary UI controls.",
+        "Use concise progress states and artifact links for review."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "title": "Mission Control Operations update surface",
+          "ownership": "Administrators need a Settings -> Operations Deployment Update card that exposes current state, target selection, update mode, options, reason, confirmation, and recent runs."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "title": "Target MoonMind image is the operator choice",
+          "ownership": "The UI and API center on selecting an allowlisted MoonMind target image tag or digest, while the privileged updater runner image remains deployment-controlled configuration."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "title": "Task execution and Settings IA integration",
+          "ownership": "Deployment update is operational tool work invokable from UI, scheduled maintenance, admin tasks, or future release workflows, and remains within Settings Operations rather than becoming top-level navigation."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "title": "Operator-facing progress states",
+          "ownership": "The workflow exposes queue, validation, lock, capture, persistence, pull, recreate, verify, capture-after, success, failure, and partial-verification states with concise messages while detailed output stays in artifacts."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "The existing Settings page supports an Operations subsection route."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Explicit failure and rollback controls",
+      "shortName": "rollback-failure-controls",
+      "jiraIssueType": "Story",
+      "description": "As an operations administrator, I need failed updates and rollbacks to remain explicit audited actions, so partial deployment changes do not trigger hidden retries or silent rollbacks.",
+      "sourceReference": {
+        "path": "docs/Tools/DockerComposeUpdateSystem.md",
+        "title": "Docker Compose Deployment Update System",
+        "sections": [
+          "15. Failure and rollback semantics",
+          "4.2 Non-goals",
+          "20. Locked decisions"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-013"
+        ]
+      },
+      "scope": [
+        "Fail fast for invalid input, authorization failure, policy violation, unavailable deployment lock, Compose config validation failure, image pull failure, service recreation failure, and verification failure.",
+        "Disable automatic multi-attempt deployment retries by default.",
+        "Allow a rollback affordance only when before-state artifacts can construct a safe previous target image reference.",
+        "Run rollback through the same admin authorization, reason, confirmation, lock, artifact, and verification path as any other deployment update.",
+        "Make silent rollback impossible unless a separately documented policy explicitly enables it."
+      ],
+      "outOfScope": [
+        "Designing a full GitOps or Kubernetes rollback system.",
+        "Managing non-allowlisted stacks or host paths."
+      ],
+      "independentTest": "Workflow/tool tests simulate each failure class and a rollback request, asserting fail-fast terminal status, no automatic retry by default, rollback-as-new-update behavior, required reason/confirmation, artifact references, and policy rejection when a safe previous image cannot be derived.",
+      "acceptanceCriteria": [
+        "Each documented failure class produces a clear failed or partially verified result and actionable failure reason.",
+        "Deployment updates do not perform automatic multi-attempt retries by default.",
+        "A rollback request is submitted as a normal deployment update to a previous image reference, with admin authorization, reason, confirmation, lock acquisition, before/after artifacts, and verification.",
+        "The UI or API offers rollback only when before-state artifacts contain enough information to construct a safe target image reference.",
+        "The system never silently rolls back after failure unless an explicit separate policy enables automatic rollback.",
+        "Rollback and failure records remain visible in recent actions and audit output."
+      ],
+      "requirements": [
+        "Keep retries and rollback operator-driven by default.",
+        "Preserve the same security, audit, artifact, and verification requirements for rollback as for forward updates.",
+        "Do not expand the feature into general GitOps, Kubernetes, or non-allowlisted stack management."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-015",
+          "title": "Failure and rollback semantics",
+          "ownership": "Invalid input, auth/policy failures, lock conflicts, Compose failures, pull/recreate failures, and verification failures fail fast; automatic multi-attempt retries are off by default, and rollback is an explicit audited update."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "title": "Explicit exclusions remain enforced",
+          "ownership": "The system must not replace GitOps or Kubernetes, manage non-allowlisted stacks or host paths, treat deployment updates as agent instruction skills, or silently roll back without policy."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "title": "Admin authorization and deployment policy enforcement",
+          "ownership": "Only administrators may initiate updates, and stack names, host paths, Compose files, image repositories, modes, flags, and runner images must be checked against deployment policy."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "title": "Durable artifacts and audit record",
+          "ownership": "Every run records identity, reason, image, options, timestamps, result, failure reason, and immutable before state, command log, verification, and after state artifacts."
+        }
+      ],
+      "dependencies": [
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Before-state artifacts include enough image identity information for at least some previous-image rollback offers."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-002",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-001",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-004",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-002",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-001",
+      "STORY-006"
+    ]
+  },
+  "outOfScope": [
+    {
+      "item": "General-purpose Docker UI or shell runner",
+      "rationale": "The design explicitly restricts the feature to typed deployment update inputs and known command forms."
+    },
+    {
+      "item": "Non-admin deployment control",
+      "rationale": "Only administrators may initiate deployment updates."
+    },
+    {
+      "item": "Operator-selected updater runner images",
+      "rationale": "Runner images are privileged infrastructure and deployment-controlled."
+    },
+    {
+      "item": "GitOps or Kubernetes replacement",
+      "rationale": "The document scopes the feature to allowlisted Docker Compose stacks."
+    },
+    {
+      "item": "Silent rollback",
+      "rationale": "Rollback is a separate explicit audited update unless future policy says otherwise."
+    },
+    {
+      "item": "Spec generation",
+      "rationale": "Breakdown only; downstream specify creates feature specs."
+    }
+  ]
+}
