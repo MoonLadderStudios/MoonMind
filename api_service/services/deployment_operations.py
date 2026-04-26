@@ -57,6 +57,45 @@ class DeploymentUpdateSubmission:
     prune_old_images: bool
     reason: str
     requested_by_user_id: UUID | str | None
+    operation_kind: str = "update"
+    rollback_source_action_id: str | None = None
+    confirmation: str | None = None
+
+
+@dataclass(frozen=True)
+class RollbackImageTarget:
+    repository: str
+    reference: str
+
+
+@dataclass(frozen=True)
+class RollbackEligibilityDecision:
+    eligible: bool
+    target_image: RollbackImageTarget | None = None
+    source_action_id: str | None = None
+    reason: str | None = None
+    evidence_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class DeploymentRecentAction:
+    id: str
+    kind: str
+    status: str
+    requested_image: str | None = None
+    resolved_digest: str | None = None
+    operator: str | None = None
+    reason: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    run_detail_url: str | None = None
+    logs_artifact_url: str | None = None
+    raw_command_log_url: str | None = None
+    raw_command_log_permitted: bool = False
+    run_id: str | None = None
+    before_summary: str | None = None
+    after_summary: str | None = None
+    rollback_eligibility: RollbackEligibilityDecision | None = None
 
 
 class DeploymentExecutionCreator(Protocol):
@@ -101,8 +140,10 @@ class DeploymentOperationsService:
     def __init__(
         self,
         policies: dict[str, DeploymentStackPolicy] | None = None,
+        recent_actions: dict[str, tuple[DeploymentRecentAction, ...]] | None = None,
     ) -> None:
         self._policies = policies or DEFAULT_DEPLOYMENT_POLICIES
+        self._recent_actions = recent_actions or {}
 
     def get_policy(self, stack: str) -> DeploymentStackPolicy:
         normalized = str(stack or "").strip()
@@ -122,6 +163,9 @@ class DeploymentOperationsService:
         reference: str,
         mode: str,
         reason: str,
+        operation_kind: str = "update",
+        confirmation: str | None = None,
+        rollback_source_action_id: str | None = None,
     ) -> DeploymentStackPolicy:
         policy = self.get_policy(stack)
         if repository != policy.repository:
@@ -144,7 +188,28 @@ class DeploymentOperationsService:
                 "deployment_reason_required",
                 "Deployment update reason is required.",
             )
+        normalized_operation = str(operation_kind or "update").strip()
+        if normalized_operation not in {"update", "rollback"}:
+            raise DeploymentOperationError(
+                "deployment_operation_kind_invalid",
+                "Deployment operation kind is invalid.",
+            )
+        if normalized_operation == "rollback":
+            if not str(confirmation or "").strip():
+                raise DeploymentOperationError(
+                    "deployment_confirmation_required",
+                    "Rollback confirmation is required.",
+                )
+            if not str(rollback_source_action_id or "").strip():
+                raise DeploymentOperationError(
+                    "deployment_rollback_source_required",
+                    "Rollback source action is required.",
+                )
         return policy
+
+    def recent_actions(self, stack: str) -> tuple[DeploymentRecentAction, ...]:
+        policy = self.get_policy(stack)
+        return self._recent_actions.get(policy.stack, ())
 
     async def queue_update(
         self,
@@ -199,6 +264,25 @@ class DeploymentOperationsService:
         policy: DeploymentStackPolicy,
         submission: DeploymentUpdateSubmission,
     ) -> dict[str, Any]:
+        plan_inputs = {
+            "stack": policy.stack,
+            "image": {
+                "repository": submission.repository,
+                "reference": submission.reference,
+            },
+            "mode": submission.mode,
+            "removeOrphans": submission.remove_orphans,
+            "wait": submission.wait,
+            "runSmokeCheck": submission.run_smoke_check,
+            "pauseWork": submission.pause_work,
+            "pruneOldImages": submission.prune_old_images,
+            "reason": submission.reason,
+            "operationKind": submission.operation_kind,
+        }
+        if submission.rollback_source_action_id:
+            plan_inputs["rollbackSourceActionId"] = submission.rollback_source_action_id
+        if submission.confirmation:
+            plan_inputs["confirmation"] = submission.confirmation
         return {
             "task": {
                 "instructions": (
@@ -209,7 +293,9 @@ class DeploymentOperationsService:
                 "operation": {
                     "type": "deployment.update",
                     "source": "api.v1.operations.deployment.update",
-                    "jiraIssue": "MM-518",
+                    "jiraIssue": "MM-523",
+                    "kind": submission.operation_kind,
+                    "rollbackSourceActionId": submission.rollback_source_action_id,
                 },
                 "plan": [
                     {
@@ -220,20 +306,7 @@ class DeploymentOperationsService:
                             "name": DEPLOYMENT_UPDATE_TOOL_NAME,
                             "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
                         },
-                        "inputs": {
-                            "stack": policy.stack,
-                            "image": {
-                                "repository": submission.repository,
-                                "reference": submission.reference,
-                            },
-                            "mode": submission.mode,
-                            "removeOrphans": submission.remove_orphans,
-                            "wait": submission.wait,
-                            "runSmokeCheck": submission.run_smoke_check,
-                            "pauseWork": submission.pause_work,
-                            "pruneOldImages": submission.prune_old_images,
-                            "reason": submission.reason,
-                        },
+                        "inputs": plan_inputs,
                     }
                 ],
             }

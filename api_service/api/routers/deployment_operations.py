@@ -47,6 +47,11 @@ class DeploymentUpdateRequest(BaseModel):
     pause_work: bool = Field(False, alias="pauseWork")
     prune_old_images: bool = Field(False, alias="pruneOldImages")
     reason: str = Field(..., min_length=1)
+    operation_kind: Literal["update", "rollback"] = Field("update", alias="operationKind")
+    rollback_source_action_id: str | None = Field(
+        None, alias="rollbackSourceActionId"
+    )
+    confirmation: str | None = None
 
 
 class DeploymentUpdateResponse(BaseModel):
@@ -80,6 +85,48 @@ class DeploymentStackStateResponse(BaseModel):
     running_images: list[RunningImageModel] = Field(..., alias="runningImages")
     services: list[DeploymentServiceStateModel]
     last_update_run_id: str | None = Field(None, alias="lastUpdateRunId")
+    recent_actions: list["DeploymentRecentActionModel"] = Field(
+        default_factory=list, alias="recentActions"
+    )
+
+
+class RollbackImageTargetModel(BaseModel):
+    repository: str
+    reference: str
+
+
+class RollbackEligibilityModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    eligible: bool
+    source_action_id: str | None = Field(None, alias="sourceActionId")
+    target_image: RollbackImageTargetModel | None = Field(None, alias="targetImage")
+    reason: str | None = None
+    evidence_ref: str | None = Field(None, alias="evidenceRef")
+
+
+class DeploymentRecentActionModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    kind: str
+    status: str
+    requested_image: str | None = Field(None, alias="requestedImage")
+    resolved_digest: str | None = Field(None, alias="resolvedDigest")
+    operator: str | None = None
+    reason: str | None = None
+    started_at: str | None = Field(None, alias="startedAt")
+    completed_at: str | None = Field(None, alias="completedAt")
+    run_detail_url: str | None = Field(None, alias="runDetailUrl")
+    logs_artifact_url: str | None = Field(None, alias="logsArtifactUrl")
+    raw_command_log_url: str | None = Field(None, alias="rawCommandLogUrl")
+    raw_command_log_permitted: bool = Field(False, alias="rawCommandLogPermitted")
+    run_id: str | None = Field(None, alias="runId")
+    before_summary: str | None = Field(None, alias="beforeSummary")
+    after_summary: str | None = Field(None, alias="afterSummary")
+    rollback_eligibility: RollbackEligibilityModel | None = Field(
+        None, alias="rollbackEligibility"
+    )
 
 
 class ImageTargetModel(BaseModel):
@@ -129,6 +176,7 @@ def _require_admin(user: User) -> None:
         detail={
             "code": "deployment_update_forbidden",
             "message": "Only administrators can submit deployment updates.",
+            "failureClass": "authorization_failure",
         },
     )
 
@@ -140,7 +188,54 @@ def _policy_error(exc: DeploymentOperationError) -> HTTPException:
     )
 
 
-def _stack_state(policy: DeploymentStackPolicy) -> DeploymentStackStateResponse:
+def _recent_action_model(action) -> DeploymentRecentActionModel:
+    eligibility = action.rollback_eligibility
+    return DeploymentRecentActionModel(
+        id=action.id,
+        kind=action.kind,
+        status=action.status,
+        requestedImage=action.requested_image,
+        resolvedDigest=action.resolved_digest,
+        operator=action.operator,
+        reason=action.reason,
+        startedAt=action.started_at,
+        completedAt=action.completed_at,
+        runDetailUrl=action.run_detail_url,
+        logsArtifactUrl=action.logs_artifact_url,
+        rawCommandLogUrl=(
+            action.raw_command_log_url
+            if action.raw_command_log_permitted
+            else None
+        ),
+        rawCommandLogPermitted=action.raw_command_log_permitted,
+        runId=action.run_id,
+        beforeSummary=action.before_summary,
+        afterSummary=action.after_summary,
+        rollbackEligibility=(
+            RollbackEligibilityModel(
+                eligible=eligibility.eligible,
+                sourceActionId=eligibility.source_action_id,
+                targetImage=(
+                    RollbackImageTargetModel(
+                        repository=eligibility.target_image.repository,
+                        reference=eligibility.target_image.reference,
+                    )
+                    if eligibility.target_image
+                    else None
+                ),
+                reason=eligibility.reason,
+                evidenceRef=eligibility.evidence_ref,
+            )
+            if eligibility
+            else None
+        ),
+    )
+
+
+def _stack_state(
+    policy: DeploymentStackPolicy,
+    service: DeploymentOperationsService,
+) -> DeploymentStackStateResponse:
     return DeploymentStackStateResponse(
         stack=policy.stack,
         projectName=policy.project_name,
@@ -161,6 +256,10 @@ def _stack_state(policy: DeploymentStackPolicy) -> DeploymentStackStateResponse:
             )
         ],
         lastUpdateRunId=None,
+        recentActions=[
+            _recent_action_model(action)
+            for action in service.recent_actions(policy.stack)
+        ],
     )
 
 
@@ -183,6 +282,9 @@ async def submit_deployment_update(
             reference=payload.image.reference,
             mode=payload.mode,
             reason=payload.reason,
+            operation_kind=payload.operation_kind,
+            confirmation=payload.confirmation,
+            rollback_source_action_id=payload.rollback_source_action_id,
         )
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
@@ -202,6 +304,9 @@ async def submit_deployment_update(
                 prune_old_images=payload.prune_old_images,
                 reason=payload.reason,
                 requested_by_user_id=getattr(user, "id", None),
+                operation_kind=payload.operation_kind,
+                rollback_source_action_id=payload.rollback_source_action_id,
+                confirmation=payload.confirmation,
             ),
         )
     except TemporalSubmitDisabledError as exc:
@@ -229,7 +334,7 @@ async def get_deployment_stack_state(
         policy = service.get_policy(stack)
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
-    return _stack_state(policy)
+    return _stack_state(policy, service)
 
 
 @router.get("/image-targets", response_model=ImageTargetsResponse)

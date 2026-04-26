@@ -101,7 +101,10 @@ class DeploymentUpdateLockManager:
                         f"'{normalized}' is already running."
                     ),
                     retryable=False,
-                    details={"stack": normalized},
+                    details={
+                        "stack": normalized,
+                        "failureClass": "deployment_lock_unavailable",
+                    },
                 )
             self._held.add(normalized)
         return DeploymentUpdateLockLease(self, normalized)
@@ -162,7 +165,11 @@ class DisabledComposeRunner:
             error_code="POLICY_VIOLATION",
             message="Deployment update runner is not configured for this worker.",
             retryable=False,
-            details={"stack": stack, "phase": phase},
+            details={
+                "stack": stack,
+                "phase": phase,
+                "failureClass": "policy_violation",
+            },
         )
 
     async def pull(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
@@ -170,7 +177,11 @@ class DisabledComposeRunner:
             error_code="POLICY_VIOLATION",
             message="Deployment update runner is not configured for this worker.",
             retryable=False,
-            details={"stack": stack, "command": list(command)},
+            details={
+                "stack": stack,
+                "command": list(command),
+                "failureClass": "policy_violation",
+            },
         )
 
     async def up(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
@@ -178,7 +189,11 @@ class DisabledComposeRunner:
             error_code="POLICY_VIOLATION",
             message="Deployment update runner is not configured for this worker.",
             retryable=False,
-            details={"stack": stack, "command": list(command)},
+            details={
+                "stack": stack,
+                "command": list(command),
+                "failureClass": "policy_violation",
+            },
         )
 
     async def verify(
@@ -196,6 +211,7 @@ class DisabledComposeRunner:
                 "stack": stack,
                 "requested_image": requested_image,
                 "resolved_digest": resolved_digest,
+                "failureClass": "policy_violation",
             },
         )
 
@@ -431,6 +447,15 @@ class DeploymentUpdateExecutor:
             "verificationArtifactRef": verification_ref,
             "audit": _redact_sensitive(audit_snapshot(completed=True)),
         }
+        if final_status != "SUCCEEDED":
+            outputs["failure"] = {
+                "class": "verification_failure",
+                "reason": _redact_sensitive(
+                    failure_reason
+                    or "Deployment verification did not prove desired state."
+                ),
+                "retryable": False,
+            }
         return ToolResult(
             status="COMPLETED" if final_status == "SUCCEEDED" else "FAILED",
             outputs=outputs,
@@ -455,14 +480,21 @@ def _verification_final_status(verification: ComposeVerification) -> str:
                 error_code="DEPLOYMENT_VERIFICATION_INVALID",
                 message=f"Unsupported deployment verification status '{explicit}'.",
                 retryable=False,
-                details={"status": explicit},
+                details={
+                    "status": explicit,
+                    "failureClass": "verification_failure",
+                },
             )
         if verification.succeeded and explicit != "SUCCEEDED":
             raise ToolFailure(
                 error_code="DEPLOYMENT_VERIFICATION_INVALID",
                 message="Deployment verification status conflicts with success flag.",
                 retryable=False,
-                details={"status": explicit, "succeeded": verification.succeeded},
+                details={
+                    "status": explicit,
+                    "succeeded": verification.succeeded,
+                    "failureClass": "verification_failure",
+                },
             )
         if explicit == "SUCCEEDED" and not verification.succeeded:
             raise ToolFailure(
@@ -472,7 +504,11 @@ def _verification_final_status(verification: ComposeVerification) -> str:
                     "with success flag."
                 ),
                 retryable=False,
-                details={"status": explicit, "succeeded": verification.succeeded},
+                details={
+                    "status": explicit,
+                    "succeeded": verification.succeeded,
+                    "failureClass": "verification_failure",
+                },
             )
         return explicit
     return "SUCCEEDED" if verification.succeeded else "FAILED"
@@ -537,7 +573,7 @@ def build_compose_command_plan(
             error_code="INVALID_INPUT",
             message=f"Unsupported deployment update mode '{normalized_mode}'.",
             retryable=False,
-            details={"mode": normalized_mode},
+            details={"mode": normalized_mode, "failureClass": "invalid_input"},
         )
     normalized_runner = _required_string(runner_mode, "deployment_runner_mode")
     if normalized_runner not in DEPLOYMENT_RUNNER_MODES:
@@ -545,7 +581,10 @@ def build_compose_command_plan(
             error_code="POLICY_VIOLATION",
             message=f"Unsupported deployment runner mode '{normalized_runner}'.",
             retryable=False,
-            details={"runner_mode": normalized_runner},
+            details={
+                "runner_mode": normalized_runner,
+                "failureClass": "policy_violation",
+            },
         )
 
     up_args = ["docker", "compose", "up", "-d"]
@@ -608,7 +647,10 @@ def register_deployment_update_tool_handler(
 def _parse_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(inputs, Mapping):
         raise ToolFailure(
-            "INVALID_INPUT", "Deployment inputs must be an object.", False
+            "INVALID_INPUT",
+            "Deployment inputs must be an object.",
+            False,
+            details={"failureClass": "invalid_input"},
         )
     forbidden = {"command", "composeFile", "hostPath", "updaterRunnerImage"}
     found_forbidden = sorted(forbidden.intersection(inputs.keys()))
@@ -617,12 +659,17 @@ def _parse_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
             error_code="INVALID_INPUT",
             message="Deployment update inputs contain forbidden fields.",
             retryable=False,
-            details={"fields": found_forbidden},
+            details={"fields": found_forbidden, "failureClass": "invalid_input"},
         )
 
     image = inputs.get("image")
     if not isinstance(image, Mapping):
-        raise ToolFailure("INVALID_INPUT", "Deployment image must be an object.", False)
+        raise ToolFailure(
+            "INVALID_INPUT",
+            "Deployment image must be an object.",
+            False,
+            details={"failureClass": "invalid_input"},
+        )
 
     stack = _required_string(inputs.get("stack"), "stack")
     if stack not in DEPLOYMENT_UPDATE_STACKS:
@@ -633,6 +680,7 @@ def _parse_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
             details={
                 "stack": stack,
                 "allowed_stacks": sorted(DEPLOYMENT_UPDATE_STACKS),
+                "failureClass": "invalid_input",
             },
         )
 
@@ -668,7 +716,7 @@ def _required_string(value: Any, field_name: str) -> str:
             error_code="INVALID_INPUT",
             message=f"{field_name} is required.",
             retryable=False,
-            details={"field": field_name},
+            details={"field": field_name, "failureClass": "invalid_input"},
         )
     return normalized
 
@@ -684,7 +732,11 @@ def _optional_bool(
             error_code="INVALID_INPUT",
             message=f"{field_name} must be a boolean.",
             retryable=False,
-            details={"field": field_name, "value_type": type(value).__name__},
+            details={
+                "field": field_name,
+                "value_type": type(value).__name__,
+                "failureClass": "invalid_input",
+            },
         )
     return value
 
@@ -695,7 +747,11 @@ def _ensure_command_succeeded(phase: str, result: Mapping[str, Any]) -> None:
             error_code="DEPLOYMENT_COMMAND_FAILED",
             message=f"Deployment {phase} command returned an invalid result.",
             retryable=False,
-            details={"phase": phase, "result_type": type(result).__name__},
+            details={
+                "phase": phase,
+                "result_type": type(result).__name__,
+                "failureClass": _command_failure_class(phase),
+            },
         )
     for key in ("exitCode", "exit_code", "returncode"):
         if key in result:
@@ -708,14 +764,24 @@ def _ensure_command_succeeded(phase: str, result: Mapping[str, Any]) -> None:
                         f"Deployment {phase} command returned a non-numeric exit code."
                     ),
                     retryable=False,
-                    details={"phase": phase, "field": key, "value": result[key]},
+                    details={
+                        "phase": phase,
+                        "field": key,
+                        "value": result[key],
+                        "failureClass": _command_failure_class(phase),
+                    },
                 ) from exc
             if code != 0:
                 raise ToolFailure(
                     error_code="DEPLOYMENT_COMMAND_FAILED",
                     message=f"Deployment {phase} command failed with exit code {code}.",
                     retryable=False,
-                    details={"phase": phase, "exit_code": code, "result": dict(result)},
+                    details={
+                        "phase": phase,
+                        "exit_code": code,
+                        "result": dict(result),
+                        "failureClass": _command_failure_class(phase),
+                    },
                 )
             return
     for key in ("ok", "success", "succeeded"):
@@ -725,7 +791,12 @@ def _ensure_command_succeeded(phase: str, result: Mapping[str, Any]) -> None:
                     error_code="DEPLOYMENT_COMMAND_FAILED",
                     message=f"Deployment {phase} command reported failure.",
                     retryable=False,
-                    details={"phase": phase, "field": key, "result": dict(result)},
+                    details={
+                        "phase": phase,
+                        "field": key,
+                        "result": dict(result),
+                        "failureClass": _command_failure_class(phase),
+                    },
                 )
             return
     status = str(result.get("status") or "").strip().lower()
@@ -735,15 +806,32 @@ def _ensure_command_succeeded(phase: str, result: Mapping[str, Any]) -> None:
                 error_code="DEPLOYMENT_COMMAND_FAILED",
                 message=f"Deployment {phase} command reported status '{status}'.",
                 retryable=False,
-                details={"phase": phase, "status": status, "result": dict(result)},
+                details={
+                    "phase": phase,
+                    "status": status,
+                    "result": dict(result),
+                    "failureClass": _command_failure_class(phase),
+                },
             )
         return
     raise ToolFailure(
         error_code="DEPLOYMENT_COMMAND_FAILED",
         message=f"Deployment {phase} command result did not include a success signal.",
         retryable=False,
-        details={"phase": phase, "result": dict(result)},
+        details={
+            "phase": phase,
+            "result": dict(result),
+            "failureClass": _command_failure_class(phase),
+        },
     )
+
+
+def _command_failure_class(phase: str) -> str:
+    if phase == "pull":
+        return "image_pull_failure"
+    if phase == "up":
+        return "service_recreation_failure"
+    return "compose_config_validation_failure"
 
 
 def _record_command_exception(command_log: dict[str, Any], exc: Exception) -> None:

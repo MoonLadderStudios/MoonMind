@@ -57,6 +57,12 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
                     "pauseWork": {"type": "boolean"},
                     "pruneOldImages": {"type": "boolean"},
                     "reason": {"type": "string"},
+                    "operationKind": {
+                        "type": "string",
+                        "enum": ["update", "rollback"],
+                    },
+                    "rollbackSourceActionId": {"type": "string"},
+                    "confirmation": {"type": "string"},
                 },
             }
         },
@@ -97,6 +103,16 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
                     "audit": {
                         "type": "object",
                         "additionalProperties": True,
+                    },
+                    "failure": {
+                        "type": "object",
+                        "required": ["class", "reason", "retryable"],
+                        "additionalProperties": False,
+                        "properties": {
+                            "class": {"type": "string"},
+                            "reason": {"type": "string"},
+                            "retryable": {"type": "boolean"},
+                        },
                     },
                 },
             }

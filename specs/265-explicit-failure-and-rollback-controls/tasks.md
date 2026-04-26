@@ -28,8 +28,8 @@
 
 **Purpose**: Confirm the active feature artifacts and test surfaces are ready.
 
-- [ ] T001 Verify `.specify/feature.json` points to `specs/265-explicit-failure-and-rollback-controls` and record the branch-name prerequisite-script blocker in `specs/265-explicit-failure-and-rollback-controls/tasks.md`. (FR-011, SC-008)
-- [ ] T002 Inspect current deployment implementation and test entry points in `moonmind/workflows/skills/deployment_execution.py`, `api_service/services/deployment_operations.py`, `api_service/api/routers/deployment_operations.py`, `frontend/src/components/settings/OperationsSettingsSection.tsx`, `tests/unit/workflows/skills/test_deployment_update_execution.py`, `tests/unit/api/routers/test_deployment_operations.py`, and `frontend/src/components/settings/OperationsSettingsSection.test.tsx`. (FR-001-FR-010)
+- [X] T001 Verify `.specify/feature.json` points to `specs/265-explicit-failure-and-rollback-controls` and record the branch-name prerequisite-script blocker in `specs/265-explicit-failure-and-rollback-controls/tasks.md`. (FR-011, SC-008)
+- [X] T002 Inspect current deployment implementation and test entry points in `moonmind/workflows/skills/deployment_execution.py`, `api_service/services/deployment_operations.py`, `api_service/api/routers/deployment_operations.py`, `frontend/src/components/settings/OperationsSettingsSection.tsx`, `tests/unit/workflows/skills/test_deployment_update_execution.py`, `tests/unit/api/routers/test_deployment_operations.py`, and `frontend/src/components/settings/OperationsSettingsSection.test.tsx`. (FR-001-FR-010)
 
 ---
 
@@ -39,9 +39,9 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete.
 
-- [ ] T003 [P] Add shared failing-test fixtures for deployment failure classes, rollback-safe before-state evidence, unsafe before-state evidence, and rollback metadata in `tests/unit/workflows/skills/test_deployment_update_execution.py`. (FR-001, FR-006, FR-007, DESIGN-REQ-001, DESIGN-REQ-004)
-- [ ] T004 [P] Add shared fake recent-action/projection fixtures for deployment stack state and rollback submission tests in `tests/unit/api/routers/test_deployment_operations.py`. (FR-003, FR-004, FR-005, FR-009, SC-003, SC-007)
-- [ ] T005 [P] Add mock deployment stack state entries for eligible and ineligible rollback actions in `frontend/src/components/settings/OperationsSettingsSection.test.tsx`. (FR-006, FR-007, SC-005)
+- [X] T003 [P] Add shared failing-test fixtures for deployment failure classes, rollback-safe before-state evidence, unsafe before-state evidence, and rollback metadata in `tests/unit/workflows/skills/test_deployment_update_execution.py`. (FR-001, FR-006, FR-007, DESIGN-REQ-001, DESIGN-REQ-004)
+- [X] T004 [P] Add shared fake recent-action/projection fixtures for deployment stack state and rollback submission tests in `tests/unit/api/routers/test_deployment_operations.py`. (FR-003, FR-004, FR-005, FR-009, SC-003, SC-007)
+- [X] T005 [P] Add mock deployment stack state entries for eligible and ineligible rollback actions in `frontend/src/components/settings/OperationsSettingsSection.test.tsx`. (FR-006, FR-007, SC-005)
 
 **Checkpoint**: Foundation ready for red-first story tests.
 
@@ -57,49 +57,51 @@
 
 ### Unit Tests (write first)
 
-- [ ] T006 [P] Add failing unit test matrix for normalized failure classes and actionable reasons in `tests/unit/workflows/skills/test_deployment_update_execution.py`. (FR-001, SC-001, DESIGN-REQ-001)
-- [ ] T007 [P] Add failing unit tests for rollback eligibility from safe, missing, ambiguous, malformed, and non-allowlisted before-state evidence in `tests/unit/api/routers/test_deployment_operations.py`. (FR-006, FR-007, SC-005, DESIGN-REQ-004)
-- [ ] T008 [P] Add failing unit tests proving rollback submission uses the normal typed update path with `operationKind=rollback`, `rollbackSourceActionId`, admin authorization, explicit confirmation, reason, and policy-valid target in `tests/unit/api/routers/test_deployment_operations.py`. (FR-004, FR-005, SC-004, DESIGN-REQ-003)
-- [ ] T009 [P] Add verification-first unit test proving two explicit deployment update submissions are distinct audited operator actions, not automatic retry continuation, in `tests/unit/api/routers/test_deployment_operations.py`. (FR-003, SC-003, DESIGN-REQ-002)
-- [ ] T010 [P] Add verification-first unit test proving failed deployment execution does not enqueue or perform rollback without explicit rollback metadata in `tests/unit/workflows/skills/test_deployment_update_execution.py`. (FR-008, SC-006, DESIGN-REQ-004)
-- [ ] T011 [P] Add failing API unit tests for recent failure and rollback action fields in deployment stack state in `tests/unit/api/routers/test_deployment_operations.py`. (FR-009, SC-007, DESIGN-REQ-006)
-- [ ] T012 [P] Add failing UI unit tests for rendering rollback controls only on eligible recent actions and withholding them for unsafe actions in `frontend/src/components/settings/OperationsSettingsSection.test.tsx`. (FR-006, FR-007, acceptance scenarios 4-5)
-- [ ] T013 [P] Add failing UI unit test for rollback confirmation text and submitted typed deployment payload including explicit confirmation metadata in `frontend/src/components/settings/OperationsSettingsSection.test.tsx`. (FR-004, FR-005, acceptance scenario 3)
-- [ ] T014 Run `pytest tests/unit/workflows/skills/test_deployment_update_execution.py tests/unit/api/routers/test_deployment_operations.py -q` and `./tools/test_unit.sh --ui-args frontend/src/components/settings/OperationsSettingsSection.test.tsx` to confirm T006-T013 fail for the expected missing behavior. (SC-001, SC-003, SC-004, SC-005, SC-006, SC-007)
+- [X] T006 [P] Add failing unit test matrix for normalized failure classes and actionable reasons in `tests/unit/workflows/skills/test_deployment_update_execution.py`. (FR-001, SC-001, DESIGN-REQ-001)
+- [X] T007 [P] Add failing unit tests for rollback eligibility from safe, missing, ambiguous, malformed, and non-allowlisted before-state evidence in `tests/unit/api/routers/test_deployment_operations.py`. (FR-006, FR-007, SC-005, DESIGN-REQ-004)
+- [X] T008 [P] Add failing unit tests proving rollback submission uses the normal typed update path with `operationKind=rollback`, `rollbackSourceActionId`, admin authorization, explicit confirmation, reason, and policy-valid target in `tests/unit/api/routers/test_deployment_operations.py`. (FR-004, FR-005, SC-004, DESIGN-REQ-003)
+- [X] T009 [P] Add verification-first unit test proving two explicit deployment update submissions are distinct audited operator actions, not automatic retry continuation, in `tests/unit/api/routers/test_deployment_operations.py`. (FR-003, SC-003, DESIGN-REQ-002)
+- [X] T010 [P] Add verification-first unit test proving failed deployment execution does not enqueue or perform rollback without explicit rollback metadata in `tests/unit/workflows/skills/test_deployment_update_execution.py`. (FR-008, SC-006, DESIGN-REQ-004)
+- [X] T011 [P] Add failing API unit tests for recent failure and rollback action fields in deployment stack state in `tests/unit/api/routers/test_deployment_operations.py`. (FR-009, SC-007, DESIGN-REQ-006)
+- [X] T012 [P] Add failing UI unit tests for rendering rollback controls only on eligible recent actions and withholding them for unsafe actions in `frontend/src/components/settings/OperationsSettingsSection.test.tsx`. (FR-006, FR-007, acceptance scenarios 4-5)
+- [X] T013 [P] Add failing UI unit test for rollback confirmation text and submitted typed deployment payload including explicit confirmation metadata in `frontend/src/components/settings/OperationsSettingsSection.test.tsx`. (FR-004, FR-005, acceptance scenario 3)
+- [X] T014 Run `pytest tests/unit/workflows/skills/test_deployment_update_execution.py tests/unit/api/routers/test_deployment_operations.py -q` and `./tools/test_unit.sh --ui-args frontend/src/components/settings/OperationsSettingsSection.test.tsx` to confirm T006-T013 fail for the expected missing behavior. (SC-001, SC-003, SC-004, SC-005, SC-006, SC-007)
 
 ### Integration Tests (write first)
 
-- [ ] T015 [P] Add failing hermetic integration test for failed `deployment.update_compose_stack` dispatch exposing failure metadata without automatic rollback in `tests/integration/temporal/test_deployment_update_execution_contract.py`. (FR-001, FR-008, SC-001, SC-006, DESIGN-REQ-001, DESIGN-REQ-004)
-- [ ] T016 [P] Add failing hermetic integration test proving rollback dispatch still invokes `deployment.update_compose_stack` through the existing typed tool contract in `tests/integration/temporal/test_deployment_update_execution_contract.py`. (FR-004, FR-005, DESIGN-REQ-003, DESIGN-REQ-005)
-- [ ] T017 Run `pytest tests/integration/temporal/test_deployment_update_execution_contract.py -q` to confirm T015-T016 fail for the expected missing behavior. (SC-004, SC-006)
+- [X] T015 [P] Add failing hermetic integration test for failed `deployment.update_compose_stack` dispatch exposing failure metadata without automatic rollback in `tests/integration/temporal/test_deployment_update_execution_contract.py`. (FR-001, FR-008, SC-001, SC-006, DESIGN-REQ-001, DESIGN-REQ-004)
+- [X] T016 [P] Add failing hermetic integration test proving rollback dispatch still invokes `deployment.update_compose_stack` through the existing typed tool contract in `tests/integration/temporal/test_deployment_update_execution_contract.py`. (FR-004, FR-005, DESIGN-REQ-003, DESIGN-REQ-005)
+- [X] T017 Run `pytest tests/integration/temporal/test_deployment_update_execution_contract.py -q` to confirm T015-T016 fail for the expected missing behavior. (SC-004, SC-006)
 
 ### Red-First Confirmation
 
-- [ ] T018 Confirm and record in `specs/265-explicit-failure-and-rollback-controls/tasks.md` that T006-T017 were run before production implementation and failed for missing MM-523 behavior rather than fixture or syntax errors. (FR-001-FR-009, SC-001-SC-007)
+- [X] T018 Confirm and record in `specs/265-explicit-failure-and-rollback-controls/tasks.md` that T006-T017 were run before production implementation and failed for missing MM-523 behavior rather than fixture or syntax errors. (FR-001-FR-009, SC-001-SC-007)
+
+Red-first evidence: Before production implementation, the focused Python unit run failed during collection on missing rollback/recent-action service models, the focused integration run failed with missing `outputs["failure"]`, and the UI target initially could not reach Vitest until npm dependencies were prepared and the local binary was used because the managed workspace path contains a colon. After implementation, all focused and full unit commands listed below passed.
 
 ### Conditional Fallback For Implemented-Unverified Rows
 
-- [ ] T019 If T009 fails, update explicit retry/audit request handling in `api_service/services/deployment_operations.py` so repeated operator submissions remain separate audited update requests. (FR-003, SC-003)
-- [ ] T020 If T010 or T015 shows an automatic rollback path, remove that path in `moonmind/workflows/skills/deployment_execution.py` or `api_service/services/deployment_operations.py` and require explicit rollback metadata instead. (FR-008, SC-006, DESIGN-REQ-004)
+- [X] T019 If T009 fails, update explicit retry/audit request handling in `api_service/services/deployment_operations.py` so repeated operator submissions remain separate audited update requests. (FR-003, SC-003)
+- [X] T020 If T010 or T015 shows an automatic rollback path, remove that path in `moonmind/workflows/skills/deployment_execution.py` or `api_service/services/deployment_operations.py` and require explicit rollback metadata instead. (FR-008, SC-006, DESIGN-REQ-004)
 
 ### Implementation
 
-- [ ] T021 Add deployment failure-class normalization and failure metadata output in `moonmind/workflows/skills/deployment_execution.py`. (FR-001, SC-001, DESIGN-REQ-001)
-- [ ] T022 Update deployment tool output schema for compact failure metadata in `moonmind/workflows/skills/deployment_tools.py`. (FR-001, DESIGN-REQ-001)
-- [ ] T023 Add rollback eligibility and recent deployment action models to `api_service/api/routers/deployment_operations.py`. (FR-006, FR-007, FR-009, DESIGN-REQ-004, DESIGN-REQ-006)
-- [ ] T024 Implement rollback eligibility derivation and fail-closed unsafe evidence handling in `api_service/services/deployment_operations.py`. (FR-006, FR-007, SC-005, DESIGN-REQ-004)
-- [ ] T025 Extend rollback submission metadata, explicit confirmation validation, and normal typed update queue construction in `api_service/services/deployment_operations.py`. (FR-004, FR-005, DESIGN-REQ-003)
-- [ ] T026 Wire rollback request fields, including `confirmation`, through `DeploymentUpdateRequest` and queue response handling in `api_service/api/routers/deployment_operations.py`. (FR-004, FR-005)
-- [ ] T027 Surface bounded failure and rollback recent actions in deployment stack state from existing execution/artifact evidence in `api_service/api/routers/deployment_operations.py` and `api_service/services/deployment_operations.py`. (FR-009, SC-007, DESIGN-REQ-006)
-- [ ] T028 Add rollback eligibility schema, rollback action rendering, unsafe-action withholding, and rollback confirmation flow in `frontend/src/components/settings/OperationsSettingsSection.tsx`. (FR-004, FR-005, FR-006, FR-007, acceptance scenarios 3-5)
-- [ ] T029 Preserve allowlisted boundaries for rollback targets and raw command-log hiding in `api_service/services/deployment_operations.py`, `api_service/api/routers/deployment_operations.py`, and `frontend/src/components/settings/OperationsSettingsSection.tsx`. (FR-010, DESIGN-REQ-005)
+- [X] T021 Add deployment failure-class normalization and failure metadata output in `moonmind/workflows/skills/deployment_execution.py`. (FR-001, SC-001, DESIGN-REQ-001)
+- [X] T022 Update deployment tool output schema for compact failure metadata in `moonmind/workflows/skills/deployment_tools.py`. (FR-001, DESIGN-REQ-001)
+- [X] T023 Add rollback eligibility and recent deployment action models to `api_service/api/routers/deployment_operations.py`. (FR-006, FR-007, FR-009, DESIGN-REQ-004, DESIGN-REQ-006)
+- [X] T024 Implement rollback eligibility derivation and fail-closed unsafe evidence handling in `api_service/services/deployment_operations.py`. (FR-006, FR-007, SC-005, DESIGN-REQ-004)
+- [X] T025 Extend rollback submission metadata, explicit confirmation validation, and normal typed update queue construction in `api_service/services/deployment_operations.py`. (FR-004, FR-005, DESIGN-REQ-003)
+- [X] T026 Wire rollback request fields, including `confirmation`, through `DeploymentUpdateRequest` and queue response handling in `api_service/api/routers/deployment_operations.py`. (FR-004, FR-005)
+- [X] T027 Surface bounded failure and rollback recent actions in deployment stack state from existing execution/artifact evidence in `api_service/api/routers/deployment_operations.py` and `api_service/services/deployment_operations.py`. (FR-009, SC-007, DESIGN-REQ-006)
+- [X] T028 Add rollback eligibility schema, rollback action rendering, unsafe-action withholding, and rollback confirmation flow in `frontend/src/components/settings/OperationsSettingsSection.tsx`. (FR-004, FR-005, FR-006, FR-007, acceptance scenarios 3-5)
+- [X] T029 Preserve allowlisted boundaries for rollback targets and raw command-log hiding in `api_service/services/deployment_operations.py`, `api_service/api/routers/deployment_operations.py`, and `frontend/src/components/settings/OperationsSettingsSection.tsx`. (FR-010, DESIGN-REQ-005)
 
 ### Story Validation
 
-- [ ] T030 Run `pytest tests/unit/workflows/skills/test_deployment_update_execution.py tests/unit/api/routers/test_deployment_operations.py -q` and fix only MM-523-related failures. (FR-001-FR-010)
-- [ ] T031 Run `./tools/test_unit.sh --ui-args frontend/src/components/settings/OperationsSettingsSection.test.tsx` and fix only MM-523-related failures. (FR-004-FR-009)
-- [ ] T032 Run `pytest tests/integration/temporal/test_deployment_update_execution_contract.py -q` and fix only MM-523-related failures. (FR-001, FR-004, FR-005, FR-008)
-- [ ] T033 Run traceability grep `rg -n "MM-523|DESIGN-REQ-001|rollbackEligibility|operationKind|failureClass" specs/265-explicit-failure-and-rollback-controls moonmind api_service frontend/src tests` and update missing traceability in feature artifacts or tests. (FR-011, SC-008)
+- [X] T030 Run `pytest tests/unit/workflows/skills/test_deployment_update_execution.py tests/unit/api/routers/test_deployment_operations.py -q` and fix only MM-523-related failures. (FR-001-FR-010)
+- [X] T031 Run `./tools/test_unit.sh --ui-args frontend/src/components/settings/OperationsSettingsSection.test.tsx` and fix only MM-523-related failures. (FR-004-FR-009)
+- [X] T032 Run `pytest tests/integration/temporal/test_deployment_update_execution_contract.py -q` and fix only MM-523-related failures. (FR-001, FR-004, FR-005, FR-008)
+- [X] T033 Run traceability grep `rg -n "MM-523|DESIGN-REQ-001|rollbackEligibility|operationKind|failureClass" specs/265-explicit-failure-and-rollback-controls moonmind api_service frontend/src tests` and update missing traceability in feature artifacts or tests. (FR-011, SC-008)
 
 **Checkpoint**: MM-523 story is functionally complete, covered by unit and integration tests, and independently testable.
 
@@ -109,11 +111,11 @@
 
 **Purpose**: Strengthen the completed story without expanding scope.
 
-- [ ] T034 [P] Review `moonmind/workflows/skills/deployment_execution.py` and `api_service/services/deployment_operations.py` for secret hygiene and remove any unredacted failure or rollback evidence from outputs. (FR-001, FR-009, security guardrail)
-- [ ] T035 [P] Review `frontend/src/components/settings/OperationsSettingsSection.tsx` for accessible rollback button labels, confirmation text, and no overlapping or misleading UI states. (FR-004, FR-006, FR-007)
-- [ ] T036 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full required unit verification, including existing retry-policy and allowlist boundary coverage in `tests/unit/workflows/skills/test_deployment_tool_contracts.py`, `tests/unit/workflows/skills/test_deployment_update_execution.py`, and `tests/unit/api/routers/test_deployment_operations.py`. (FR-002, FR-010, SC-001-SC-008, DESIGN-REQ-002, DESIGN-REQ-005)
-- [ ] T037 Run `./tools/test_integration.sh` when Docker is available; if unavailable, record the Docker availability blocker and the focused hermetic integration evidence from T032 in `specs/265-explicit-failure-and-rollback-controls/verification.md`. (SC-004, SC-006)
-- [ ] T038 Run `/speckit.verify` after implementation and tests pass, preserving MM-523, final verdict, tests run, and remaining risks in `specs/265-explicit-failure-and-rollback-controls/verification.md`. (FR-011, SC-008)
+- [X] T034 [P] Review `moonmind/workflows/skills/deployment_execution.py` and `api_service/services/deployment_operations.py` for secret hygiene and remove any unredacted failure or rollback evidence from outputs. (FR-001, FR-009, security guardrail)
+- [X] T035 [P] Review `frontend/src/components/settings/OperationsSettingsSection.tsx` for accessible rollback button labels, confirmation text, and no overlapping or misleading UI states. (FR-004, FR-006, FR-007)
+- [X] T036 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full required unit verification, including existing retry-policy and allowlist boundary coverage in `tests/unit/workflows/skills/test_deployment_tool_contracts.py`, `tests/unit/workflows/skills/test_deployment_update_execution.py`, and `tests/unit/api/routers/test_deployment_operations.py`. (FR-002, FR-010, SC-001-SC-008, DESIGN-REQ-002, DESIGN-REQ-005)
+- [X] T037 Run `./tools/test_integration.sh` when Docker is available; if unavailable, record the Docker availability blocker and the focused hermetic integration evidence from T032 in `specs/265-explicit-failure-and-rollback-controls/verification.md`. (SC-004, SC-006)
+- [X] T038 Run `/speckit.verify` after implementation and tests pass, preserving MM-523, final verdict, tests run, and remaining risks in `specs/265-explicit-failure-and-rollback-controls/verification.md`. (FR-011, SC-008)
 
 ---
 
