@@ -21,7 +21,15 @@ Implement MM-519 by adding a canonical deployment update executable tool definit
 | FR-008 | implemented_verified | invalid plan validation parameterized tests reject shell/path/runner override fields | complete | integration-style passed |
 | FR-009 | implemented_verified | `deployment_operations.py` imports shared constants; API unit test asserts name/version | complete | unit passed |
 | FR-010 | implemented_verified | MM-519 is preserved in spec/tasks/verification and traceability check passed | complete | final verify passed |
-| DESIGN-REQ-001..009 | implemented_verified | contract helper, API binding, targeted tests, and traceability check cover the source mappings | complete | unit + integration-style passed |
+| DESIGN-REQ-001 | implemented_verified | `deployment_tools.py` defines `deployment.update_compose_stack`; unit test asserts parsed definition | complete | unit passed |
+| DESIGN-REQ-002 | implemented_verified | strict input schema in `deployment_tools.py`; unit and plan validation tests cover required and optional fields | complete | unit + integration-style passed |
+| DESIGN-REQ-003 | implemented_verified | output schema assertions in `test_deployment_tool_contracts.py` cover status, image, services, and artifact refs | complete | unit passed |
+| DESIGN-REQ-004 | implemented_verified | capabilities/admin assertions in `test_deployment_tool_contracts.py` | complete | unit passed |
+| DESIGN-REQ-005 | implemented_verified | executor binding assertions in `test_deployment_tool_contracts.py` | complete | unit passed |
+| DESIGN-REQ-006 | implemented_verified | retry policy assertions in `test_deployment_tool_contracts.py` | complete | unit passed |
+| DESIGN-REQ-007 | implemented_verified | representative plan node validation and API queued-run assertions cover canonical name/version and typed inputs | complete | unit + integration-style passed |
+| DESIGN-REQ-008 | implemented_verified | invalid plan validation tests reject shell/path/runner override fields before execution | complete | integration-style passed |
+| DESIGN-REQ-009 | implemented_verified | executable tool definition uses `mm.tool.execute`; tasks and verification preserve non-agent-instruction boundary | complete | unit + final verify passed |
 
 ## Technical Context
 

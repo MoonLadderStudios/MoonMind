@@ -7,7 +7,7 @@
 
 **Organization**: Tasks are grouped by phase around the single MM-519 user story.
 
-**Source Traceability**: Tasks cover FR-001 through FR-010, SC-001 through SC-005, and DESIGN-REQ-001 through DESIGN-REQ-009.
+**Source Traceability**: Tasks cover FR-001 through FR-010, SC-001 through SC-005, and DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-008, and DESIGN-REQ-009.
 
 **Test Commands**:
 
@@ -45,7 +45,7 @@
 
 **Independent Test**: Validate the canonical tool definition and representative plan nodes against the existing registry and plan validation helpers.
 
-**Traceability**: FR-001-FR-010, SC-001-SC-005, DESIGN-REQ-001-DESIGN-REQ-009
+**Traceability**: FR-001-FR-010, SC-001-SC-005, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009
 
 **Test Plan**:
 
