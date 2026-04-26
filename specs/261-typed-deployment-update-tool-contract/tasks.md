@@ -68,7 +68,7 @@
 
 - [X] T009 Implement canonical deployment update tool contract constants and payload builder in `moonmind/workflows/skills/deployment_tools.py`. (FR-001-FR-006, DESIGN-REQ-001-DESIGN-REQ-006)
 - [X] T010 Update `api_service/services/deployment_operations.py` to use canonical deployment tool constants for queued-run plan nodes and integration metadata. (FR-009, DESIGN-REQ-007)
-- [X] T011 Run targeted unit and integration-style validation commands and fix failures. (FR-001-FR-009, SC-001-SC-004)
+- [X] T011 Run targeted unit and integration-style story validation commands and fix failures. (FR-001-FR-009, SC-001-SC-004)
 - [X] T012 Run traceability check for MM-519 and DESIGN-REQ coverage across the feature artifacts, code, and tests. (FR-010, SC-005)
 
 **Checkpoint**: The story is fully functional, covered by unit and integration-style tests, and testable independently
