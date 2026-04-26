@@ -1,27 +1,12 @@
 [
   {
-    "id": 3142955427,
+    "id": 3143081514,
     "disposition": "addressed",
-    "rationale": "Updated _recent_action_model to use Pydantic field names and added a DeploymentRecentAction type hint."
+    "rationale": "Added explicit versioned PyPI dependencies for nltk 3.9.4 and aiohttp 3.13.5 to pyproject.toml and regenerated poetry.lock metadata with Poetry."
   },
   {
-    "id": 4176503639,
-    "disposition": "not-applicable",
-    "rationale": "Broad review summary with no separate actionable request beyond the linked model-construction comment."
-  },
-  {
-    "id": 4176505945,
-    "disposition": "not-applicable",
-    "rationale": "Informational automated Codex review wrapper with no actionable code finding."
-  },
-  {
-    "id": 3142958549,
+    "id": 4176603582,
     "disposition": "addressed",
-    "rationale": "Deployment stack state now falls back to persisted Temporal deployment execution history when no injected recent actions are present."
-  },
-  {
-    "id": 3142958551,
-    "disposition": "addressed",
-    "rationale": "Rollback submissions now produce fresh server-side idempotency keys and the UI includes a request timestamp in the rollback reason."
+    "rationale": "Synchronized pyproject.toml with the lockfile dependency updates and verified the project with poetry check --lock plus the full unit test runner."
   }
 ]
