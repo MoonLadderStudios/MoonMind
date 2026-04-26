@@ -1300,6 +1300,58 @@ async def test_fetch_result_maps_blocked_pr_resolver_result_to_user_error(
     assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
     assert "run_fix_comments_skill" in result.summary
 
+async def test_fetch_result_prefers_terminal_status_over_skipped_merge_outcome(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "blocked",\n'
+            '  "merge_outcome": "skipped",\n'
+            '  "final_reason": "actionable_comments",\n'
+            '  "next_step": "run_fix_comments_skill"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-blocked-skipped",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-blocked-skipped",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-blocked-skipped", pr_resolver_expected=True
+    )
+    assert result.failure_class == "user_error"
+    assert result.summary is not None
+    assert "pr-resolver reported status 'blocked'" in result.summary
+    assert "run_fix_comments_skill" in result.summary
+
 async def test_fetch_result_upgrades_generic_failed_exit_with_pr_result(
     tmp_path: Path,
 ):
@@ -1578,6 +1630,60 @@ async def test_fetch_result_maps_final_state_merged_pr_resolver_artifact_metadat
         result.metadata["headSha"]
         == "49061ed20f6b2260ba9564e71f4f896e3f96d3df"
     )
+
+
+async def test_fetch_result_maps_final_latest_head_sha_metadata(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    artifacts_path = workspace_path / "artifacts"
+    artifacts_path.mkdir(parents=True)
+    (artifacts_path / "pr_resolver_result.json").write_text(
+        (
+            "{\n"
+            '  "status": "merged",\n'
+            '  "headSha": "   ",\n'
+            '  "final": {\n'
+            '    "headRefOid": "   ",\n'
+            '    "latestHeadSha": "latest-final-sha"\n'
+            "  }\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-final-latest-head-sha",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-final-latest-head-sha",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-final-latest-head-sha", pr_resolver_expected=True
+    )
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "merged"
+    assert result.metadata["headSha"] == "latest-final-sha"
 
 
 async def test_fetch_result_maps_outcome_merged_pr_resolver_artifact_metadata(
