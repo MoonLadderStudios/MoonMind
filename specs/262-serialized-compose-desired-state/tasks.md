@@ -54,7 +54,7 @@
 - [X] T020 Run traceability grep for `MM-520`, `DESIGN-REQ-001`, and `deployment.update_compose_stack` across the feature artifacts, code, and tests.
 - [X] T021 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final unit verification.
 - [X] T022 Run `./tools/test_integration.sh` when Docker is available; otherwise record the exact blocker.
-- [X] T023 Run `/speckit.verify` for `specs/262-serialized-compose-desired-state/` and produce final verification evidence.
+- [X] T023 Run `/moonspec-verify` for `specs/262-serialized-compose-desired-state/` and produce final verification evidence.
 
 ## Dependencies and Execution Order
 
