@@ -1375,6 +1375,9 @@ class JiraSettings(BaseSettings):
     jira_allowed_projects: Optional[str] = Field(
         None, alias="ATLASSIAN_JIRA_ALLOWED_PROJECTS"
     )
+    jira_project_defaults_by_repository: Optional[str] = Field(
+        None, alias="ATLASSIAN_JIRA_PROJECT_DEFAULTS_BY_REPOSITORY"
+    )
     jira_allowed_actions: Optional[str] = Field(
         None, alias="ATLASSIAN_JIRA_ALLOWED_ACTIONS"
     )
@@ -1409,6 +1412,43 @@ class JiraSettings(BaseSettings):
             if normalized not in projects:
                 projects.append(normalized)
         return ",".join(projects) if projects else None
+
+    @field_validator("jira_project_defaults_by_repository", mode="before")
+    @classmethod
+    def _normalize_project_defaults_by_repository(cls, value: object) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        mappings: list[str] = []
+        seen: set[str] = set()
+        for item in raw.split(","):
+            candidate = item.strip()
+            if not candidate:
+                continue
+            if "=" not in candidate:
+                raise ValueError(
+                    "ATLASSIAN_JIRA_PROJECT_DEFAULTS_BY_REPOSITORY entries must "
+                    "use owner/repo=PROJECT"
+                )
+            repository, project = candidate.split("=", 1)
+            normalized_repository = repository.strip()
+            normalized_project = project.strip().upper()
+            if not _OWNER_REPO_PATTERN.fullmatch(normalized_repository):
+                raise ValueError(
+                    "ATLASSIAN_JIRA_PROJECT_DEFAULTS_BY_REPOSITORY repositories "
+                    "must use owner/repo"
+                )
+            if not _JIRA_PROJECT_KEY_PATTERN.fullmatch(normalized_project):
+                raise ValueError(
+                    "ATLASSIAN_JIRA_PROJECT_DEFAULTS_BY_REPOSITORY project values "
+                    "must match Jira project keys"
+                )
+            key = normalized_repository.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            mappings.append(f"{normalized_repository}={normalized_project}")
+        return ",".join(mappings) if mappings else None
 
     @field_validator("jira_allowed_actions", mode="before")
     @classmethod

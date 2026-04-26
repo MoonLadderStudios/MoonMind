@@ -41,7 +41,7 @@ inputs:
     label: Repository
     type: text
     required: true
-    default: MoonLadderStudios/MoonMind
+    default: ""
   - name: orchestration_mode
     label: Orchestration Mode
     type: enum
