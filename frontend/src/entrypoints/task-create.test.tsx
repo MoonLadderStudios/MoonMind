@@ -5991,6 +5991,83 @@ describe("Task Create Entrypoint", () => {
     expect(task.git).toEqual({ branch: "develop" });
   });
 
+  it("submits the fetched default branch even when it is not in the loaded options", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [{ value: "release", label: "release", source: "github" }],
+            defaultBranch: "trunk",
+            error: null,
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const branchInput = (await screen.findByLabelText(
+      "Branch",
+    )) as HTMLInputElement;
+    await waitFor(() => {
+      expect(branchInput.disabled).toBe(false);
+    });
+    expect(branchInput.value).toBe("");
+
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Use the hidden repository default branch." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(task.git).toEqual({ branch: "trunk" });
+  });
+
+  it("omits git branch when a user explicitly clears the branch field", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const branchInput = (await screen.findByLabelText(
+      "Branch",
+    )) as HTMLInputElement;
+    await waitFor(() => {
+      expect(branchInput.disabled).toBe(false);
+    });
+
+    fireEvent.change(branchInput, {
+      target: { value: "feature/create-page" },
+    });
+    fireEvent.change(branchInput, {
+      target: { value: "" },
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Submit with an intentionally blank branch." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(task).not.toHaveProperty("git");
+  });
+
   it("keeps branch loading text inside the dropdown only", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

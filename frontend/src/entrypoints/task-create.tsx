@@ -2280,6 +2280,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [repository, setRepository] = useState(defaultRepository);
   const [providerProfile, setProviderProfile] = useState("");
   const [branch, setBranch] = useState("");
+  const [branchTouched, setBranchTouched] = useState(false);
   const [publishMode, setPublishMode] = useState(
     normalizePublishModeForSubmit(defaultPublishMode),
   );
@@ -2628,6 +2629,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     if (draft.branch) {
       setBranch(draft.branch);
+      setBranchTouched(false);
     }
     if (draft.legacyBranchWarning) {
       setSubmitMessage(draft.legacyBranchWarning);
@@ -3881,12 +3883,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }, [branchOptionsQuery.data]);
   const defaultBranch = useMemo(() => {
     const value = String(branchOptionsQuery.data?.defaultBranch || "").trim();
-    if (!value || !branchOptions.some((item) => item.value === value)) {
-      return "";
-    }
     return value;
-  }, [branchOptions, branchOptionsQuery.data?.defaultBranch]);
-  const effectiveBranch = branch.trim() || defaultBranch;
+  }, [branchOptionsQuery.data?.defaultBranch]);
+  const effectiveBranch =
+    branch.trim() ||
+    (!branchTouched && pageMode.mode === "create" ? defaultBranch : "");
   const selectedBranchIsStale = Boolean(
     branch.trim() &&
       branchOptionsQuery.isSuccess &&
@@ -6703,7 +6704,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   branchOptionsQuery.isLoading ? "Loading branches..." : "Branch"
                 }
                 disabled={branchControlDisabled}
-                onChange={(event) => setBranch(event.target.value)}
+                onChange={(event) => {
+                  setBranchTouched(true);
+                  setBranch(event.target.value);
+                }}
               />
             </div>
             <div
