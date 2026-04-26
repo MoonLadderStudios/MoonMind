@@ -17,7 +17,8 @@ Validation rules:
 
 - **glyphs**: visible label split into graphemes.
 - **phase index**: glyph order adjusted to match the current left-to-right/top-left-to-bottom-right visible sweep direction.
-- **delay**: CSS animation-delay derived from `(phaseIndex + edgePadding) / (glyphCount + edgePadding * 2) * var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms))`.
+- **delay**: CSS animation-delay derived from `letterSweepStartRatio + ((phaseIndex / max(glyphCount - 1, 1)) * letterSweepTravelRatio)`, multiplied by `var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms))`.
+- **active window**: the foreground text wave uses the shared outer cycle but completes its glyph-to-glyph travel quickly, then remains inactive until the next cycle.
 
 State transitions:
 

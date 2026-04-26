@@ -26,11 +26,11 @@ Test implications: Task-list integration verifies executing label becomes one gl
 
 ## DESIGN-REQ-004 Timing And Direction
 
-Decision: Use the CSS token duration with the configured sweep fallback in styles and calculate per-glyph phase ratios from glyph index/count in component code. Set direction to left-to-right/top-left-to-bottom-right to match the visible sweep described by the canonical UI design.
-Evidence: Existing CSS moves from `--mm-executing-sweep-start-x: 135%` to `--mm-executing-sweep-end-x: -135%`.
-Rationale: The foreground wave should feel phase-locked with the physical sweep.
+Decision: Use the CSS token duration with the configured sweep fallback as the outer cycle, but run the foreground text wave through a shorter active phase inside that cycle. Calculate per-glyph phase ratios from glyph index/count, start the first glyph at the configured active-window ratio, sweep across the word using a smaller travel ratio, then leave the glyphs inactive for the rest of the cycle. Set direction to left-to-right/top-left-to-bottom-right to match the visible sweep described by the canonical UI design.
+Evidence: Existing CSS moves from `--mm-executing-sweep-start-x: 135%` to `--mm-executing-sweep-end-x: -135%`, but the oversized background layers mean equal cycle duration alone does not produce equal perceived sweep speed.
+Rationale: The foreground wave should feel phase-locked with the physical sweep; a faster text active window plus idle tail matches the visual sweep better than stretching glyph delays across the full outer cycle.
 Alternatives considered: Right-to-left phase order. Rejected because the visible sweep direction is left-to-right/top-left-to-bottom-right even though oversized background-position tokens move inversely.
-Test implications: Render tests assert every glyph receives a millisecond delay; CSS tests assert the shared duration token.
+Test implications: Render tests assert every glyph receives index/count values; CSS tests assert the shared duration token plus the active-window start and travel ratios.
 
 ## DESIGN-REQ-005 Accessibility
 

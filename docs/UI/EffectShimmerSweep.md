@@ -127,6 +127,14 @@ motion:
     allow_overlap_between_cycles: false
     idle_gap_present: false
     center_pause_present: false
+
+  foreground_text:
+    timing_source: physical_sweep_center
+    first_glyph_phase_ratio: 0.20
+    last_glyph_phase_ratio: 0.38
+    glyph_pulse_duration_ratio: 0.05
+    idle_tail_present: true
+    note: matching cycle duration alone is insufficient because background-position percentage travel is measured against the oversized background image; the foreground wave must complete quickly, then remain inactive until the next outer cycle
 ```
 
 ## Theme Binding
@@ -268,8 +276,11 @@ implementation_shape:
     glyph_brightening:
       strategy: split_visible_label_into_grapheme_spans
       animation: css_only
-      timing: use_shorter_letter_cycle_duration
-      edge_padding_chars: 3
+      timing: faster_active_sweep_inside_shared_outer_cycle
+      first_glyph_phase_ratio: 0.20
+      last_glyph_phase_ratio: 0.38
+      glyph_pulse_duration_ratio: 0.05
+      idle_tail_present: true
       accessibility:
         parent_exposes_complete_label: true
         visual_glyphs_are_hidden_from_assistive_tech: true
@@ -313,6 +324,8 @@ effect_tokens:
   --mm-executing-sweep-layer-offset-x: -12%
   --mm-executing-sweep-layer-offset-y: -10%
   --mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)
+  --mm-executing-letter-sweep-start-ratio: 0.2
+  --mm-executing-letter-sweep-travel-ratio: 0.18
 ```
 
 ## Non-Goals
