@@ -88,6 +88,7 @@ Rollback submits to the same typed update endpoint:
   "pauseWork": false,
   "pruneOldImages": false,
   "reason": "Rollback after failed update depupd_recent",
+  "confirmation": "Rollback to ghcr.io/moonladderstudios/moonmind:stable confirmed",
   "operationKind": "rollback",
   "rollbackSourceActionId": "depupd_recent"
 }

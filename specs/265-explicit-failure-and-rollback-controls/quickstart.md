@@ -67,3 +67,4 @@ rg -n "MM-523|DESIGN-REQ-001|rollbackEligibility|operationKind|failureClass" spe
 3. Deployment stack state exposes rollback only for recent actions with trusted before-state evidence.
 4. Rollback confirmation submits the same typed deployment update endpoint with a policy-valid previous image target and rollback metadata.
 5. Recent actions show failure and rollback records with status, requested image, operator, reason, timestamps, run detail link, logs artifact link, and before/after summary.
+6. Rollback requests without explicit confirmation fail closed before queueing a deployment update.
