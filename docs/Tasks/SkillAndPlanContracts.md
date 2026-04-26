@@ -517,6 +517,13 @@ metadata surface when `issueTypeId` is not supplied, and creates dependency
 links when `dependencyMode = linear_blocker_chain`. It is not the default path
 for ambiguous Jira requests.
 
+For breakdown-driven Jira output, the canonical traceability shape is
+`sourceReference.path` on every story, with `source.referencePath` or
+`source.path` as a breakdown-level fallback. The tool also accepts path-only
+generated forms, `sourceReference: "<path>"` and top-level
+`sourceDocument: "<path>"`, and normalizes those before validating that no Jira
+mutation can occur without a source document path.
+
 If Jira output succeeds, workflow PR output is skipped because Jira is the requested output. If Jira output cannot run or fails and fallback is enabled, the tool returns fallback metadata pointing to the existing `artifacts/story-breakdowns/...` handoff so normal branch/PR publishing can expose that docs output.
 
 ---

@@ -36,6 +36,9 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
+from moonmind.workflows.skills.deployment_execution import (
+    register_deployment_update_tool_handler,
+)
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
@@ -1227,6 +1230,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 launcher=workload_launcher,
                 workflow_docker_mode=settings.workflow.workflow_docker_mode,
             )
+            register_deployment_update_tool_handler(dispatcher)
 
         bindings = build_worker_activity_bindings(
             fleet=topology.fleet,

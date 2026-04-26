@@ -1404,6 +1404,12 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     run_supervisor.reconcile.assert_not_awaited()
     session_controller.reconcile.assert_not_awaited()
     mock_dispatcher_cls.assert_called_once_with()
+    deployment_handler_calls = [
+        call
+        for call in mock_dispatcher_cls.return_value.register_skill.call_args_list
+        if call.kwargs.get("skill_name") == "deployment.update_compose_stack"
+    ]
+    assert deployment_handler_calls == []
     mock_skill_activities_cls.assert_called_once_with(
         dispatcher=mock_dispatcher_cls.return_value,
         artifact_service=ANY,
@@ -1504,6 +1510,12 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     mock_build_deps.assert_called_once_with()
     run_supervisor.reconcile.assert_awaited_once()
     session_controller.reconcile.assert_awaited_once()
+    deployment_handler_calls = [
+        call
+        for call in mock_dispatcher_cls.return_value.register_skill.call_args_list
+        if call.kwargs.get("skill_name") == "deployment.update_compose_stack"
+    ]
+    assert len(deployment_handler_calls) == 1
     mock_agent_runtime_activities_cls.assert_called_once_with(
         artifact_service=ANY,
         run_store=run_store,

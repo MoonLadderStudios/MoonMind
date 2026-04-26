@@ -28,6 +28,10 @@ from moonmind.workflows.skills.skill_registry import (
     create_registry_snapshot,
     parse_skill_registry,
 )
+from moonmind.workflows.skills.deployment_tools import (
+    DEPLOYMENT_UPDATE_TOOL_NAME,
+    DEPLOYMENT_UPDATE_TOOL_VERSION,
+)
 from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
@@ -716,6 +720,55 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
         ("security.pentest.run", "1.0.0")
     ]
     assert parsed[0].executor.activity_type == "security.pentest.execute"
+
+async def test_default_skill_registry_payload_uses_curated_deployment_tool_definition():
+    payload = _default_skill_registry_payload(
+        parameters={
+            "task": {
+                "steps": [
+                    {
+                        "tool": {
+                            "type": "skill",
+                            "name": DEPLOYMENT_UPDATE_TOOL_NAME,
+                            "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
+                        }
+                    }
+                ]
+            }
+        }
+    )
+
+    skills = payload.get("skills")
+    assert isinstance(skills, list)
+    assert len(skills) == 1
+    definition = skills[0]
+
+    assert definition["name"] == DEPLOYMENT_UPDATE_TOOL_NAME
+    assert definition["version"] == DEPLOYMENT_UPDATE_TOOL_VERSION
+    assert definition["type"] == "skill"
+    assert definition["executor"] == {
+        "activity_type": "mm.tool.execute",
+        "selector": {"mode": "by_capability"},
+    }
+    assert definition["requirements"]["capabilities"] == [
+        "deployment_control",
+        "docker_admin",
+    ]
+    assert definition["security"]["allowed_roles"] == ["admin"]
+
+    input_schema = definition["inputs"]["schema"]
+    assert input_schema["required"] == ["stack", "image", "reason"]
+    assert input_schema["additionalProperties"] is False
+    assert input_schema["properties"]["image"]["additionalProperties"] is False
+
+    parsed = parse_skill_registry(payload)
+    assert [(tool.name, tool.version) for tool in parsed] == [
+        (DEPLOYMENT_UPDATE_TOOL_NAME, DEPLOYMENT_UPDATE_TOOL_VERSION)
+    ]
+    assert parsed[0].required_capabilities == (
+        "deployment_control",
+        "docker_admin",
+    )
 
 async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_fleet():
     bindings = build_activity_bindings(

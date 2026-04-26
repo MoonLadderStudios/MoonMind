@@ -242,6 +242,82 @@ async def test_create_jira_issues_blocks_story_breakdown_without_source_referenc
     assert "STORY-001" in result.outputs["storyOutput"]["reason"]
 
 @pytest.mark.asyncio
+async def test_create_jira_issues_accepts_string_source_reference_from_breakdown():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "none",
+                },
+            },
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "String source",
+                    "sourceReference": "docs/Designs/RuntimeTypes.md",
+                }
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    request = service.requests[0]
+    assert request.description.startswith(
+        "Source Reference\nSource Document: docs/Designs/RuntimeTypes.md"
+    )
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_uses_source_document_as_breakdown_fallback_path():
+    service = _FakeJiraService()
+    breakdown = {
+        "sourceDocument": " ",
+        "source_document": "docs/Designs/RuntimeTypes.md",
+        "stories": [
+            {
+                "id": "STORY-001",
+                "summary": "Top-level source document",
+                "description": "Create a traced story.",
+            }
+        ],
+    }
+
+    async def fetcher(_repo: str, _ref: str, _path: str) -> str:
+        import json
+
+        return json.dumps(breakdown)
+
+    result = await create_jira_issues_from_stories(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetBranch": "breakdown-branch",
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "none",
+                },
+            },
+        },
+        jira_service_factory=lambda: service,
+        story_fetcher=fetcher,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    request = service.requests[0]
+    assert request.description.startswith(
+        "Source Reference\nSource Document: docs/Designs/RuntimeTypes.md"
+    )
+
+@pytest.mark.asyncio
 async def test_create_jira_issues_falls_back_to_docs_tmp_when_jira_target_missing():
     result = await create_jira_issues_from_stories(
         {
