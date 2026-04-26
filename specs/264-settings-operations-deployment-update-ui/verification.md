@@ -33,3 +33,4 @@
 ## Notes
 
 - Verification completed after remediation with the canonical unit runner, focused UI test, typecheck, lint, and traceability checks passing.
+- Alignment pass confirmed `tasks.md` now uses `/moonspec-verify` wording and retains one-story task coverage with explicit unit and integration plans.
