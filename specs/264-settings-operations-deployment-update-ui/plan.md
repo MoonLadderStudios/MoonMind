@@ -45,6 +45,14 @@ Add the missing Mission Control Settings Operations Deployment Update card on to
 **Constraints**: No top-level navigation; no updater runner image control; no raw logs link unless explicitly allowed  
 **Scale/Scope**: One Settings Operations card for the allowlisted `moonmind` stack
 
+## Test Strategy
+
+**Unit test strategy**: Use focused React/Vitest coverage in `frontend/src/components/settings/OperationsSettingsSection.test.tsx` for pure UI decisions and component-local behavior: release-tag defaulting, mutable-tag warnings, mode availability, reason validation, confirmation text construction, typed request payload construction, absence of updater runner controls, and raw command-log link gating.
+
+**Integration test strategy**: Use the same component test as a browser-facing integration boundary by rendering `OperationsSettingsSection` with TanStack Query and mocked `fetch` responses for the real deployment operation endpoints: `GET /api/v1/operations/deployment/stacks/{stack}`, `GET /api/v1/operations/deployment/image-targets`, and `POST /api/v1/operations/deployment/update`. Run it through the repository unit runner with `./tools/test_unit.sh --ui-args frontend/src/components/settings/OperationsSettingsSection.test.tsx` so Python unit coverage and targeted frontend behavior are verified together.
+
+**Existing backend contract evidence**: Keep `tests/unit/api/routers/test_deployment_operations.py` as the backend route contract evidence for authorization, policy validation, state shape, image target shape, and typed submission queueing. This story does not require new backend integration tests because it consumes already-tested endpoints without changing their contract.
+
 ## Constitution Check
 
 - I. Orchestrate, Don't Recreate: PASS. Uses existing typed deployment operation endpoints.
