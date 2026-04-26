@@ -61,6 +61,26 @@ class HermeticRunner:
         )
 
 
+class FailedVerificationRunner(HermeticRunner):
+    async def verify(
+        self,
+        *,
+        stack: str,
+        requested_image: str,
+        resolved_digest: str | None,
+    ) -> ComposeVerification:
+        return ComposeVerification(
+            succeeded=False,
+            updated_services=(),
+            running_services=({"name": "api", "state": "running"},),
+            details={
+                "message": "health check failed",
+                "requestedImage": requested_image,
+                "resolvedDigest": resolved_digest,
+            },
+        )
+
+
 def _snapshot():
     return create_registry_snapshot(
         skills=(
@@ -90,6 +110,22 @@ def _payload() -> dict[str, object]:
             "reason": "Update to tested build",
         },
     }
+
+
+def _rollback_payload() -> dict[str, object]:
+    payload = _payload()
+    inputs = dict(payload["inputs"])
+    inputs["image"] = {
+        "repository": "ghcr.io/moonladderstudios/moonmind",
+        "reference": "stable",
+    }
+    inputs["operationKind"] = "rollback"
+    inputs["rollbackSourceActionId"] = "depupd_recent"
+    inputs["confirmation"] = (
+        "Rollback to ghcr.io/moonladderstudios/moonmind:stable confirmed"
+    )
+    payload["inputs"] = inputs
+    return payload
 
 
 @pytest.mark.asyncio
@@ -153,3 +189,62 @@ async def test_deployment_update_tool_dispatch_surfaces_deployment_locked() -> N
 
     assert exc_info.value.error_code == "DEPLOYMENT_LOCKED"
     assert exc_info.value.retryable is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.integration_ci
+async def test_deployment_update_tool_dispatch_failed_verification_has_failure_metadata(
+) -> None:
+    executor = DeploymentUpdateExecutor(
+        lock_manager=DeploymentUpdateLockManager(),
+        desired_state_store=InMemoryDesiredStateStore(),
+        evidence_writer=InMemoryEvidenceWriter(),
+        runner=FailedVerificationRunner(),
+    )
+    dispatcher = ToolActivityDispatcher()
+    register_deployment_update_tool_handler(dispatcher, executor=executor)
+
+    result = await execute_tool_activity(
+        invocation_payload=_payload(),
+        registry_snapshot=_snapshot(),
+        dispatcher=dispatcher,
+        context={"deployment_runner_mode": "privileged_worker"},
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["status"] == "FAILED"
+    assert result.outputs["failure"] == {
+        "class": "verification_failure",
+        "reason": "health check failed",
+        "retryable": False,
+    }
+    assert "rollback" not in str(result.outputs).lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.integration_ci
+async def test_rollback_dispatch_uses_existing_deployment_update_tool_contract(
+) -> None:
+    runner = HermeticRunner()
+    executor = DeploymentUpdateExecutor(
+        lock_manager=DeploymentUpdateLockManager(),
+        desired_state_store=InMemoryDesiredStateStore(),
+        evidence_writer=InMemoryEvidenceWriter(),
+        runner=runner,
+    )
+    dispatcher = ToolActivityDispatcher()
+    register_deployment_update_tool_handler(dispatcher, executor=executor)
+
+    result = await execute_tool_activity(
+        invocation_payload=_rollback_payload(),
+        registry_snapshot=_snapshot(),
+        dispatcher=dispatcher,
+        context={"deployment_runner_mode": "privileged_worker"},
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["requestedImage"] == (
+        "ghcr.io/moonladderstudios/moonmind:stable"
+    )

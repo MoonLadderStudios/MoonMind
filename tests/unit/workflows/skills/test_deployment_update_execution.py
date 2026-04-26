@@ -10,6 +10,7 @@ from moonmind.workflows.skills.deployment_execution import (
     DeploymentUpdateExecutor,
     DeploymentUpdateLockManager,
     InMemoryDesiredStateStore,
+    _ensure_command_succeeded,
     build_compose_command_plan,
     build_deployment_update_handler,
 )
@@ -160,6 +161,13 @@ class FailingUpRunner(RecordingRunner):
         return {"stack": stack, "command": list(command), "exitCode": 17}
 
 
+class FailingPullRunner(RecordingRunner):
+    async def pull(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+        self.events.append("runner:pull")
+        self.commands.append(("pull", command))
+        return {"stack": stack, "command": list(command), "exitCode": 23}
+
+
 class SecretRecordingRunner(RecordingRunner):
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         self.events.append(f"runner:capture:{phase}")
@@ -255,6 +263,7 @@ async def test_same_stack_lock_contention_fails_before_side_effects() -> None:
 
     assert exc_info.value.error_code == "DEPLOYMENT_LOCKED"
     assert exc_info.value.retryable is False
+    assert exc_info.value.details["failureClass"] == "deployment_lock_unavailable"
     assert second_executor.desired_state_store.records == []
 
     blocking_runner.release_before_capture()
@@ -350,6 +359,82 @@ async def test_verification_failure_returns_failed_tool_result_with_evidence_ref
 
 
 @pytest.mark.asyncio
+async def test_verification_failure_outputs_failure_class_and_actionable_reason(
+) -> None:
+    events: list[str] = []
+    runner = SecretVerificationFailureRunner(events)
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner, events=events
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.outputs["failure"] == {
+        "class": "verification_failure",
+        "reason": "health check failed with [REDACTED],log_level=info",
+        "retryable": False,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expected_class"),
+    [
+        (_inputs(stack="other-stack"), "invalid_input"),
+        (_inputs(updaterRunnerImage="docker:29-cli"), "invalid_input"),
+    ],
+)
+async def test_invalid_input_failures_include_normalized_failure_class(
+    payload: dict[str, object], expected_class: str
+) -> None:
+    executor, _store, _evidence, _runner, _events = _executor()
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await executor.execute(payload)
+
+    assert exc_info.value.details["failureClass"] == expected_class
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("runner", "expected_phase", "expected_class"),
+    [
+        (FailingPullRunner, "pull", "image_pull_failure"),
+        (FailingUpRunner, "up", "service_recreation_failure"),
+    ],
+)
+async def test_command_failures_include_normalized_failure_class(
+    runner: type[RecordingRunner], expected_phase: str, expected_class: str
+) -> None:
+    events: list[str] = []
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner(events), events=events
+    )
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await executor.execute(_inputs())
+
+    assert exc_info.value.details["phase"] == expected_phase
+    assert exc_info.value.details["failureClass"] == expected_class
+
+
+@pytest.mark.asyncio
+async def test_failed_execution_does_not_emit_rollback_without_explicit_request(
+) -> None:
+    events: list[str] = []
+    runner = RecordingRunner(events, verification_succeeded=False)
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner, events=events
+    )
+
+    result = await executor.execute(_inputs())
+
+    serialized = json.dumps(result.outputs)
+    assert "rollback" not in serialized.lower()
+    assert result.outputs["status"] == "FAILED"
+
+
+@pytest.mark.asyncio
 async def test_forbidden_runner_image_and_path_inputs_are_rejected() -> None:
     executor, _store, _evidence, _runner, _events = _executor()
 
@@ -419,6 +504,15 @@ def test_unsupported_runner_mode_fails_closed() -> None:
         )
 
     assert exc_info.value.error_code == "POLICY_VIOLATION"
+    assert exc_info.value.details["failureClass"] == "policy_violation"
+
+
+def test_compose_config_validation_failure_has_normalized_class() -> None:
+    with pytest.raises(ToolFailure) as exc_info:
+        _ensure_command_succeeded("config", {"status": "invalid"})
+
+    assert exc_info.value.error_code == "DEPLOYMENT_COMMAND_FAILED"
+    assert exc_info.value.details["failureClass"] == "compose_config_validation_failure"
 
 
 @pytest.mark.asyncio

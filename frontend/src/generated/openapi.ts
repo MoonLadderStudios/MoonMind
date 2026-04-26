@@ -3424,6 +3424,45 @@ export interface components {
             /** Reference */
             reference: string;
         };
+        /** DeploymentRecentActionModel */
+        DeploymentRecentActionModel: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Status */
+            status: string;
+            /** Requestedimage */
+            requestedImage?: string | null;
+            /** Resolveddigest */
+            resolvedDigest?: string | null;
+            /** Operator */
+            operator?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Startedat */
+            startedAt?: string | null;
+            /** Completedat */
+            completedAt?: string | null;
+            /** Rundetailurl */
+            runDetailUrl?: string | null;
+            /** Logsartifacturl */
+            logsArtifactUrl?: string | null;
+            /** Rawcommandlogurl */
+            rawCommandLogUrl?: string | null;
+            /**
+             * Rawcommandlogpermitted
+             * @default false
+             */
+            rawCommandLogPermitted: boolean;
+            /** Runid */
+            runId?: string | null;
+            /** Beforesummary */
+            beforeSummary?: string | null;
+            /** Aftersummary */
+            afterSummary?: string | null;
+            rollbackEligibility?: components["schemas"]["RollbackEligibilityModel"] | null;
+        };
         /** DeploymentServiceStateModel */
         DeploymentServiceStateModel: {
             /** Name */
@@ -3447,6 +3486,8 @@ export interface components {
             services: components["schemas"]["DeploymentServiceStateModel"][];
             /** Lastupdaterunid */
             lastUpdateRunId?: string | null;
+            /** Recentactions */
+            recentActions?: components["schemas"]["DeploymentRecentActionModel"][];
         };
         /** DeploymentUpdateRequest */
         DeploymentUpdateRequest: {
@@ -3482,6 +3523,16 @@ export interface components {
             pruneOldImages: boolean;
             /** Reason */
             reason: string;
+            /**
+             * Operationkind
+             * @default update
+             * @enum {string}
+             */
+            operationKind: "update" | "rollback";
+            /** Rollbacksourceactionid */
+            rollbackSourceActionId?: string | null;
+            /** Confirmation */
+            confirmation?: string | null;
         };
         /** DeploymentUpdateResponse */
         DeploymentUpdateResponse: {
@@ -5548,6 +5599,25 @@ export interface components {
             mode: components["schemas"]["RetryWorkflowMode"];
             /** Notes */
             notes?: string | null;
+        };
+        /** RollbackEligibilityModel */
+        RollbackEligibilityModel: {
+            /** Eligible */
+            eligible: boolean;
+            /** Sourceactionid */
+            sourceActionId?: string | null;
+            targetImage?: components["schemas"]["RollbackImageTargetModel"] | null;
+            /** Reason */
+            reason?: string | null;
+            /** Evidenceref */
+            evidenceRef?: string | null;
+        };
+        /** RollbackImageTargetModel */
+        RollbackImageTargetModel: {
+            /** Repository */
+            repository: string;
+            /** Reference */
+            reference: string;
         };
         /** RunningImageModel */
         RunningImageModel: {

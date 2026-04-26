@@ -56,6 +56,47 @@ const stackState = {
   ],
 };
 
+const stackStateWithRollback = {
+  ...stackState,
+  recentActions: [
+    {
+      status: 'FAILED',
+      requestedImage: 'ghcr.io/moonladderstudios/moonmind:20260425.1234',
+      operator: 'admin@example.com',
+      reason: 'Routine release failed',
+      startedAt: '2026-04-25T18:00:00Z',
+      completedAt: '2026-04-25T18:04:00Z',
+      runDetailUrl: '/tasks/depupd_recent',
+      logsArtifactUrl: '/api/artifacts/logs',
+      beforeSummary: 'ghcr.io/moonladderstudios/moonmind:stable',
+      afterSummary: 'verification failed',
+      rollbackEligibility: {
+        eligible: true,
+        sourceActionId: 'depupd_recent',
+        targetImage: {
+          repository: 'ghcr.io/moonladderstudios/moonmind',
+          reference: 'stable',
+        },
+        evidenceRef: 'art:sha256:before',
+      },
+    },
+    {
+      status: 'FAILED',
+      requestedImage: 'ghcr.io/moonladderstudios/moonmind:latest',
+      operator: 'admin@example.com',
+      reason: 'Unsafe rollback evidence',
+      startedAt: '2026-04-25T19:00:00Z',
+      completedAt: '2026-04-25T19:04:00Z',
+      rollbackEligibility: {
+        eligible: false,
+        sourceActionId: 'depupd_unsafe',
+        targetImage: null,
+        reason: 'Before-state evidence is missing.',
+      },
+    },
+  ],
+};
+
 const imageTargets = {
   stack: 'moonmind',
   repositories: [
@@ -273,5 +314,92 @@ describe('OperationsSettingsSection deployment update card', () => {
       '/api/artifacts/logs',
     );
     expect(within(card).queryByRole('link', { name: /raw command/i })).toBeNull();
+  });
+
+  it('renders rollback only for eligible recent deployment actions', async () => {
+    fetchSpy.mockImplementation((input) => {
+      const url = String(input);
+      if (url === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => workerSnapshot } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/stacks/moonmind') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => stackStateWithRollback,
+        } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/image-targets?stack=moonmind') {
+        return Promise.resolve({ ok: true, json: async () => imageTargets } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, json: async () => ({}) } as Response);
+    });
+
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /deployment update/i });
+    expect(await within(card).findByRole('button', { name: /roll back to stable/i })).toBeTruthy();
+    expect(within(card).queryByRole('button', { name: /roll back to latest/i })).toBeNull();
+    expect(within(card).getByText(/before-state evidence is missing/i)).toBeTruthy();
+  });
+
+  it('confirms rollback and submits the typed deployment rollback payload', async () => {
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => workerSnapshot } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/stacks/moonmind') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => stackStateWithRollback,
+        } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/image-targets?stack=moonmind') {
+        return Promise.resolve({ ok: true, json: async () => imageTargets } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/update') {
+        return Promise.resolve({
+          ok: true,
+          status: 202,
+          json: async () => ({
+            deploymentUpdateRunId: 'depupd_rollback',
+            taskId: 'mm:deployment-update',
+            workflowId: 'mm:deployment-update',
+            status: 'QUEUED',
+            body: init?.body,
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, json: async () => ({}) } as Response);
+    });
+
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /deployment update/i });
+    fireEvent.click(await within(card).findByRole('button', { name: /roll back to stable/i }));
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Rollback deployment?'));
+      expect(confirmSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Target image: ghcr.io/moonladderstudios/moonmind:stable'),
+      );
+    });
+
+    await waitFor(() => {
+      const updateCall = fetchSpy.mock.calls.find(([url]) => String(url) === '/api/v1/operations/deployment/update');
+      expect(updateCall).toBeDefined();
+      expect(JSON.parse(String(updateCall?.[1]?.body))).toMatchObject({
+        stack: 'moonmind',
+        image: {
+          repository: 'ghcr.io/moonladderstudios/moonmind',
+          reference: 'stable',
+        },
+        operationKind: 'rollback',
+        rollbackSourceActionId: 'depupd_recent',
+        confirmation: expect.stringContaining('Rollback to ghcr.io/moonladderstudios/moonmind:stable confirmed'),
+        reason: expect.stringContaining('Rollback after failed update depupd_recent'),
+      });
+    });
+    expect(await within(card).findByText(/deployment rollback queued/i)).toBeTruthy();
   });
 });

@@ -88,6 +88,22 @@ const DeploymentStackStateSchema = z
             runId: z.string().optional().nullable(),
             beforeSummary: z.string().optional().nullable(),
             afterSummary: z.string().optional().nullable(),
+            rollbackEligibility: z
+              .object({
+                eligible: z.boolean(),
+                sourceActionId: z.string().optional().nullable(),
+                targetImage: z
+                  .object({
+                    repository: z.string(),
+                    reference: z.string(),
+                  })
+                  .optional()
+                  .nullable(),
+                reason: z.string().optional().nullable(),
+                evidenceRef: z.string().optional().nullable(),
+              })
+              .optional()
+              .nullable(),
           })
           .passthrough(),
       )
@@ -456,6 +472,83 @@ export function OperationsSettingsSection({
     },
   });
 
+  const rollbackMutation = useMutation({
+    mutationFn: async (action: DeploymentAction) => {
+      const eligibility = action.rollbackEligibility;
+      const target = eligibility?.targetImage;
+      if (!eligibility?.eligible || !target) {
+        throw new Error(eligibility?.reason || 'Rollback target is not available.');
+      }
+      const targetImage = `${target.repository}:${target.reference}`;
+      const sourceActionId = String(
+        eligibility.sourceActionId || action.id || action.runId || '',
+      ).trim();
+      if (!sourceActionId) {
+        throw new Error('Rollback source action is required.');
+      }
+      const confirmation = [
+        'Rollback deployment?',
+        `Target image: ${targetImage}`,
+        `Source action: ${sourceActionId}`,
+        `Stack: ${deploymentState?.stack || DEPLOYMENT_STACK}`,
+        'Services may restart during this operation.',
+      ].join('\n');
+      if (!window.confirm(confirmation)) {
+        return null;
+      }
+      const requestedAt = new Date().toISOString();
+      const confirmationText = `Rollback to ${targetImage} confirmed from ${sourceActionId}`;
+      const response = await fetch('/api/v1/operations/deployment/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          stack: deploymentState?.stack || DEPLOYMENT_STACK,
+          image: target,
+          mode: 'changed_services',
+          removeOrphans: true,
+          wait: true,
+          runSmokeCheck: false,
+          pauseWork: false,
+          pruneOldImages: false,
+          reason: `Rollback after failed update ${sourceActionId} at ${requestedAt}`,
+          operationKind: 'rollback',
+          rollbackSourceActionId: sourceActionId,
+          confirmation: confirmationText,
+        }),
+      });
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        const detail =
+          typeof errorPayload.detail?.message === 'string'
+            ? errorPayload.detail.message
+            : typeof errorPayload.detail === 'string'
+              ? errorPayload.detail
+              : `Server error: ${response.status}`;
+        throw new Error(detail);
+      }
+      return response.json() as Promise<{ deploymentUpdateRunId: string; status: string }>;
+    },
+    onSuccess: (result) => {
+      if (!result) {
+        return;
+      }
+      setDeploymentNotice({
+        level: 'ok',
+        text: `Deployment rollback queued: ${result.deploymentUpdateRunId}`,
+      });
+      queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
+    },
+    onError: (mutationError: Error) => {
+      setDeploymentNotice({
+        level: 'error',
+        text: mutationError.message,
+      });
+    },
+  });
+
   const handleDeploymentSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setDeploymentNotice(null);
@@ -699,6 +792,22 @@ export function OperationsSettingsSection({
                             >
                               Raw command log
                             </a>
+                          ) : null}
+                          {action.rollbackEligibility?.eligible &&
+                          action.rollbackEligibility.targetImage ? (
+                            <button
+                              type="button"
+                              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+                              onClick={() => rollbackMutation.mutate(action)}
+                            >
+                              Roll back to {action.rollbackEligibility.targetImage.reference}
+                            </button>
+                          ) : action.rollbackEligibility &&
+                            !action.rollbackEligibility.eligible &&
+                            action.rollbackEligibility.reason ? (
+                            <span className="text-sm text-slate-500 dark:text-slate-400">
+                              {action.rollbackEligibility.reason}
+                            </span>
                           ) : null}
                         </div>
                       </div>

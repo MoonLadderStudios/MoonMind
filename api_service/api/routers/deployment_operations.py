@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,8 +14,11 @@ from api_service.db.models import User
 from api_service.services.deployment_operations import (
     DeploymentOperationError,
     DeploymentOperationsService,
+    DeploymentRecentAction,
     DeploymentStackPolicy,
     DeploymentUpdateSubmission,
+    RollbackEligibilityDecision,
+    RollbackImageTarget,
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.tasks.routing import TemporalSubmitDisabledError
@@ -23,6 +26,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionService,
     TemporalExecutionValidationError,
 )
+from moonmind.workflows.skills.deployment_tools import DEPLOYMENT_UPDATE_TOOL_NAME
 
 
 router = APIRouter(prefix="/api/v1/operations/deployment", tags=["deployment"])
@@ -47,6 +51,11 @@ class DeploymentUpdateRequest(BaseModel):
     pause_work: bool = Field(False, alias="pauseWork")
     prune_old_images: bool = Field(False, alias="pruneOldImages")
     reason: str = Field(..., min_length=1)
+    operation_kind: Literal["update", "rollback"] = Field("update", alias="operationKind")
+    rollback_source_action_id: str | None = Field(
+        None, alias="rollbackSourceActionId"
+    )
+    confirmation: str | None = None
 
 
 class DeploymentUpdateResponse(BaseModel):
@@ -80,6 +89,48 @@ class DeploymentStackStateResponse(BaseModel):
     running_images: list[RunningImageModel] = Field(..., alias="runningImages")
     services: list[DeploymentServiceStateModel]
     last_update_run_id: str | None = Field(None, alias="lastUpdateRunId")
+    recent_actions: list["DeploymentRecentActionModel"] = Field(
+        default_factory=list, alias="recentActions"
+    )
+
+
+class RollbackImageTargetModel(BaseModel):
+    repository: str
+    reference: str
+
+
+class RollbackEligibilityModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    eligible: bool
+    source_action_id: str | None = Field(None, alias="sourceActionId")
+    target_image: RollbackImageTargetModel | None = Field(None, alias="targetImage")
+    reason: str | None = None
+    evidence_ref: str | None = Field(None, alias="evidenceRef")
+
+
+class DeploymentRecentActionModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    kind: str
+    status: str
+    requested_image: str | None = Field(None, alias="requestedImage")
+    resolved_digest: str | None = Field(None, alias="resolvedDigest")
+    operator: str | None = None
+    reason: str | None = None
+    started_at: str | None = Field(None, alias="startedAt")
+    completed_at: str | None = Field(None, alias="completedAt")
+    run_detail_url: str | None = Field(None, alias="runDetailUrl")
+    logs_artifact_url: str | None = Field(None, alias="logsArtifactUrl")
+    raw_command_log_url: str | None = Field(None, alias="rawCommandLogUrl")
+    raw_command_log_permitted: bool = Field(False, alias="rawCommandLogPermitted")
+    run_id: str | None = Field(None, alias="runId")
+    before_summary: str | None = Field(None, alias="beforeSummary")
+    after_summary: str | None = Field(None, alias="afterSummary")
+    rollback_eligibility: RollbackEligibilityModel | None = Field(
+        None, alias="rollbackEligibility"
+    )
 
 
 class ImageTargetModel(BaseModel):
@@ -129,6 +180,7 @@ def _require_admin(user: User) -> None:
         detail={
             "code": "deployment_update_forbidden",
             "message": "Only administrators can submit deployment updates.",
+            "failureClass": "authorization_failure",
         },
     )
 
@@ -140,16 +192,263 @@ def _policy_error(exc: DeploymentOperationError) -> HTTPException:
     )
 
 
-def _stack_state(policy: DeploymentStackPolicy) -> DeploymentStackStateResponse:
+def _enum_text(value: object) -> str | None:
+    resolved = getattr(value, "value", value)
+    if resolved is None:
+        return None
+    text = str(resolved).strip()
+    return text or None
+
+
+def _iso_text(value: object) -> str | None:
+    if value is None:
+        return None
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        return str(isoformat())
+    text = str(value).strip()
+    return text or None
+
+
+def _deployment_plan_inputs(record: object) -> dict[str, Any]:
+    parameters = getattr(record, "parameters", None)
+    if not isinstance(parameters, dict):
+        return {}
+    task = parameters.get("task")
+    if not isinstance(task, dict):
+        return {}
+    plan = task.get("plan")
+    if not isinstance(plan, list):
+        return {}
+    for step in plan:
+        if not isinstance(step, dict):
+            continue
+        tool = step.get("tool")
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("name") != DEPLOYMENT_UPDATE_TOOL_NAME:
+            continue
+        inputs = step.get("inputs")
+        return dict(inputs) if isinstance(inputs, dict) else {}
+    return {}
+
+
+def _deployment_operation(record: object) -> dict[str, Any]:
+    parameters = getattr(record, "parameters", None)
+    if not isinstance(parameters, dict):
+        return {}
+    task = parameters.get("task")
+    if not isinstance(task, dict):
+        return {}
+    operation = task.get("operation")
+    return dict(operation) if isinstance(operation, dict) else {}
+
+
+def _artifact_url(ref: object) -> str | None:
+    if not isinstance(ref, str) or not ref.strip():
+        return None
+    return f"/api/artifacts/{ref.strip()}"
+
+
+def _rollback_target_from_summary(
+    *,
+    before_summary: str | None,
+    policy: DeploymentStackPolicy,
+) -> RollbackImageTarget | None:
+    if not before_summary:
+        return None
+    candidate = before_summary.strip()
+    prefix = f"{policy.repository}:"
+    if not candidate.startswith(prefix):
+        return None
+    reference = candidate.removeprefix(prefix).strip()
+    if not reference:
+        return None
+    try:
+        policy_service = DeploymentOperationsService({policy.stack: policy})
+        policy_service.validate_update_request(
+            stack=policy.stack,
+            repository=policy.repository,
+            reference=reference,
+            mode=policy.allowed_modes[0],
+            reason="Validate rollback target",
+            operation_kind="update",
+        )
+    except DeploymentOperationError:
+        return None
+    return RollbackImageTarget(repository=policy.repository, reference=reference)
+
+
+def _recent_action_from_execution_record(
+    record: object,
+    *,
+    policy: DeploymentStackPolicy,
+) -> DeploymentRecentAction | None:
+    inputs = _deployment_plan_inputs(record)
+    if inputs.get("stack") != policy.stack:
+        return None
+    image = inputs.get("image")
+    if not isinstance(image, dict):
+        image = {}
+    repository = str(image.get("repository") or policy.repository).strip()
+    reference = str(image.get("reference") or "").strip()
+    requested_image = f"{repository}:{reference}" if repository and reference else None
+    operation = _deployment_operation(record)
+    operation_kind = str(
+        inputs.get("operationKind") or operation.get("kind") or "update"
+    ).strip()
+    state_text = (_enum_text(getattr(record, "state", None)) or "unknown").upper()
+    close_status = _enum_text(getattr(record, "close_status", None))
+    status_text = (close_status or state_text).upper()
+    if operation_kind == "rollback":
+        kind = "rollback"
+    elif status_text in {"FAILED", "TERMINATED", "CANCELED", "CANCELLED", "FAILURE"}:
+        kind = "failure"
+    else:
+        kind = "update"
+    run_id = str(getattr(record, "run_id", "") or "").strip()
+    action_id = (
+        f"depupd_{run_id.replace('-', '')}"
+        if run_id
+        else str(getattr(record, "workflow_id", "deployment-update"))
+    )
+    artifact_refs = [
+        ref for ref in getattr(record, "artifact_refs", []) or [] if isinstance(ref, str)
+    ]
+    before_summary = None
+    after_summary = None
+    memo = getattr(record, "memo", None)
+    if isinstance(memo, dict):
+        before_summary = (
+            memo.get("deploymentBeforeSummary")
+            or memo.get("beforeSummary")
+            or memo.get("before_summary")
+        )
+        after_summary = (
+            memo.get("deploymentAfterSummary")
+            or memo.get("afterSummary")
+            or memo.get("after_summary")
+            or memo.get("summary")
+        )
+    before_summary = str(before_summary).strip() if before_summary else None
+    after_summary = str(after_summary).strip() if after_summary else None
+    target_image = _rollback_target_from_summary(
+        before_summary=before_summary,
+        policy=policy,
+    )
+    evidence_ref = artifact_refs[0] if artifact_refs else None
+    eligibility = RollbackEligibilityDecision(
+        eligible=target_image is not None,
+        target_image=target_image,
+        source_action_id=action_id,
+        reason=None if target_image else "Before-state evidence is missing.",
+        evidence_ref=evidence_ref,
+    )
+    return DeploymentRecentAction(
+        id=action_id,
+        kind=kind,
+        status=status_text,
+        requested_image=requested_image,
+        resolved_digest=str(image.get("digest") or "").strip() or None,
+        operator=str(getattr(record, "owner_id", "") or "").strip() or None,
+        reason=str(inputs.get("reason") or "").strip() or None,
+        started_at=_iso_text(getattr(record, "started_at", None)),
+        completed_at=_iso_text(getattr(record, "closed_at", None)),
+        run_detail_url=f"/tasks/{getattr(record, 'workflow_id', '')}",
+        logs_artifact_url=_artifact_url(evidence_ref),
+        raw_command_log_url=None,
+        raw_command_log_permitted=False,
+        run_id=run_id or None,
+        before_summary=before_summary,
+        after_summary=after_summary,
+        rollback_eligibility=eligibility,
+    )
+
+
+async def _recent_actions_from_executions(
+    *,
+    execution_service: TemporalExecutionService,
+    policy: DeploymentStackPolicy,
+) -> tuple[DeploymentRecentAction, ...]:
+    try:
+        result = await execution_service.list_executions(
+            workflow_type="MoonMind.Run",
+            integration=DEPLOYMENT_UPDATE_TOOL_NAME,
+            page_size=10,
+        )
+    except Exception:
+        return ()
+    actions: list[DeploymentRecentAction] = []
+    for record in getattr(result, "items", ()) or ():
+        action = _recent_action_from_execution_record(record, policy=policy)
+        if action is not None:
+            actions.append(action)
+    return tuple(actions)
+
+
+def _recent_action_model(action: DeploymentRecentAction) -> DeploymentRecentActionModel:
+    eligibility = action.rollback_eligibility
+    return DeploymentRecentActionModel(
+        id=action.id,
+        kind=action.kind,
+        status=action.status,
+        requested_image=action.requested_image,
+        resolved_digest=action.resolved_digest,
+        operator=action.operator,
+        reason=action.reason,
+        started_at=action.started_at,
+        completed_at=action.completed_at,
+        run_detail_url=action.run_detail_url,
+        logs_artifact_url=action.logs_artifact_url,
+        raw_command_log_url=(
+            action.raw_command_log_url
+            if action.raw_command_log_permitted
+            else None
+        ),
+        raw_command_log_permitted=action.raw_command_log_permitted,
+        run_id=action.run_id,
+        before_summary=action.before_summary,
+        after_summary=action.after_summary,
+        rollback_eligibility=(
+            RollbackEligibilityModel(
+                eligible=eligibility.eligible,
+                source_action_id=eligibility.source_action_id,
+                target_image=(
+                    RollbackImageTargetModel(
+                        repository=eligibility.target_image.repository,
+                        reference=eligibility.target_image.reference,
+                    )
+                    if eligibility.target_image
+                    else None
+                ),
+                reason=eligibility.reason,
+                evidence_ref=eligibility.evidence_ref,
+            )
+            if eligibility
+            else None
+        ),
+    )
+
+
+def _stack_state(
+    policy: DeploymentStackPolicy,
+    service: DeploymentOperationsService,
+    recent_actions: tuple[DeploymentRecentAction, ...] | None = None,
+) -> DeploymentStackStateResponse:
+    actions = (
+        recent_actions
+        if recent_actions is not None
+        else service.recent_actions(policy.stack)
+    )
     return DeploymentStackStateResponse(
         stack=policy.stack,
-        projectName=policy.project_name,
-        configuredImage=policy.configured_image,
-        runningImages=[
+        project_name=policy.project_name,
+        configured_image=policy.configured_image,
+        running_images=[
             RunningImageModel(
                 service="api",
                 image=policy.configured_image,
-                imageId=None,
+                image_id=None,
                 digest=None,
             )
         ],
@@ -160,7 +459,8 @@ def _stack_state(policy: DeploymentStackPolicy) -> DeploymentStackStateResponse:
                 health=None,
             )
         ],
-        lastUpdateRunId=None,
+        last_update_run_id=None,
+        recent_actions=[_recent_action_model(action) for action in actions],
     )
 
 
@@ -183,6 +483,9 @@ async def submit_deployment_update(
             reference=payload.image.reference,
             mode=payload.mode,
             reason=payload.reason,
+            operation_kind=payload.operation_kind,
+            confirmation=payload.confirmation,
+            rollback_source_action_id=payload.rollback_source_action_id,
         )
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
@@ -202,6 +505,9 @@ async def submit_deployment_update(
                 prune_old_images=payload.prune_old_images,
                 reason=payload.reason,
                 requested_by_user_id=getattr(user, "id", None),
+                operation_kind=payload.operation_kind,
+                rollback_source_action_id=payload.rollback_source_action_id,
+                confirmation=payload.confirmation,
             ),
         )
     except TemporalSubmitDisabledError as exc:
@@ -223,13 +529,22 @@ async def submit_deployment_update(
 async def get_deployment_stack_state(
     stack: str,
     service: DeploymentOperationsService = Depends(_get_deployment_service),
+    execution_service: TemporalExecutionService = Depends(
+        _get_temporal_execution_service
+    ),
     _user: User = Depends(get_current_user()),
 ) -> DeploymentStackStateResponse:
     try:
         policy = service.get_policy(stack)
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
-    return _stack_state(policy)
+    recent_actions = service.recent_actions(policy.stack)
+    if not recent_actions:
+        recent_actions = await _recent_actions_from_executions(
+            execution_service=execution_service,
+            policy=policy,
+        )
+    return _stack_state(policy, service, recent_actions=recent_actions)
 
 
 @router.get("/image-targets", response_model=ImageTargetsResponse)
