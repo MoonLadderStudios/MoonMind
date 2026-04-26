@@ -139,6 +139,7 @@ Relevant Implementation Notes
 - **DESIGN-REQ-007**: Source section 8.3 requires a representative plan node using `tool.type = skill`, canonical name/version, and typed inputs. Scope: in scope. Maps to FR-007 and FR-009.
 - **DESIGN-REQ-008**: Source sections 4.2, 5, and 20 forbid arbitrary shell input, user-selectable runner images, arbitrary host paths, arbitrary Compose files, and hidden target image transformations. Scope: in scope. Maps to FR-008.
 - **DESIGN-REQ-009**: Source section 16 requires deployment updates to interact with task execution through executable operational work rather than agent instruction bundles. Scope: in scope. Maps to FR-001, FR-005, and FR-007.
+- **DESIGN-REQ-016**: Source section 16 requires task execution to resolve `deployment.update_compose_stack` through the executable tool registry path used by queued deployment runs. Scope: in scope. Maps to FR-001, FR-007, and FR-009.
 
 ## Success Criteria *(mandatory)*
 
@@ -148,4 +149,4 @@ Relevant Implementation Notes
 - **SC-002**: A representative valid deployment update plan node validates successfully against a pinned registry snapshot.
 - **SC-003**: Representative invalid deployment update plan nodes containing shell/path/runner override inputs fail validation before execution.
 - **SC-004**: Existing policy-gated API tests confirm queued deployment update runs use the canonical shared tool name and version.
-- **SC-005**: Verification evidence preserves `MM-519`, the canonical Jira preset brief, and DESIGN-REQ-001 through DESIGN-REQ-009 in MoonSpec artifacts.
+- **SC-005**: Verification evidence preserves `MM-519`, the canonical Jira preset brief, DESIGN-REQ-001 through DESIGN-REQ-009, and DESIGN-REQ-016 in MoonSpec artifacts.
