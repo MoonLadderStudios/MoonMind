@@ -22,6 +22,10 @@
 
 **Traceability IDs**: FR-001 through FR-012; SC-001 through SC-005; DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-016, DESIGN-REQ-017.
 
+**Unit Test Plan**: Use focused React/Vitest assertions in `frontend/src/components/settings/OperationsSettingsSection.test.tsx` for release-tag defaulting, mutable warnings, mode availability, reason validation, confirmation text, request payload construction, updater runner control absence, and raw command-log link gating.
+
+**Integration Test Plan**: Render `OperationsSettingsSection` with TanStack Query and mocked real deployment operation endpoints (`GET /api/v1/operations/deployment/stacks/{stack}`, `GET /api/v1/operations/deployment/image-targets`, `POST /api/v1/operations/deployment/update`) through `./tools/test_unit.sh --ui-args frontend/src/components/settings/OperationsSettingsSection.test.tsx`.
+
 - [X] T004 [P] Add failing UI test for rendering the Deployment Update card with current deployment state and no top-level deployment navigation in `frontend/src/components/settings/OperationsSettingsSection.test.tsx`. (FR-001, FR-002, SC-001, DESIGN-REQ-001)
 - [X] T005 [P] Add failing UI test for target defaulting to a recent release tag, mutable-tag warning, allowed modes, and absence of updater runner image controls in `frontend/src/components/settings/OperationsSettingsSection.test.tsx`. (FR-003, FR-004, FR-005, FR-006, SC-002, SC-004, DESIGN-REQ-002, DESIGN-REQ-016)
 - [X] T006 [P] Add failing UI test for reason validation, confirmation content, and typed POST payload in `frontend/src/components/settings/OperationsSettingsSection.test.tsx`. (FR-007, FR-008, FR-009, SC-003)
@@ -29,7 +33,7 @@
 - [X] T008 Implement deployment state/target queries, card sections, target/mode/options/reason controls, confirmation, submit mutation, recent actions rendering, and gated log links in `frontend/src/components/settings/OperationsSettingsSection.tsx`. (FR-001 through FR-011)
 - [X] T009 Run focused UI test command and mark T004-T008 complete when passing. (SC-001 through SC-004)
 - [X] T010 Run traceability check for `MM-522` and source design IDs in `specs/264-settings-operations-deployment-update-ui`. (FR-012, SC-005)
-- [X] T011 Run `/speckit.verify` equivalent and record final verification in `specs/264-settings-operations-deployment-update-ui/verification.md`. (FR-001 through FR-012)
+- [X] T011 Run `/moonspec-verify` equivalent and record final verification in `specs/264-settings-operations-deployment-update-ui/verification.md`. (FR-001 through FR-012)
 
 ## Dependencies
 
