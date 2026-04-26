@@ -286,9 +286,9 @@ acceptance_criteria:
   - the executing pill remains readable at all times during the sweep
   - the shimmer never escapes the rounded bounds of the pill
   - the shimmer produces no measurable layout shift
-  - one complete sweep occurs roughly every 1.6 to 1.8 seconds with no center pause or idle delay
+  - one complete shimmer sweep occurs roughly every 2.2 seconds with no center pause or idle delay
   - the brightest moment occurs near the center of the pill, not at the edges
-  - supported glyph-rendered hosts brighten letters in sequence on the same timing as the sweep
+  - supported glyph-rendered hosts brighten letters in sequence on a shorter cycle than the shimmer sweep
   - the effect looks intentional in both light and dark themes
   - reduced-motion users see a static active treatment with no animated sweep
   - non-executing states never inherit the shimmer accidentally
@@ -298,7 +298,7 @@ acceptance_criteria:
 
 ```yaml
 effect_tokens:
-  --mm-executing-sweep-cycle-duration: 1800ms
+  --mm-executing-sweep-cycle-duration: 2200ms
   --mm-executing-sweep-angle: -18deg
   --mm-executing-sweep-band-width: 24%
   --mm-executing-sweep-band-height: 180%
@@ -312,7 +312,7 @@ effect_tokens:
   --mm-executing-sweep-end-y: -160%
   --mm-executing-sweep-layer-offset-x: -12%
   --mm-executing-sweep-layer-offset-y: -10%
-  --mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)
+  --mm-executing-letter-cycle-duration: 1500ms
 ```
 
 ## Non-Goals
