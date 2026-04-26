@@ -1,32 +1,17 @@
 [
   {
-    "id": 3143105240,
-    "disposition": "addressed",
-    "rationale": "Updated the canonical shimmer acceptance criteria so glyph brightening stays on the same timing as the sweep instead of a shorter independent cycle."
+    "id": 4177457111,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary stated there was no feedback to address."
   },
   {
-    "id": 3143105242,
+    "id": 3144162425,
     "disposition": "addressed",
-    "rationale": "Changed the documented letter-cycle token to reference --mm-executing-sweep-cycle-duration, preserving phase alignment."
+    "rationale": "Planner now generates a synthetic targetBranch only when a MoonSpec breakdown step will create a new story breakdown artifact, preserving authored branch-only Jira import flows."
   },
   {
-    "id": 3143105244,
-    "disposition": "addressed",
-    "rationale": "Changed --mm-executing-letter-cycle-duration to var(--mm-executing-sweep-cycle-duration) and compressed the active keyframe window to 8% so the pulse feels faster without duration drift."
-  },
-  {
-    "id": 3143105247,
-    "disposition": "addressed",
-    "rationale": "Restored nested CSS fallbacks for glyph animation duration and delay: letter duration, then sweep duration, then 2200ms."
-  },
-  {
-    "id": 3143105248,
-    "disposition": "addressed",
-    "rationale": "Updated Mission Control CSS contract tests to assert the nested fallback logic and compressed 8% keyframe reset."
-  },
-  {
-    "id": 4176625480,
-    "disposition": "addressed",
-    "rationale": "Addressed the summary review by keeping shimmer and letter cycles synchronized while documenting and testing the shared timing contract."
+    "id": 4177457338,
+    "disposition": "not-applicable",
+    "rationale": "Automated Codex review wrapper contained no separate actionable feedback beyond discussion_r3144162425."
   }
 ]

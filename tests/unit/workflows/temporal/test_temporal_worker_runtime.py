@@ -427,6 +427,51 @@ def test_runtime_planner_uses_head_branch_for_jira_story_breakdown_from_main():
         == breakdown["inputs"]["storyBreakdownPath"]
     )
 
+def test_runtime_planner_preserves_authored_branch_for_jira_story_import():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "Import existing breakdown into Jira",
+                "instructions": "Create Jira issues from an existing breakdown.",
+                "repository": "MoonLadderStudios/MoonMind",
+                "git": {"branch": "feature/authored-breakdown"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+                "tool": {"type": "skill", "name": "story.create_jira_issues"},
+                "storyOutput": {
+                    "mode": "jira",
+                    "storyBreakdownPath": "artifacts/story-breakdowns/import/stories.json",
+                    "jira": {
+                        "projectKey": "MM",
+                        "issueTypeName": "Story",
+                    },
+                },
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node = plan["nodes"][0]
+
+    assert node["tool"] == {
+        "type": "skill",
+        "name": "story.create_jira_issues",
+        "version": "1.0",
+    }
+    assert node["inputs"]["branch"] == "feature/authored-breakdown"
+    assert node["inputs"]["storyBreakdownPath"] == (
+        "artifacts/story-breakdowns/import/stories.json"
+    )
+    assert "targetBranch" not in node["inputs"]
+    assert "startingBranch" not in node["inputs"]
+
 def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

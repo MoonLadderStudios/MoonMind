@@ -716,6 +716,7 @@ def _build_runtime_planner():
             or ""
         ).strip().lower()
         should_prepare_story_breakdown = bool(story_output_payload)
+        creates_story_breakdown_artifact = False
 
         # --- Expand task.steps[] or stepCount into multiple plan nodes ---
         has_multi_steps = (
@@ -729,6 +730,9 @@ def _build_runtime_planner():
                 for step in raw_steps
                 if isinstance(step, Mapping)
             }
+            creates_story_breakdown_artifact = bool(
+                step_tool_names & _MOONSPEC_BREAKDOWN_TOOLS
+            )
             if not story_output_payload:
                 for step in raw_steps:
                     if not isinstance(step, Mapping):
@@ -748,9 +752,12 @@ def _build_runtime_planner():
                 step_tool_names & (_JIRA_STORY_OUTPUT_TOOLS | _MOONSPEC_BREAKDOWN_TOOLS)
             )
         elif selected_skill_name:
+            creates_story_breakdown_artifact = (
+                selected_skill_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS
+            )
             should_prepare_story_breakdown = (
                 should_prepare_story_breakdown
-                or selected_skill_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS
+                or creates_story_breakdown_artifact
             )
 
         if should_prepare_story_breakdown:
@@ -759,7 +766,11 @@ def _build_runtime_planner():
                 existing={**story_output_payload, **node_inputs},
             )
             node_inputs.update(story_paths)
-            if story_output_mode == "jira" and not node_inputs.get("targetBranch"):
+            if (
+                story_output_mode == "jira"
+                and creates_story_breakdown_artifact
+                and not node_inputs.get("targetBranch")
+            ):
                 if node_inputs.get("branch") and not node_inputs.get("startingBranch"):
                     node_inputs["startingBranch"] = node_inputs["branch"]
                 prefix = _derive_pr_branch_prefix(
