@@ -167,6 +167,7 @@ class SecretRecordingRunner(RecordingRunner):
             "stack": stack,
             "phase": phase,
             "services": ["api"],
+            "diagnostics": "token=super-secret,log_level=info",
             "environment": {
                 "API_TOKEN": "token=super-secret",
                 "REGISTRY_PASSWORD": "registry-password",
@@ -182,6 +183,7 @@ class SecretRecordingRunner(RecordingRunner):
             "command": list(command),
             "exitCode": 0,
             "authHeader": "Bearer secret-token",
+            "stdout": "passwd=hunter2;mode=ok",
         }
 
 
@@ -201,6 +203,35 @@ class InvalidStatusRunner(RecordingRunner):
             details={"failedChecks": ["image-id"]},
             status="UNKNOWN",
         )
+
+
+class SecretVerificationFailureRunner(RecordingRunner):
+    async def verify(
+        self,
+        *,
+        stack: str,
+        requested_image: str,
+        resolved_digest: str | None,
+    ) -> ComposeVerification:
+        self.events.append("runner:verify")
+        return ComposeVerification(
+            succeeded=False,
+            updated_services=(),
+            running_services=(),
+            details={
+                "message": "health check failed with token=super-secret,log_level=info",
+                "requestedImage": requested_image,
+                "resolvedDigest": resolved_digest,
+            },
+        )
+
+
+class VerificationEvidenceFailureWriter(RecordingEvidenceWriter):
+    async def write(self, kind: str, payload: Mapping[str, Any]) -> str:
+        if kind == "verification":
+            self.events.append("evidence:verification:failed")
+            raise RuntimeError("verification evidence write failed")
+        return await super().write(kind, payload)
 
 
 @pytest.mark.asyncio
@@ -503,6 +534,52 @@ async def test_evidence_payloads_are_recursively_redacted_before_publication() -
         payload for kind, payload in evidence.records if kind == "before-state"
     )
     assert before_payload["environment"]["NORMAL_VALUE"] == "visible"
+    assert before_payload["diagnostics"] == "[REDACTED],log_level=info"
+    command_payload = next(
+        payload for kind, payload in evidence.records if kind == "command-log"
+    )
+    assert command_payload["pull"]["result"]["stdout"] == "[REDACTED];mode=ok"
+
+
+@pytest.mark.asyncio
+async def test_output_audit_failure_reason_is_redacted() -> None:
+    events: list[str] = []
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=SecretVerificationFailureRunner(events), events=events
+    )
+
+    result = await executor.execute(_inputs())
+
+    audit = result.outputs["audit"]
+    assert audit["failureReason"] == (
+        "health check failed with [REDACTED],log_level=info"
+    )
+    assert "super-secret" not in json.dumps(result.outputs)
+
+
+@pytest.mark.asyncio
+async def test_post_verification_exception_marks_audit_failed() -> None:
+    events: list[str] = []
+    runner = RecordingRunner(events)
+    store = RecordingDesiredStateStore(events)
+    evidence = VerificationEvidenceFailureWriter(events)
+    executor = DeploymentUpdateExecutor(
+        lock_manager=DeploymentUpdateLockManager(),
+        desired_state_store=store,
+        evidence_writer=evidence,
+        runner=runner,
+    )
+
+    with pytest.raises(RuntimeError, match="verification evidence write failed"):
+        await executor.execute(_inputs())
+
+    after_payload = next(
+        payload for kind, payload in evidence.records if kind == "after-state"
+    )
+    assert after_payload["audit"]["finalStatus"] == "FAILED"
+    assert after_payload["audit"]["failureReason"] == (
+        "verification evidence write failed"
+    )
 
 
 @pytest.mark.asyncio

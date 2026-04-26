@@ -31,7 +31,8 @@ _SENSITIVE_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SENSITIVE_VALUE_PATTERN = re.compile(
-    r"(bearer\s+[A-Za-z0-9._~+/=-]+|token=\S+|password=\S+|secret=\S+)",
+    r"(bearer\s+[A-Za-z0-9._~+/=-]+|"
+    r"(?:token|password|passwd|secret)=[^ \t\n\r,;&\"']+)",
     re.IGNORECASE,
 )
 
@@ -361,8 +362,7 @@ class DeploymentUpdateExecutor:
                     },
                 )
             except Exception as exc:
-                if final_status is None:
-                    final_status = "FAILED"
+                final_status = "FAILED"
                 failure_reason = failure_reason or _failure_reason(exc)
                 _record_command_exception(command_log, exc)
                 raise
@@ -429,7 +429,7 @@ class DeploymentUpdateExecutor:
             "afterStateArtifactRef": after_ref,
             "commandLogArtifactRef": command_ref,
             "verificationArtifactRef": verification_ref,
-            "audit": audit_snapshot(completed=True),
+            "audit": _redact_sensitive(audit_snapshot(completed=True)),
         }
         return ToolResult(
             status="COMPLETED" if final_status == "SUCCEEDED" else "FAILED",

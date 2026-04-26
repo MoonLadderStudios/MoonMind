@@ -1,62 +1,27 @@
 [
   {
-    "id": 3142801124,
-    "disposition": "addressed",
-    "rationale": "Deployment tool registration is now limited to the privileged agent_runtime fleet instead of every worker dispatcher, keeping stack update locking and execution on the intended deployment-capable worker boundary."
-  },
-  {
-    "id": 3142801125,
-    "disposition": "addressed",
-    "rationale": "Compose pull and up result mappings are now strictly checked for success signals and non-zero exit codes fail closed before later lifecycle steps."
-  },
-  {
-    "id": 3142801128,
-    "disposition": "addressed",
-    "rationale": "Deployment execution now writes command-log and after-state evidence from a finally path when runner calls fail after before-state capture."
-  },
-  {
-    "id": 3142801130,
-    "disposition": "addressed",
-    "rationale": "deployment.update_compose_stack registration moved inside the agent_runtime fleet setup block rather than using the default disabled runner on all workers."
-  },
-  {
-    "id": 3142801132,
-    "disposition": "addressed",
-    "rationale": "Command-log evidence is persisted before verification on success and in the failure cleanup path when pull or up fails."
-  },
-  {
-    "id": 4176371791,
+    "id": 4176417120,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary; its actionable inline findings are tracked by their individual comment IDs."
+    "rationale": "Bot review summary; no actionable request beyond the inline redaction comment tracked separately."
   },
   {
-    "id": 3142801582,
+    "id": 3142847692,
     "disposition": "addressed",
-    "rationale": "The awaited first deployment task result is now assigned and asserted as COMPLETED."
+    "rationale": "Refined sensitive value redaction to stop at common delimiters and include passwd, with regression coverage for preserving adjacent non-sensitive fields."
   },
   {
-    "id": 3142803336,
-    "disposition": "addressed",
-    "rationale": "_parse_inputs now rejects non-allowlisted stack names at the execution boundary with INVALID_INPUT."
-  },
-  {
-    "id": 3142803338,
-    "disposition": "addressed",
-    "rationale": "removeOrphans and wait now require real boolean values and reject string payloads with INVALID_INPUT."
-  },
-  {
-    "id": 3142803340,
-    "disposition": "addressed",
-    "rationale": "desiredStateRef was removed from emitted outputs so runtime output stays within the declared tool schema."
-  },
-  {
-    "id": 4176375485,
+    "id": 4176419798,
     "disposition": "not-applicable",
-    "rationale": "Top-level Codex review wrapper; actionable suggestions are tracked by their individual inline comment IDs."
+    "rationale": "Bot review wrapper text; actionable Codex findings are tracked by their inline review comment IDs."
   },
   {
-    "id": 3142815558,
+    "id": 3142851408,
     "disposition": "addressed",
-    "rationale": "The awaited first deployment task result is now assigned and asserted as COMPLETED."
+    "rationale": "Returned audit metadata is now passed through recursive redaction, with regression coverage for secret-like verification failure reasons."
+  },
+  {
+    "id": 3142851410,
+    "disposition": "addressed",
+    "rationale": "Deployment execution exceptions now force finalStatus to FAILED even after verification had set a success status, with regression coverage for post-verification evidence failures."
   }
 ]
