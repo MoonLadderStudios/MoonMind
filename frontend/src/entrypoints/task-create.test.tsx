@@ -5904,8 +5904,10 @@ describe("Task Create Entrypoint", () => {
       ),
     ).toBe(true);
     await waitFor(() => {
-      expect((branchInput as HTMLInputElement).value).toBe("main");
+      expect((branchInput as HTMLInputElement).disabled).toBe(false);
     });
+    expect((branchInput as HTMLInputElement).value).toBe("");
+    expect((branchInput as HTMLInputElement).placeholder).toBe("Branch");
 
     fireEvent.change(branchInput, {
       target: { value: "feature/create-page" },
@@ -5929,7 +5931,7 @@ describe("Task Create Entrypoint", () => {
     expect(JSON.stringify(task)).not.toContain("startingBranch");
   });
 
-  it("updates the selected branch to the default when the repository changes", async () => {
+  it("keeps the branch field empty when repository defaults are available", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -5959,19 +5961,34 @@ describe("Task Create Entrypoint", () => {
       "Branch",
     )) as HTMLInputElement;
     await waitFor(() => {
-      expect(branchInput.value).toBe("main");
+      expect(branchInput.disabled).toBe(false);
     });
+    expect(branchInput.value).toBe("");
 
-    fireEvent.change(branchInput, {
-      target: { value: "feature/create-page" },
-    });
     fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
       target: { value: "MoonLadderStudios/OtherRepo" },
     });
 
     await waitFor(() => {
-      expect(branchInput.value).toBe("develop");
+      expect(branchInput.disabled).toBe(false);
     });
+    expect(branchInput.value).toBe("");
+
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Use the repository default branch." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(task.git).toEqual({ branch: "develop" });
   });
 
   it("keeps branch loading text inside the dropdown only", async () => {
