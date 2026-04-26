@@ -34,10 +34,14 @@ class _FakeExecutionRecord:
 class _FakeExecutionService:
     def __init__(self) -> None:
         self.requests: list[dict[str, object]] = []
+        self.execution_items: list[object] = []
 
     async def create_execution(self, **kwargs: object) -> _FakeExecutionRecord:
         self.requests.append(kwargs)
         return _FakeExecutionRecord()
+
+    async def list_executions(self, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(items=self.execution_items)
 
 
 def _override_user(app: FastAPI, *, is_superuser: bool) -> None:
@@ -366,6 +370,65 @@ def test_deployment_state_withholds_rollback_for_missing_before_state_evidence(
     assert eligibility["reason"] == "Before-state evidence is missing."
 
 
+def test_deployment_state_projects_recent_actions_from_execution_history(
+    admin_client: tuple[TestClient, _FakeExecutionService],
+) -> None:
+    client, execution_service = admin_client
+    execution_service.execution_items = [
+        SimpleNamespace(
+            workflow_id="mm:workflow-history",
+            run_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            owner_id="admin@example.com",
+            state="failed",
+            close_status="failed",
+            parameters={
+                "task": {
+                    "operation": {"kind": "update"},
+                    "plan": [
+                        {
+                            "tool": {
+                                "name": DEPLOYMENT_UPDATE_TOOL_NAME,
+                                "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
+                            },
+                            "inputs": {
+                                "stack": "moonmind",
+                                "image": {
+                                    "repository": (
+                                        "ghcr.io/moonladderstudios/moonmind"
+                                    ),
+                                    "reference": "20260425.1234",
+                                },
+                                "mode": "changed_services",
+                                "reason": "Routine release failed",
+                                "operationKind": "update",
+                            },
+                        }
+                    ],
+                }
+            },
+            memo={"summary": "Deployment update failed."},
+            artifact_refs=["art_before"],
+            started_at="2026-04-25T18:00:00Z",
+            closed_at="2026-04-25T18:04:00Z",
+        )
+    ]
+
+    response = client.get("/api/v1/operations/deployment/stacks/moonmind")
+
+    assert response.status_code == 200
+    action = response.json()["recentActions"][0]
+    assert action["id"] == "depupd_aaaaaaaabbbbccccddddeeeeeeeeeeee"
+    assert action["kind"] == "failure"
+    assert action["status"] == "FAILED"
+    assert action["requestedImage"] == (
+        "ghcr.io/moonladderstudios/moonmind:20260425.1234"
+    )
+    assert action["reason"] == "Routine release failed"
+    assert action["runDetailUrl"] == "/tasks/mm:workflow-history"
+    assert action["rollbackEligibility"]["eligible"] is False
+    assert action["rollbackEligibility"]["evidenceRef"] == "art_before"
+
+
 def test_allowed_image_targets_return_digest_guidance(
     admin_client: tuple[TestClient, _FakeExecutionService],
 ) -> None:
@@ -405,6 +468,28 @@ def test_admin_can_submit_rollback_through_typed_deployment_update(
     assert plan_inputs["rollbackSourceActionId"] == "depupd_recent"
     assert plan_inputs["confirmation"].startswith("Rollback to")
     assert plan_inputs["image"]["reference"] == "stable"
+
+
+def test_repeated_rollback_submissions_are_distinct_explicit_actions(
+    admin_client: tuple[TestClient, _FakeExecutionService],
+) -> None:
+    client, execution_service = admin_client
+
+    first = client.post(
+        "/api/v1/operations/deployment/update",
+        json=_rollback_payload(),
+    )
+    second = client.post(
+        "/api/v1/operations/deployment/update",
+        json=_rollback_payload(),
+    )
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert len(execution_service.requests) == 2
+    assert execution_service.requests[0]["idempotency_key"] != (
+        execution_service.requests[1]["idempotency_key"]
+    )
 
 
 def test_rollback_submission_requires_explicit_confirmation(

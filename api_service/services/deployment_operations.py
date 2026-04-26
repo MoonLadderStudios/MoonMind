@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
@@ -318,6 +318,11 @@ class DeploymentOperationsService:
         policy: DeploymentStackPolicy,
         submission: DeploymentUpdateSubmission,
     ) -> str:
+        explicit_action_key = (
+            uuid4().hex
+            if submission.operation_kind == "rollback"
+            else submission.reason.strip()
+        )
         return "|".join(
             [
                 "deployment-update",
@@ -325,6 +330,6 @@ class DeploymentOperationsService:
                 submission.repository,
                 submission.reference,
                 submission.mode,
-                submission.reason.strip(),
+                explicit_action_key,
             ]
         )[:128]

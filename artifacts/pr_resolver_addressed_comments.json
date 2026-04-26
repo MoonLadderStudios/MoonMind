@@ -1,22 +1,27 @@
 [
   {
-    "id": 3142898352,
+    "id": 3142955427,
     "disposition": "addressed",
-    "rationale": "Replaced index-based recent deployment action keys with keys derived from action identifiers, URLs, or stable action fields."
+    "rationale": "Updated _recent_action_model to use Pydantic field names and added a DeploymentRecentAction type hint."
   },
   {
-    "id": 4176457752,
+    "id": 4176503639,
     "disposition": "not-applicable",
-    "rationale": "Top-level bot review summary; the inline recommendation it referenced was handled separately."
+    "rationale": "Broad review summary with no separate actionable request beyond the linked model-construction comment."
   },
   {
-    "id": 3142899981,
+    "id": 4176505945,
+    "disposition": "not-applicable",
+    "rationale": "Informational automated Codex review wrapper with no actionable code finding."
+  },
+  {
+    "id": 3142958549,
     "disposition": "addressed",
-    "rationale": "Changed missing or empty allowedModes metadata to default to changed_services only and added frontend coverage."
+    "rationale": "Deployment stack state now falls back to persisted Temporal deployment execution history when no injected recent actions are present."
   },
   {
-    "id": 4176458909,
-    "disposition": "not-applicable",
-    "rationale": "Top-level automated review wrapper with no independent actionable request."
+    "id": 3142958551,
+    "disposition": "addressed",
+    "rationale": "Rollback submissions now produce fresh server-side idempotency keys and the UI includes a request timestamp in the rollback reason."
   }
 ]

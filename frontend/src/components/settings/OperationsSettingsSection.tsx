@@ -496,6 +496,7 @@ export function OperationsSettingsSection({
       if (!window.confirm(confirmation)) {
         return null;
       }
+      const requestedAt = new Date().toISOString();
       const confirmationText = `Rollback to ${targetImage} confirmed from ${sourceActionId}`;
       const response = await fetch('/api/v1/operations/deployment/update', {
         method: 'POST',
@@ -512,7 +513,7 @@ export function OperationsSettingsSection({
           runSmokeCheck: false,
           pauseWork: false,
           pruneOldImages: false,
-          reason: `Rollback after failed update ${sourceActionId}`,
+          reason: `Rollback after failed update ${sourceActionId} at ${requestedAt}`,
           operationKind: 'rollback',
           rollbackSourceActionId: sourceActionId,
           confirmation: confirmationText,
