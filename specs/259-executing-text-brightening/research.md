@@ -3,7 +3,7 @@
 ## DESIGN-REQ-001 Physical Sweep Plus Foreground Layer
 
 Decision: Preserve the existing host-level `mm-status-pill-shimmer` background animation and remove the old text pseudo-element from the requested task-list path in favor of real glyph spans.
-Evidence: `frontend/src/styles/mission-control.css` already defines executing host metadata, sweep gradients, geometry, and `--mm-executing-sweep-cycle-duration: 1650ms`.
+Evidence: `frontend/src/styles/mission-control.css` already defines executing host metadata, sweep gradients, geometry, and `--mm-executing-sweep-cycle-duration`.
 Rationale: The source request frames the current shimmer as the physical sweep layer and asks for a second text-brightening layer.
 Alternatives considered: Keep the existing CSS-only pseudo-element. Rejected because it cannot brighten individual letters.
 Test implications: CSS contract test must verify the host sweep remains and glyph keyframes exist.
@@ -26,7 +26,7 @@ Test implications: Task-list integration verifies executing label becomes one gl
 
 ## DESIGN-REQ-004 Timing And Direction
 
-Decision: Use the CSS token duration with a 1650ms fallback in styles and calculate delays against `1650` ms in component code. Set direction to left-to-right/top-left-to-bottom-right to match the visible sweep described by the canonical UI design.
+Decision: Use the CSS token duration with the configured sweep fallback in styles and calculate per-glyph phase ratios from glyph index/count in component code. Set direction to left-to-right/top-left-to-bottom-right to match the visible sweep described by the canonical UI design.
 Evidence: Existing CSS moves from `--mm-executing-sweep-start-x: 135%` to `--mm-executing-sweep-end-x: -135%`.
 Rationale: The foreground wave should feel phase-locked with the physical sweep.
 Alternatives considered: Right-to-left phase order. Rejected because the visible sweep direction is left-to-right/top-left-to-bottom-right even though oversized background-position tokens move inversely.

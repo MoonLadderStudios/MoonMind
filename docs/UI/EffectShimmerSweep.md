@@ -98,7 +98,7 @@ layers:
 ```yaml
 motion:
   cycle:
-    duration_ms: 1650
+    duration_ms: 2200
     repeat: infinite
     repeat_delay_ms: 0
     easing: linear
@@ -288,7 +288,7 @@ acceptance_criteria:
   - the shimmer produces no measurable layout shift
   - one complete shimmer sweep occurs roughly every 2.2 seconds with no center pause or idle delay
   - the brightest moment occurs near the center of the pill, not at the edges
-  - supported glyph-rendered hosts brighten letters in sequence on a shorter cycle than the shimmer sweep
+  - supported glyph-rendered hosts brighten letters in sequence on the same timing as the sweep
   - the effect looks intentional in both light and dark themes
   - reduced-motion users see a static active treatment with no animated sweep
   - non-executing states never inherit the shimmer accidentally
@@ -312,7 +312,7 @@ effect_tokens:
   --mm-executing-sweep-end-y: -160%
   --mm-executing-sweep-layer-offset-x: -12%
   --mm-executing-sweep-layer-offset-y: -10%
-  --mm-executing-letter-cycle-duration: 1500ms
+  --mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)
 ```
 
 ## Non-Goals

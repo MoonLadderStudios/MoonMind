@@ -12,7 +12,7 @@ Treat the existing EXECUTING shimmer as the physical sweep layer, then add a sec
 
 In MoonMind, the browser equivalent should usually not be "rerender React every 32 ms." In the browser, CSS animation is the better default: it is declarative, cheaper for many table rows, and can be synchronized with your existing shimmer duration variable.
 
-Recommended implementation: split only EXECUTING into glyph spans. CSS alone cannot target "the third letter of this text node," so true per-letter brightening requires wrapping each visible grapheme in a span. Because EXECUTING is short, the DOM cost is tiny. Replace the two status spans in frontend/src/entrypoints/tasks-list.tsx with a small ExecutionStatusPill component. Use Intl.Segmenter when available, aria-label on the parent, aria-hidden on the glyph span, CSS-derived animation delays per glyph, the existing --mm-executing-sweep-cycle-duration: 1650ms token, and a reduced-motion override. If the visible beam direction changes, update the CSS --mm-executing-letter-sweep-direction token with the sweep geometry.
+Recommended implementation: split only EXECUTING into glyph spans. CSS alone cannot target "the third letter of this text node," so true per-letter brightening requires wrapping each visible grapheme in a span. Because EXECUTING is short, the DOM cost is tiny. Replace the two status spans in frontend/src/entrypoints/tasks-list.tsx with a small ExecutionStatusPill component. Use Intl.Segmenter when available, aria-label on the parent, aria-hidden on the glyph span, CSS-derived animation delays per glyph, the existing --mm-executing-sweep-cycle-duration token, and a reduced-motion override. If the visible beam direction changes, update the CSS --mm-executing-letter-sweep-direction token with the sweep geometry.
 
 The cleanest patch: implement the glyph-span component and keep the existing broad shimmer. Existing status detection remains centralized in executionStatusPillProps(); the existing shimmer remains the background/beam layer; the new glyph spans become the foreground Codex-like letter-brightening layer; the animation stays CSS-driven and phase-locked through --mm-executing-sweep-cycle-duration; accessibility remains clean because the visible glyph spans are hidden from screen readers.
 ```
@@ -60,7 +60,7 @@ The cleanest patch: implement the glyph-span component and keep the existing bro
 | DESIGN-REQ-001 | Input Core idea | Existing executing shimmer remains the physical sweep layer while a foreground text-brightening layer is added. | In scope | FR-001, FR-002 |
 | DESIGN-REQ-002 | Input browser guidance | The browser implementation must use CSS animation rather than rerendering React on a timer. | In scope | FR-003 |
 | DESIGN-REQ-003 | Input recommended implementation | Executing labels must be split into per-grapheme spans so letters brighten independently. | In scope | FR-004, FR-005 |
-| DESIGN-REQ-004 | Input timing guidance | The letter brightening must use the same 1650ms shimmer duration token as the physical sweep. | In scope | FR-006 |
+| DESIGN-REQ-004 | Input timing guidance | The letter brightening must use the same shimmer duration token as the physical sweep. | In scope | FR-006 |
 | DESIGN-REQ-005 | Input accessibility notes | Split glyphs must be hidden from assistive technology while the parent exposes the complete label. | In scope | FR-007 |
 | DESIGN-REQ-006 | Input reduced-motion notes | Reduced motion must disable non-essential sweep and letter animations. | In scope | FR-008 |
 | DESIGN-REQ-007 | Input cleanest patch | Existing status detection remains centralized through `executionStatusPillProps()`. | In scope | FR-009 |
@@ -75,7 +75,7 @@ The cleanest patch: implement the glyph-span component and keep the existing bro
 - **FR-003**: The text-brightening layer MUST be CSS-driven and MUST NOT use a JavaScript animation loop or periodic React rerender.
 - **FR-004**: The executing text-brightening layer MUST render one visual glyph span per visible grapheme.
 - **FR-005**: The glyph splitting MUST use platform grapheme segmentation when available and fall back safely when it is not.
-- **FR-006**: The glyph brightening animation MUST use `--mm-executing-sweep-cycle-duration` with a 1650ms fallback and per-glyph delays with edge padding.
+- **FR-006**: The glyph brightening animation MUST use `--mm-executing-sweep-cycle-duration` with the configured sweep fallback and per-glyph delays with edge padding.
 - **FR-007**: The executing glyph layer MUST be hidden from assistive technology while the parent status pill exposes the full readable label.
 - **FR-008**: Reduced-motion styling MUST disable glyph brightening animation, text shadow, and filter effects.
 - **FR-009**: Executing status detection MUST continue to use `executionStatusPillProps()` as the central selector contract.

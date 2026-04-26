@@ -7,7 +7,7 @@
 
 ## Summary
 
-Add a task-list `ExecutionStatusPill` component that keeps status normalization in `executionStatusPillProps()`, renders non-executing states as plain text, and renders executing states as a parent status pill with an accessible label plus hidden per-grapheme visual spans. Replace the task-list table and card status span call sites with the component. Update Mission Control CSS so the existing executing physical sweep remains on the host and the new glyph spans run a CSS-only brightening pulse using the shared 1650ms sweep duration token. Validate with focused Vitest coverage, typecheck, lint, and the repo unit runner where available.
+Add a task-list `ExecutionStatusPill` component that keeps status normalization in `executionStatusPillProps()`, renders non-executing states as plain text, and renders executing states as a parent status pill with an accessible label plus hidden per-grapheme visual spans. Replace the task-list table and card status span call sites with the component. Update Mission Control CSS so the existing executing physical sweep remains on the host and the new glyph spans run a CSS-only brightening pulse using the shared sweep duration token. Validate with focused Vitest coverage, typecheck, lint, and the repo unit runner where available.
 
 ## Requirement Status
 
