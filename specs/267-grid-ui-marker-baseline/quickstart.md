@@ -15,7 +15,7 @@ This MoonSpec story requires the target Tactics frontend source tree containing 
 2. Locate every direct mutation API use:
 
    ```bash
-   rg -n "SpawnTileMarkers|SpawnTileMarkersFromIndexes|QueueSpawnTileMarkers|QueueSpawnTileMarkersFromIndexes|ClearTileMarkers|ClearAllTileMarkers|SpawnDecalsAtLocations|ClearSpecifiedDecals" .
+   rg -w -n "SpawnTileMarkers|SpawnTileMarkersFromIndexes|QueueSpawnTileMarkers|QueueSpawnTileMarkersFromIndexes|ClearTileMarkers|ClearAllTileMarkers|SpawnDecalsAtLocations|ClearSpecifiedDecals" .
    ```
 
 3. Create or update the checked-in inventory with source path, source location, invoked API, producer role, operation category, and notes.

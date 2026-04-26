@@ -38,7 +38,7 @@
 
 **CRITICAL**: No story implementation work can begin until T001 through T009 are complete.
 
-- [ ] T006 Run `rg -n "SpawnTileMarkers|SpawnTileMarkersFromIndexes|QueueSpawnTileMarkers|QueueSpawnTileMarkersFromIndexes|ClearTileMarkers|ClearAllTileMarkers|SpawnDecalsAtLocations|ClearSpecifiedDecals" TARGET_PROJECT_ROOT` and save the complete result set in `TARGET_PROJECT_ROOT/Docs/TacticsFrontend/GridUiMarkerMutationInventory.md`. (FR-001, DESIGN-REQ-002)
+- [ ] T006 Run `rg -w -n "SpawnTileMarkers|SpawnTileMarkersFromIndexes|QueueSpawnTileMarkers|QueueSpawnTileMarkersFromIndexes|ClearTileMarkers|ClearAllTileMarkers|SpawnDecalsAtLocations|ClearSpecifiedDecals" TARGET_PROJECT_ROOT` and save the complete result set in `TARGET_PROJECT_ROOT/Docs/TacticsFrontend/GridUiMarkerMutationInventory.md`. (FR-001, DESIGN-REQ-002)
 - [ ] T007 Create the checked-in mutation inventory table in `TARGET_PROJECT_ROOT/Docs/TacticsFrontend/GridUiMarkerMutationInventory.md` with source path, source location, invoked API, marker/decal type, operation category, producer role, and notes. (FR-001, FR-002, SC-001, SC-002)
 - [ ] T008 Classify every inventory row in `TARGET_PROJECT_ROOT/Docs/TacticsFrontend/GridUiMarkerMutationInventory.md` with exactly one role from selected movement, hover movement, attack targeting, ability preview, focus/selection, path/ghost path, phase clear, teardown clear, or debug/demo utility. (FR-002, DESIGN-REQ-003)
 - [ ] T009 Identify or create target test fixture locations for Movement overlay producers, lifecycle/idempotence behavior, and diagnostic evidence in `TARGET_PROJECT_ROOT/Tests/GridUi/`. (FR-003, FR-004, FR-005)

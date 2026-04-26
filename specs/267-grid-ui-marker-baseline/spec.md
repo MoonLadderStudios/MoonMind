@@ -34,7 +34,7 @@ Establish an observable baseline for the existing Grid UI marker lifecycle befor
 Acceptance Criteria:
 - A checked-in inventory identifies direct uses of SpawnTileMarkers, SpawnTileMarkersFromIndexes, QueueSpawnTileMarkers, QueueSpawnTileMarkersFromIndexes, ClearTileMarkers, ClearAllTileMarkers, SpawnDecalsAtLocations, and ClearSpecifiedDecals.
 - Each call site is categorized by producer role: selected movement, hover movement, attack targeting, ability preview, focus/selection, path/ghost path, phase clear, teardown clear, or debug/demo utility.
-- At least one automated test captures the current non-interference bug class where clearing one Movement producer can erase another Movement producer's overlay.
+- At least one automated test captures the current Movement overlay interference bug class where clearing one Movement producer can erase another Movement producer's overlay.
 - Existing Grid UI marker lifecycle/idempotence tests still pass or are updated with equivalent assertions.
 - Diagnostics can distinguish producer churn from renderer churn with source, marker type, reason, owner controller, tile count, and operation type.
 
@@ -53,7 +53,7 @@ diagnostics, grid-ui-overlay, jira, moonmind-workflow-mm-2e552d30-1728-450d-808a
 
 1. **Given** the Grid UI marker lifecycle contains direct mutation APIs, **When** maintainers review the baseline inventory, **Then** every direct use of SpawnTileMarkers, SpawnTileMarkersFromIndexes, QueueSpawnTileMarkers, QueueSpawnTileMarkersFromIndexes, ClearTileMarkers, ClearAllTileMarkers, SpawnDecalsAtLocations, and ClearSpecifiedDecals is listed with its source location.
 2. **Given** an inventoried marker/decal mutation call site, **When** maintainers inspect its classification, **Then** the call site is assigned exactly one producer role from selected movement, hover movement, attack targeting, ability preview, focus/selection, path/ghost path, phase clear, teardown clear, or debug/demo utility.
-3. **Given** two Movement overlay producers are active, **When** one producer clears its Movement overlay, **Then** automated regression coverage demonstrates whether another producer's Movement overlay can be erased and captures the current non-interference bug class as baseline evidence.
+3. **Given** two Movement overlay producers are active, **When** one producer clears its Movement overlay, **Then** automated regression coverage demonstrates whether another producer's Movement overlay can be erased and captures the current Movement overlay interference bug class as baseline evidence.
 4. **Given** existing Grid UI marker lifecycle and idempotence expectations, **When** the baseline test suite runs, **Then** those expectations still pass or equivalent assertions document the same behavior.
 5. **Given** marker producer or renderer activity changes, **When** diagnostics are emitted, **Then** diagnostic evidence includes source, marker type, reason, owner controller, tile count, and operation type so producer churn can be distinguished from renderer churn.
 
@@ -88,7 +88,7 @@ diagnostics, grid-ui-overlay, jira, moonmind-workflow-mm-2e552d30-1728-450d-808a
 
 - **FR-001**: The system MUST include a checked-in inventory of every direct use of SpawnTileMarkers, SpawnTileMarkersFromIndexes, QueueSpawnTileMarkers, QueueSpawnTileMarkersFromIndexes, ClearTileMarkers, ClearAllTileMarkers, SpawnDecalsAtLocations, and ClearSpecifiedDecals.
 - **FR-002**: The inventory MUST categorize every listed call site with exactly one producer role from selected movement, hover movement, attack targeting, ability preview, focus/selection, path/ghost path, phase clear, teardown clear, or debug/demo utility.
-- **FR-003**: The test suite MUST include automated regression coverage for the current non-interference bug class where clearing one Movement producer can erase another Movement producer's overlay.
+- **FR-003**: The test suite MUST include automated regression coverage for the current Movement overlay interference bug class where clearing one Movement producer can erase another Movement producer's overlay.
 - **FR-004**: Existing Grid UI marker lifecycle and idempotence expectations MUST continue to pass, or equivalent assertions MUST preserve the same observable guarantees.
 - **FR-005**: Diagnostic evidence for marker/decal producer and renderer activity MUST include source, marker type, reason, owner controller, tile count, and operation type.
 - **FR-006**: The baseline story MUST NOT change Grid UI marker ownership semantics beyond the minimum test or diagnostic instrumentation required to observe current behavior.
