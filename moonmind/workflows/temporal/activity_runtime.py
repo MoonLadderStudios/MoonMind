@@ -59,6 +59,10 @@ from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as C
 from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DISABLED_MESSAGE
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
+from moonmind.workflows.skills.deployment_tools import (
+    DEPLOYMENT_UPDATE_TOOL_NAME,
+    build_deployment_update_tool_definition_payload,
+)
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -730,6 +734,9 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
 def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any]:
     if is_dood_tool(name):
         return build_dood_tool_definition_payload(name=name, version=version)
+
+    if name == DEPLOYMENT_UPDATE_TOOL_NAME:
+        return build_deployment_update_tool_definition_payload()
 
     if name == "security.pentest.run":
         return {
