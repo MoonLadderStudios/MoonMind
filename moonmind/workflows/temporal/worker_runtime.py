@@ -759,9 +759,9 @@ def _build_runtime_planner():
                 existing={**story_output_payload, **node_inputs},
             )
             node_inputs.update(story_paths)
-            if story_output_mode == "jira" and not (
-                node_inputs.get("targetBranch") or node_inputs.get("branch")
-            ):
+            if story_output_mode == "jira" and not node_inputs.get("targetBranch"):
+                if node_inputs.get("branch") and not node_inputs.get("startingBranch"):
+                    node_inputs["startingBranch"] = node_inputs["branch"]
                 prefix = _derive_pr_branch_prefix(
                     task_payload=task_payload,
                     publish_payload=publish_payload,

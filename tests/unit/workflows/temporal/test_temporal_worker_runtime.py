@@ -367,6 +367,66 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
         "linear_blocker_chain"
     )
 
+def test_runtime_planner_uses_head_branch_for_jira_story_breakdown_from_main():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "Docs\\TacticsFrontend\\InitiativeOrderBar.md",
+                "instructions": "Docs\\TacticsFrontend\\InitiativeOrderBar.md",
+                "repository": "MoonLadderStudios/Tactics",
+                "git": {"branch": "main"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "id": "breakdown",
+                        "tool": {"type": "skill", "name": "moonspec-breakdown"},
+                        "instructions": "Extract MoonSpec stories.",
+                    },
+                    {
+                        "id": "jira",
+                        "tool": {"type": "skill", "name": "story.create_jira_issues"},
+                        "instructions": "Create Jira issues from the generated breakdown.",
+                        "storyOutput": {
+                            "mode": "jira",
+                            "fallback": "fail",
+                            "jira": {
+                                "projectKey": "MM",
+                                "issueTypeName": "Story",
+                                "dependencyMode": "linear_blocker_chain",
+                            },
+                        },
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    breakdown = plan["nodes"][0]
+    jira = plan["nodes"][1]
+
+    assert breakdown["inputs"]["branch"] == "main"
+    assert breakdown["inputs"]["startingBranch"] == "main"
+    assert breakdown["inputs"]["targetBranch"].startswith(
+        "docs-tacticsfrontend-initiativeorderbar-"
+    )
+    assert breakdown["inputs"]["targetBranch"] != "main"
+    assert breakdown["inputs"]["publishMode"] == "branch"
+    assert jira["inputs"]["targetBranch"] == breakdown["inputs"]["targetBranch"]
+    assert jira["inputs"]["branch"] == "main"
+    assert (
+        jira["inputs"]["storyBreakdownPath"]
+        == breakdown["inputs"]["storyBreakdownPath"]
+    )
+
 def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
