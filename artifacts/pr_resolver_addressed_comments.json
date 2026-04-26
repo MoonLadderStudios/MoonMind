@@ -1,17 +1,32 @@
 [
   {
-    "id": 3144051956,
+    "id": 3144071649,
     "disposition": "addressed",
-    "rationale": "Removed the redundant 2600ms nested fallback from the executing letter animation duration and delay so the root sweep duration variable remains the single default."
+    "rationale": "Renamed the contradictory non-interference wording in the acceptance criteria to Movement overlay interference bug class."
   },
   {
-    "id": 4177370118,
-    "disposition": "not-applicable",
-    "rationale": "Review summary only; the actionable inline CSS and test feedback from the same review was handled in the code changes."
+    "id": 3144071660,
+    "disposition": "addressed",
+    "rationale": "Updated acceptance scenario 3 to describe the Movement overlay interference bug class."
   },
   {
-    "id": 3144051959,
+    "id": 3144071663,
     "disposition": "addressed",
-    "rationale": "Updated the Mission Control CSS assertions to match the simplified animation-duration and animation-delay variable usage."
+    "rationale": "Updated FR-003 to require regression coverage for the Movement overlay interference bug class."
+  },
+  {
+    "id": 3144071664,
+    "disposition": "addressed",
+    "rationale": "Added the -w flag to the T006 ripgrep command for whole-word API matching."
+  },
+  {
+    "id": 3144071666,
+    "disposition": "addressed",
+    "rationale": "Added the -w flag to the quickstart ripgrep command for whole-word API matching."
+  },
+  {
+    "id": 4177385866,
+    "disposition": "addressed",
+    "rationale": "Addressed the review summary by updating the contradictory bug-class wording and both ripgrep commands."
   }
 ]
