@@ -2280,7 +2280,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [repository, setRepository] = useState(defaultRepository);
   const [providerProfile, setProviderProfile] = useState("");
   const [branch, setBranch] = useState("");
-  const branchDefaultAppliedRepositoryRef = useRef("");
+  const [branchTouched, setBranchTouched] = useState(false);
   const [publishMode, setPublishMode] = useState(
     normalizePublishModeForSubmit(defaultPublishMode),
   );
@@ -2629,6 +2629,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     if (draft.branch) {
       setBranch(draft.branch);
+      setBranchTouched(false);
     }
     if (draft.legacyBranchWarning) {
       setSubmitMessage(draft.legacyBranchWarning);
@@ -3880,6 +3881,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return true;
     });
   }, [branchOptionsQuery.data]);
+  const defaultBranch = useMemo(() => {
+    const value = String(branchOptionsQuery.data?.defaultBranch || "").trim();
+    return value;
+  }, [branchOptionsQuery.data?.defaultBranch]);
+  const effectiveBranch =
+    branch.trim() ||
+    (!branchTouched && pageMode.mode === "create" ? defaultBranch : "");
   const selectedBranchIsStale = Boolean(
     branch.trim() &&
       branchOptionsQuery.isSuccess &&
@@ -3887,40 +3895,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         (item) => item.value === branch.trim(),
       ),
   );
-  useEffect(() => {
-    const isNewRepository =
-      branchLookupRepository &&
-      !branchDefaultAppliedRepositoryRef.current.startsWith(
-        `${branchLookupRepository}:`,
-      );
-    if (
-      !branchOptionsQuery.isSuccess ||
-      (branch.trim() && !isNewRepository)
-    ) {
-      return;
-    }
-    const defaultBranch = String(
-      branchOptionsQuery.data?.defaultBranch || "",
-    ).trim();
-    if (
-      !defaultBranch ||
-      !branchOptions.some((item) => item.value === defaultBranch)
-    ) {
-      return;
-    }
-    const defaultKey = `${branchLookupRepository}:${defaultBranch}`;
-    if (branchDefaultAppliedRepositoryRef.current === defaultKey) {
-      return;
-    }
-    branchDefaultAppliedRepositoryRef.current = defaultKey;
-    setBranch(defaultBranch);
-  }, [
-    branch,
-    branchLookupRepository,
-    branchOptions,
-    branchOptionsQuery.data?.defaultBranch,
-    branchOptionsQuery.isSuccess,
-  ]);
   const branchControlDisabled =
     !selectedRepositoryForBranchLookup.trim() ||
     !branchLookupEndpoint ||
@@ -5191,10 +5165,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             },
           }
         : {}),
-      ...(branch.trim()
+      ...(effectiveBranch
         ? {
             git: {
-              branch: branch.trim(),
+              branch: effectiveBranch,
             },
           }
         : {}),
@@ -6730,7 +6704,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   branchOptionsQuery.isLoading ? "Loading branches..." : "Branch"
                 }
                 disabled={branchControlDisabled}
-                onChange={(event) => setBranch(event.target.value)}
+                onChange={(event) => {
+                  setBranchTouched(true);
+                  setBranch(event.target.value);
+                }}
               />
             </div>
             <div
