@@ -1183,7 +1183,6 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             dispatcher,
             execution_creator=_build_jira_orchestrate_execution_creator(),
         )
-        register_deployment_update_tool_handler(dispatcher)
 
         run_store = None
         run_supervisor = None
@@ -1231,6 +1230,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 launcher=workload_launcher,
                 workflow_docker_mode=settings.workflow.workflow_docker_mode,
             )
+            register_deployment_update_tool_handler(dispatcher)
 
         bindings = build_worker_activity_bindings(
             fleet=topology.fleet,

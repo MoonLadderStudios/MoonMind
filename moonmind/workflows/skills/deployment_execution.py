@@ -19,6 +19,7 @@ DEPLOYMENT_RUNNER_MODES = frozenset(
     {"privileged_worker", "ephemeral_updater_container"}
 )
 DEPLOYMENT_UPDATE_MODES = frozenset({"changed_services", "force_recreate"})
+DEPLOYMENT_UPDATE_STACKS = frozenset({"moonmind"})
 
 
 class DesiredStateStore(Protocol):
@@ -209,58 +210,110 @@ class DeploymentUpdateExecutor:
         operator = str(context.get("operator") or context.get("principal") or "").strip()
         requested_image = _requested_image(parsed)
         resolved_digest = parsed["image"].get("resolvedDigest")
+        before_ref: str | None = None
+        after_ref: str | None = None
+        command_ref: str | None = None
+        verification_ref: str | None = None
+        verification: ComposeVerification | None = None
+        command_log: dict[str, Any] = {
+            "runnerMode": command_plan.runner_mode,
+            "pull": {"command": list(command_plan.pull_args)},
+            "up": {"command": list(command_plan.up_args)},
+        }
 
         async with await self.lock_manager.acquire(parsed["stack"]):
-            before_state = await self.runner.capture_state(
-                stack=parsed["stack"], phase="before"
-            )
-            before_ref = await self.evidence_writer.write("before-state", before_state)
+            try:
+                before_state = await self.runner.capture_state(
+                    stack=parsed["stack"], phase="before"
+                )
+                before_ref = await self.evidence_writer.write("before-state", before_state)
 
-            desired_payload = {
-                "stack": parsed["stack"],
-                "imageRepository": parsed["image"]["repository"],
-                "requestedReference": parsed["image"]["reference"],
-                "resolvedDigest": resolved_digest,
-                "reason": parsed["reason"],
-                "operator": operator or None,
-                "createdAt": _utc_now(),
-                "sourceRunId": source_run_id,
-            }
-            desired_state_ref = await self.desired_state_store.persist(desired_payload)
-
-            pull_result = await self.runner.pull(
-                stack=parsed["stack"], command=command_plan.pull_args
-            )
-            up_result = await self.runner.up(
-                stack=parsed["stack"], command=command_plan.up_args
-            )
-            command_ref = await self.evidence_writer.write(
-                "command-log",
-                {
-                    "runnerMode": command_plan.runner_mode,
-                    "pull": {"command": list(command_plan.pull_args), "result": pull_result},
-                    "up": {"command": list(command_plan.up_args), "result": up_result},
-                },
-            )
-
-            verification = await self.runner.verify(
-                stack=parsed["stack"],
-                requested_image=requested_image,
-                resolved_digest=resolved_digest,
-            )
-            verification_ref = await self.evidence_writer.write(
-                "verification",
-                {
-                    "succeeded": verification.succeeded,
-                    "details": dict(verification.details),
-                    "requestedImage": requested_image,
+                desired_payload = {
+                    "stack": parsed["stack"],
+                    "imageRepository": parsed["image"]["repository"],
+                    "requestedReference": parsed["image"]["reference"],
                     "resolvedDigest": resolved_digest,
-                },
+                    "reason": parsed["reason"],
+                    "operator": operator or None,
+                    "createdAt": _utc_now(),
+                    "sourceRunId": source_run_id,
+                }
+                await self.desired_state_store.persist(desired_payload)
+
+                pull_result = await self.runner.pull(
+                    stack=parsed["stack"], command=command_plan.pull_args
+                )
+                command_log["pull"]["result"] = pull_result
+                _ensure_command_succeeded("pull", pull_result)
+
+                up_result = await self.runner.up(
+                    stack=parsed["stack"], command=command_plan.up_args
+                )
+                command_log["up"]["result"] = up_result
+                _ensure_command_succeeded("up", up_result)
+                command_ref = await self.evidence_writer.write(
+                    "command-log", command_log
+                )
+
+                verification = await self.runner.verify(
+                    stack=parsed["stack"],
+                    requested_image=requested_image,
+                    resolved_digest=resolved_digest,
+                )
+                verification_ref = await self.evidence_writer.write(
+                    "verification",
+                    {
+                        "succeeded": verification.succeeded,
+                        "details": dict(verification.details),
+                        "requestedImage": requested_image,
+                        "resolvedDigest": resolved_digest,
+                    },
+                )
+            except Exception as exc:
+                _record_command_exception(command_log, exc)
+                raise
+            finally:
+                if (
+                    command_ref is None
+                    and ("result" in command_log["pull"] or "error" in command_log)
+                ):
+                    command_ref = await self.evidence_writer.write(
+                        "command-log", command_log
+                    )
+                if before_ref is not None:
+                    after_state = await self.runner.capture_state(
+                        stack=parsed["stack"], phase="after"
+                    )
+                    after_ref = await self.evidence_writer.write("after-state", after_state)
+
+        if verification is None:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_FAILED",
+                message="Deployment update did not complete verification.",
+                retryable=False,
+                details={"stack": parsed["stack"]},
             )
-            after_state = await self.runner.capture_state(
-                stack=parsed["stack"], phase="after"
+        if after_ref is None:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_EVIDENCE_INCOMPLETE",
+                message="Deployment update completed without after-state evidence.",
+                retryable=False,
+                details={"stack": parsed["stack"]},
             )
-            after_ref = await self.evidence_writer.write("after-state", after_state)
+        if command_ref is None:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_EVIDENCE_INCOMPLETE",
+                message="Deployment update completed without command-log evidence.",
+                retryable=False,
+                details={"stack": parsed["stack"]},
+            )
+        if verification_ref is None:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_EVIDENCE_INCOMPLETE",
+                message="Deployment update completed without verification evidence.",
+                retryable=False,
+                details={"stack": parsed["stack"]},
+            )
 
         outputs = {
             "status": "SUCCEEDED" if verification.succeeded else "FAILED",
@@ -273,7 +326,6 @@ class DeploymentUpdateExecutor:
             "afterStateArtifactRef": after_ref,
             "commandLogArtifactRef": command_ref,
             "verificationArtifactRef": verification_ref,
-            "desiredStateRef": desired_state_ref,
         }
         return ToolResult(
             status="COMPLETED" if verification.succeeded else "FAILED",
@@ -380,15 +432,24 @@ def _parse_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(image, Mapping):
         raise ToolFailure("INVALID_INPUT", "Deployment image must be an object.", False)
 
+    stack = _required_string(inputs.get("stack"), "stack")
+    if stack not in DEPLOYMENT_UPDATE_STACKS:
+        raise ToolFailure(
+            error_code="INVALID_INPUT",
+            message=f"Unsupported deployment stack '{stack}'.",
+            retryable=False,
+            details={"stack": stack, "allowed_stacks": sorted(DEPLOYMENT_UPDATE_STACKS)},
+        )
+
     parsed = {
-        "stack": _required_string(inputs.get("stack"), "stack"),
+        "stack": stack,
         "image": {
             "repository": _required_string(image.get("repository"), "image.repository"),
             "reference": _required_string(image.get("reference"), "image.reference"),
         },
         "mode": str(inputs.get("mode") or "changed_services").strip(),
-        "removeOrphans": bool(inputs.get("removeOrphans", False)),
-        "wait": bool(inputs.get("wait", True)),
+        "removeOrphans": _optional_bool(inputs, "removeOrphans", default=False),
+        "wait": _optional_bool(inputs, "wait", default=True),
         "reason": _required_string(inputs.get("reason"), "reason"),
     }
     resolved_digest = image.get("resolvedDigest")
@@ -417,6 +478,93 @@ def _required_string(value: Any, field_name: str) -> str:
     return normalized
 
 
+def _optional_bool(
+    inputs: Mapping[str, Any], field_name: str, *, default: bool
+) -> bool:
+    if field_name not in inputs:
+        return default
+    value = inputs[field_name]
+    if not isinstance(value, bool):
+        raise ToolFailure(
+            error_code="INVALID_INPUT",
+            message=f"{field_name} must be a boolean.",
+            retryable=False,
+            details={"field": field_name, "value_type": type(value).__name__},
+        )
+    return value
+
+
+def _ensure_command_succeeded(phase: str, result: Mapping[str, Any]) -> None:
+    if not isinstance(result, Mapping):
+        raise ToolFailure(
+            error_code="DEPLOYMENT_COMMAND_FAILED",
+            message=f"Deployment {phase} command returned an invalid result.",
+            retryable=False,
+            details={"phase": phase, "result_type": type(result).__name__},
+        )
+    for key in ("exitCode", "exit_code", "returncode"):
+        if key in result:
+            try:
+                code = int(result[key])
+            except (TypeError, ValueError) as exc:
+                raise ToolFailure(
+                    error_code="DEPLOYMENT_COMMAND_FAILED",
+                    message=(
+                        f"Deployment {phase} command returned a non-numeric exit code."
+                    ),
+                    retryable=False,
+                    details={"phase": phase, "field": key, "value": result[key]},
+                ) from exc
+            if code != 0:
+                raise ToolFailure(
+                    error_code="DEPLOYMENT_COMMAND_FAILED",
+                    message=f"Deployment {phase} command failed with exit code {code}.",
+                    retryable=False,
+                    details={"phase": phase, "exit_code": code, "result": dict(result)},
+                )
+            return
+    for key in ("ok", "success", "succeeded"):
+        if key in result:
+            if result[key] is not True:
+                raise ToolFailure(
+                    error_code="DEPLOYMENT_COMMAND_FAILED",
+                    message=f"Deployment {phase} command reported failure.",
+                    retryable=False,
+                    details={"phase": phase, "field": key, "result": dict(result)},
+                )
+            return
+    status = str(result.get("status") or "").strip().lower()
+    if status:
+        if status not in {"completed", "succeeded", "success", "ok"}:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_COMMAND_FAILED",
+                message=f"Deployment {phase} command reported status '{status}'.",
+                retryable=False,
+                details={"phase": phase, "status": status, "result": dict(result)},
+            )
+        return
+    raise ToolFailure(
+        error_code="DEPLOYMENT_COMMAND_FAILED",
+        message=f"Deployment {phase} command result did not include a success signal.",
+        retryable=False,
+        details={"phase": phase, "result": dict(result)},
+    )
+
+
+def _record_command_exception(command_log: dict[str, Any], exc: Exception) -> None:
+    if "error" in command_log:
+        return
+    if isinstance(exc, ToolFailure):
+        command_log["error"] = exc.to_payload()
+    else:
+        command_log["error"] = {
+            "error_code": "DEPLOYMENT_COMMAND_EXCEPTION",
+            "message": str(exc),
+            "retryable": False,
+            "details": {"type": type(exc).__name__},
+        }
+
+
 def _stable_ref(kind: str, payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     digest = hashlib.sha256(kind.encode("utf-8") + b"\0" + encoded).hexdigest()
@@ -433,6 +581,7 @@ __all__ = [
     "DeploymentUpdateExecutor",
     "DeploymentUpdateLockManager",
     "DEPLOYMENT_RUNNER_MODES",
+    "DEPLOYMENT_UPDATE_STACKS",
     "DEPLOYMENT_UPDATE_MODES",
     "DisabledComposeRunner",
     "InMemoryDesiredStateStore",

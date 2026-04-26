@@ -1,37 +1,62 @@
 [
   {
-    "id": 3142703165,
+    "id": 3142801124,
     "disposition": "addressed",
-    "rationale": "The update endpoint now queues with the normalized policy stack by passing policy.stack through DeploymentUpdateSubmission."
+    "rationale": "Deployment tool registration is now limited to the privileged agent_runtime fleet instead of every worker dispatcher, keeping stack update locking and execution on the intended deployment-capable worker boundary."
   },
   {
-    "id": 4176254410,
+    "id": 3142801125,
+    "disposition": "addressed",
+    "rationale": "Compose pull and up result mappings are now strictly checked for success signals and non-zero exit codes fail closed before later lifecycle steps."
+  },
+  {
+    "id": 3142801128,
+    "disposition": "addressed",
+    "rationale": "Deployment execution now writes command-log and after-state evidence from a finally path when runner calls fail after before-state capture."
+  },
+  {
+    "id": 3142801130,
+    "disposition": "addressed",
+    "rationale": "deployment.update_compose_stack registration moved inside the agent_runtime fleet setup block rather than using the default disabled runner on all workers."
+  },
+  {
+    "id": 3142801132,
+    "disposition": "addressed",
+    "rationale": "Command-log evidence is persisted before verification on success and in the failure cleanup path when pull or up fails."
+  },
+  {
+    "id": 4176371791,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary; actionable child feedback is tracked separately."
+    "rationale": "Top-level automated review summary; its actionable inline findings are tracked by their individual comment IDs."
   },
   {
-    "id": 3142707227,
+    "id": 3142801582,
     "disposition": "addressed",
-    "rationale": "queue_update now creates a Temporal MoonMind.Run execution record through TemporalExecutionService before returning QUEUED metadata."
+    "rationale": "The awaited first deployment task result is now assigned and asserted as COMPLETED."
   },
   {
-    "id": 3142707228,
+    "id": 3142803336,
     "disposition": "addressed",
-    "rationale": "Queued run inputs now use the canonical stack from deployment policy, with regression coverage for whitespace-normalized stack input."
+    "rationale": "_parse_inputs now rejects non-allowlisted stack names at the execution boundary with INVALID_INPUT."
   },
   {
-    "id": 4176257392,
+    "id": 3142803338,
+    "disposition": "addressed",
+    "rationale": "removeOrphans and wait now require real boolean values and reject string payloads with INVALID_INPUT."
+  },
+  {
+    "id": 3142803340,
+    "disposition": "addressed",
+    "rationale": "desiredStateRef was removed from emitted outputs so runtime output stays within the declared tool schema."
+  },
+  {
+    "id": 4176375485,
     "disposition": "not-applicable",
-    "rationale": "Top-level Codex review wrapper with no standalone requested code change."
+    "rationale": "Top-level Codex review wrapper; actionable suggestions are tracked by their individual inline comment IDs."
   },
   {
-    "id": 3142727783,
+    "id": 3142815558,
     "disposition": "addressed",
-    "rationale": "Replaced the Protocol stub ellipsis with raise NotImplementedError."
-  },
-  {
-    "id": 3142733512,
-    "disposition": "addressed",
-    "rationale": "Replaced the Protocol stub ellipsis with raise NotImplementedError as requested by the code-quality bot."
+    "rationale": "The awaited first deployment task result is now assigned and asserted as COMPLETED."
   }
 ]

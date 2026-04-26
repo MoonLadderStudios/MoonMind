@@ -65,12 +65,12 @@ class RecordingRunner:
     async def pull(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
         self.events.append("runner:pull")
         self.commands.append(("pull", command))
-        return {"stack": stack, "command": list(command)}
+        return {"stack": stack, "command": list(command), "exitCode": 0}
 
     async def up(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
         self.events.append("runner:up")
         self.commands.append(("up", command))
-        return {"stack": stack, "command": list(command)}
+        return {"stack": stack, "command": list(command), "exitCode": 0}
 
     async def verify(
         self,
@@ -143,6 +143,13 @@ def _executor(
     )
 
 
+class FailingUpRunner(RecordingRunner):
+    async def up(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+        self.events.append("runner:up")
+        self.commands.append(("up", command))
+        return {"stack": stack, "command": list(command), "exitCode": 17}
+
+
 @pytest.mark.asyncio
 async def test_same_stack_lock_contention_fails_before_side_effects() -> None:
     import asyncio
@@ -167,7 +174,8 @@ async def test_same_stack_lock_contention_fails_before_side_effects() -> None:
     assert second_executor.desired_state_store.records == []
 
     blocking_runner.release_before_capture()
-    await first_task
+    first_result = await first_task
+    assert first_result.status == "COMPLETED"
 
 
 @pytest.mark.asyncio
@@ -263,6 +271,53 @@ async def test_forbidden_runner_image_and_path_inputs_are_rejected() -> None:
 
     assert exc_info.value.error_code == "INVALID_INPUT"
     assert exc_info.value.details["fields"] == ["updaterRunnerImage"]
+
+
+@pytest.mark.asyncio
+async def test_non_allowlisted_stack_is_rejected_at_execution_boundary() -> None:
+    executor, _store, _evidence, _runner, _events = _executor()
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await executor.execute(_inputs(stack="other-stack"))
+
+    assert exc_info.value.error_code == "INVALID_INPUT"
+    assert exc_info.value.details["stack"] == "other-stack"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["removeOrphans", "wait"])
+async def test_boolean_options_must_be_real_booleans(field: str) -> None:
+    executor, _store, _evidence, _runner, _events = _executor()
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await executor.execute(_inputs(**{field: "false"}))
+
+    assert exc_info.value.error_code == "INVALID_INPUT"
+    assert exc_info.value.details["field"] == field
+    assert exc_info.value.details["value_type"] == "str"
+
+
+@pytest.mark.asyncio
+async def test_failed_command_result_stops_execution_and_persists_diagnostics() -> None:
+    events: list[str] = []
+    runner = FailingUpRunner(events)
+    executor, _store, evidence, _runner, _events = _executor(runner=runner, events=events)
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await executor.execute(_inputs())
+
+    assert exc_info.value.error_code == "DEPLOYMENT_COMMAND_FAILED"
+    assert exc_info.value.details["phase"] == "up"
+    assert "runner:verify" not in events
+    assert [kind for kind, _payload in evidence.records] == [
+        "before-state",
+        "command-log",
+        "after-state",
+    ]
+    command_payload = dict(evidence.records[1][1])
+    assert command_payload["pull"]["result"]["exitCode"] == 0
+    assert command_payload["up"]["result"]["exitCode"] == 17
+    assert command_payload["error"]["error_code"] == "DEPLOYMENT_COMMAND_FAILED"
 
 
 def test_unsupported_runner_mode_fails_closed() -> None:
