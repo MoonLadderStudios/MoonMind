@@ -201,6 +201,15 @@ async def _expand_task_template_for_child_run(
         or None
     )
     template_inputs = _coerce_mapping(task_payload.get("inputs"))
+    repository = (
+        task_payload.get("repository")
+        or parameters.get("repository")
+        or parameters.get("repo")
+    )
+    template_context: dict[str, Any] = {}
+    if isinstance(repository, str) and repository.strip():
+        template_context["repository"] = repository.strip()
+        template_context["repo"] = repository.strip()
     catalog = TaskTemplateCatalogService(session)
     expand_kwargs = {
         "slug": template_slug,
@@ -208,7 +217,7 @@ async def _expand_task_template_for_child_run(
         "scope_ref": template_scope_ref,
         "version": template_version,
         "inputs": template_inputs,
-        "context": {},
+        "context": template_context,
         "options": ExpandOptions(should_enforce_step_limit=True),
     }
     try:

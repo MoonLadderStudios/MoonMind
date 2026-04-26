@@ -1004,11 +1004,11 @@ async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
                 "linear_blocker_chain"
             )
 
-async def test_jira_breakdown_uses_first_allowed_project_as_runtime_default(
+async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "MM,OPS")
+    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "MM")
     seed_dir = (
         Path(__file__).resolve().parents[3]
         / "api_service"
@@ -1058,11 +1058,16 @@ async def test_jira_breakdown_uses_first_allowed_project_as_runtime_default(
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
 
-async def test_jira_breakdown_orchestrate_uses_first_allowed_project_as_runtime_default(
+async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "MM,OPS")
+    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "PLAT,GAME")
+    monkeypatch.setattr(
+        settings.atlassian.jira,
+        "jira_project_defaults_by_repository",
+        "ExampleOrg/Platform=PLAT,ExampleOrg/Game=GAME",
+    )
     seed_dir = (
         Path(__file__).resolve().parents[3]
         / "api_service"
@@ -1086,7 +1091,7 @@ async def test_jira_breakdown_orchestrate_uses_first_allowed_project_as_runtime_
                 for item in template["inputs"]
                 if item["name"] == "jira_project_key"
             )
-            assert project_input["default"] == "MM"
+            assert project_input["default"] is None
 
             expanded = await service.expand_template(
                 slug="jira-breakdown-orchestrate",
@@ -1095,30 +1100,170 @@ async def test_jira_breakdown_orchestrate_uses_first_allowed_project_as_runtime_
                 version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
+                    "jira_project_key": "TOOL",
                     "jira_issue_type": "Story",
                     "jira_dependency_mode": "linear_blocker_chain",
-                    "repository": "MoonLadderStudios/MoonMind",
                     "orchestration_mode": "runtime",
                     "runtime_mode": "codex_cli",
                     "publish_mode": "pr",
-                    "source_issue_key": "MM-404",
+                    "source_issue_key": "GAME-404",
                 },
-                context={},
+                context={"repository": "ExampleOrg/Game"},
             )
 
-            assert "Jira Story issue in project MM" in expanded["steps"][1][
+            assert "Jira Story issue in project GAME" in expanded["steps"][1][
                 "instructions"
             ]
             assert expanded["steps"][1]["storyOutput"] == {
                 "mode": "jira",
                 "fallback": "fail",
                 "jira": {
-                    "projectKey": "MM",
+                    "projectKey": "GAME",
                     "issueTypeName": "Story",
                     "dependencyMode": "linear_blocker_chain",
                 },
             }
+            assert expanded["steps"][2]["jiraOrchestration"]["task"]["repository"] == (
+                "ExampleOrg/Game"
+            )
+            assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "GAME"
+            assert expanded["appliedTemplate"]["inputs"]["repository"] == "ExampleOrg/Game"
+
+async def test_jira_breakdown_replaces_tool_placeholder_with_single_allowed_project(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "MM")
+    monkeypatch.setattr(
+        settings.atlassian.jira,
+        "jira_project_defaults_by_repository",
+        None,
+    )
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            expanded = await service.expand_template(
+                slug="jira-breakdown",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": "docs/Designs/RuntimeTypes.md",
+                    "jira_project_key": "TOOL",
+                    "jira_issue_type": "Story",
+                    "jira_dependency_mode": "none",
+                },
+                context={},
+            )
+
+            assert expanded["steps"][1]["storyOutput"]["jira"] == {
+                "projectKey": "MM",
+                "issueTypeName": "Story",
+                "dependencyMode": "none",
+            }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
+
+async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "PLAT,GAME")
+    monkeypatch.setattr(
+        settings.atlassian.jira,
+        "jira_project_defaults_by_repository",
+        "ExampleOrg/Platform=PLAT,ExampleOrg/Game=GAME",
+    )
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            expanded = await service.expand_template(
+                slug="jira-breakdown-orchestrate",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": "docs/Designs/RuntimeTypes.md",
+                    "jira_project_key": "PLAT",
+                    "jira_issue_type": "Story",
+                    "jira_dependency_mode": "linear_blocker_chain",
+                    "repository": "ExampleOrg/Platform",
+                    "orchestration_mode": "runtime",
+                    "runtime_mode": "codex_cli",
+                    "publish_mode": "pr",
+                    "source_issue_key": "PLAT-404",
+                },
+                context={"repository": "ExampleOrg/Game"},
+            )
+
+            assert expanded["steps"][1]["storyOutput"]["jira"]["projectKey"] == "PLAT"
+            assert expanded["steps"][2]["jiraOrchestration"]["task"]["repository"] == (
+                "ExampleOrg/Platform"
+            )
+
+async def test_jira_breakdown_requires_project_when_multiple_allowed_without_repo_policy(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "MM,OPS")
+    monkeypatch.setattr(
+        settings.atlassian.jira, "jira_project_defaults_by_repository", None
+    )
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service.get_template(
+                slug="jira-breakdown",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+            )
+            project_input = next(
+                item
+                for item in template["inputs"]
+                if item["name"] == "jira_project_key"
+            )
+            assert project_input["default"] is None
+
+            with pytest.raises(TaskTemplateValidationError):
+                await service.expand_template(
+                    slug="jira-breakdown",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={
+                        "feature_request": "docs/Designs/RuntimeTypes.md",
+                        "jira_issue_type": "Story",
+                        "jira_dependency_mode": "none",
+                    },
+                    context={},
+                )
 
 async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
     seed_dir = (

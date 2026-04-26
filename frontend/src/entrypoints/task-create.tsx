@@ -4071,6 +4071,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         : [];
       const key = name.toLowerCase();
       const isFeatureRequestKey = isFeatureRequestInputKey(name);
+      const isJiraProjectKey = key === "jira_project_key" || key === "jiraprojectkey";
+      const isRepositoryInput = key === "repository" || key === "repo";
 
       let value: unknown = null;
       let valueSource = "";
@@ -4080,7 +4082,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (isFeatureRequestKey && explicitFeatureRequest) {
         value = explicitFeatureRequest;
         valueSource = "manual";
+      } else if (isRepositoryInput && repositoryValue) {
+        value = repositoryValue;
+        valueSource = "draft";
       } else if (
+        !isJiraProjectKey &&
+        !isRepositoryInput &&
         remembered !== undefined &&
         remembered !== null &&
         String(remembered).trim() !== ""
@@ -4110,6 +4117,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
       const hasValue =
         value !== null && value !== undefined && String(value).trim() !== "";
+      if (!hasValue && required && (isJiraProjectKey || isRepositoryInput)) {
+        return;
+      }
       if (!hasValue && required) {
         if (inputType === "enum" && options.length > 0) {
           value = options[0];
@@ -4146,7 +4156,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
 
       values[name] = normalized;
-      templateInputMemoryRef.current[name] = normalized;
+      if (!isJiraProjectKey && !isRepositoryInput) {
+        templateInputMemoryRef.current[name] = normalized;
+      }
       if (valueSource === "assumed" || valueSource === "draft") {
         assumptions.push(label);
       }
@@ -4193,6 +4205,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const { values: inputs, assumptions } = resolveTemplateInputs(
         detail.inputs || [],
       );
+      const presetRuntime = runtime.trim().toLowerCase();
       const expandResponse = await fetch(
         withQueryParams(
           interpolatePath(taskTemplateExpandEndpoint, {
@@ -4213,6 +4226,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               selectedPreset.latestVersion ||
               "1.0.0",
             inputs,
+            context: {
+              repository: repository.trim() || defaultRepository,
+              repo: repository.trim() || defaultRepository,
+              targetRuntime: presetRuntime,
+            },
             options: { enforceStepLimit: true },
           }),
         },

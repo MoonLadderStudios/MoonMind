@@ -599,6 +599,7 @@ Recommended policy defaults:
 - minimal required scopes only
 - no project-admin scopes unless truly needed
 - optional allowlist of project keys inside MoonMind
+- optional repository-to-project defaults for Jira Breakdown / Jira Orchestrate presets
 - optional allowlist of tool actions per agent/runtime
 
 Potential MoonMind-side policy knobs:
@@ -608,6 +609,9 @@ jira_policy:
   allowed_projects:
     - ENG
     - OPS
+  project_defaults_by_repository:
+    ExampleOrg/Platform: ENG
+    ExampleOrg/Game: OPS
   allowed_actions:
     - create_issue
     - create_subtask
@@ -617,6 +621,13 @@ jira_policy:
     - add_comment
   require_explicit_transition_lookup: true
   deny_raw_http_mode: true
+```
+
+Environment form:
+
+```bash
+ATLASSIAN_JIRA_ALLOWED_PROJECTS="ENG,OPS"
+ATLASSIAN_JIRA_PROJECT_DEFAULTS_BY_REPOSITORY="ExampleOrg/Platform=ENG,ExampleOrg/Game=OPS"
 ```
 
 ## Error handling

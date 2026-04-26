@@ -6807,6 +6807,112 @@ describe("Task Create Entrypoint", () => {
     ]);
   });
 
+  it("does not autofill required repository template input from instructions", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith("/api/task-step-templates/speckit-demo?scope=global")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "speckit-demo",
+            scope: "global",
+            title: "Spec Kit Demo",
+            description: "Seed a repository-aware flow.",
+            latestVersion: "1.2.3",
+            version: "1.2.3",
+            inputs: [
+              {
+                name: "feature_name",
+                label: "Feature Name",
+                type: "text",
+                required: true,
+              },
+              {
+                name: "repository",
+                label: "Repository",
+                type: "text",
+                required: true,
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/task-step-templates/speckit-demo:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:speckit-demo:1.2.3:01",
+                title: "Clarify spec",
+                instructions: "Clarify the requested scope.",
+              },
+            ],
+            appliedTemplate: {
+              slug: "speckit-demo",
+              version: "1.2.3",
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(
+      <TaskCreatePage payload={withoutDefaultRepository(mockPayload)} />,
+    );
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Route Jira child tasks correctly." },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "/api/task-step-templates/speckit-demo:expand?scope=global",
+        ),
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const expandCall = fetchSpy.mock.calls
+      .filter(([url]) =>
+        String(url).startsWith(
+          "/api/task-step-templates/speckit-demo:expand?scope=global",
+        ),
+      )
+      .at(-1);
+    const request = JSON.parse(String(expandCall?.[1]?.body));
+    expect(request.inputs).toEqual({
+      feature_name: "Route Jira child tasks correctly.",
+    });
+    expect(request.inputs.repository).toBeUndefined();
+  });
+
   it("does not mutate the draft when selecting a preset before apply", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 

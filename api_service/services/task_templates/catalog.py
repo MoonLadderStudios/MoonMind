@@ -9,7 +9,7 @@ import re
 import socket
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -285,30 +285,137 @@ def _render_value(
         }
     return value
 
-def _first_allowed_jira_project_key() -> str | None:
+def _single_allowed_jira_project_key() -> str | None:
     projects = settings.atlassian.jira.jira_allowed_projects
     if not projects:
         return None
-    return projects.split(",")[0]
+    allowed = [project.strip() for project in projects.split(",") if project.strip()]
+    if len(allowed) != 1:
+        return None
+    return allowed[0]
 
 def _effective_inputs_schema(
-    *, slug: str, inputs_schema: list[dict[str, Any]]
+    *,
+    slug: str,
+    inputs_schema: list[dict[str, Any]],
+    context: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Apply runtime-derived defaults without mutating stored template versions."""
 
     if slug not in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
         return inputs_schema
 
-    project_key = _first_allowed_jira_project_key()
-    if not project_key:
-        return inputs_schema
-
+    repository = _repository_from_context(context)
+    project_key = _jira_project_default_for_context(repository)
+    repository_default = repository if slug == _JIRA_BREAKDOWN_ORCHESTRATE_SLUG else None
     effective_schema = [dict(definition) for definition in inputs_schema]
+    default_configured_repository = str(
+        settings.workflow.github_repository or ""
+    ).strip()
     for definition in effective_schema:
-        if definition.get("name") == _JIRA_BREAKDOWN_PROJECT_INPUT:
-            definition["default"] = project_key
-            break
+        name = definition.get("name")
+        if name == _JIRA_BREAKDOWN_PROJECT_INPUT:
+            if project_key:
+                definition["default"] = project_key
+            elif str(definition.get("default") or "").strip() == "TOOL":
+                definition["default"] = None
+        elif name == "repository" and repository_default:
+            definition["default"] = repository_default
+        elif name == "repository" and slug == _JIRA_BREAKDOWN_ORCHESTRATE_SLUG:
+            default_repository = str(definition.get("default") or "").strip()
+            if default_repository and default_repository == default_configured_repository:
+                definition["default"] = None
     return effective_schema
+
+def _repository_from_context(context: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(context, Mapping):
+        return None
+    for key in ("repository", "repo"):
+        value = context.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+def _jira_project_default_for_repository(repository: str | None) -> str | None:
+    if not repository:
+        return None
+    raw = settings.atlassian.jira.jira_project_defaults_by_repository
+    if not raw:
+        return None
+    normalized_repository = repository.strip().lower()
+    allowed_projects = {
+        project.strip().upper()
+        for project in str(settings.atlassian.jira.jira_allowed_projects or "").split(",")
+        if project.strip()
+    }
+    for item in raw.split(","):
+        candidate = item.strip()
+        if not candidate or "=" not in candidate:
+            continue
+        mapped_repository, mapped_project = candidate.split("=", 1)
+        project_key = mapped_project.strip().upper()
+        if mapped_repository.strip().lower() != normalized_repository:
+            continue
+        if allowed_projects and project_key not in allowed_projects:
+            raise TaskTemplateValidationError(
+                f"Configured Jira project default {project_key!r} for repository "
+                f"{repository!r} is not in ATLASSIAN_JIRA_ALLOWED_PROJECTS."
+            )
+        return project_key
+    return None
+
+def _jira_project_default_for_context(repository: str | None) -> str | None:
+    return _jira_project_default_for_repository(
+        repository
+    ) or _single_allowed_jira_project_key()
+
+
+def _apply_contextual_input_overrides(
+    *,
+    slug: str,
+    inputs_schema: list[dict[str, Any]],
+    submitted: dict[str, Any],
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if slug not in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
+        return submitted
+
+    repository = _repository_from_context(context)
+    project_key = _jira_project_default_for_context(repository)
+    if not repository and not project_key:
+        return submitted
+
+    adjusted = dict(submitted)
+    schema_defaults = _input_schema_defaults_by_name(inputs_schema)
+    if slug == _JIRA_BREAKDOWN_ORCHESTRATE_SLUG:
+        submitted_repository = str(adjusted.get("repository") or "").strip()
+        schema_repository = schema_defaults.get("repository", "")
+        if (
+            repository
+            and (not submitted_repository or submitted_repository == schema_repository)
+        ):
+            adjusted["repository"] = repository
+
+    if project_key:
+        submitted_project = str(adjusted.get(_JIRA_BREAKDOWN_PROJECT_INPUT) or "").strip()
+        schema_project = schema_defaults.get(_JIRA_BREAKDOWN_PROJECT_INPUT, "")
+        if (
+            not submitted_project
+            or submitted_project == schema_project
+            or submitted_project == "TOOL"
+        ):
+            adjusted[_JIRA_BREAKDOWN_PROJECT_INPUT] = project_key
+    return adjusted
+
+def _input_schema_defaults_by_name(inputs_schema: list[dict[str, Any]]) -> dict[str, str]:
+    return {
+        str(definition.get("name") or "").strip(): str(
+            definition.get("default") or ""
+        ).strip()
+        for definition in inputs_schema
+        if str(definition.get("name") or "").strip()
+    }
+
 
 def _serialize_template(
     *,
@@ -967,12 +1074,19 @@ class TaskTemplateCatalogService:
                         f"{_format_include_path(include_path)}."
                     )
                 try:
+                    child_schema = _effective_inputs_schema(
+                        slug=child_template.slug,
+                        inputs_schema=child_version.inputs_schema or [],
+                        context=variables.get("context"),
+                    )
                     child_inputs = self._resolve_inputs(
-                        schema=_effective_inputs_schema(
+                        schema=child_schema,
+                        submitted=_apply_contextual_input_overrides(
                             slug=child_template.slug,
-                            inputs_schema=child_version.inputs_schema or [],
+                            inputs_schema=child_schema,
+                            submitted=dict(input_mapping),
+                            context=variables.get("context"),
                         ),
-                        submitted=dict(input_mapping),
                     )
                 except TaskTemplateValidationError as exc:
                     raise TaskTemplateValidationError(
@@ -1091,16 +1205,31 @@ class TaskTemplateCatalogService:
         )
         selected_version = self._select_template_version(template, version)
 
+        effective_context = dict(context or {})
+        if not _repository_from_context(effective_context):
+            input_repository = (inputs or {}).get("repository") or (inputs or {}).get(
+                "repo"
+            )
+            if isinstance(input_repository, str) and input_repository.strip():
+                effective_context["repository"] = input_repository.strip()
+                effective_context["repo"] = input_repository.strip()
+        effective_schema = _effective_inputs_schema(
+            slug=template.slug,
+            inputs_schema=selected_version.inputs_schema or [],
+            context=effective_context,
+        )
         validated_inputs = self._resolve_inputs(
-            schema=_effective_inputs_schema(
+            schema=effective_schema,
+            submitted=_apply_contextual_input_overrides(
                 slug=template.slug,
-                inputs_schema=selected_version.inputs_schema or [],
+                inputs_schema=effective_schema,
+                submitted=dict(inputs or {}),
+                context=effective_context,
             ),
-            submitted=dict(inputs or {}),
         )
         variables = {
             "inputs": validated_inputs,
-            "context": dict(context or {}),
+            "context": effective_context,
             "now": datetime.now(UTC).isoformat(),
             "iso_today": datetime.now(UTC).date().isoformat(),
         }

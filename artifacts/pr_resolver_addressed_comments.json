@@ -13,5 +13,35 @@
     "id": 4177457338,
     "disposition": "not-applicable",
     "rationale": "Automated Codex review wrapper contained no separate actionable feedback beyond discussion_r3144162425."
+  },
+  {
+    "id": 3144190036,
+    "disposition": "addressed",
+    "rationale": "Centralized Jira project default resolution, reused it for schema defaults and submitted input overrides, and now replaces explicit TOOL placeholders with repository or single-allowed project defaults."
+  },
+  {
+    "id": 3144190038,
+    "disposition": "addressed",
+    "rationale": "Simplified the effective schema loop with mutually exclusive branches and moved configured repository lookup outside the loop."
+  },
+  {
+    "id": 4177478709,
+    "disposition": "not-applicable",
+    "rationale": "Informational review summary; the actionable child comments from this review were handled separately."
+  },
+  {
+    "id": 3144190046,
+    "disposition": "addressed",
+    "rationale": "Replaced repeated default lookups with a single schema default map built once per contextual override pass."
+  },
+  {
+    "id": 3144192988,
+    "disposition": "addressed",
+    "rationale": "Required repository inputs without a value now skip generic autofill instead of falling back to feature request or instruction text."
+  },
+  {
+    "id": 4177481852,
+    "disposition": "not-applicable",
+    "rationale": "Informational Codex review wrapper; the actionable repository autofill comment from this review was handled separately."
   }
 ]
