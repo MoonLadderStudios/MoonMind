@@ -1,32 +1,32 @@
 [
   {
-    "id": 3143105240,
+    "id": 3144190036,
     "disposition": "addressed",
-    "rationale": "Updated the canonical shimmer acceptance criteria so glyph brightening stays on the same timing as the sweep instead of a shorter independent cycle."
+    "rationale": "Centralized Jira project default resolution, reused it for schema defaults and submitted input overrides, and now replaces explicit TOOL placeholders with repository or single-allowed project defaults."
   },
   {
-    "id": 3143105242,
+    "id": 3144190038,
     "disposition": "addressed",
-    "rationale": "Changed the documented letter-cycle token to reference --mm-executing-sweep-cycle-duration, preserving phase alignment."
+    "rationale": "Simplified the effective schema loop with mutually exclusive branches and moved configured repository lookup outside the loop."
   },
   {
-    "id": 3143105244,
-    "disposition": "addressed",
-    "rationale": "Changed --mm-executing-letter-cycle-duration to var(--mm-executing-sweep-cycle-duration) and compressed the active keyframe window to 8% so the pulse feels faster without duration drift."
+    "id": 4177478709,
+    "disposition": "not-applicable",
+    "rationale": "Informational review summary; the actionable child comments from this review were handled separately."
   },
   {
-    "id": 3143105247,
+    "id": 3144190046,
     "disposition": "addressed",
-    "rationale": "Restored nested CSS fallbacks for glyph animation duration and delay: letter duration, then sweep duration, then 2200ms."
+    "rationale": "Replaced repeated default lookups with a single schema default map built once per contextual override pass."
   },
   {
-    "id": 3143105248,
+    "id": 3144192988,
     "disposition": "addressed",
-    "rationale": "Updated Mission Control CSS contract tests to assert the nested fallback logic and compressed 8% keyframe reset."
+    "rationale": "Required repository inputs without a value now skip generic autofill instead of falling back to feature request or instruction text."
   },
   {
-    "id": 4176625480,
-    "disposition": "addressed",
-    "rationale": "Addressed the summary review by keeping shimmer and letter cycles synchronized while documenting and testing the shared timing contract."
+    "id": 4177481852,
+    "disposition": "not-applicable",
+    "rationale": "Informational Codex review wrapper; the actionable repository autofill comment from this review was handled separately."
   }
 ]

@@ -1100,6 +1100,7 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
+                    "jira_project_key": "TOOL",
                     "jira_issue_type": "Story",
                     "jira_dependency_mode": "linear_blocker_chain",
                     "orchestration_mode": "runtime",
@@ -1127,6 +1128,49 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
             )
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "GAME"
             assert expanded["appliedTemplate"]["inputs"]["repository"] == "ExampleOrg/Game"
+
+async def test_jira_breakdown_replaces_tool_placeholder_with_single_allowed_project(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "MM")
+    monkeypatch.setattr(
+        settings.atlassian.jira,
+        "jira_project_defaults_by_repository",
+        None,
+    )
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            expanded = await service.expand_template(
+                slug="jira-breakdown",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": "docs/Designs/RuntimeTypes.md",
+                    "jira_project_key": "TOOL",
+                    "jira_issue_type": "Story",
+                    "jira_dependency_mode": "none",
+                },
+                context={},
+            )
+
+            assert expanded["steps"][1]["storyOutput"]["jira"] == {
+                "projectKey": "MM",
+                "issueTypeName": "Story",
+                "dependencyMode": "none",
+            }
+            assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
 
 async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
     tmp_path,

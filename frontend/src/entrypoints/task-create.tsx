@@ -4143,7 +4143,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
       const hasValue =
         value !== null && value !== undefined && String(value).trim() !== "";
-      if (!hasValue && required && isJiraProjectKey) {
+      if (!hasValue && required && (isJiraProjectKey || isRepositoryInput)) {
         return;
       }
       if (!hasValue && required) {

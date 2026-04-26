@@ -306,27 +306,23 @@ def _effective_inputs_schema(
         return inputs_schema
 
     repository = _repository_from_context(context)
-    project_key = _jira_project_default_for_repository(repository)
-    if not project_key:
-        project_key = _single_allowed_jira_project_key()
+    project_key = _jira_project_default_for_context(repository)
     repository_default = repository if slug == _JIRA_BREAKDOWN_ORCHESTRATE_SLUG else None
     effective_schema = [dict(definition) for definition in inputs_schema]
+    default_configured_repository = str(
+        settings.workflow.github_repository or ""
+    ).strip()
     for definition in effective_schema:
-        if definition.get("name") == _JIRA_BREAKDOWN_PROJECT_INPUT:
+        name = definition.get("name")
+        if name == _JIRA_BREAKDOWN_PROJECT_INPUT:
             if project_key:
                 definition["default"] = project_key
             elif str(definition.get("default") or "").strip() == "TOOL":
                 definition["default"] = None
-        if definition.get("name") == "repository" and repository_default:
+        elif name == "repository" and repository_default:
             definition["default"] = repository_default
-        elif (
-            definition.get("name") == "repository"
-            and slug == _JIRA_BREAKDOWN_ORCHESTRATE_SLUG
-        ):
+        elif name == "repository" and slug == _JIRA_BREAKDOWN_ORCHESTRATE_SLUG:
             default_repository = str(definition.get("default") or "").strip()
-            default_configured_repository = str(
-                settings.workflow.github_repository or ""
-            ).strip()
             if default_repository and default_repository == default_configured_repository:
                 definition["default"] = None
     return effective_schema
@@ -368,6 +364,12 @@ def _jira_project_default_for_repository(repository: str | None) -> str | None:
         return project_key
     return None
 
+def _jira_project_default_for_context(repository: str | None) -> str | None:
+    return _jira_project_default_for_repository(
+        repository
+    ) or _single_allowed_jira_project_key()
+
+
 def _apply_contextual_input_overrides(
     *,
     slug: str,
@@ -379,29 +381,41 @@ def _apply_contextual_input_overrides(
         return submitted
 
     repository = _repository_from_context(context)
-    if not repository:
+    project_key = _jira_project_default_for_context(repository)
+    if not repository and not project_key:
         return submitted
 
     adjusted = dict(submitted)
+    schema_defaults = _input_schema_defaults_by_name(inputs_schema)
     if slug == _JIRA_BREAKDOWN_ORCHESTRATE_SLUG:
         submitted_repository = str(adjusted.get("repository") or "").strip()
-        schema_repository = _input_schema_default(inputs_schema, "repository")
-        if not submitted_repository or submitted_repository == schema_repository:
+        schema_repository = schema_defaults.get("repository", "")
+        if (
+            repository
+            and (not submitted_repository or submitted_repository == schema_repository)
+        ):
             adjusted["repository"] = repository
 
-    project_key = _jira_project_default_for_repository(repository)
     if project_key:
         submitted_project = str(adjusted.get(_JIRA_BREAKDOWN_PROJECT_INPUT) or "").strip()
-        schema_project = _input_schema_default(inputs_schema, _JIRA_BREAKDOWN_PROJECT_INPUT)
-        if not submitted_project or submitted_project == schema_project:
+        schema_project = schema_defaults.get(_JIRA_BREAKDOWN_PROJECT_INPUT, "")
+        if (
+            not submitted_project
+            or submitted_project == schema_project
+            or submitted_project == "TOOL"
+        ):
             adjusted[_JIRA_BREAKDOWN_PROJECT_INPUT] = project_key
     return adjusted
 
-def _input_schema_default(inputs_schema: list[dict[str, Any]], name: str) -> str:
-    for definition in inputs_schema:
-        if str(definition.get("name") or "").strip() == name:
-            return str(definition.get("default") or "").strip()
-    return ""
+def _input_schema_defaults_by_name(inputs_schema: list[dict[str, Any]]) -> dict[str, str]:
+    return {
+        str(definition.get("name") or "").strip(): str(
+            definition.get("default") or ""
+        ).strip()
+        for definition in inputs_schema
+        if str(definition.get("name") or "").strip()
+    }
+
 
 def _serialize_template(
     *,
