@@ -40,7 +40,7 @@
   --mm-control-shell-hover: rgb(var(--mm-accent) / 0.12);
   --mm-control-border: rgb(var(--mm-border) / 0.78);
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
-  --mm-executing-sweep-cycle-duration: 1800ms;
+  --mm-executing-sweep-cycle-duration: 2200ms;
   --mm-executing-sweep-angle: -18deg;
   --mm-executing-sweep-band-width: 24%;
   --mm-executing-sweep-band-height: 180%;
@@ -1378,10 +1378,10 @@ tr[data-proposal-id].proposal-consuming td {
   --mm-letter-phase: calc(var(--mm-letter-phase-forward) + var(--mm-letter-phase-reverse));
   --mm-letter-delay-ratio: calc((var(--mm-letter-phase) + var(--mm-executing-letter-edge-padding)) / (var(--mm-letter-count, 1) + (var(--mm-executing-letter-edge-padding) * 2)));
   animation-name: mm-executing-letter-brighten;
-  animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 1800ms));
+  animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms));
   animation-timing-function: linear;
   animation-iteration-count: infinite;
-  animation-delay: calc(var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 1800ms)) * var(--mm-letter-delay-ratio));
+  animation-delay: calc(var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms)) * var(--mm-letter-delay-ratio));
 }
 
 @keyframes mm-executing-letter-brighten {
@@ -1401,7 +1401,7 @@ tr[data-proposal-id].proposal-consuming td {
     filter: brightness(1.14);
   }
 
-  12%,
+  8%,
   100% {
     text-shadow: none;
     filter: brightness(1);

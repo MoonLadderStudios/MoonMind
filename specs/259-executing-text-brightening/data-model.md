@@ -17,7 +17,7 @@ Validation rules:
 
 - **glyphs**: visible label split into graphemes.
 - **phase index**: glyph order adjusted to match the current left-to-right/top-left-to-bottom-right visible sweep direction.
-- **delay**: millisecond CSS custom property derived from `(phaseIndex + edgePadding) / (glyphCount + edgePadding * 2) * 1650`.
+- **delay**: CSS animation-delay derived from `(phaseIndex + edgePadding) / (glyphCount + edgePadding * 2) * var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms))`.
 
 State transitions:
 
