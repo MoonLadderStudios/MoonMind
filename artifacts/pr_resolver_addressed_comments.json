@@ -1,27 +1,22 @@
 [
   {
-    "id": 4176417120,
+    "id": 3142898352,
+    "disposition": "addressed",
+    "rationale": "Replaced index-based recent deployment action keys with keys derived from action identifiers, URLs, or stable action fields."
+  },
+  {
+    "id": 4176457752,
     "disposition": "not-applicable",
-    "rationale": "Bot review summary; no actionable request beyond the inline redaction comment tracked separately."
+    "rationale": "Top-level bot review summary; the inline recommendation it referenced was handled separately."
   },
   {
-    "id": 3142847692,
+    "id": 3142899981,
     "disposition": "addressed",
-    "rationale": "Refined sensitive value redaction to stop at common delimiters and include passwd, with regression coverage for preserving adjacent non-sensitive fields."
+    "rationale": "Changed missing or empty allowedModes metadata to default to changed_services only and added frontend coverage."
   },
   {
-    "id": 4176419798,
+    "id": 4176458909,
     "disposition": "not-applicable",
-    "rationale": "Bot review wrapper text; actionable Codex findings are tracked by their inline review comment IDs."
-  },
-  {
-    "id": 3142851408,
-    "disposition": "addressed",
-    "rationale": "Returned audit metadata is now passed through recursive redaction, with regression coverage for secret-like verification failure reasons."
-  },
-  {
-    "id": 3142851410,
-    "disposition": "addressed",
-    "rationale": "Deployment execution exceptions now force finalStatus to FAILED even after verification had set a success status, with regression coverage for post-verification evidence failures."
+    "rationale": "Top-level automated review wrapper with no independent actionable request."
   }
 ]
