@@ -933,6 +933,35 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Aregular-draft-artifact-edit?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:regular-draft-artifact-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              inputArtifactRef: "regular-draft-artifact",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Aattachment-edit?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -1034,7 +1063,7 @@ describe("Task Create Entrypoint", () => {
               },
               inputParameters: {
                 targetRuntime: "codex_cli",
-                requiredCapabilities: ["codex_cli", "git"],
+                requiredCapabilities: ["codex_cli"],
                 task: {
                   title: "Break down the Grid UI overlay plan.",
                   runtime: {
@@ -1385,6 +1414,17 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Aregular-draft-artifact-edit/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "immediate",
+              message: "Inputs updated.",
+              execution: { workflowId: "mm:regular-draft-artifact-edit" },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Aattachment-edit/update") {
           return Promise.resolve({
             ok: true,
@@ -1659,6 +1699,35 @@ describe("Task Create Entrypoint", () => {
                   },
                   publish: { mode: "pr" },
                   tool: { type: "skill", name: "speckit-orchestrate" },
+                },
+              }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/regular-draft-artifact/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                repository: "MoonLadderStudios/MoonMind",
+                requiredCapabilities: ["artifact-sibling-capability"],
+                operatorNote: "Preserve sibling field outside draft.",
+                draft: {
+                  task: {
+                    instructions: "Regular artifact draft instructions.",
+                    runtime: {
+                      mode: "codex_cli",
+                      model: "gpt-5.4",
+                      effort: "medium",
+                    },
+                  },
+                },
+                task: {
+                  instructions: "Regular artifact task instructions.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                  },
                 },
               }),
           } as Response);
@@ -3773,6 +3842,43 @@ describe("Task Create Entrypoint", () => {
     expect(
       window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
     ).toBe("Changes were scheduled for the next safe point.");
+  });
+
+  it("does not treat a regular input artifact draft key as an authoritative snapshot", async () => {
+    renderForEdit("mm:regular-draft-artifact-edit");
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Regular artifact draft instructions.");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Aregular-draft-artifact-edit/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) =>
+          String(url) ===
+          "/api/executions/mm%3Aregular-draft-artifact-edit/update",
+      )
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+    expect(request).toMatchObject({
+      updateName: "UpdateInputs",
+      parametersPatch: {
+        repository: "MoonLadderStudios/MoonMind",
+        operatorNote: "Preserve sibling field outside draft.",
+        task: {
+          instructions: "Regular artifact draft instructions.",
+        },
+      },
+    });
   });
 
   it("retains unchanged persisted attachment refs when editing an artifact-backed execution", async () => {
