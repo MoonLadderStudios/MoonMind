@@ -20,7 +20,7 @@ Implement MM-519 by adding a canonical deployment update executable tool definit
 | FR-007 | implemented_verified | valid pinned registry plan validation test in `test_deployment_tool_contracts.py` | complete | integration-style passed |
 | FR-008 | implemented_verified | invalid plan validation parameterized tests reject shell/path/runner override fields | complete | integration-style passed |
 | FR-009 | implemented_verified | `deployment_operations.py` imports shared constants; API unit test asserts name/version | complete | unit passed |
-| FR-010 | implemented_unverified | MM-519 is preserved in spec/tasks and traceability check passed; final verification pending | produce verification report | final verify |
+| FR-010 | implemented_verified | MM-519 is preserved in spec/tasks/verification and traceability check passed | complete | final verify passed |
 | DESIGN-REQ-001..009 | implemented_verified | contract helper, API binding, targeted tests, and traceability check cover the source mappings | complete | unit + integration-style passed |
 
 ## Technical Context
