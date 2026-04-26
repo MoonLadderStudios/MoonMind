@@ -1190,9 +1190,19 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         planner = _build_runtime_planner()
 
         dispatcher = SkillActivityDispatcher()
+
+        async def _read_story_output_artifact(artifact_ref: str) -> bytes:
+            _artifact, payload = await artifact_service.read(
+                artifact_id=artifact_ref,
+                principal="system:story_output",
+                allow_restricted_raw=True,
+            )
+            return payload
+
         register_story_output_tool_handlers(
             dispatcher,
             execution_creator=_build_jira_orchestrate_execution_creator(),
+            artifact_reader=_read_story_output_artifact,
         )
 
         run_store = None

@@ -367,7 +367,7 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
         "linear_blocker_chain"
     )
 
-def test_runtime_planner_uses_head_branch_for_jira_story_breakdown_from_main():
+def test_runtime_planner_jira_breakdown_treats_branch_as_base_branch():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -378,7 +378,7 @@ def test_runtime_planner_uses_head_branch_for_jira_story_breakdown_from_main():
         inputs={
             "task": {
                 "title": "Docs\\TacticsFrontend\\InitiativeOrderBar.md",
-                "instructions": "Docs\\TacticsFrontend\\InitiativeOrderBar.md",
+                "instructions": "Break down Docs\\TacticsFrontend\\InitiativeOrderBar.md.",
                 "repository": "MoonLadderStudios/Tactics",
                 "git": {"branch": "main"},
                 "runtime": {"mode": "codex_cli"},
@@ -426,6 +426,7 @@ def test_runtime_planner_uses_head_branch_for_jira_story_breakdown_from_main():
         jira["inputs"]["storyBreakdownPath"]
         == breakdown["inputs"]["storyBreakdownPath"]
     )
+    assert jira["inputs"]["startingBranch"] == "main"
 
 def test_runtime_planner_preserves_authored_branch_for_jira_story_import():
     planner = _build_runtime_planner()
@@ -1599,10 +1600,14 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     mock_binding.handler = "agent_runtime_handler"
     mock_build_bindings.return_value = [mock_binding]
 
-    with patch(
-        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
-        side_effect=_fake_session_context,
+    with (
+        patch("moonmind.workflows.temporal.worker_runtime.settings") as mock_settings,
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+            side_effect=_fake_session_context,
+        ),
     ):
+        mock_settings.workflow.workflow_docker_mode = "profiles"
         resources, handlers = await _build_runtime_activities(topology)
 
     assert handlers == [
