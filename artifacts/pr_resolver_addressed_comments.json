@@ -1,17 +1,17 @@
 [
   {
-    "id": 3144051956,
-    "disposition": "addressed",
-    "rationale": "Removed the redundant 2600ms nested fallback from the executing letter animation duration and delay so the root sweep duration variable remains the single default."
-  },
-  {
-    "id": 4177370118,
+    "id": 4177457111,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the actionable inline CSS and test feedback from the same review was handled in the code changes."
+    "rationale": "Automated review summary stated there was no feedback to address."
   },
   {
-    "id": 3144051959,
+    "id": 3144162425,
     "disposition": "addressed",
-    "rationale": "Updated the Mission Control CSS assertions to match the simplified animation-duration and animation-delay variable usage."
+    "rationale": "Planner now generates a synthetic targetBranch only when a MoonSpec breakdown step will create a new story breakdown artifact, preserving authored branch-only Jira import flows."
+  },
+  {
+    "id": 4177457338,
+    "disposition": "not-applicable",
+    "rationale": "Automated Codex review wrapper contained no separate actionable feedback beyond discussion_r3144162425."
   }
 ]
