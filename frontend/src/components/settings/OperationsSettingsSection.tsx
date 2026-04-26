@@ -84,6 +84,8 @@ const DeploymentStackStateSchema = z
             logsArtifactUrl: z.string().optional().nullable(),
             rawCommandLogUrl: z.string().optional().nullable(),
             rawCommandLogPermitted: z.boolean().optional(),
+            id: z.union([z.string(), z.number()]).optional().nullable(),
+            runId: z.string().optional().nullable(),
             beforeSummary: z.string().optional().nullable(),
             afterSummary: z.string().optional().nullable(),
           })
@@ -114,6 +116,7 @@ const ImageTargetsSchema = z
 type DeploymentStackState = z.infer<typeof DeploymentStackStateSchema>;
 type ImageTargets = z.infer<typeof ImageTargetsSchema>;
 type ImageTargetRepository = ImageTargets['repositories'][number];
+type DeploymentAction = DeploymentStackState['recentActions'][number];
 
 export interface WorkerPauseConfig {
   get: string;
@@ -159,6 +162,28 @@ function modeDescription(mode: string): string {
 function affectedServices(state: DeploymentStackState | undefined): string {
   const names = state?.services.map((service) => service.name).filter(Boolean) ?? [];
   return names.length > 0 ? names.join(', ') : 'services reported by deployment policy';
+}
+
+function deploymentActionKey(action: DeploymentAction): string {
+  return String(
+    action.id ||
+      action.runId ||
+      action.runDetailUrl ||
+      action.logsArtifactUrl ||
+      action.rawCommandLogUrl ||
+      [
+        action.startedAt,
+        action.completedAt,
+        action.requestedImage,
+        action.resolvedDigest,
+        action.operator,
+        action.reason,
+        action.status,
+      ]
+        .filter(Boolean)
+        .join('|') ||
+      'deployment-action',
+  );
 }
 
 export function OperationsSettingsSection({
@@ -321,7 +346,10 @@ export function OperationsSettingsSection({
   );
 
   const allowedModes = useMemo(
-    () => activeTargetRepository?.allowedModes ?? ['changed_services', 'force_recreate'],
+    () => {
+      const explicitModes = activeTargetRepository?.allowedModes?.filter(Boolean) ?? [];
+      return explicitModes.length > 0 ? explicitModes : ['changed_services'];
+    },
     [activeTargetRepository],
   );
 
@@ -619,9 +647,9 @@ export function OperationsSettingsSection({
                 </h5>
                 <div className="mt-3 space-y-3">
                   {deploymentState?.recentActions.length ? (
-                    deploymentState.recentActions.map((action, index) => (
+                    deploymentState.recentActions.map((action) => (
                       <div
-                        key={`${action.startedAt || action.requestedImage || 'deployment'}-${index}`}
+                        key={deploymentActionKey(action)}
                         className="rounded-2xl bg-slate-50 p-4 text-sm dark:bg-slate-800/50"
                       >
                         <div className="font-semibold text-slate-900 dark:text-white">

@@ -169,6 +169,47 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(within(card).queryByLabelText(/updater runner/i)).toBeNull();
   });
 
+  it('defaults missing deployment mode policy to changed services only', async () => {
+    fetchSpy.mockImplementation((input) => {
+      const url = String(input);
+      if (url === '/api/workers') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => workerSnapshot,
+        } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/stacks/moonmind') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => stackState,
+        } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/image-targets?stack=moonmind') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...imageTargets,
+            repositories: imageTargets.repositories.map(({ allowedModes, ...repository }) => repository),
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        statusText: `Unhandled ${url}`,
+        json: async () => ({}),
+      } as Response);
+    });
+
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /deployment update/i });
+    const mode = await within(card).findByLabelText(/update mode/i);
+    expect(within(mode).getByRole('option', { name: /restart changed services/i })).toBeTruthy();
+    expect(within(mode).queryByRole('option', { name: /force recreate all services/i })).toBeNull();
+    expect(within(card).queryByText(/recreate every service/i)).toBeNull();
+  });
+
   it('requires a reason, confirms restart details, and submits the typed deployment payload', async () => {
     renderOperations();
 
