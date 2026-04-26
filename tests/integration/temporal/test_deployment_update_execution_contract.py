@@ -54,13 +54,18 @@ class HermeticRunner:
             succeeded=True,
             updated_services=("api",),
             running_services=({"name": "api", "state": "running"},),
-            details={"requestedImage": requested_image, "resolvedDigest": resolved_digest},
+            details={
+                "requestedImage": requested_image,
+                "resolvedDigest": resolved_digest,
+            },
         )
 
 
 def _snapshot():
     return create_registry_snapshot(
-        skills=(parse_tool_definition(build_deployment_update_tool_definition_payload()),),
+        skills=(
+            parse_tool_definition(build_deployment_update_tool_definition_payload()),
+        ),
         artifact_store=InMemoryArtifactStore(),
     )
 
@@ -113,6 +118,10 @@ async def test_deployment_update_tool_dispatch_returns_structured_result() -> No
     assert result.outputs["status"] == "SUCCEEDED"
     assert result.outputs["stack"] == "moonmind"
     assert result.outputs["beforeStateArtifactRef"].startswith("art:sha256:")
+    assert result.outputs["verificationArtifactRef"].startswith("art:sha256:")
+    assert result.outputs["audit"]["finalStatus"] == "SUCCEEDED"
+    assert result.progress["state"] == "SUCCEEDED"
+    assert [event["state"] for event in result.progress["events"]][-1] == "SUCCEEDED"
     assert runner.commands[0][0] == "pull"
     assert runner.commands[1][0] == "up"
 

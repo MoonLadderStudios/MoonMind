@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Mapping, Protocol
@@ -20,6 +21,19 @@ DEPLOYMENT_RUNNER_MODES = frozenset(
 )
 DEPLOYMENT_UPDATE_MODES = frozenset({"changed_services", "force_recreate"})
 DEPLOYMENT_UPDATE_STACKS = frozenset({"moonmind"})
+DEPLOYMENT_FINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "PARTIALLY_VERIFIED"})
+_REDACTED = "[REDACTED]"
+_SENSITIVE_KEY_PATTERN = re.compile(
+    r"("
+    r"token|secret|password|passwd|credential|authorization|"
+    r"auth[_-]?header|api[_-]?key|registry[_-]?password"
+    r")",
+    re.IGNORECASE,
+)
+_SENSITIVE_VALUE_PATTERN = re.compile(
+    r"(bearer\s+[A-Za-z0-9._~+/=-]+|token=\S+|password=\S+|secret=\S+)",
+    re.IGNORECASE,
+)
 
 
 class DesiredStateStore(Protocol):
@@ -45,6 +59,7 @@ class ComposeVerification:
     updated_services: tuple[str, ...]
     running_services: tuple[Mapping[str, Any], ...]
     details: Mapping[str, Any]
+    status: str | None = None
 
 
 class ComposeRunner(Protocol):
@@ -80,7 +95,10 @@ class DeploymentUpdateLockManager:
             if normalized in self._held:
                 raise ToolFailure(
                     error_code="DEPLOYMENT_LOCKED",
-                    message=f"Deployment update for stack '{normalized}' is already running.",
+                    message=(
+                        "Deployment update for stack "
+                        f"'{normalized}' is already running."
+                    ),
                     retryable=False,
                     details={"stack": normalized},
                 )
@@ -194,12 +212,19 @@ class DeploymentUpdateExecutor:
         context: Mapping[str, Any] | None = None,
     ) -> ToolResult:
         context = dict(context or {})
+        progress_events: list[dict[str, str]] = []
+        _add_progress(progress_events, "QUEUED", "Deployment update queued.")
+        _add_progress(
+            progress_events, "VALIDATING", "Validating deployment update input."
+        )
         parsed = _parse_inputs(inputs)
         command_plan = build_compose_command_plan(
             mode=parsed["mode"],
             remove_orphans=parsed["removeOrphans"],
             wait=parsed["wait"],
-            runner_mode=str(context.get("deployment_runner_mode") or "privileged_worker"),
+            runner_mode=str(
+                context.get("deployment_runner_mode") or "privileged_worker"
+            ),
         )
         source_run_id = str(
             context.get("source_run_id")
@@ -207,27 +232,82 @@ class DeploymentUpdateExecutor:
             or context.get("workflow_id")
             or ""
         ).strip() or None
-        operator = str(context.get("operator") or context.get("principal") or "").strip()
+        operator = str(
+            context.get("operator") or context.get("principal") or ""
+        ).strip()
+        operator_role = str(
+            context.get("operator_role") or context.get("principal_role") or ""
+        ).strip()
+        workflow_id = str(context.get("workflow_id") or "").strip() or None
+        task_id = (
+            str(context.get("task_id") or context.get("workflow_task_id") or "").strip()
+            or None
+        )
         requested_image = _requested_image(parsed)
         resolved_digest = parsed["image"].get("resolvedDigest")
+        started_at = _utc_now()
         before_ref: str | None = None
         after_ref: str | None = None
         command_ref: str | None = None
         verification_ref: str | None = None
         verification: ComposeVerification | None = None
+        final_status: str | None = None
+        failure_reason: str | None = None
         command_log: dict[str, Any] = {
             "runnerMode": command_plan.runner_mode,
             "pull": {"command": list(command_plan.pull_args)},
             "up": {"command": list(command_plan.up_args)},
         }
 
+        def audit_snapshot(*, completed: bool = False) -> dict[str, Any]:
+            return _compact_mapping(
+                {
+                    "runId": source_run_id,
+                    "workflowId": workflow_id,
+                    "taskId": task_id,
+                    "stack": parsed["stack"],
+                    "operator": operator or None,
+                    "operatorRole": operator_role or None,
+                    "reason": parsed["reason"],
+                    "requestedImage": requested_image,
+                    "resolvedDigest": resolved_digest,
+                    "mode": parsed["mode"],
+                    "options": {
+                        "removeOrphans": parsed["removeOrphans"],
+                        "wait": parsed["wait"],
+                    },
+                    "startedAt": started_at,
+                    "completedAt": _utc_now() if completed else None,
+                    "finalStatus": final_status,
+                    "failureReason": failure_reason,
+                }
+            )
+
+        async def write_evidence(kind: str, payload: Mapping[str, Any]) -> str:
+            enriched = dict(payload)
+            enriched["audit"] = audit_snapshot(completed=final_status is not None)
+            return await self.evidence_writer.write(kind, _redact_sensitive(enriched))
+
+        _add_progress(
+            progress_events, "LOCK_WAITING", "Waiting for deployment update lock."
+        )
         async with await self.lock_manager.acquire(parsed["stack"]):
             try:
+                _add_progress(
+                    progress_events,
+                    "CAPTURING_BEFORE_STATE",
+                    "Capturing current deployment state.",
+                )
                 before_state = await self.runner.capture_state(
                     stack=parsed["stack"], phase="before"
                 )
-                before_ref = await self.evidence_writer.write("before-state", before_state)
+                before_ref = await write_evidence("before-state", before_state)
 
+                _add_progress(
+                    progress_events,
+                    "PERSISTING_DESIRED_STATE",
+                    "Persisting requested deployment state.",
+                )
                 desired_payload = {
                     "stack": parsed["stack"],
                     "imageRepository": parsed["image"]["repository"],
@@ -240,36 +320,50 @@ class DeploymentUpdateExecutor:
                 }
                 await self.desired_state_store.persist(desired_payload)
 
+                _add_progress(
+                    progress_events, "PULLING_IMAGES", "Pulling requested images."
+                )
                 pull_result = await self.runner.pull(
                     stack=parsed["stack"], command=command_plan.pull_args
                 )
                 command_log["pull"]["result"] = pull_result
                 _ensure_command_succeeded("pull", pull_result)
 
+                _add_progress(
+                    progress_events,
+                    "RECREATING_SERVICES",
+                    "Recreating deployment services.",
+                )
                 up_result = await self.runner.up(
                     stack=parsed["stack"], command=command_plan.up_args
                 )
                 command_log["up"]["result"] = up_result
                 _ensure_command_succeeded("up", up_result)
-                command_ref = await self.evidence_writer.write(
-                    "command-log", command_log
-                )
+                command_ref = await write_evidence("command-log", command_log)
 
+                _add_progress(progress_events, "VERIFYING", "Verifying deployed state.")
                 verification = await self.runner.verify(
                     stack=parsed["stack"],
                     requested_image=requested_image,
                     resolved_digest=resolved_digest,
                 )
-                verification_ref = await self.evidence_writer.write(
+                final_status = _verification_final_status(verification)
+                if final_status != "SUCCEEDED":
+                    failure_reason = _verification_failure_reason(verification)
+                verification_ref = await write_evidence(
                     "verification",
                     {
                         "succeeded": verification.succeeded,
+                        "status": final_status,
                         "details": dict(verification.details),
                         "requestedImage": requested_image,
                         "resolvedDigest": resolved_digest,
                     },
                 )
             except Exception as exc:
+                if final_status is None:
+                    final_status = "FAILED"
+                failure_reason = failure_reason or _failure_reason(exc)
                 _record_command_exception(command_log, exc)
                 raise
             finally:
@@ -277,14 +371,17 @@ class DeploymentUpdateExecutor:
                     command_ref is None
                     and ("result" in command_log["pull"] or "error" in command_log)
                 ):
-                    command_ref = await self.evidence_writer.write(
-                        "command-log", command_log
-                    )
+                    command_ref = await write_evidence("command-log", command_log)
                 if before_ref is not None:
+                    _add_progress(
+                        progress_events,
+                        "CAPTURING_AFTER_STATE",
+                        "Capturing deployment state after update.",
+                    )
                     after_state = await self.runner.capture_state(
                         stack=parsed["stack"], phase="after"
                     )
-                    after_ref = await self.evidence_writer.write("after-state", after_state)
+                    after_ref = await write_evidence("after-state", after_state)
 
         if verification is None:
             raise ToolFailure(
@@ -293,6 +390,8 @@ class DeploymentUpdateExecutor:
                 retryable=False,
                 details={"stack": parsed["stack"]},
             )
+        if final_status is None:
+            final_status = _verification_final_status(verification)
         if after_ref is None:
             raise ToolFailure(
                 error_code="DEPLOYMENT_EVIDENCE_INCOMPLETE",
@@ -315,23 +414,114 @@ class DeploymentUpdateExecutor:
                 details={"stack": parsed["stack"]},
             )
 
+        terminal_message = _terminal_progress_message(final_status)
+        _add_progress(progress_events, final_status, terminal_message)
         outputs = {
-            "status": "SUCCEEDED" if verification.succeeded else "FAILED",
+            "status": final_status,
             "stack": parsed["stack"],
             "requestedImage": requested_image,
             "resolvedDigest": resolved_digest,
             "updatedServices": list(verification.updated_services),
-            "runningServices": [dict(service) for service in verification.running_services],
+            "runningServices": [
+                dict(service) for service in verification.running_services
+            ],
             "beforeStateArtifactRef": before_ref,
             "afterStateArtifactRef": after_ref,
             "commandLogArtifactRef": command_ref,
             "verificationArtifactRef": verification_ref,
+            "audit": audit_snapshot(completed=True),
         }
         return ToolResult(
-            status="COMPLETED" if verification.succeeded else "FAILED",
+            status="COMPLETED" if final_status == "SUCCEEDED" else "FAILED",
             outputs=outputs,
-            progress={"percent": 100},
+            progress={
+                "percent": 100,
+                "state": final_status,
+                "message": terminal_message,
+                "events": progress_events,
+            },
         )
+
+
+def _add_progress(events: list[dict[str, str]], state: str, message: str) -> None:
+    events.append({"state": state, "message": message})
+
+
+def _verification_final_status(verification: ComposeVerification) -> str:
+    explicit = str(verification.status or "").strip().upper()
+    if explicit:
+        if explicit not in DEPLOYMENT_FINAL_STATUSES:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_VERIFICATION_INVALID",
+                message=f"Unsupported deployment verification status '{explicit}'.",
+                retryable=False,
+                details={"status": explicit},
+            )
+        if verification.succeeded and explicit != "SUCCEEDED":
+            raise ToolFailure(
+                error_code="DEPLOYMENT_VERIFICATION_INVALID",
+                message="Deployment verification status conflicts with success flag.",
+                retryable=False,
+                details={"status": explicit, "succeeded": verification.succeeded},
+            )
+        if explicit == "SUCCEEDED" and not verification.succeeded:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_VERIFICATION_INVALID",
+                message=(
+                    "Deployment verification success status conflicts "
+                    "with success flag."
+                ),
+                retryable=False,
+                details={"status": explicit, "succeeded": verification.succeeded},
+            )
+        return explicit
+    return "SUCCEEDED" if verification.succeeded else "FAILED"
+
+
+def _verification_failure_reason(verification: ComposeVerification) -> str | None:
+    details = dict(verification.details)
+    for key in ("failureReason", "failure_reason", "message", "reason"):
+        value = details.get(key)
+        if value:
+            return str(value)
+    failed_checks = details.get("failedChecks") or details.get("failed_checks")
+    if failed_checks:
+        return f"Verification checks failed: {failed_checks}"
+    if not verification.succeeded:
+        return "Deployment verification did not prove desired state."
+    return None
+
+
+def _failure_reason(exc: Exception) -> str:
+    if isinstance(exc, ToolFailure):
+        return exc.message
+    return str(exc)
+
+
+def _terminal_progress_message(status: str) -> str:
+    if status == "SUCCEEDED":
+        return "Deployment update succeeded."
+    if status == "PARTIALLY_VERIFIED":
+        return "Deployment update partially verified."
+    return "Deployment update failed."
+
+
+def _compact_mapping(payload: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _redact_sensitive(value: Any, key: str | None = None) -> Any:
+    if key and _SENSITIVE_KEY_PATTERN.search(key):
+        return _REDACTED
+    if isinstance(value, Mapping):
+        return {str(k): _redact_sensitive(v, str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_sensitive(item, key) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_sensitive(item, key) for item in value)
+    if isinstance(value, str):
+        return _SENSITIVE_VALUE_PATTERN.sub(_REDACTED, value)
+    return value
 
 
 def build_compose_command_plan(
@@ -417,7 +607,9 @@ def register_deployment_update_tool_handler(
 
 def _parse_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(inputs, Mapping):
-        raise ToolFailure("INVALID_INPUT", "Deployment inputs must be an object.", False)
+        raise ToolFailure(
+            "INVALID_INPUT", "Deployment inputs must be an object.", False
+        )
     forbidden = {"command", "composeFile", "hostPath", "updaterRunnerImage"}
     found_forbidden = sorted(forbidden.intersection(inputs.keys()))
     if found_forbidden:
@@ -438,7 +630,10 @@ def _parse_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
             error_code="INVALID_INPUT",
             message=f"Unsupported deployment stack '{stack}'.",
             retryable=False,
-            details={"stack": stack, "allowed_stacks": sorted(DEPLOYMENT_UPDATE_STACKS)},
+            details={
+                "stack": stack,
+                "allowed_stacks": sorted(DEPLOYMENT_UPDATE_STACKS),
+            },
         )
 
     parsed = {

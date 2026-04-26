@@ -94,6 +94,10 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
                     "afterStateArtifactRef": {"type": "string"},
                     "commandLogArtifactRef": {"type": "string"},
                     "verificationArtifactRef": {"type": "string"},
+                    "audit": {
+                        "type": "object",
+                        "additionalProperties": True,
+                    },
                 },
             }
         },
