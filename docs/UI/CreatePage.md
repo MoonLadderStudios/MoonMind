@@ -377,6 +377,7 @@ It exposes:
 
 - `Preset`
 - `Feature Request / Initial Instructions`
+- preset-declared option controls, including Jira project or Jira board selectors when the selected preset declares those inputs
 - objective-scoped image inputs when attachment policy is enabled
 - `Apply`
 - `Save Current Steps as Preset` when preset saving is enabled
@@ -410,6 +411,7 @@ Rules:
 - when non-empty, it is preferred over primary-step instructions for objective text resolution
 - objective-scoped attachments are the matching structured input source for this field
 - changing preset objective text or objective-scoped attachments must not silently rewrite already expanded steps
+- changing a preset-declared option such as Jira board selection must not rewrite already expanded steps until the user explicitly reapplies the preset
 
 ### 8.4 Reapply behavior
 

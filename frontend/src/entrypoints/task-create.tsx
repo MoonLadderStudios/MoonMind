@@ -359,10 +359,12 @@ interface TaskTemplateInputDefinition {
     | "boolean"
     | "user"
     | "team"
-    | "repo_path";
+    | "repo_path"
+    | "jira_board";
   required?: boolean;
   default?: unknown;
   options?: string[];
+  placeholder?: string | null;
 }
 
 interface TaskTemplateSummary {
@@ -1476,6 +1478,16 @@ function isFeatureRequestInputKey(rawKey: string): boolean {
   );
 }
 
+function isJiraProjectInputKey(rawKey: string): boolean {
+  const normalizedKey = normalizeTemplateInputKey(rawKey);
+  return normalizedKey === "jiraprojectkey";
+}
+
+function isRepositoryInputKey(rawKey: string): boolean {
+  const normalizedKey = normalizeTemplateInputKey(rawKey);
+  return normalizedKey === "repository" || normalizedKey === "repo";
+}
+
 export function resolveObjectiveInstructions(
   featureRequest: string,
   primaryInstructions: string,
@@ -2302,6 +2314,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
+  const [templateInputValues, setTemplateInputValues] = useState<
+    Record<string, string>
+  >({});
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
   const [presetReapplyNeeded, setPresetReapplyNeeded] = useState(false);
   const [appliedTemplateFeatureRequest, setAppliedTemplateFeatureRequest] =
@@ -3052,6 +3067,109 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const selectedPreset =
     templateItems.find((item) => item.key === selectedPresetKey) || null;
+  const selectedPresetDetailQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "template-detail",
+      selectedPreset?.scope,
+      selectedPreset?.scopeRef || "",
+      selectedPreset?.slug,
+    ],
+    enabled: Boolean(taskTemplateCatalogEnabled && selectedPreset),
+    queryFn: async (): Promise<TaskTemplateDetail> => {
+      if (!selectedPreset) {
+        throw new Error("Choose a preset first.");
+      }
+      const response = await fetch(
+        withQueryParams(
+          interpolatePath(taskTemplateDetailEndpoint, {
+            slug: selectedPreset.slug,
+          }),
+          {
+            scope: selectedPreset.scope,
+            scopeRef: selectedPreset.scopeRef || undefined,
+          },
+        ),
+        { headers: { Accept: "application/json" } },
+      );
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load preset details."),
+        );
+      }
+      return (await response.json()) as TaskTemplateDetail;
+    },
+  });
+  const selectedPresetInputs = selectedPresetDetailQuery.data?.inputs || [];
+  const visiblePresetInputs = selectedPresetInputs.filter(
+    (definition) => !isFeatureRequestInputKey(definition.name),
+  );
+  const presetJiraProjectInput = visiblePresetInputs.find((definition) =>
+    isJiraProjectInputKey(definition.name),
+  );
+  const presetJiraBoardInput = visiblePresetInputs.find(
+    (definition) => definition.type === "jira_board",
+  );
+  const presetJiraProjectKey = String(
+    (presetJiraProjectInput
+      ? templateInputValues[presetJiraProjectInput.name] ??
+        presetJiraProjectInput.default
+      : "") ||
+      jiraIntegration?.defaultProjectKey ||
+      "",
+  ).trim();
+  const presetNeedsJiraProjects = Boolean(
+    jiraIntegration?.enabled &&
+      (presetJiraProjectInput || presetJiraBoardInput),
+  );
+  const presetJiraProjectsQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "preset-jira",
+      "projects",
+      jiraIntegration?.endpoints.projects,
+    ],
+    enabled: presetNeedsJiraProjects,
+    queryFn: async (): Promise<JiraProject[]> => {
+      const endpoint = jiraIntegration?.endpoints.projects || "";
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load Jira projects."),
+        );
+      }
+      return readJiraItems<JiraProject>(await response.json());
+    },
+  });
+  const presetJiraBoardsQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "preset-jira",
+      "boards",
+      jiraIntegration?.endpoints.boards,
+      presetJiraProjectKey,
+    ],
+    enabled: Boolean(
+      jiraIntegration?.enabled && presetJiraBoardInput && presetJiraProjectKey,
+    ),
+    queryFn: async (): Promise<JiraBoard[]> => {
+      const endpoint = interpolatePath(
+        jiraIntegration?.endpoints.boards || "",
+        { projectKey: presetJiraProjectKey },
+      );
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load Jira boards."),
+        );
+      }
+      return readJiraItems<JiraBoard>(await response.json());
+    },
+  });
   const selectedPresetDeleteEnabled =
     taskTemplateSaveEnabled && selectedPreset?.scope === "personal";
   const deletePresetTooltip = selectedPreset
@@ -4071,16 +4189,24 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         : [];
       const key = name.toLowerCase();
       const isFeatureRequestKey = isFeatureRequestInputKey(name);
-      const isJiraProjectKey = key === "jira_project_key" || key === "jiraprojectkey";
-      const isRepositoryInput = key === "repository" || key === "repo";
+      const isJiraProjectKey = isJiraProjectInputKey(name);
+      const isRepositoryInput = isRepositoryInputKey(name);
 
       let value: unknown = null;
       let valueSource = "";
       const remembered = templateInputMemoryRef.current[name];
       const defaultValue = definition.default;
+      const explicitInputValue = templateInputValues[name];
 
       if (isFeatureRequestKey && explicitFeatureRequest) {
         value = explicitFeatureRequest;
+        valueSource = "manual";
+      } else if (
+        explicitInputValue !== undefined &&
+        explicitInputValue !== null &&
+        String(explicitInputValue).trim() !== ""
+      ) {
+        value = explicitInputValue;
         valueSource = "manual";
       } else if (isRepositoryInput && repositoryValue) {
         value = repositoryValue;
@@ -4156,7 +4282,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
 
       values[name] = normalized;
-      if (!isJiraProjectKey && !isRepositoryInput) {
+      if (!isRepositoryInput) {
         templateInputMemoryRef.current[name] = normalized;
       }
       if (valueSource === "assumed" || valueSource === "draft") {
@@ -4165,6 +4291,48 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     });
 
     return { values, assumptions };
+  }
+
+  function templateInputDisplayValue(
+    definition: TaskTemplateInputDefinition,
+  ): string {
+    const explicit = templateInputValues[definition.name];
+    if (explicit !== undefined) {
+      return explicit;
+    }
+    if (definition.type === "jira_board") {
+      return String(definition.default || jiraIntegration?.defaultBoardId || "").trim();
+    }
+    if (isJiraProjectInputKey(definition.name)) {
+      return String(
+        definition.default || jiraIntegration?.defaultProjectKey || "",
+      ).trim();
+    }
+    if (isRepositoryInputKey(definition.name)) {
+      return String(definition.default || repository || defaultRepository || "").trim();
+    }
+    return String(definition.default ?? "").trim();
+  }
+
+  function updateTemplateInputValue(
+    definition: TaskTemplateInputDefinition,
+    value: string,
+  ) {
+    const normalized = value.trim();
+    setTemplateInputValues((current) => {
+      const next = { ...current, [definition.name]: normalized };
+      if (isJiraProjectInputKey(definition.name) && presetJiraBoardInput) {
+        next[presetJiraBoardInput.name] = "";
+      }
+      return next;
+    });
+    templateInputMemoryRef.current[definition.name] = normalized;
+    if (isJiraProjectInputKey(definition.name) && presetJiraBoardInput) {
+      templateInputMemoryRef.current[presetJiraBoardInput.name] = "";
+    }
+    if (appliedTemplates.length > 0) {
+      setPresetReapplyNeeded(true);
+    }
   }
 
   async function handleApplyPreset() {
@@ -4182,26 +4350,29 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         scope: selectedPreset.scope,
         scopeRef: selectedPreset.scopeRef || undefined,
       };
-      const detailResponse = await fetch(
-        withQueryParams(
-          interpolatePath(taskTemplateDetailEndpoint, {
-            slug: selectedPreset.slug,
-          }),
-          scopeParams,
-        ),
-        {
-          headers: { Accept: "application/json" },
-        },
-      );
-      if (!detailResponse.ok) {
-        throw new Error(
-          await responseErrorMessage(
-            detailResponse,
-            "Failed to load preset details.",
+      let detail = selectedPresetDetailQuery.data;
+      if (!detail) {
+        const detailResponse = await fetch(
+          withQueryParams(
+            interpolatePath(taskTemplateDetailEndpoint, {
+              slug: selectedPreset.slug,
+            }),
+            scopeParams,
           ),
+          {
+            headers: { Accept: "application/json" },
+          },
         );
+        if (!detailResponse.ok) {
+          throw new Error(
+            await responseErrorMessage(
+              detailResponse,
+              "Failed to load preset details.",
+            ),
+          );
+        }
+        detail = (await detailResponse.json()) as TaskTemplateDetail;
       }
-      const detail = (await detailResponse.json()) as TaskTemplateDetail;
       const { values: inputs, assumptions } = resolveTemplateInputs(
         detail.inputs || [],
       );
@@ -6134,6 +6305,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 value={selectedPresetKey}
                 onChange={(event) => {
                   setSelectedPresetKey(event.target.value);
+                  setTemplateInputValues({});
                   setTemplateMessage(null);
                   setPresetReapplyNeeded(false);
                 }}
@@ -6175,6 +6347,167 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   handleTemplateFeatureRequestChange(event.target.value)
                 }
               />
+              {selectedPresetDetailQuery.isError ? (
+                <p className="notice small">Failed to load preset options.</p>
+              ) : null}
+              {visiblePresetInputs.length > 0 ? (
+                <div className="grid-2">
+                  {visiblePresetInputs.map((definition) => {
+                    const inputId = `queue-template-input-${definition.name}`;
+                    const value = templateInputDisplayValue(definition);
+                    if (
+                      isJiraProjectInputKey(definition.name) &&
+                      jiraIntegration?.enabled
+                    ) {
+                      return (
+                        <label key={definition.name} htmlFor={inputId}>
+                          {definition.label}
+                          <select
+                            id={inputId}
+                            value={value}
+                            disabled={
+                              presetJiraProjectsQuery.isLoading ||
+                              presetJiraProjectsQuery.isError
+                            }
+                            onChange={(event) =>
+                              updateTemplateInputValue(
+                                definition,
+                                event.target.value,
+                              )
+                            }
+                          >
+                            <option value="">Select project...</option>
+                            {(presetJiraProjectsQuery.data || []).map((project) => (
+                              <option
+                                key={project.projectKey}
+                                value={project.projectKey}
+                              >
+                                {project.name
+                                  ? `${project.name} (${project.projectKey})`
+                                  : project.projectKey}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      );
+                    }
+                    if (definition.type === "jira_board") {
+                      return (
+                        <label key={definition.name} htmlFor={inputId}>
+                          {definition.label}
+                          <select
+                            id={inputId}
+                            value={value}
+                            disabled={
+                              !presetJiraProjectKey ||
+                              presetJiraBoardsQuery.isLoading ||
+                              presetJiraBoardsQuery.isError
+                            }
+                            onChange={(event) =>
+                              updateTemplateInputValue(
+                                definition,
+                                event.target.value,
+                              )
+                            }
+                          >
+                            <option value="">No board selected</option>
+                            {(presetJiraBoardsQuery.data || []).map((board) => (
+                              <option key={board.id} value={board.id}>
+                                {board.name || board.id}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      );
+                    }
+                    if (definition.type === "enum") {
+                      return (
+                        <label key={definition.name} htmlFor={inputId}>
+                          {definition.label}
+                          <select
+                            id={inputId}
+                            value={value}
+                            onChange={(event) =>
+                              updateTemplateInputValue(
+                                definition,
+                                event.target.value,
+                              )
+                            }
+                          >
+                            {(definition.options || []).map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      );
+                    }
+                    if (definition.type === "boolean") {
+                      return (
+                        <label key={definition.name} htmlFor={inputId}>
+                          {definition.label}
+                          <input
+                            id={inputId}
+                            type="checkbox"
+                            checked={value === "true"}
+                            onChange={(event) =>
+                              updateTemplateInputValue(
+                                definition,
+                                event.target.checked ? "true" : "false",
+                              )
+                            }
+                          />
+                        </label>
+                      );
+                    }
+                    if (
+                      definition.type === "textarea" ||
+                      definition.type === "markdown"
+                    ) {
+                      return (
+                        <label key={definition.name} htmlFor={inputId}>
+                          {definition.label}
+                          <textarea
+                            id={inputId}
+                            value={value}
+                            placeholder={definition.placeholder || ""}
+                            onChange={(event) =>
+                              updateTemplateInputValue(
+                                definition,
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </label>
+                      );
+                    }
+                    return (
+                      <label key={definition.name} htmlFor={inputId}>
+                        {definition.label}
+                        <input
+                          id={inputId}
+                          type="text"
+                          value={value}
+                          placeholder={definition.placeholder || ""}
+                          onChange={(event) =>
+                            updateTemplateInputValue(
+                              definition,
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {presetJiraProjectsQuery.isError ? (
+                <p className="notice small">Failed to load Jira projects.</p>
+              ) : null}
+              {presetJiraBoardsQuery.isError ? (
+                <p className="notice small">Failed to load Jira boards.</p>
+              ) : null}
               {attachmentPolicy.enabled ? (
                 <div className="queue-step-attachments">
                   <label>

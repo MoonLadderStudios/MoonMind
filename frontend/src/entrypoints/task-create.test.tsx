@@ -4945,6 +4945,125 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
+  it("passes a preset-selected Jira board into Jira Breakdown expansion", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "jira-breakdown",
+                scope: "global",
+                title: "Jira Breakdown",
+                description: "Create Jira stories from a breakdown.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/task-step-templates/jira-breakdown?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "jira-breakdown",
+            scope: "global",
+            title: "Jira Breakdown",
+            description: "Create Jira stories from a breakdown.",
+            latestVersion: "1.0.0",
+            version: "1.0.0",
+            inputs: [
+              {
+                name: "feature_request",
+                label: "Declarative Design Path or Text",
+                type: "markdown",
+                required: true,
+              },
+              {
+                name: "jira_project_key",
+                label: "Jira Project Key",
+                type: "text",
+                required: true,
+                default: "ENG",
+              },
+              {
+                name: "jira_board_id",
+                label: "Jira Board",
+                type: "jira_board",
+                required: false,
+                default: "42",
+              },
+              {
+                name: "jira_dependency_mode",
+                label: "Jira Dependency Mode",
+                type: "enum",
+                required: true,
+                default: "none",
+                options: ["none", "linear_blocker_chain"],
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith("/api/task-step-templates/jira-breakdown:expand?scope=global")
+      ) {
+        const body = JSON.parse(String(init?.body || "{}"));
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:jira-breakdown:1.0.0:01",
+                title: "Create Jira stories",
+                instructions: `Selected Jira board ID: ${body.inputs.jira_board_id}`,
+              },
+            ],
+            appliedTemplate: {
+              slug: "jira-breakdown",
+              version: "1.0.0",
+              inputs: body.inputs,
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const boardSelect = (await screen.findByLabelText(
+      "Jira Board",
+    )) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        Array.from(boardSelect.options).some((option) => option.value === "7"),
+      ).toBe(true);
+    });
+    fireEvent.change(boardSelect, { target: { value: "7" } });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      { target: { value: "docs/Design.md" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    await waitFor(() => {
+      const expandCall = fetchSpy.mock.calls.find(([url]) =>
+        String(url).startsWith(
+          "/api/task-step-templates/jira-breakdown:expand?scope=global",
+        ),
+      );
+      expect(expandCall).toBeTruthy();
+      const body = JSON.parse(String(expandCall?.[1]?.body || "{}"));
+      expect(body.inputs.jira_board_id).toBe("7");
+    });
+  });
+
   it("preserves draft publish mode in edit mode when Jira Breakdown is the selected preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
