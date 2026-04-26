@@ -72,25 +72,49 @@ _PR_RESOLVER_BLOCKED_STATUSES: frozenset[str] = frozenset(
     {"blocked", "attempts_exhausted"}
 )
 _PR_RESOLVER_MERGED_STATUSES: frozenset[str] = frozenset({"merged"})
+_PR_RESOLVER_TERMINAL_STATUSES: frozenset[str] = (
+    _PR_RESOLVER_FAILURE_STATUSES | _PR_RESOLVER_MERGED_STATUSES
+)
+
+
+def _normalize_pr_resolver_text(value: Any) -> str:
+    """Return one normalized resolver status candidate."""
+
+    return str(value or "").strip().lower()
+
+
+def _first_terminal_pr_resolver_status(*values: Any) -> str:
+    """Prefer known terminal resolver statuses over informational outcomes."""
+
+    normalized = [_normalize_pr_resolver_text(value) for value in values]
+    for candidate in normalized:
+        if candidate in _PR_RESOLVER_TERMINAL_STATUSES:
+            return candidate
+    for candidate in normalized:
+        if candidate:
+            return candidate
+    return ""
 
 
 def _pr_resolver_status(payload: dict[str, Any]) -> str:
     """Return the normalized terminal status from known resolver artifacts."""
 
-    status = str(
-        payload.get("status") or payload.get("merge_outcome") or ""
-    ).strip().lower()
+    status = _first_terminal_pr_resolver_status(
+        payload.get("status"),
+        payload.get("merge_outcome"),
+        payload.get("outcome"),
+    )
     if status:
         return status
 
     final = _pr_resolver_final_payload(payload)
     if final:
-        return str(
-            final.get("state")
-            or final.get("status")
-            or final.get("merge_outcome")
-            or ""
-        ).strip().lower()
+        return _first_terminal_pr_resolver_status(
+            final.get("state"),
+            final.get("status"),
+            final.get("merge_outcome"),
+            final.get("outcome"),
+        )
     return ""
 
 
@@ -331,9 +355,15 @@ def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
         payload.get("head_sha"),
         payload.get("latestHeadSha"),
         payload.get("latest_head_sha"),
+        payload.get("headOid"),
+        payload.get("head_oid"),
         final.get("headRefOid"),
-        final.get("head_sha"),
         final.get("headSha"),
+        final.get("head_sha"),
+        final.get("latestHeadSha"),
+        final.get("latest_head_sha"),
+        final.get("headOid"),
+        final.get("head_oid"),
     )
     if head_sha:
         metadata["headSha"] = head_sha
