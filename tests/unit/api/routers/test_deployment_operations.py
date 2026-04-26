@@ -13,6 +13,10 @@ from api_service.api.routers.deployment_operations import (
     router,
 )
 from api_service.auth_providers import get_current_user
+from moonmind.workflows.skills.deployment_tools import (
+    DEPLOYMENT_UPDATE_TOOL_NAME,
+    DEPLOYMENT_UPDATE_TOOL_VERSION,
+)
 
 
 class _FakeExecutionRecord:
@@ -109,11 +113,12 @@ def test_admin_can_submit_policy_valid_deployment_update(
     request = execution_service.requests[0]
     assert request["workflow_type"] == "MoonMind.Run"
     assert request["owner_type"] == "user"
-    assert request["integration"] == "deployment.update_compose_stack"
+    assert request["integration"] == DEPLOYMENT_UPDATE_TOOL_NAME
     parameters = request["initial_parameters"]
     assert isinstance(parameters, dict)
     plan = parameters["task"]["plan"]
-    assert plan[0]["tool"]["name"] == "deployment.update_compose_stack"
+    assert plan[0]["tool"]["name"] == DEPLOYMENT_UPDATE_TOOL_NAME
+    assert plan[0]["tool"]["version"] == DEPLOYMENT_UPDATE_TOOL_VERSION
     assert plan[0]["inputs"]["stack"] == "moonmind"
 
 

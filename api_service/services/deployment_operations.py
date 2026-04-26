@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
+from moonmind.workflows.skills.deployment_tools import (
+    DEPLOYMENT_UPDATE_TOOL_NAME,
+    DEPLOYMENT_UPDATE_TOOL_VERSION,
+)
+
 
 _IMAGE_REFERENCE_PATTERN = re.compile(
     r"^(?:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|sha256:[A-Fa-f0-9]{64})$"
@@ -167,7 +172,7 @@ class DeploymentOperationsService:
                 submission=submission,
             ),
             repository=None,
-            integration="deployment.update_compose_stack",
+            integration=DEPLOYMENT_UPDATE_TOOL_NAME,
             summary=(
                 f"Policy-gated deployment update for {policy.stack} to "
                 f"{submission.repository}:{submission.reference}."
@@ -199,7 +204,7 @@ class DeploymentOperationsService:
                 "instructions": (
                     "Run the policy-gated deployment update operation for "
                     f"stack '{policy.stack}' using the typed "
-                    "deployment.update_compose_stack tool contract."
+                    f"{DEPLOYMENT_UPDATE_TOOL_NAME} tool contract."
                 ),
                 "operation": {
                     "type": "deployment.update",
@@ -212,8 +217,8 @@ class DeploymentOperationsService:
                         "title": "Update MoonMind deployment",
                         "tool": {
                             "type": "skill",
-                            "name": "deployment.update_compose_stack",
-                            "version": "1.0.0",
+                            "name": DEPLOYMENT_UPDATE_TOOL_NAME,
+                            "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
                         },
                         "inputs": {
                             "stack": policy.stack,
