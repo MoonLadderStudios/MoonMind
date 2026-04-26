@@ -759,9 +759,9 @@ def _build_runtime_planner():
                 existing={**story_output_payload, **node_inputs},
             )
             node_inputs.update(story_paths)
-            if story_output_mode == "jira" and not (
-                node_inputs.get("targetBranch") or node_inputs.get("branch")
-            ):
+            if story_output_mode == "jira" and not node_inputs.get("targetBranch"):
+                if node_inputs.get("branch") and not node_inputs.get("startingBranch"):
+                    node_inputs["startingBranch"] = node_inputs["branch"]
                 prefix = _derive_pr_branch_prefix(
                     task_payload=task_payload,
                     publish_payload=publish_payload,
@@ -1179,9 +1179,19 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         planner = _build_runtime_planner()
 
         dispatcher = SkillActivityDispatcher()
+
+        async def _read_story_output_artifact(artifact_ref: str) -> bytes:
+            _artifact, payload = await artifact_service.read(
+                artifact_id=artifact_ref,
+                principal="system:story_output",
+                allow_restricted_raw=True,
+            )
+            return payload
+
         register_story_output_tool_handlers(
             dispatcher,
             execution_creator=_build_jira_orchestrate_execution_creator(),
+            artifact_reader=_read_story_output_artifact,
         )
 
         run_store = None
