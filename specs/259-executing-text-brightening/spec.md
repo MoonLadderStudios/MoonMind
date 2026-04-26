@@ -35,7 +35,7 @@ The cleanest patch: implement the glyph-span component and keep the existing bro
 **Acceptance Scenarios**:
 
 1. **Given** a task-list table row or card row is executing, **When** the status pill renders, **Then** the visible label is represented by one hidden visual glyph span containing one styled span per grapheme.
-2. **Given** an executing task-list status pill is rendered, **When** the letter wave is active, **Then** each glyph receives a deterministic CSS delay so the brightening wave enters and exits smoothly with edge padding.
+2. **Given** an executing task-list status pill is rendered, **When** the letter wave is active, **Then** each glyph receives a deterministic CSS delay so the brightening wave crosses quickly inside the shared outer cycle and remains inactive until the next cycle.
 3. **Given** the executing status pill renders its glyph layer, **When** assistive technology reads the pill, **Then** it receives the complete status phrase from the parent label rather than individual letters.
 4. **Given** a task-list status is not executing, **When** the pill renders, **Then** it keeps the existing plain status text and does not receive glyph-wave markup or executing shimmer metadata.
 5. **Given** reduced-motion preference is active, **When** executing pills are visible, **Then** the physical sweep and glyph brightening animations are disabled while the active executing treatment remains recognizable.
@@ -75,7 +75,7 @@ The cleanest patch: implement the glyph-span component and keep the existing bro
 - **FR-003**: The text-brightening layer MUST be CSS-driven and MUST NOT use a JavaScript animation loop or periodic React rerender.
 - **FR-004**: The executing text-brightening layer MUST render one visual glyph span per visible grapheme.
 - **FR-005**: The glyph splitting MUST use platform grapheme segmentation when available and fall back safely when it is not.
-- **FR-006**: The glyph brightening animation MUST use `--mm-executing-sweep-cycle-duration` with the configured sweep fallback and per-glyph delays with edge padding.
+- **FR-006**: The glyph brightening animation MUST use `--mm-executing-sweep-cycle-duration` with the configured sweep fallback as the outer cycle, with per-glyph delays constrained to a faster active text-sweep window followed by an inactive tail.
 - **FR-007**: The executing glyph layer MUST be hidden from assistive technology while the parent status pill exposes the full readable label.
 - **FR-008**: Reduced-motion styling MUST disable glyph brightening animation, text shadow, and filter effects.
 - **FR-009**: Executing status detection MUST continue to use `executionStatusPillProps()` as the central selector contract.

@@ -7,7 +7,7 @@
 
 ## Summary
 
-Add a task-list `ExecutionStatusPill` component that keeps status normalization in `executionStatusPillProps()`, renders non-executing states as plain text, and renders executing states as a parent status pill with an accessible label plus hidden per-grapheme visual spans. Replace the task-list table and card status span call sites with the component. Update Mission Control CSS so the existing executing physical sweep remains on the host and the new glyph spans run a CSS-only brightening pulse using the shared sweep duration token. Validate with focused Vitest coverage, typecheck, lint, and the repo unit runner where available.
+Add a task-list `ExecutionStatusPill` component that keeps status normalization in `executionStatusPillProps()`, renders non-executing states as plain text, and renders executing states as a parent status pill with an accessible label plus hidden per-grapheme visual spans. Replace the task-list table and card status span call sites with the component. Update Mission Control CSS so the existing executing physical sweep remains on the host and the new glyph spans run a CSS-only brightening pulse using the shared sweep duration token as the outer cycle, with a faster active text-sweep window and inactive tail. Validate with focused Vitest coverage, typecheck, lint, and the repo unit runner where available.
 
 ## Requirement Status
 
@@ -18,7 +18,7 @@ Add a task-list `ExecutionStatusPill` component that keeps status normalization 
 | FR-003 | implemented_verified | CSS keyframes and no timer/state animation in `ExecutionStatusPill.tsx` | complete | typecheck + lint passed |
 | FR-004 | implemented_verified | `.status-letter-wave__glyph` render assertions | complete | integration test passed |
 | FR-005 | implemented_verified | `Intl.Segmenter` with `Array.from` fallback in component | complete | typecheck passed |
-| FR-006 | implemented_verified | `--mm-executing-sweep-cycle-duration` CSS and per-glyph delay assertions | complete | CSS unit + integration tests passed |
+| FR-006 | implemented_verified | `--mm-executing-sweep-cycle-duration`, active-window ratio CSS, and per-glyph delay assertions | complete | CSS unit + integration tests passed |
 | FR-007 | implemented_verified | `aria-label` and `aria-hidden` task-list assertions | complete | integration test passed |
 | FR-008 | implemented_verified | reduced-motion glyph suppression assertions | complete | CSS unit test passed |
 | FR-009 | implemented_verified | component delegates to `executionStatusPillProps()` | complete | integration test passed |
