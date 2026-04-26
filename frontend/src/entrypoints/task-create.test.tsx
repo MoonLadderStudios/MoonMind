@@ -933,6 +933,35 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Aregular-draft-artifact-edit?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:regular-draft-artifact-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              inputArtifactRef: "regular-draft-artifact",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Aattachment-edit?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -998,6 +1027,104 @@ describe("Task Create Entrypoint", () => {
                   },
                   publish: { mode: "pr" },
                   tool: { type: "skill", name: "speckit-orchestrate" },
+                },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Acomplex-rerun?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:complex-rerun",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              targetSkill: "jira-breakdown-orchestrate",
+              taskSkills: ["jira-breakdown-orchestrate"],
+              profileId: "codex_default",
+              model: "gpt-5.5",
+              effort: "high",
+              repository: "MoonLadderStudios/Tactics",
+              publishMode: "none",
+              inputArtifactRef: "complex-input",
+              taskInputSnapshot: {
+                available: true,
+                artifactRef: "complex-rerun-snapshot",
+                snapshotVersion: 1,
+                sourceKind: "create",
+                reconstructionMode: "authoritative",
+                disabledReasons: {},
+                fallbackEvidenceRefs: [],
+              },
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                requiredCapabilities: ["codex_cli"],
+                task: {
+                  title: "Break down the Grid UI overlay plan.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.5",
+                    effort: "high",
+                    profileId: "codex_default",
+                  },
+                  git: { branch: "main" },
+                  publish: { mode: "none" },
+                  tool: {
+                    type: "skill",
+                    name: "jira-breakdown-orchestrate",
+                    version: "1.0",
+                  },
+                  skill: {
+                    name: "jira-breakdown-orchestrate",
+                    version: "1.0",
+                  },
+                  steps: [
+                    {
+                      id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                      title: "Break down declarative design",
+                      instructions: "Break down the Grid UI overlay plan.",
+                      skill: {
+                        id: "moonspec-breakdown",
+                        requiredCapabilities: ["git"],
+                      },
+                    },
+                    {
+                      id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                      title: "Create Jira stories",
+                      skill: { id: "story.create_jira_issues" },
+                      storyOutput: {
+                        mode: "jira",
+                        fallback: "fail",
+                        jira: {
+                          projectKey: "MM",
+                          issueTypeName: "Story",
+                          dependencyMode: "linear_blocker_chain",
+                        },
+                      },
+                    },
+                    {
+                      id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                      title: "Create dependent Jira Orchestrate tasks",
+                      skill: { id: "story.create_jira_orchestrate_tasks" },
+                      jiraOrchestration: {
+                        task: {
+                          repository: "MoonLadderStudios/MoonMind",
+                          orchestrationMode: "runtime",
+                          runtime: { mode: "codex_cli" },
+                          publish: {
+                            mode: "pr",
+                            mergeAutomation: { enabled: true },
+                          },
+                        },
+                        traceability: { sourceIssueKey: "" },
+                      },
+                    },
+                  ],
                 },
               },
               actions: {
@@ -1287,6 +1414,17 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Aregular-draft-artifact-edit/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "immediate",
+              message: "Inputs updated.",
+              execution: { workflowId: "mm:regular-draft-artifact-edit" },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Aattachment-edit/update") {
           return Promise.resolve({
             ok: true,
@@ -1306,6 +1444,18 @@ describe("Task Create Entrypoint", () => {
               applied: "continue_as_new",
               message: "Rerun requested. New execution created.",
               execution: { workflowId: "mm:rerun-created" },
+              continueAsNewCause: "manual_rerun",
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Acomplex-rerun/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "continue_as_new",
+              message: "Rerun requested. New execution created.",
+              execution: { workflowId: "mm:complex-rerun-created" },
               continueAsNewCause: "manual_rerun",
             }),
           } as Response);
@@ -1553,6 +1703,35 @@ describe("Task Create Entrypoint", () => {
               }),
           } as Response);
         }
+        if (url === "/api/artifacts/regular-draft-artifact/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                repository: "MoonLadderStudios/MoonMind",
+                requiredCapabilities: ["artifact-sibling-capability"],
+                operatorNote: "Preserve sibling field outside draft.",
+                draft: {
+                  task: {
+                    instructions: "Regular artifact draft instructions.",
+                    runtime: {
+                      mode: "codex_cli",
+                      model: "gpt-5.4",
+                      effort: "medium",
+                    },
+                  },
+                },
+                task: {
+                  instructions: "Regular artifact task instructions.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                  },
+                },
+              }),
+          } as Response);
+        }
         if (url === "/api/artifacts/attachment-snapshot/download") {
           return Promise.resolve({
             ok: true,
@@ -1613,6 +1792,139 @@ describe("Task Create Entrypoint", () => {
                     stepOrdinal: 0,
                   },
                 ],
+              }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/complex-rerun-snapshot/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                snapshotVersion: 1,
+                source: { kind: "create" },
+                draft: {
+                  repository: "MoonLadderStudios/Tactics",
+                  requiredCapabilities: ["codex_cli", "git"],
+                  targetRuntime: "codex_cli",
+                  taskShape: "multi_step",
+                  task: {
+                    title: "Break down the Grid UI overlay plan.",
+                    instructions: "Break down the Grid UI overlay plan.",
+                    runtime: {
+                      mode: "codex_cli",
+                      model: "gpt-5.5",
+                      effort: "high",
+                      profileId: "codex_default",
+                    },
+                    git: { branch: "main" },
+                    publish: { mode: "none" },
+                    tool: {
+                      type: "skill",
+                      name: "jira-breakdown-orchestrate",
+                      version: "1.0",
+                      requiredCapabilities: ["git"],
+                    },
+                    skill: {
+                      id: "jira-breakdown-orchestrate",
+                      args: {},
+                      requiredCapabilities: ["git"],
+                    },
+                    skills: {
+                      include: [{ name: "jira-breakdown-orchestrate" }],
+                    },
+                    appliedStepTemplates: [
+                      {
+                        slug: "jira-breakdown-orchestrate",
+                        version: "1.0.0",
+                        inputs: {
+                          feature_request: "Break down the Grid UI overlay plan.",
+                          jira_project_key: "MM",
+                          jira_issue_type: "Story",
+                          jira_dependency_mode: "linear_blocker_chain",
+                          repository: "MoonLadderStudios/MoonMind",
+                          orchestration_mode: "runtime",
+                          runtime_mode: "codex_cli",
+                          publish_mode: "pr",
+                          source_issue_key: "",
+                        },
+                        stepIds: [
+                          "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                          "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                          "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                        ],
+                        appliedAt: "2026-04-26T19:29:23.784091+00:00",
+                        capabilities: ["git"],
+                      },
+                    ],
+                    steps: [
+                      {
+                        id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                        title: "Break down declarative design",
+                        instructions: "Break down the Grid UI overlay plan.",
+                        tool: {
+                          type: "skill",
+                          name: "moonspec-breakdown",
+                          version: "1.0",
+                          requiredCapabilities: ["git"],
+                        },
+                        skill: {
+                          id: "moonspec-breakdown",
+                          args: {},
+                          requiredCapabilities: ["git"],
+                        },
+                      },
+                      {
+                        id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                        title: "Create Jira stories",
+                        tool: {
+                          type: "skill",
+                          name: "story.create_jira_issues",
+                          version: "1.0",
+                          inputs: {},
+                        },
+                        skill: {
+                          id: "story.create_jira_issues",
+                          args: {},
+                        },
+                        storyOutput: {
+                          mode: "jira",
+                          fallback: "fail",
+                          jira: {
+                            projectKey: "MM",
+                            issueTypeName: "Story",
+                            dependencyMode: "linear_blocker_chain",
+                          },
+                        },
+                      },
+                      {
+                        id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                        title: "Create dependent Jira Orchestrate tasks",
+                        tool: {
+                          type: "skill",
+                          name: "story.create_jira_orchestrate_tasks",
+                          version: "1.0",
+                          inputs: {},
+                        },
+                        skill: {
+                          id: "story.create_jira_orchestrate_tasks",
+                          args: {},
+                        },
+                        jiraOrchestration: {
+                          task: {
+                            repository: "MoonLadderStudios/MoonMind",
+                            orchestrationMode: "runtime",
+                            runtime: { mode: "codex_cli" },
+                            publish: {
+                              mode: "pr",
+                              mergeAutomation: { enabled: true },
+                            },
+                          },
+                          traceability: { sourceIssueKey: "" },
+                        },
+                      },
+                    ],
+                  },
+                },
               }),
           } as Response);
         }
@@ -2952,6 +3264,107 @@ describe("Task Create Entrypoint", () => {
     ).toBe("Rerun was requested and the latest execution view is ready.");
   });
 
+  it("preserves authoritative snapshot details when requesting a complex rerun", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Acomplex-rerun",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(
+          ([url]) => String(url) === "/api/artifacts/complex-rerun-snapshot/download",
+        ),
+      ).toBeTruthy();
+      expect(
+        (screen.getAllByLabelText("Instructions")[0] as HTMLTextAreaElement)
+          .value,
+      ).toBe("Break down the Grid UI overlay plan.");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Rerun Task" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Acomplex-rerun/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions/mm%3Acomplex-rerun/update")
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+
+    expect(request).toMatchObject({
+      updateName: "RequestRerun",
+      parametersPatch: {
+        repository: "MoonLadderStudios/Tactics",
+        requiredCapabilities: ["codex_cli", "git"],
+        targetRuntime: "codex_cli",
+        task: {
+          appliedStepTemplates: [
+            expect.objectContaining({
+              slug: "jira-breakdown-orchestrate",
+              inputs: expect.objectContaining({
+                jira_dependency_mode: "linear_blocker_chain",
+                orchestration_mode: "runtime",
+                publish_mode: "pr",
+              }),
+              stepIds: [
+                "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                "tpl:jira-breakdown-orchestrate:1.0.0:03",
+              ],
+            }),
+          ],
+          steps: [
+            expect.objectContaining({
+              id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+              tool: expect.objectContaining({
+                name: "moonspec-breakdown",
+                requiredCapabilities: ["git"],
+              }),
+              skill: expect.objectContaining({
+                id: "moonspec-breakdown",
+                requiredCapabilities: ["git"],
+              }),
+            }),
+            expect.objectContaining({
+              id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+              storyOutput: {
+                mode: "jira",
+                fallback: "fail",
+                jira: {
+                  projectKey: "MM",
+                  issueTypeName: "Story",
+                  dependencyMode: "linear_blocker_chain",
+                },
+              },
+            }),
+            expect.objectContaining({
+              id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+              jiraOrchestration: {
+                task: {
+                  repository: "MoonLadderStudios/MoonMind",
+                  orchestrationMode: "runtime",
+                  runtime: { mode: "codex_cli" },
+                  publish: {
+                    mode: "pr",
+                    mergeAutomation: { enabled: true },
+                  },
+                },
+                traceability: { sourceIssueKey: "" },
+              },
+            }),
+          ],
+        },
+      },
+    });
+  });
+
   it("shows backend stale-state failures without redirecting from rerun mode", async () => {
     window.history.pushState(
       {},
@@ -3429,6 +3842,43 @@ describe("Task Create Entrypoint", () => {
     expect(
       window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
     ).toBe("Changes were scheduled for the next safe point.");
+  });
+
+  it("does not treat a regular input artifact draft key as an authoritative snapshot", async () => {
+    renderForEdit("mm:regular-draft-artifact-edit");
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Regular artifact draft instructions.");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Aregular-draft-artifact-edit/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) =>
+          String(url) ===
+          "/api/executions/mm%3Aregular-draft-artifact-edit/update",
+      )
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+    expect(request).toMatchObject({
+      updateName: "UpdateInputs",
+      parametersPatch: {
+        repository: "MoonLadderStudios/MoonMind",
+        operatorNote: "Preserve sibling field outside draft.",
+        task: {
+          instructions: "Regular artifact draft instructions.",
+        },
+      },
+    });
   });
 
   it("retains unchanged persisted attachment refs when editing an artifact-backed execution", async () => {
