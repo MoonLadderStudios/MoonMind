@@ -18,7 +18,9 @@ from moonmind.workflows.skills.tool_registry import create_registry_snapshot
 
 def _snapshot():
     return create_registry_snapshot(
-        skills=(parse_tool_definition(build_deployment_update_tool_definition_payload()),),
+        skills=(
+            parse_tool_definition(build_deployment_update_tool_definition_payload()),
+        ),
         artifact_store=InMemoryArtifactStore(),
     )
 
@@ -65,7 +67,9 @@ def _valid_plan_payload(snapshot) -> dict[str, object]:
 
 
 def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
-    definition = parse_tool_definition(build_deployment_update_tool_definition_payload())
+    definition = parse_tool_definition(
+        build_deployment_update_tool_definition_payload()
+    )
 
     assert definition.name == DEPLOYMENT_UPDATE_TOOL_NAME
     assert definition.version == DEPLOYMENT_UPDATE_TOOL_VERSION
@@ -108,9 +112,11 @@ def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
         "PARTIALLY_VERIFIED",
     ]
     assert "verificationArtifactRef" in output_schema["properties"]
+    assert "audit" in output_schema["properties"]
 
 
-def test_representative_deployment_update_plan_validates_against_registry_snapshot() -> None:
+def test_representative_deployment_update_plan_validates_against_registry_snapshot(
+) -> None:
     snapshot = _snapshot()
     validated = validate_plan_payload(
         payload=_valid_plan_payload(snapshot),
