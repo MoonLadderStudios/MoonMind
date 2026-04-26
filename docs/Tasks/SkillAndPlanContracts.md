@@ -505,17 +505,21 @@ the planner may use the narrower deterministic batch tool:
  "dependencyMode": "linear_blocker_chain"
  }
  },
+ "storyBreakdownArtifactRef": "art_01ABC...",
  "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json"
  }
 }
 ```
 
 `story.create_jira_issues` is backed by `mm.tool.execute` and requires
-`integration:jira`. It creates one Jira issue per story from inline `stories` or
+`integration:jira`. It creates one Jira issue per story from inline `stories`,
+from `storyBreakdownArtifactRef`, from previous step story-output payloads, or
 from `storyBreakdownPath`, resolves `issueTypeName` through the trusted Jira
 metadata surface when `issueTypeId` is not supplied, and creates dependency
-links when `dependencyMode = linear_blocker_chain`. It is not the default path
-for ambiguous Jira requests.
+links when `dependencyMode = linear_blocker_chain`. Repository path reads are a
+publication fallback; workflow-local story handoff should use inline stories or
+artifact refs so Jira creation does not depend on a protected branch push. It is
+not the default path for ambiguous Jira requests.
 
 For breakdown-driven Jira output, the canonical traceability shape is
 `sourceReference.path` on every story, with `source.referencePath` or

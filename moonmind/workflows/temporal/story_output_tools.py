@@ -39,6 +39,10 @@ StoryFetcher = Callable[
     [str, str, str],
     str | Awaitable[str],
 ]
+ArtifactReader = Callable[
+    [str],
+    str | bytes | Awaitable[str | bytes],
+]
 JiraServiceFactory = Callable[[], JiraToolService]
 ExecutionCreator = Callable[..., Mapping[str, Any] | Awaitable[Mapping[str, Any]]]
 
@@ -822,10 +826,18 @@ async def create_jira_issues_from_stories(
     *,
     jira_service_factory: JiraServiceFactory = JiraToolService,
     story_fetcher: StoryFetcher = _default_github_story_fetcher,
+    artifact_reader: ArtifactReader | None = None,
 ) -> ToolResult:
     """Create one Jira issue per story, or report story-breakdown fallback metadata."""
 
+    previous_outputs = _mapping(
+        (_context or {}).get("previousOutputs")
+        or (_context or {}).get("previous_outputs")
+    )
     story_output = _mapping(inputs.get("storyOutput") or inputs.get("story_output"))
+    previous_story_output = _mapping(
+        previous_outputs.get("storyOutput") or previous_outputs.get("story_output")
+    )
     story_output_mode = str(
         story_output.get("mode") or story_output.get("target") or ""
     ).strip().lower()
@@ -886,9 +898,61 @@ async def create_jira_issues_from_stories(
         or inputs.get("storyBreakdown")
         or inputs.get("story_breakdown")
         or inputs.get("storyBreakdownJson")
+        or previous_outputs.get("stories")
+        or previous_outputs.get("storyBreakdown")
+        or previous_outputs.get("story_breakdown")
+        or previous_outputs.get("storyBreakdownJson")
+        or previous_story_output.get("stories")
+        or previous_story_output.get("storyBreakdown")
+        or previous_story_output.get("story_breakdown")
+        or previous_story_output.get("storyBreakdownJson")
     )
     breakdown_source_path = _breakdown_source_path(raw_story_payload)
     stories = _coerce_story_payload(raw_story_payload)
+    if not stories:
+        artifact_ref = _string(
+            inputs.get("storyBreakdownArtifactRef")
+            or inputs.get("story_breakdown_artifact_ref")
+            or story_output.get("storyBreakdownArtifactRef")
+            or story_output.get("story_breakdown_artifact_ref")
+            or previous_outputs.get("storyBreakdownArtifactRef")
+            or previous_outputs.get("story_breakdown_artifact_ref")
+            or previous_story_output.get("storyBreakdownArtifactRef")
+            or previous_story_output.get("story_breakdown_artifact_ref")
+        )
+        if artifact_ref:
+            try:
+                if artifact_reader is None:
+                    raise ValueError(
+                        "storyBreakdownArtifactRef was provided, but this worker "
+                        "has no artifact reader configured."
+                    )
+                artifact_payload = artifact_reader(artifact_ref)
+                if inspect.isawaitable(artifact_payload):
+                    artifact_payload = await artifact_payload  # type: ignore[assignment]
+                if isinstance(artifact_payload, bytes):
+                    artifact_payload = artifact_payload.decode(
+                        "utf-8", errors="replace"
+                    )
+                parsed_payload: Any = artifact_payload
+                if isinstance(artifact_payload, str) and artifact_payload.strip():
+                    try:
+                        parsed_payload = json.loads(artifact_payload)
+                    except json.JSONDecodeError:
+                        parsed_payload = artifact_payload
+                breakdown_source_path = _breakdown_source_path(parsed_payload)
+                stories = _coerce_story_payload(parsed_payload)
+            except Exception as exc:
+                if fallback_for_missing_stories:
+                    return _fallback_result(
+                        reason=(
+                            "Unable to read story breakdown artifact for Jira "
+                            f"output: {exc}"
+                        ),
+                        inputs=inputs,
+                        dependency_mode=dependency_mode,
+                    )
+                raise
     if not stories:
         repo = _string(inputs.get("repository") or inputs.get("repo"))
         ref = _string(
@@ -899,6 +963,8 @@ async def create_jira_issues_from_stories(
         path = _string(
             inputs.get("storyBreakdownPath")
             or story_output.get("storyBreakdownPath")
+            or previous_outputs.get("storyBreakdownPath")
+            or previous_story_output.get("storyBreakdownPath")
         )
         if repo and ref and path:
             try:
@@ -914,6 +980,26 @@ async def create_jira_issues_from_stories(
                 breakdown_source_path = _breakdown_source_path(fetched_payload)
                 stories = _coerce_story_payload(fetched)
             except Exception as exc:
+                push_status = _string(
+                    previous_outputs.get("push_status")
+                    or previous_outputs.get("pushStatus")
+                )
+                push_branch = _string(
+                    previous_outputs.get("push_branch")
+                    or previous_outputs.get("pushBranch")
+                )
+                if (
+                    push_status == "protected_branch"
+                    and push_branch
+                    and ref == push_branch
+                ):
+                    raise ValueError(
+                        "Unable to read story breakdown for Jira output because "
+                        f"the previous step produced it on protected branch '{push_branch}' "
+                        "and it was not published. Jira story creation requires inline "
+                        "stories, storyBreakdownArtifactRef, or a readable repo/ref/path "
+                        "from a published handoff branch."
+                    ) from exc
                 if fallback_for_missing_stories:
                     return _fallback_result(
                         reason=f"Unable to read story breakdown for Jira output: {exc}",
@@ -1117,11 +1203,22 @@ def register_story_output_tool_handlers(
     dispatcher: Any,
     *,
     execution_creator: ExecutionCreator | None = None,
+    artifact_reader: ArtifactReader | None = None,
 ) -> None:
+    async def _create_jira_issues(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await create_jira_issues_from_stories(
+            inputs,
+            context,
+            artifact_reader=artifact_reader,
+        )
+
     dispatcher.register_skill(
         skill_name=JIRA_CREATE_ISSUES_TOOL_NAME,
         version="1.0",
-        handler=create_jira_issues_from_stories,
+        handler=_create_jira_issues,
     )
 
     async def _create_jira_orchestrate_tasks(
