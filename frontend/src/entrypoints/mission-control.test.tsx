@@ -467,12 +467,12 @@ describe('Mission Control shared entry', () => {
     expect(cssRuleBlock(missionControlCss, '.status-letter-wave')).toContain('z-index: 2');
     const glyphBlock = cssRuleBlock(missionControlCss, '.status-letter-wave__glyph');
     expect(glyphBlock).toContain('animation-name: mm-executing-letter-brighten');
-    expect(glyphBlock).toContain('animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2600ms))');
+    expect(glyphBlock).toContain('animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration))');
     expect(glyphBlock).toContain('var(--mm-executing-letter-sweep-direction)');
     expect(glyphBlock).toContain('--mm-letter-phase-max: max(calc(var(--mm-letter-count, 1) - 1), 1)');
     expect(glyphBlock).toContain('var(--mm-executing-letter-sweep-start-ratio)');
     expect(glyphBlock).toContain('var(--mm-executing-letter-sweep-travel-ratio)');
-    expect(glyphBlock).toContain('animation-delay: calc(var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2600ms)) * var(--mm-letter-delay-ratio))');
+    expect(glyphBlock).toContain('animation-delay: calc(var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration)) * var(--mm-letter-delay-ratio))');
     expect(glyphBlock).not.toContain('will-change');
     expect(missionControlCss).toMatch(
       /@keyframes mm-executing-letter-brighten\s*\{[\s\S]*?0%\s*\{[\s\S]*?var\(--mm-executing-letter-bright[\s\S]*?3%\s*\{[\s\S]*?brightness\(1\.14\)[\s\S]*?5%,\s*100%\s*\{[\s\S]*?brightness\(1\)/,

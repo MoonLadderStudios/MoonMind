@@ -1380,10 +1380,10 @@ tr[data-proposal-id].proposal-consuming td {
   --mm-letter-phase-max: max(calc(var(--mm-letter-count, 1) - 1), 1);
   --mm-letter-delay-ratio: calc(var(--mm-executing-letter-sweep-start-ratio) + ((var(--mm-letter-phase) / var(--mm-letter-phase-max)) * var(--mm-executing-letter-sweep-travel-ratio)));
   animation-name: mm-executing-letter-brighten;
-  animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2600ms));
+  animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration));
   animation-timing-function: linear;
   animation-iteration-count: infinite;
-  animation-delay: calc(var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2600ms)) * var(--mm-letter-delay-ratio));
+  animation-delay: calc(var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration)) * var(--mm-letter-delay-ratio));
 }
 
 @keyframes mm-executing-letter-brighten {
