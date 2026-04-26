@@ -1,5 +1,20 @@
 [
   {
+    "id": 4177457111,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary stated there was no feedback to address."
+  },
+  {
+    "id": 3144162425,
+    "disposition": "addressed",
+    "rationale": "Planner now generates a synthetic targetBranch only when a MoonSpec breakdown step will create a new story breakdown artifact, preserving authored branch-only Jira import flows."
+  },
+  {
+    "id": 4177457338,
+    "disposition": "not-applicable",
+    "rationale": "Automated Codex review wrapper contained no separate actionable feedback beyond discussion_r3144162425."
+  },
+  {
     "id": 3144190036,
     "disposition": "addressed",
     "rationale": "Centralized Jira project default resolution, reused it for schema defaults and submitted input overrides, and now replaces explicit TOOL placeholders with repository or single-allowed project defaults."

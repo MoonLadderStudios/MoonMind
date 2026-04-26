@@ -395,6 +395,7 @@ def test_runtime_planner_jira_breakdown_treats_branch_as_base_branch():
                         "instructions": "Create Jira issues from the generated breakdown.",
                         "storyOutput": {
                             "mode": "jira",
+                            "fallback": "fail",
                             "jira": {
                                 "projectKey": "MM",
                                 "issueTypeName": "Story",
@@ -414,14 +415,63 @@ def test_runtime_planner_jira_breakdown_treats_branch_as_base_branch():
 
     assert breakdown["inputs"]["branch"] == "main"
     assert breakdown["inputs"]["startingBranch"] == "main"
-    assert breakdown["inputs"]["targetBranch"] != "main"
     assert breakdown["inputs"]["targetBranch"].startswith(
         "docs-tacticsfrontend-initiativeorderbar-"
     )
+    assert breakdown["inputs"]["targetBranch"] != "main"
     assert breakdown["inputs"]["publishMode"] == "branch"
     assert jira["inputs"]["targetBranch"] == breakdown["inputs"]["targetBranch"]
     assert jira["inputs"]["branch"] == "main"
+    assert (
+        jira["inputs"]["storyBreakdownPath"]
+        == breakdown["inputs"]["storyBreakdownPath"]
+    )
     assert jira["inputs"]["startingBranch"] == "main"
+
+def test_runtime_planner_preserves_authored_branch_for_jira_story_import():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "Import existing breakdown into Jira",
+                "instructions": "Create Jira issues from an existing breakdown.",
+                "repository": "MoonLadderStudios/MoonMind",
+                "git": {"branch": "feature/authored-breakdown"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+                "tool": {"type": "skill", "name": "story.create_jira_issues"},
+                "storyOutput": {
+                    "mode": "jira",
+                    "storyBreakdownPath": "artifacts/story-breakdowns/import/stories.json",
+                    "jira": {
+                        "projectKey": "MM",
+                        "issueTypeName": "Story",
+                    },
+                },
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node = plan["nodes"][0]
+
+    assert node["tool"] == {
+        "type": "skill",
+        "name": "story.create_jira_issues",
+        "version": "1.0",
+    }
+    assert node["inputs"]["branch"] == "feature/authored-breakdown"
+    assert node["inputs"]["storyBreakdownPath"] == (
+        "artifacts/story-breakdowns/import/stories.json"
+    )
+    assert "targetBranch" not in node["inputs"]
+    assert "startingBranch" not in node["inputs"]
 
 def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
     planner = _build_runtime_planner()
