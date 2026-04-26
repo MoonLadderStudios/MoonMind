@@ -397,7 +397,7 @@ describe('Mission Control shared entry', () => {
 
 
   it('defines the shared MM-488 executing shimmer modifier contract', async () => {
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*2200ms/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*2600ms/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-band-width:\s*24%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-band-height:\s*180%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-halo-width-multiplier:\s*10/);
@@ -412,8 +412,8 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-y:\s*-10%/);
     expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-width:\s*84%/);
     expect(missionControlCss).toContain('--mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)');
-    expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-start-ratio:\s*0\.2/);
-    expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-travel-ratio:\s*0\.18/);
+    expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-start-ratio:\s*0\.18/);
+    expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-travel-ratio:\s*0\.16/);
     expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-direction:\s*1/);
     expect(missionControlCss).toContain('--mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32)');
     expect(missionControlCss).toContain('--mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, white 32%)');
@@ -467,12 +467,12 @@ describe('Mission Control shared entry', () => {
     expect(cssRuleBlock(missionControlCss, '.status-letter-wave')).toContain('z-index: 2');
     const glyphBlock = cssRuleBlock(missionControlCss, '.status-letter-wave__glyph');
     expect(glyphBlock).toContain('animation-name: mm-executing-letter-brighten');
-    expect(glyphBlock).toContain('animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms))');
+    expect(glyphBlock).toContain('animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2600ms))');
     expect(glyphBlock).toContain('var(--mm-executing-letter-sweep-direction)');
     expect(glyphBlock).toContain('--mm-letter-phase-max: max(calc(var(--mm-letter-count, 1) - 1), 1)');
     expect(glyphBlock).toContain('var(--mm-executing-letter-sweep-start-ratio)');
     expect(glyphBlock).toContain('var(--mm-executing-letter-sweep-travel-ratio)');
-    expect(glyphBlock).toContain('animation-delay: calc(var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms)) * var(--mm-letter-delay-ratio))');
+    expect(glyphBlock).toContain('animation-delay: calc(var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2600ms)) * var(--mm-letter-delay-ratio))');
     expect(glyphBlock).not.toContain('will-change');
     expect(missionControlCss).toMatch(
       /@keyframes mm-executing-letter-brighten\s*\{[\s\S]*?0%\s*\{[\s\S]*?var\(--mm-executing-letter-bright[\s\S]*?3%\s*\{[\s\S]*?brightness\(1\.14\)[\s\S]*?5%,\s*100%\s*\{[\s\S]*?brightness\(1\)/,
