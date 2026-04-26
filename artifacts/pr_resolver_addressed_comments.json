@@ -1,12 +1,22 @@
 [
   {
-    "id": 3143081514,
+    "id": 3142718382,
     "disposition": "addressed",
-    "rationale": "Added explicit versioned PyPI dependencies for nltk 3.9.4 and aiohttp 3.13.5 to pyproject.toml and regenerated poetry.lock metadata with Poetry."
+    "rationale": "Added nested final latestHeadSha/latest_head_sha fallbacks and made final SHA ordering match the top-level camelCase-before-snake_case ordering. Covered by test_fetch_result_maps_final_latest_head_sha_metadata."
   },
   {
-    "id": 4176603582,
+    "id": 4176265832,
+    "disposition": "not-applicable",
+    "rationale": "Review summary only; the actionable SHA-resolution feedback is tracked and addressed by comment 3142718382."
+  },
+  {
+    "id": 3142720637,
     "disposition": "addressed",
-    "rationale": "Synchronized pyproject.toml with the lockfile dependency updates and verified the project with poetry check --lock plus the full unit test runner."
+    "rationale": "Changed PR resolver status resolution to prefer known terminal statuses over informational outcomes such as merge_outcome=skipped. Covered by test_fetch_result_prefers_terminal_status_over_skipped_merge_outcome."
+  },
+  {
+    "id": 4176268269,
+    "disposition": "not-applicable",
+    "rationale": "Automated review wrapper with no separate actionable feedback beyond comment 3142720637."
   }
 ]
