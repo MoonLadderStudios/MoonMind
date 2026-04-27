@@ -7,6 +7,11 @@ from uuid import uuid4
 
 import pytest
 
+from moonmind.workflows.temporal.client import (
+    ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV,
+    TemporalClientAdapter,
+)
+
 collect_ignore_glob = [
     "api/routers/test_task_runs.py",
     "api/routers/test_mcp_tools.py",
@@ -25,8 +30,6 @@ class _DummyWorkflowStartResult:
 def prevent_live_temporal_lifecycle_calls(monkeypatch):
     """Keep unit tests from starting/signaling/canceling real Temporal workflows."""
 
-    from moonmind.workflows.temporal.client import TemporalClientAdapter
-
     async def mock_start_workflow(self, *args, **kwargs):
         workflow_id = kwargs.get("workflow_id") or kwargs.get("id") or "mm:unit-test"
         return _DummyWorkflowStartResult(workflow_id=workflow_id, run_id=str(uuid4()))
@@ -37,7 +40,7 @@ def prevent_live_temporal_lifecycle_calls(monkeypatch):
     async def mock_describe_workflow(*args, **kwargs):
         return None
 
-    monkeypatch.setenv("MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS", "0")
+    monkeypatch.setenv(ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV, "0")
     monkeypatch.setattr(TemporalClientAdapter, "start_workflow", mock_start_workflow)
     monkeypatch.setattr(TemporalClientAdapter, "update_workflow", mock_noop)
     monkeypatch.setattr(TemporalClientAdapter, "signal_workflow", mock_noop)
