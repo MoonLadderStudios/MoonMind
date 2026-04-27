@@ -40,6 +40,9 @@ describe('Tasks List Entrypoint', () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks',
+    );
 
     const scheduledHeaderButton = await screen.findByRole('button', {
       name: /Scheduled\. Sorted descending\. Activate to sort ascending\./i,
@@ -61,6 +64,44 @@ describe('Tasks List Entrypoint', () => {
     });
   });
 
+  it('defaults to user task scope but exposes raw all-workflows scope', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    const scopeFilter = screen.getByLabelText('Scope') as HTMLSelectElement;
+    expect(scopeFilter.value).toBe('tasks');
+    expect((screen.getByLabelText('Workflow Type') as HTMLSelectElement).disabled).toBe(true);
+
+    const baselineCalls = fetchSpy.mock.calls.length;
+    fireEvent.change(scopeFilter, { target: { value: 'all' } });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+    });
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=all',
+    );
+    expect((screen.getByLabelText('Workflow Type') as HTMLSelectElement).disabled).toBe(false);
+  });
+
+  it('keeps explicit task scope in the URL when entry filters are active', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const baselineCalls = fetchSpy.mock.calls.length;
+
+    fireEvent.change(screen.getByLabelText('Entry'), { target: { value: 'run' } });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+    });
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&entry=run',
+    );
+    expect(window.location.search).toContain('scope=tasks');
+    expect(window.location.search).toContain('entry=run');
+  });
 
   it('renders active task-list pills with the shared shimmer selector contract while keeping inactive pills plain', async () => {
     fetchSpy.mockResolvedValue({
@@ -243,7 +284,9 @@ describe('Tasks List Entrypoint', () => {
     await waitFor(() => {
       expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
     });
-    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe('/api/executions?source=temporal&pageSize=50&repo=owner%2Frepo');
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&repo=owner%2Frepo',
+    );
 
     fireEvent.change(screen.getByLabelText('Repository'), {
       target: { value: 'owner/repo ' },
@@ -254,6 +297,23 @@ describe('Tasks List Entrypoint', () => {
       expect(repositoryInput.value).toBe('owner/repo ');
     });
     expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+  });
+
+  it('preserves the default task scope in shared URLs when entry filters are set', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const baselineCalls = fetchSpy.mock.calls.length;
+
+    fireEvent.change(screen.getByLabelText('Entry'), { target: { value: 'manifest' } });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+    });
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&entry=manifest',
+    );
+    expect(window.location.search).toBe('?scope=tasks&entry=manifest&limit=50');
   });
 
   it('labels the lifecycle filter as status and exposes canonical status options', async () => {
@@ -288,7 +348,9 @@ describe('Tasks List Entrypoint', () => {
     await waitFor(() => {
       expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
     });
-    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe('/api/executions?source=temporal&pageSize=50&state=completed');
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&state=completed',
+    );
   });
 
   it('renders pagination as arrow buttons beside the table summary', async () => {
