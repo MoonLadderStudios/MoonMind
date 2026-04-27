@@ -9,13 +9,13 @@ Fields:
 - `imageRepository`: repository portion of the desired image.
 - `requestedReference`: requested tag or digest reference.
 - `resolvedDigest`: digest-pinned reference when known.
-- `reason`: administrator-provided reason for the update.
+- `reason`: optional administrator-provided reason for the update.
 - `operator`: initiating principal when available.
 - `createdAt`: UTC timestamp when desired state is persisted.
 - `sourceRunId`: workflow/run/idempotency identifier when available.
 
 Validation rules:
-- `stack`, `imageRepository`, `requestedReference`, and `reason` are required.
+- `stack`, `imageRepository`, and `requestedReference` are required.
 - `resolvedDigest` remains distinct from `requestedReference`.
 - The store boundary must not accept caller-selected arbitrary file paths.
 

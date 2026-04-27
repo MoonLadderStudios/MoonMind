@@ -186,7 +186,7 @@ async def get_or_create_default_user(
         email=default_email,
         hashed_password=hashed_password,
         is_active=True,
-        is_superuser=False,  # Default user is not superuser unless specified
+        is_superuser=True,
         is_verified=True,
         # oidc_provider and oidc_subject can be null or set to 'disabled_auth_default'
         oidc_provider="default",

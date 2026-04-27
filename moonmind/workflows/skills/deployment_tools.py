@@ -30,7 +30,7 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
         "inputs": {
             "schema": {
                 "type": "object",
-                "required": ["stack", "image", "reason"],
+                "required": ["stack", "image"],
                 "additionalProperties": False,
                 "properties": {
                     "stack": {"type": "string", "enum": ["moonmind"]},

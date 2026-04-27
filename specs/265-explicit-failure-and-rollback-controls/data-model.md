@@ -33,14 +33,14 @@ Validation rules:
 - `image.repository`: allowlisted MoonMind image repository.
 - `image.reference`: target previous image tag or digest from rollback eligibility.
 - `mode`: normal deployment update mode, usually `changed_services` unless the operator explicitly chooses another policy-allowed mode.
-- `reason`: required operator reason.
+- `reason`: optional operator reason.
 - `confirmation`: operator confirmation that the rollback target and restart implications are understood.
 - `sourceActionId`: optional recent action used to derive rollback target.
 - `operationKind`: `rollback`.
 
 Validation rules:
 - Rollback uses the same typed deployment update path as forward updates.
-- Admin authorization, reason, confirmation, deployment lock, before/after artifacts, and verification remain required.
+- Admin authorization, confirmation, deployment lock, before/after artifacts, and verification remain required.
 - Rollback cannot include shell commands, runner images, host paths, non-allowlisted stacks, or non-allowlisted repositories.
 
 ## Deployment Audit Action

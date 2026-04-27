@@ -86,7 +86,7 @@ def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
     )
 
     input_schema = definition.input_schema
-    assert input_schema["required"] == ["stack", "image", "reason"]
+    assert input_schema["required"] == ["stack", "image"]
     assert input_schema["additionalProperties"] is False
     assert input_schema["properties"]["stack"]["enum"] == ["moonmind"]
     assert input_schema["properties"]["mode"]["enum"] == [

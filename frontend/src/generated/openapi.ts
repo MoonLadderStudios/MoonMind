@@ -3522,7 +3522,7 @@ export interface components {
              */
             pruneOldImages: boolean;
             /** Reason */
-            reason: string;
+            reason?: string | null;
             /**
              * Operationkind
              * @default update

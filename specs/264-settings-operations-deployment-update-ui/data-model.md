@@ -22,10 +22,10 @@
 - `reference`
 - `mode`: `changed_services` by default, `force_recreate` only when available.
 - `removeOrphans`, `wait`, `runSmokeCheck`, `pauseWork`, `pruneOldImages`
-- `reason`: required before submit.
+- `reason`: optional operator note.
 
 ## Validation Rules
 
 - Target image controls expose repository/reference only; updater runner image is not a form field.
 - Mutable references such as `latest` produce a visible warning and confirmation warning.
-- Submit is blocked when reason is blank or no target repository/reference is available.
+- Submit is blocked when no target repository/reference is available.

@@ -693,7 +693,7 @@ def _parse_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
         "mode": str(inputs.get("mode") or "changed_services").strip(),
         "removeOrphans": _optional_bool(inputs, "removeOrphans", default=False),
         "wait": _optional_bool(inputs, "wait", default=True),
-        "reason": _required_string(inputs.get("reason"), "reason"),
+        "reason": _optional_string(inputs.get("reason")),
     }
     resolved_digest = image.get("resolvedDigest")
     if resolved_digest is not None and str(resolved_digest).strip():
@@ -719,6 +719,11 @@ def _required_string(value: Any, field_name: str) -> str:
             details={"field": field_name, "failureClass": "invalid_input"},
         )
     return normalized
+
+
+def _optional_string(value: Any) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
 
 
 def _optional_bool(

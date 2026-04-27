@@ -23,12 +23,12 @@
 - `image.resolvedDigest`: optional resolved digest.
 - `mode`: `changed_services` or `force_recreate`.
 - `removeOrphans`, `wait`, `runSmokeCheck`, `pauseWork`, `pruneOldImages`: bounded booleans.
-- `reason`: required operator reason.
+- `reason`: optional operator reason.
 
 ## Validation Rules
 
 - Root input object rejects unknown fields.
 - `image` object rejects unknown fields.
-- Required fields are `stack`, `image`, and `reason`; `image.repository` and `image.reference` are required inside `image`.
+- Required fields are `stack` and `image`; `image.repository` and `image.reference` are required inside `image`.
 - Unsupported mode values fail schema validation.
 - Shell/path/runner override fields are not part of the schema and fail before execution.
