@@ -14,7 +14,7 @@ export const EXECUTING_STATUS_PILL_TRACEABILITY = Object.freeze({
 
 export type ExecutionStatusPillProps = Readonly<{
   className: string;
-  'data-state'?: 'executing';
+  'data-state'?: 'executing' | 'planning';
   'data-effect'?: 'shimmer-sweep';
   'data-shimmer-label'?: string;
 }>;
@@ -55,10 +55,10 @@ export function executionStatusPillProps(status: string | null | undefined): Exe
   const key = normalizedExecutionStatusKey(status);
   const className = executionStatusBaseClasses(key);
 
-  if (key === 'executing') {
+  if (key === 'executing' || key === 'planning') {
     return {
-      className: `${className} is-executing`,
-      'data-state': 'executing',
+      className: `${className} is-${key}`,
+      'data-state': key,
       'data-effect': 'shimmer-sweep',
       'data-shimmer-label': executionStatusVisibleLabel(status),
     };

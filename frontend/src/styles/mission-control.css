@@ -1314,8 +1314,9 @@ tr[data-proposal-id].proposal-consuming td {
   border-color: rgb(var(--mm-border) / 0.75);
 }
 
-.status-running[data-state="executing"][data-effect="shimmer-sweep"],
-.status-running.is-executing {
+.status-running[data-effect="shimmer-sweep"],
+.status-running.is-executing,
+.status-running.is-planning {
   position: relative;
   overflow: hidden;
   isolation: isolate;
@@ -1411,8 +1412,9 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .status-running[data-state="executing"][data-effect="shimmer-sweep"],
-  .status-running.is-executing {
+  .status-running[data-effect="shimmer-sweep"],
+  .status-running.is-executing,
+  .status-running.is-planning {
     animation: none;
     background-position:
       50% 50%,

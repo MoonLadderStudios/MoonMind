@@ -420,7 +420,7 @@ describe('Mission Control shared entry', () => {
 
     const shimmerBlock = cssRuleBlocks(
       missionControlCss,
-      '.status-running[data-state="executing"][data-effect="shimmer-sweep"], .status-running.is-executing',
+      '.status-running[data-effect="shimmer-sweep"], .status-running.is-executing, .status-running.is-planning',
     ).join('\n');
     expect(shimmerBlock).toContain('animation: mm-status-pill-shimmer');
     expect(shimmerBlock).toContain('background-color: rgb(var(--mm-accent-2) / 0.14)');
@@ -442,7 +442,7 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).not.toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?52%\s*\{/);
     expect(missionControlCss).toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?0%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),[\s\S]*?100%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-end-x\)\s*var\(--mm-executing-sweep-end-y\),[\s\S]*?background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\),[\s\S]*?calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-core-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\);/);
     expect(missionControlCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-state="executing"\]\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing[\s\S]*?animation: none;/,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing,\s*\.status-running\.is-planning[\s\S]*?animation: none;/,
     );
     expect(missionControlCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?background-position:\s*50% 50%,[\s\S]*?calc\(50% \+ \(var\(--mm-executing-sweep-layer-offset-x\) \/ 2\)\)\s*calc\(50% \+ \(var\(--mm-executing-sweep-layer-offset-y\) \/ 2\)\);[\s\S]*?background-size:\s*160% var\(--mm-executing-sweep-band-height\),\s*140% var\(--mm-executing-sweep-band-height\);/,

@@ -35,10 +35,10 @@ function visibleStatusLabel(status: string | null | undefined): string {
 export function ExecutionStatusPill({ status }: { status: string | null | undefined }) {
   const label = visibleStatusLabel(status);
   const pillProps = executionStatusPillProps(status);
-  const isExecuting = pillProps['data-state'] === 'executing';
+  const hasShimmerSweep = pillProps['data-effect'] === 'shimmer-sweep';
   const glyphs = useMemo(() => splitGraphemes(label), [label]);
 
-  if (!isExecuting) {
+  if (!hasShimmerSweep) {
     return <span {...pillProps}>{label}</span>;
   }
 

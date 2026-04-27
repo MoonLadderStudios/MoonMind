@@ -39,6 +39,34 @@ async def test_temporal_client_uses_shared_pydantic_data_converter(monkeypatch):
 
     assert captured["data_converter"] is MOONMIND_TEMPORAL_DATA_CONVERTER
 
+
+async def test_default_adapter_refuses_implicit_live_connection_under_pytest(
+    monkeypatch,
+):
+    monkeypatch.delenv("MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS", raising=False)
+    adapter = TemporalClientAdapter()
+
+    with pytest.raises(RuntimeError, match="implicit live Temporal connection"):
+        await adapter.get_client()
+
+
+async def test_default_adapter_allows_explicit_live_connection_opt_in(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_connect(address, *, namespace, data_converter):
+        captured["address"] = address
+        captured["namespace"] = namespace
+        captured["data_converter"] = data_converter
+        return AsyncMock()
+
+    monkeypatch.setenv("MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS", "1")
+    monkeypatch.setattr(temporal_client_module.Client, "connect", fake_connect)
+
+    connected = await TemporalClientAdapter().get_client()
+
+    assert connected is not None
+    assert captured["data_converter"] is MOONMIND_TEMPORAL_DATA_CONVERTER
+
 # ---- get_drain_metrics ----
 
 async def test_get_drain_metrics_counts_running_workflows(adapter):
