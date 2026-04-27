@@ -127,7 +127,12 @@ def _pr_resolver_final_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Return the nested final-state payload when resolver artifacts include one."""
 
     final = payload.get("final")
-    return final if isinstance(final, dict) else {}
+    if isinstance(final, dict):
+        return final
+    merge_outcome = payload.get("mergeOutcome")
+    if isinstance(merge_outcome, dict):
+        return merge_outcome
+    return {}
 
 
 def _first_stripped_text(*values: Any) -> str:
