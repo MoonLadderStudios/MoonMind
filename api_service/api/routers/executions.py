@@ -2497,6 +2497,8 @@ def _report_output_instruction(report_output: Mapping[str, Any]) -> str:
     return (
         "\n\nMoonMind report output contract:\n"
         "- Finish with a concise final report suitable for a `report.primary` artifact.\n"
+        "- If the task asks a question or requests a topic report, answer that "
+        "request directly in the final report body.\n"
         "- Include outcome, commands or tools run, key evidence, failures or "
         "skipped work, and recommended next action.\n"
         "- Do not include secrets, raw credentials, cookies, tokens, or full "

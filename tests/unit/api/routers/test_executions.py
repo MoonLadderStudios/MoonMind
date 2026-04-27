@@ -860,9 +860,9 @@ def test_create_task_shaped_execution_preserves_report_output_contract(
     assert initial_parameters["task"]["reportOutput"] == initial_parameters[
         "reportOutput"
     ]
-    assert "MoonMind report output contract" in initial_parameters["task"][
-        "instructions"
-    ]
+    task_instructions = initial_parameters["task"]["instructions"]
+    assert "MoonMind report output contract" in task_instructions
+    assert "answer that request directly in the final report body" in task_instructions
 
 def test_create_task_shaped_execution_prefers_task_publish_mode_alias_over_top_publish(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
