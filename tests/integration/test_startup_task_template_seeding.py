@@ -165,8 +165,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "{{ inputs.orchestration_mode }}"
         )
         assert downstream_step["jiraOrchestration"]["task"]["publish"] == {
-            "mode": "{{ inputs.publish_mode }}",
-            "mergeAutomation": {"enabled": True},
+            "mode": "pr",
+            "mergeAutomation": {
+                "enabled": "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
+            },
         }
 
 @pytest.mark.asyncio
