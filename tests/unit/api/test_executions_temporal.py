@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -118,6 +119,80 @@ def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
         assert item["state"] == "awaiting_external"
         assert item["entry"] == "run"
         assert item["waitingReason"] == "external_completion"
+
+
+def test_list_executions_source_temporal_defaults_to_task_scope(client) -> None:
+    test_client, _service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get("/api/executions", params={"source": "temporal"})
+
+        assert response.status_code == 200
+        expected_query = (
+            'WorkflowType="MoonMind.Run" AND mm_entry="run" '
+            'AND mm_owner_id="user-123"'
+        )
+        mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
+        mock_client.list_workflows.assert_called_once()
+        assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
+
+
+def test_list_executions_source_temporal_scope_all_keeps_raw_temporal_query(
+    client,
+) -> None:
+    test_client, _service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "scope": "all"},
+        )
+
+        assert response.status_code == 200
+        expected_query = 'mm_owner_id="user-123"'
+        mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
+        assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
+
+
+def test_list_executions_source_temporal_rejects_unknown_scope(client) -> None:
+    test_client, _service, _user, _mock_session = client
+
+    response = test_client.get(
+        "/api/executions",
+        params={"source": "temporal", "scope": "surprise"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_temporal_list_scope"
+
 
 def test_task_detail_instructions_include_task_and_step_text() -> None:
     assert executions_module._derive_full_task_instructions(
@@ -440,14 +515,8 @@ def test_list_executions_source_temporal_orders_immediate_runs_by_updated_at(
         "mm:wf-older-created-newer-updated",
         "mm:wf-newer-created-older-updated",
     ]
-    assert (
-        datetime.fromisoformat(items[0]["scheduledFor"].replace("Z", "+00:00"))
-        == older_created
-    )
-    assert (
-        datetime.fromisoformat(items[1]["scheduledFor"].replace("Z", "+00:00"))
-        == newer_created
-    )
+    assert items[0]["scheduledFor"] is None
+    assert items[1]["scheduledFor"] is None
 
 def test_describe_execution_source_temporal_syncs_projection(client) -> None:
     test_client, service, user, _mock_session = client

@@ -30,6 +30,8 @@ if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
   echo "Created Docker network: $NETWORK_NAME"
 fi
 
+export MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS=1
+
 # Build pytest service
 "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" build pytest
 
@@ -38,7 +40,9 @@ fi
 # --timeout-method=thread: use thread-based timeout (works with async tests)
 # --durations=10: print the 10 slowest tests at the end
 run_tests() {
-  "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm pytest \
+  "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm \
+    -e MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS=1 \
+    pytest \
     bash -lc "pytest tests/integration -m 'integration_ci' --tb=short --timeout 120 --timeout-method=thread --durations=10"
 }
 
