@@ -1003,6 +1003,34 @@ def test_determine_publish_completion_allows_integration_pr_without_local_pr_url
     assert message == "Workflow completed successfully"
     assert publish_failure is False
 
+def test_determine_publish_completion_includes_operator_summary_for_report_runs(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result={
+            "outputs": {
+                "summary": "Completed with status completed",
+                "operator_summary": (
+                    "The report explains that lunar regolith can shield habitats "
+                    "from radiation and micrometeorites."
+                ),
+            }
+        },
+    )
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "none"}
+    )
+
+    assert status == "success"
+    assert (
+        "Final result: The report explains that lunar regolith can shield habitats"
+        in message
+    )
+    assert "Completed with status completed" not in message
+    assert publish_failure is False
+
 def test_determine_publish_completion_fails_for_unknown_branch_publish_outcome(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:

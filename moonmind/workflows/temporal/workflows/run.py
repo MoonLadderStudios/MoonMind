@@ -3214,6 +3214,42 @@ class MoonMindRunWorkflow:
         reason = ". ".join(part.rstrip(".") for part in parts if part)
         return f"{reason}." if reason else "publish skipped: no local changes"
 
+    def _compose_success_completion_message(
+        self,
+        *,
+        publish_detail: str | None = None,
+    ) -> str:
+        parts = ["Workflow completed successfully"]
+        detail = self._coerce_text(publish_detail, max_chars=180)
+        if detail and detail.lower() not in {
+            "completed",
+            "workflow completed successfully",
+        }:
+            parts.append(detail)
+
+        operator_summary = self._coerce_text(self._operator_summary, max_chars=700)
+        last_step_summary = self._coerce_text(self._last_step_summary, max_chars=700)
+        final_summary = operator_summary or last_step_summary
+        if final_summary and not self._is_transient_summary(final_summary):
+            final_summary_lower = final_summary.lower()
+            if final_summary_lower not in {
+                "completed with status completed",
+                "workflow completed successfully",
+            } and not final_summary_lower.startswith("process exited with code"):
+                parts.append(f"Final result: {final_summary}")
+
+        pull_request_url = self._coerce_text(
+            self._publish_context.get("pullRequestUrl"),
+            max_chars=200,
+        )
+        if pull_request_url:
+            parts.append(f"Pull request: {pull_request_url}")
+
+        if len(parts) == 1:
+            return parts[0]
+        message = ". ".join(part.rstrip(".") for part in parts if part)
+        return f"{message}." if message else "Workflow completed successfully"
+
     def _determine_publish_completion(
         self,
         *,
@@ -3221,7 +3257,7 @@ class MoonMindRunWorkflow:
     ) -> tuple[str, str, bool]:
         publish_mode = self._publish_mode(parameters)
         if publish_mode == "none":
-            return ("success", "Workflow completed successfully", False)
+            return ("success", self._compose_success_completion_message(), False)
 
         if self._publish_status == "skipped":
             if publish_mode == "pr":
@@ -3237,7 +3273,9 @@ class MoonMindRunWorkflow:
         if self._publish_status == "not_required":
             return (
                 "success",
-                self._publish_reason or "Workflow completed successfully",
+                self._compose_success_completion_message(
+                    publish_detail=self._publish_reason,
+                ),
                 False,
             )
 
@@ -3258,7 +3296,13 @@ class MoonMindRunWorkflow:
             )
 
         if self._publish_status == "published":
-            return ("success", "Workflow completed successfully", False)
+            return (
+                "success",
+                self._compose_success_completion_message(
+                    publish_detail=self._publish_reason,
+                ),
+                False,
+            )
 
         if (
             publish_mode == "pr"
@@ -3273,7 +3317,7 @@ class MoonMindRunWorkflow:
                 True,
             )
 
-        return ("success", "Workflow completed successfully", False)
+        return ("success", self._compose_success_completion_message(), False)
 
     def _merge_automation_request(
         self,

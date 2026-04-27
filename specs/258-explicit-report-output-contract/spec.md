@@ -16,6 +16,7 @@ As an operator, I want tasks to explicitly request a final report artifact so Mo
 - **FR-003**: When report output is enabled, MoonMind MUST publish a report bundle through the existing artifact publication boundary using `report.primary` and final-report metadata.
 - **FR-004**: Existing generic `output.primary`, `output.summary`, and `output.agent_result` behavior MUST remain unchanged when report output is not enabled.
 - **FR-005**: If a required report cannot be published, the run MUST fail visibly instead of silently completing without a canonical report.
+- **FR-006**: For question-answering or topic-report requests, the primary report body and completed execution summary MUST prefer the agent's captured final answer/operator summary over generic lifecycle messages such as "Workflow completed successfully" or "Completed with status completed".
 
 ## Source Design
 

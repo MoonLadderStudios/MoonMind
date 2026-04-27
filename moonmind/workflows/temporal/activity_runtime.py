@@ -3396,9 +3396,38 @@ class TemporalAgentRuntimeActivities:
         instruction_ref = str(metadata.get("instructionRef") or "").strip()
         resolved_skillset_ref = str(metadata.get("resolvedSkillsetRef") or "").strip()
 
+        def _metadata_text(*keys: str) -> str:
+            for key in keys:
+                value = metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return ""
+
+        def _is_generic_completion_summary(value: Any) -> bool:
+            normalized = " ".join(str(value or "").strip().lower().split())
+            return normalized in {
+                "",
+                "completed with status completed",
+                "workflow completed successfully",
+                "codex managed-session turn completed.",
+                "codex managed-session turn completed",
+                "agent run completed without a textual report body.",
+                "agent run completed without a textual report body",
+            } or normalized.startswith("process exited with code")
+
+        result_summary = result_dict.get("summary") or result_dict.get("raw", "")
+        operator_summary = self._sanitize_operator_summary(
+            _metadata_text("operator_summary", "operatorSummary")
+        )
+        effective_summary = (
+            operator_summary
+            if operator_summary and _is_generic_completion_summary(result_summary)
+            else result_summary
+        )
+
         # Build summary payload for the artifact
         summary_payload: dict[str, Any] = {
-            "summary": result_dict.get("summary") or result_dict.get("raw", ""),
+            "summary": effective_summary,
             "output_refs": result_dict.get("output_refs") or result_dict.get("outputRefs") or [],
             "failure_class": result_dict.get("failure_class") or result_dict.get("failureClass"),
             "provider_error_code": result_dict.get("provider_error_code") or result_dict.get("providerErrorCode"),
@@ -3453,12 +3482,11 @@ class TemporalAgentRuntimeActivities:
         def _report_body() -> str:
             assistant_text = ""
             for key in ("assistantText", "lastAssistantText"):
-                value = metadata.get(key)
-                if isinstance(value, str) and value.strip():
-                    assistant_text = value.strip()
+                assistant_text = _metadata_text(key)
+                if assistant_text:
                     break
             summary_text = str(summary_payload.get("summary") or "").strip()
-            body = assistant_text or summary_text
+            body = assistant_text or operator_summary or summary_text
             if not body:
                 body = "Agent run completed without a textual report body."
             if body.lstrip().startswith("#"):
