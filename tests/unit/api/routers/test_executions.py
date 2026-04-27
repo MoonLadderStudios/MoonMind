@@ -2641,7 +2641,7 @@ def test_serialize_execution_treats_system_owner_id_as_system_owner_type() -> No
     assert payload.owner_type == "system"
     assert payload.owner_id == "system"
 
-def test_serialize_execution_uses_created_at_for_immediate_schedule() -> None:
+def test_serialize_execution_leaves_immediate_run_unscheduled() -> None:
     created_at = datetime(2026, 3, 6, 0, 0, tzinfo=UTC)
     record = SimpleNamespace(
         close_status=None,
@@ -2665,10 +2665,10 @@ def test_serialize_execution_uses_created_at_for_immediate_schedule() -> None:
 
     payload = _serialize_execution(record)
 
-    assert payload.scheduled_for == created_at
+    assert payload.scheduled_for is None
     assert payload.created_at == created_at
 
-def test_serialize_execution_falls_back_to_updated_at_for_created_at() -> None:
+def test_serialize_execution_falls_back_to_updated_at_without_scheduled_time() -> None:
     updated_at = datetime(2026, 3, 6, 0, 0, tzinfo=UTC)
     record = SimpleNamespace(
         close_status=None,
@@ -2692,7 +2692,7 @@ def test_serialize_execution_falls_back_to_updated_at_for_created_at() -> None:
     payload = _serialize_execution(record)
 
     assert payload.created_at == updated_at
-    assert payload.scheduled_for == updated_at
+    assert payload.scheduled_for is None
 
 def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> None:
     """Ensure runtime/model/effort stored in record.parameters are surfaced."""

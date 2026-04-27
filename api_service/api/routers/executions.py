@@ -9,7 +9,7 @@ import os
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Literal, Optional, cast
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
@@ -105,6 +105,13 @@ from moonmind.workflows import get_temporal_artifact_service
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
+_TEMPORAL_LIST_SCOPES = {"tasks", "user", "system", "all"}
+_TEMPORAL_SCOPE_QUERIES = {
+    "tasks": 'WorkflowType="MoonMind.Run" AND mm_entry="run"',
+    "user": '(WorkflowType="MoonMind.Run" OR WorkflowType="MoonMind.ManifestIngest")',
+    "system": 'WorkflowType!="MoonMind.Run" AND WorkflowType!="MoonMind.ManifestIngest"',
+    "all": "",
+}
 _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.SCHEDULED: "queued",
     MoonMindWorkflowState.INITIALIZING: "queued",
@@ -130,6 +137,7 @@ _GITHUB_PULL_REQUEST_PATH_PATTERN = re.compile(
     r"^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+$",
     re.IGNORECASE,
 )
+
 
 class RemediationApprovalStateModel(BaseModel):
     requestId: str | None = None
@@ -244,6 +252,38 @@ def _is_execution_admin(user: User | None) -> bool:
 def _owner_id(user: User | None) -> str | None:
     value = getattr(user, "id", None)
     return str(value) if value is not None else None
+
+
+def _normalize_temporal_list_scope(
+    scope: str | None,
+    *,
+    workflow_type: str | None,
+    entry: str | None,
+) -> Literal["tasks", "user", "system", "all"]:
+    """Return the product-facing Temporal list scope.
+
+    The default task dashboard view is intentionally not a raw Temporal
+    namespace browser. Explicit workflow-type or entry filters keep the older
+    API behavior unless the caller pins a scope.
+    """
+
+    normalized = str(scope or "").strip().lower()
+    if not normalized:
+        return "all" if workflow_type or entry else "tasks"
+    if normalized not in _TEMPORAL_LIST_SCOPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_temporal_list_scope",
+                "message": (
+                    "scope must be one of: "
+                    + ", ".join(sorted(_TEMPORAL_LIST_SCOPES))
+                    + "."
+                ),
+            },
+        )
+    return cast(Literal["tasks", "user", "system", "all"], normalized)
+
 
 def _canonicalize_execution_identifier(raw_identifier: str) -> tuple[str, bool]:
     canonical = TemporalExecutionRecord.canonicalize_identifier(raw_identifier)
@@ -1169,7 +1209,7 @@ def _serialize_execution(
 
     started_at = getattr(record, "started_at", None)
     created_at = getattr(record, "created_at", None) or started_at or record.updated_at
-    scheduled_for = getattr(record, "scheduled_for", None) or created_at
+    scheduled_for = getattr(record, "scheduled_for", None)
 
     return ExecutionModel(
         task_id=record.workflow_id,
@@ -3933,6 +3973,7 @@ async def list_executions(
     entry: Optional[str] = Query(None, alias="entry"),
     repo: Optional[str] = Query(None, alias="repo"),
     integration: Optional[str] = Query(None, alias="integration"),
+    scope: Optional[str] = Query(None, alias="scope"),
     page_size: int = Query(50, alias="pageSize", ge=1, le=200),
     next_page_token: Optional[str] = Query(None, alias="nextPageToken"),
     source: Optional[str] = Query(None),
@@ -3978,6 +4019,14 @@ async def list_executions(
                 return v.replace('"', '\\"')
 
             query_parts = []
+            temporal_scope = _normalize_temporal_list_scope(
+                scope,
+                workflow_type=workflow_type,
+                entry=entry,
+            )
+            scope_query = _TEMPORAL_SCOPE_QUERIES[temporal_scope]
+            if scope_query:
+                query_parts.append(scope_query)
             if workflow_type:
                 query_parts.append(f'WorkflowType="{escape_val(workflow_type)}"')
             if state:

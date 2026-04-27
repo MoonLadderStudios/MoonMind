@@ -18,7 +18,15 @@ type ListDashboardConfig = {
   };
 };
 
-const WORKFLOW_TYPES = ['MoonMind.Run', 'MoonMind.ManifestIngest'] as const;
+const USER_WORKFLOW_TYPES = ['MoonMind.Run', 'MoonMind.ManifestIngest'] as const;
+const SYSTEM_WORKFLOW_TYPES = ['MoonMind.ProviderProfileManager'] as const;
+const WORKFLOW_TYPES = [...USER_WORKFLOW_TYPES, ...SYSTEM_WORKFLOW_TYPES] as const;
+const LIST_SCOPES = [
+  ['tasks', 'Tasks'],
+  ['user', 'User Workflows'],
+  ['system', 'System Workflows'],
+  ['all', 'All Workflows'],
+] as const;
 const TEMPORAL_STATUSES = [
   'scheduled',
   'initializing',
@@ -104,6 +112,15 @@ function summarizeRuntime(runtime: string | null | undefined): string {
   return label === '—' ? '' : label;
 }
 
+function normalizeListScope(raw: string | null): string {
+  const candidate = (raw || '').trim().toLowerCase();
+  return LIST_SCOPES.some(([value]) => value === candidate) ? candidate : 'tasks';
+}
+
+function scopeLabel(value: string): string {
+  return LIST_SCOPES.find(([scopeValue]) => scopeValue === value)?.[1] || value;
+}
+
 function dependencyListSummary(row: ExecutionRow): string {
   const blocked = Boolean(
     row.blockedOnDependencies ||
@@ -168,6 +185,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
+  const [listScope, setListScope] = useState(() =>
+    normalizeListScope(initial.get('scope') || (initial.get('workflowType') || initial.get('entry') ? 'all' : null)),
+  );
   const [workflowType, setWorkflowType] = useState(() => initial.get('workflowType') || '');
   const [temporalState, setTemporalState] = useState(() => (initial.get('state') || '').toLowerCase());
   const [entry, setEntry] = useState(() => (initial.get('entry') || '').toLowerCase());
@@ -183,10 +203,16 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     return 'desc';
   });
   const normalizedRepository = repository.trim();
+  const workflowTypeOptions = useMemo(() => {
+    if (listScope === 'user') return USER_WORKFLOW_TYPES;
+    if (listScope === 'system') return SYSTEM_WORKFLOW_TYPES;
+    return WORKFLOW_TYPES;
+  }, [listScope]);
 
   const syncUrl = useCallback(() => {
     const params = new URLSearchParams();
-    if (workflowType) params.set('workflowType', workflowType);
+    if (listScope !== 'tasks') params.set('scope', listScope);
+    if (listScope !== 'tasks' && workflowType) params.set('workflowType', workflowType);
     if (temporalState) params.set('state', temporalState);
     if (entry) params.set('entry', entry);
     if (normalizedRepository) params.set('repo', normalizedRepository);
@@ -198,6 +224,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     }
     replaceUrlQuery(params);
   }, [
+    listScope,
     workflowType,
     temporalState,
     entry,
@@ -216,6 +243,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     'tasks-list',
     'temporal',
     pageSize,
+    listScope,
     workflowType,
     temporalState,
     entry,
@@ -230,8 +258,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       const params = new URLSearchParams();
       params.set('source', 'temporal');
       params.set('pageSize', String(pageSize));
+      params.set('scope', listScope);
       if (listCursor) params.set('nextPageToken', listCursor);
-      if (workflowType) params.set('workflowType', workflowType);
+      if (listScope !== 'tasks' && workflowType) params.set('workflowType', workflowType);
       if (temporalState) params.set('state', temporalState);
       if (entry) params.set('entry', entry);
       if (normalizedRepository) params.set('repo', normalizedRepository);
@@ -316,15 +345,17 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const activeFilters = useMemo(
     () =>
       [
-        workflowType ? ['Workflow', workflowType] : null,
+        listScope !== 'tasks' ? ['Scope', scopeLabel(listScope)] : null,
+        listScope !== 'tasks' && workflowType ? ['Workflow', workflowType] : null,
         temporalState ? ['Status', temporalState] : null,
         entry ? ['Entry', entry] : null,
         normalizedRepository ? ['Repository', normalizedRepository] : null,
       ].filter((filter): filter is [string, string] => Boolean(filter)),
-    [workflowType, temporalState, entry, normalizedRepository],
+    [listScope, workflowType, temporalState, entry, normalizedRepository],
   );
   const hasActiveFilters = activeFilters.length > 0;
   const clearFilters = useCallback(() => {
+    setListScope('tasks');
     setWorkflowType('');
     setTemporalState('');
     setEntry('');
@@ -363,17 +394,44 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
         <form className="task-list-control-grid" onSubmit={(event) => event.preventDefault()}>
           <label>
+            Scope
+            <select
+              value={listScope}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                const nextScope = normalizeListScope(event.target.value);
+                setListScope(nextScope);
+                const nextWorkflowTypes =
+                  nextScope === 'user'
+                    ? USER_WORKFLOW_TYPES
+                    : nextScope === 'system'
+                      ? SYSTEM_WORKFLOW_TYPES
+                      : WORKFLOW_TYPES;
+                if (nextScope === 'tasks' || !nextWorkflowTypes.some((type) => type === workflowType)) {
+                  setWorkflowType('');
+                }
+                resetToFirstPage();
+              }}
+            >
+              {LIST_SCOPES.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             Workflow Type
             <select
               value={workflowType}
-              disabled={!listEnabled}
+              disabled={!listEnabled || listScope === 'tasks'}
               onChange={(event) => {
                 setWorkflowType(event.target.value);
                 resetToFirstPage();
               }}
             >
               <option value="">All Types</option>
-              {WORKFLOW_TYPES.map((workflow) => (
+              {workflowTypeOptions.map((workflow) => (
                 <option key={workflow} value={workflow}>
                   {workflow}
                 </option>
