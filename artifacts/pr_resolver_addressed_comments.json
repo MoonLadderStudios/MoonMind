@@ -1,12 +1,27 @@
 [
   {
-    "id": 3144433181,
+    "id": 3144649411,
     "disposition": "addressed",
-    "rationale": "Deployment update idempotency now uses the normalized reason only for update submissions, so omitted reasons produce a stable key segment while rollback submissions remain distinct. Covered by tests/unit/api/routers/test_deployment_operations.py."
+    "rationale": "Moved the docker compose run -e flag before the pytest service token in tools/test_integration.sh so the environment option is parsed by compose."
   },
   {
-    "id": 4177704240,
+    "id": 4177919845,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary comment with no distinct actionable request beyond the inline comments."
+  },
+  {
+    "id": 3144652319,
     "disposition": "addressed",
-    "rationale": "Top-level review summarized the same deployment update idempotency issue; the service fix and regression test address that concern."
+    "rationale": "Imported ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV and TemporalClientAdapter at module scope in tests/unit/conftest.py."
+  },
+  {
+    "id": 3144652324,
+    "disposition": "addressed",
+    "rationale": "Replaced the hardcoded Temporal live-test environment variable string with ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV."
+  },
+  {
+    "id": 4177922493,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary comment that restates the same maintainability feedback addressed by the inline comments."
   }
 ]
