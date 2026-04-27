@@ -1454,6 +1454,23 @@ function isMergeAutomationPublishMode(value: string): boolean {
   return value.trim().toLowerCase() === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE;
 }
 
+function templateEnumOptionLabel(
+  definition: TaskTemplateInputDefinition,
+  option: string,
+): string {
+  const normalizedName = definition.name.trim().toLowerCase();
+  const normalizedOption = option.trim().toLowerCase();
+  if (normalizedName === "publish_mode") {
+    if (normalizedOption === "pr") {
+      return "PR";
+    }
+    if (normalizedOption === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE) {
+      return "PR with Merge Automation";
+    }
+  }
+  return option;
+}
+
 function mapExpandedStepToState(
   index: number,
   step: ExpandedStepPayload,
@@ -3223,8 +3240,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   useEffect(() => {
     if (
       pageMode.mode === "create" &&
-      (selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG ||
-        selectedPreset?.slug === JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG)
+      selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG
     ) {
       setPublishMode("none");
     }
@@ -6467,7 +6483,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           >
                             {(definition.options || []).map((option) => (
                               <option key={option} value={option}>
-                                {option}
+                                {templateEnumOptionLabel(definition, option)}
                               </option>
                             ))}
                           </select>

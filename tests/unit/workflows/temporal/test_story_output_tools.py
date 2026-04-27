@@ -866,6 +866,40 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
     assert "MM-404" in first_parameters["task"]["instructions"]
 
 @pytest.mark.asyncio
+async def test_create_jira_orchestrate_tasks_omits_disabled_merge_automation():
+    creator = _FakeExecutionCreator()
+
+    result = await create_jira_orchestrate_tasks_from_issue_mappings(
+        {
+            "jira": {
+                "issueMappings": [
+                    {
+                        "storyId": "STORY-001",
+                        "storyIndex": 1,
+                        "summary": "First",
+                        "issueKey": "MM-501",
+                    },
+                ]
+            },
+            "task": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {
+                    "mode": "pr",
+                    "mergeAutomation": {"enabled": "False"},
+                },
+                "orchestrationMode": "runtime",
+            },
+        },
+        execution_creator=creator,
+    )
+
+    assert result.status == "COMPLETED"
+    first_parameters = creator.requests[0]["initial_parameters"]
+    assert first_parameters["publishMode"] == "pr"
+    assert first_parameters["task"]["publish"] == {"mode": "pr"}
+
+@pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_uses_previous_step_mappings_and_owner_context():
     creator = _FakeExecutionCreator()
 

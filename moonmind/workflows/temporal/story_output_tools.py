@@ -320,6 +320,17 @@ def _stable_idempotency_key(
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
     return f"jira-orchestrate:{source_issue_key}:{digest}"[:128]
 
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _downstream_task_payload(
     *,
     mapping: Mapping[str, Any],
@@ -356,8 +367,12 @@ def _downstream_task_payload(
         or publish.get("mergeAutomation")
         or publish.get("merge_automation")
     )
-    if merge_automation and _string(publish.get("mode")).lower() == "pr":
-        publish["mergeAutomation"] = merge_automation
+    if (
+        merge_automation
+        and _truthy(merge_automation.get("enabled"))
+        and _string(publish.get("mode")).lower() == "pr"
+    ):
+        publish["mergeAutomation"] = {**merge_automation, "enabled": True}
         publish.pop("merge_automation", None)
     else:
         publish.pop("mergeAutomation", None)
