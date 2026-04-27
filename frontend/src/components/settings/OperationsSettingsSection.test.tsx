@@ -251,22 +251,17 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(within(card).queryByText(/recreate every service/i)).toBeNull();
   });
 
-  it('requires a reason, confirms restart details, and submits the typed deployment payload', async () => {
+  it('submits the typed deployment payload without requiring a reason', async () => {
     renderOperations();
 
     const card = await screen.findByRole('region', { name: /deployment update/i });
+
+    fireEvent.change(await within(card).findByLabelText(/target reference/i), {
+      target: { value: 'latest' },
+    });
     fireEvent.click(
       await within(card).findByRole('button', { name: /submit deployment update/i }),
     );
-    expect(within(card).getByText(/reason is required/i)).toBeTruthy();
-
-    fireEvent.change(within(card).getByLabelText(/target reference/i), {
-      target: { value: 'latest' },
-    });
-    fireEvent.change(within(card).getByLabelText(/reason/i), {
-      target: { value: 'Routine operations update' },
-    });
-    fireEvent.click(within(card).getByRole('button', { name: /submit deployment update/i }));
 
     await waitFor(() => {
       expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Current image: ghcr.io/moonladderstudios/moonmind:stable'));
@@ -293,8 +288,8 @@ describe('OperationsSettingsSection deployment update card', () => {
         runSmokeCheck: false,
         pauseWork: false,
         pruneOldImages: false,
-        reason: 'Routine operations update',
       });
+      expect(JSON.parse(String(updateCall?.[1]?.body))).not.toHaveProperty('reason');
     });
     expect(await within(card).findByText(/deployment update queued/i)).toBeTruthy();
   });

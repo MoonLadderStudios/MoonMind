@@ -1,37 +1,12 @@
 [
   {
-    "id": 3144367004,
+    "id": 3144433181,
     "disposition": "addressed",
-    "rationale": "Preset text inputs now preserve in-progress whitespace while typing; values are trimmed only when resolving inputs for expansion. Added a regression test for trailing-space editing."
+    "rationale": "Deployment update idempotency now uses the normalized reason only for update submissions, so omitted reasons produce a stable key segment while rollback submissions remain distinct. Covered by tests/unit/api/routers/test_deployment_operations.py."
   },
   {
-    "id": 4177646619,
-    "disposition": "not-applicable",
-    "rationale": "Review summary comment. The actionable inline comments from the same review were addressed individually."
-  },
-  {
-    "id": 3144367005,
+    "id": 4177704240,
     "disposition": "addressed",
-    "rationale": "Template input placeholder normalization now assigns the stripped value once and reuses it."
-  },
-  {
-    "id": 3144367007,
-    "disposition": "addressed",
-    "rationale": "Apply now relies on the React Query preset detail result instead of performing a duplicate manual fetch; the Apply button is disabled while preset details are loading."
-  },
-  {
-    "id": 3144369447,
-    "disposition": "addressed",
-    "rationale": "Changing presets clears both visible template input state and the hidden template input memory ref. Added a regression test for stale remembered values after switching presets."
-  },
-  {
-    "id": 3144369448,
-    "disposition": "addressed",
-    "rationale": "Boolean preset options are now stored as booleans from checkbox changes and resolved without treating the string false as truthy. Added a regression test for unchecked boolean submission."
-  },
-  {
-    "id": 4177649280,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary. The actionable inline comments were addressed individually."
+    "rationale": "Top-level review summarized the same deployment update idempotency issue; the service fix and regression test address that concern."
   }
 ]

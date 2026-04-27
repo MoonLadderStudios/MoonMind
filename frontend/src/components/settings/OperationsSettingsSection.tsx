@@ -396,9 +396,6 @@ export function OperationsSettingsSection({
       if (!repository || !reference) {
         throw new Error('Target image is required.');
       }
-      if (!reason) {
-        throw new Error('Deployment update reason is required.');
-      }
 
       const targetImage = `${repository}:${reference}`;
       const confirmation = [
@@ -438,7 +435,7 @@ export function OperationsSettingsSection({
           runSmokeCheck,
           pauseWork,
           pruneOldImages,
-          reason,
+          ...(reason ? { reason } : {}),
         }),
       });
       if (!response.ok) {
@@ -552,13 +549,6 @@ export function OperationsSettingsSection({
   const handleDeploymentSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setDeploymentNotice(null);
-    if (!deploymentReason.trim()) {
-      setDeploymentNotice({
-        level: 'error',
-        text: 'Deployment update reason is required.',
-      });
-      return;
-    }
     deploymentMutation.mutate();
   };
 
@@ -939,14 +929,13 @@ export function OperationsSettingsSection({
               </fieldset>
 
               <label className="block space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Reason</span>
+                <span>Reason (optional)</span>
                 <input
                   className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                   type="text"
                   maxLength={200}
                   value={deploymentReason}
                   onChange={(event) => setDeploymentReason(event.target.value)}
-                  required
                 />
               </label>
 

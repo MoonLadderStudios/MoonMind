@@ -757,7 +757,7 @@ async def test_default_skill_registry_payload_uses_curated_deployment_tool_defin
     assert definition["security"]["allowed_roles"] == ["admin"]
 
     input_schema = definition["inputs"]["schema"]
-    assert input_schema["required"] == ["stack", "image", "reason"]
+    assert input_schema["required"] == ["stack", "image"]
     assert input_schema["additionalProperties"] is False
     assert input_schema["properties"]["image"]["additionalProperties"] is False
 

@@ -20,6 +20,7 @@ from api_service.services.deployment_operations import (
     RollbackEligibilityDecision,
     RollbackImageTarget,
 )
+from moonmind.config.settings import settings
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     DEPLOYMENT_UPDATE_TOOL_VERSION,
@@ -244,7 +245,34 @@ def test_explicit_retry_submission_creates_distinct_audited_update_request(
     )
 
 
-def test_non_admin_cannot_submit_deployment_update(user_client: TestClient) -> None:
+def test_repeated_update_submission_without_reason_reuses_idempotency_key(
+    admin_client: tuple[TestClient, _FakeExecutionService],
+) -> None:
+    client, execution_service = admin_client
+    payload = _valid_update_payload()
+    payload.pop("reason")
+
+    first = client.post(
+        "/api/v1/operations/deployment/update",
+        json=payload,
+    )
+    second = client.post(
+        "/api/v1/operations/deployment/update",
+        json=payload,
+    )
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert len(execution_service.requests) == 2
+    assert execution_service.requests[0]["idempotency_key"] == (
+        execution_service.requests[1]["idempotency_key"]
+    )
+
+
+def test_non_admin_cannot_submit_deployment_update(
+    user_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "default")
     response = user_client.post(
         "/api/v1/operations/deployment/update",
         json=_valid_update_payload(),
@@ -253,6 +281,20 @@ def test_non_admin_cannot_submit_deployment_update(user_client: TestClient) -> N
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "deployment_update_forbidden"
     assert response.json()["detail"]["failureClass"] == "authorization_failure"
+
+
+def test_disabled_auth_user_can_submit_deployment_update_as_default_admin(
+    user_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
+
+    response = user_client.post(
+        "/api/v1/operations/deployment/update",
+        json=_valid_update_payload(),
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "QUEUED"
 
 
 @pytest.mark.parametrize(
@@ -273,7 +315,6 @@ def test_non_admin_cannot_submit_deployment_update(user_client: TestClient) -> N
             "deployment_image_reference_invalid",
         ),
         ("mode", "shell", "deployment_mode_not_allowed"),
-        ("reason", "   ", "deployment_reason_required"),
     ],
 )
 def test_invalid_deployment_update_policy_inputs_are_rejected_before_execution(
@@ -294,6 +335,25 @@ def test_invalid_deployment_update_policy_inputs_are_rejected_before_execution(
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == code
     assert execution_service.requests == []
+
+
+def test_deployment_update_reason_is_optional(
+    admin_client: tuple[TestClient, _FakeExecutionService],
+) -> None:
+    client, execution_service = admin_client
+    payload = _valid_update_payload()
+    payload.pop("reason")
+
+    response = client.post(
+        "/api/v1/operations/deployment/update",
+        json=payload,
+    )
+
+    assert response.status_code == 202
+    parameters = execution_service.requests[0]["initial_parameters"]
+    assert isinstance(parameters, dict)
+    plan_inputs = parameters["task"]["plan"][0]["inputs"]
+    assert "reason" not in plan_inputs
 
 
 def test_arbitrary_shell_and_path_fields_are_not_accepted(

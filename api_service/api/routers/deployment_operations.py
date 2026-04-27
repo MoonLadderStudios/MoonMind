@@ -50,7 +50,7 @@ class DeploymentUpdateRequest(BaseModel):
     run_smoke_check: bool = Field(False, alias="runSmokeCheck")
     pause_work: bool = Field(False, alias="pauseWork")
     prune_old_images: bool = Field(False, alias="pruneOldImages")
-    reason: str = Field(..., min_length=1)
+    reason: str | None = None
     operation_kind: Literal["update", "rollback"] = Field("update", alias="operationKind")
     rollback_source_action_id: str | None = Field(
         None, alias="rollbackSourceActionId"
@@ -173,6 +173,8 @@ def _get_temporal_execution_service(
 
 
 def _require_admin(user: User) -> None:
+    if settings.oidc.AUTH_PROVIDER == "disabled":
+        return
     if bool(getattr(user, "is_superuser", False)):
         return
     raise HTTPException(

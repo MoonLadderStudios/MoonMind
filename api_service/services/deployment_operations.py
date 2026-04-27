@@ -55,7 +55,7 @@ class DeploymentUpdateSubmission:
     run_smoke_check: bool
     pause_work: bool
     prune_old_images: bool
-    reason: str
+    reason: str | None
     requested_by_user_id: UUID | str | None
     operation_kind: str = "update"
     rollback_source_action_id: str | None = None
@@ -162,7 +162,7 @@ class DeploymentOperationsService:
         repository: str,
         reference: str,
         mode: str,
-        reason: str,
+        reason: str | None,
         operation_kind: str = "update",
         confirmation: str | None = None,
         rollback_source_action_id: str | None = None,
@@ -182,11 +182,6 @@ class DeploymentOperationsService:
             raise DeploymentOperationError(
                 "deployment_mode_not_allowed",
                 "Deployment update mode is not permitted by policy.",
-            )
-        if not str(reason or "").strip():
-            raise DeploymentOperationError(
-                "deployment_reason_required",
-                "Deployment update reason is required.",
             )
         normalized_operation = str(operation_kind or "update").strip()
         if normalized_operation not in {"update", "rollback"}:
@@ -276,9 +271,10 @@ class DeploymentOperationsService:
             "runSmokeCheck": submission.run_smoke_check,
             "pauseWork": submission.pause_work,
             "pruneOldImages": submission.prune_old_images,
-            "reason": submission.reason,
             "operationKind": submission.operation_kind,
         }
+        if submission.reason and submission.reason.strip():
+            plan_inputs["reason"] = submission.reason.strip()
         if submission.rollback_source_action_id:
             plan_inputs["rollbackSourceActionId"] = submission.rollback_source_action_id
         if submission.confirmation:
@@ -318,10 +314,11 @@ class DeploymentOperationsService:
         policy: DeploymentStackPolicy,
         submission: DeploymentUpdateSubmission,
     ) -> str:
+        normalized_reason = str(submission.reason or "").strip()
         explicit_action_key = (
             uuid4().hex
             if submission.operation_kind == "rollback"
-            else submission.reason.strip()
+            else normalized_reason
         )
         return "|".join(
             [

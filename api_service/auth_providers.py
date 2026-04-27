@@ -71,7 +71,9 @@ def get_current_user():
             ):
                 from types import SimpleNamespace as _SimpleNamespace
 
-                return _SimpleNamespace(id=None, email="stub@example.com")
+                return _SimpleNamespace(
+                    id=None, email="stub@example.com", is_superuser=True
+                )
 
             async def _load_default_user() -> User | None:
                 from api_service.db.base import get_async_session_context
@@ -84,6 +86,10 @@ def get_current_user():
             try:
                 user_obj = await asyncio.wait_for(_load_default_user(), timeout=1.0)
                 if user_obj is not None:
+                    # Disabled auth is single-user local mode; treat that principal
+                    # as the local administrator even if the persisted row predates
+                    # this policy.
+                    user_obj.is_superuser = True
                     return user_obj
             except (Exception, asyncio.TimeoutError):
                 # Preserve fallback behaviour while surfacing lookup failures.
@@ -95,7 +101,7 @@ def get_current_user():
             # Fallback: lightweight stub with the minimal attributes used in code
             from types import SimpleNamespace
 
-            return SimpleNamespace(id=None, email="stub@example.com")
+            return SimpleNamespace(id=None, email="stub@example.com", is_superuser=True)
 
         _cached_current_user_dependency = _current_user_fallback
 
