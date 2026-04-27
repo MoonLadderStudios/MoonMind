@@ -580,6 +580,30 @@ function mergeRecordValues(
   };
 }
 
+function artifactInputParametersForPatch(
+  execution: TemporalTaskEditingExecutionContract,
+  artifactInput?: Record<string, unknown> | undefined,
+): {
+  parameters: Record<string, unknown>;
+  fromAuthoritativeDraft: boolean;
+} {
+  const artifactRecord = recordValue(artifactInput);
+  const snapshotDraft = recordValue(artifactRecord.draft);
+  if (
+    execution.taskInputSnapshot?.reconstructionMode === "authoritative" &&
+    Object.keys(snapshotDraft).length > 0
+  ) {
+    return {
+      parameters: snapshotDraft,
+      fromAuthoritativeDraft: true,
+    };
+  }
+  return {
+    parameters: artifactRecord,
+    fromAuthoritativeDraft: false,
+  };
+}
+
 function buildEditParametersPatch({
   execution,
   artifactInput,
@@ -589,13 +613,23 @@ function buildEditParametersPatch({
   artifactInput?: Record<string, unknown> | undefined;
   submittedPayload: Record<string, unknown>;
 }): Record<string, unknown> {
+  const artifactBase = artifactInputParametersForPatch(execution, artifactInput);
+  const executionParameters = recordValue(execution.inputParameters);
   const baseParameters = mergeRecordValues(
-    recordValue(artifactInput),
-    recordValue(execution.inputParameters),
+    artifactBase.fromAuthoritativeDraft
+      ? executionParameters
+      : artifactBase.parameters,
+    artifactBase.fromAuthoritativeDraft
+      ? artifactBase.parameters
+      : executionParameters,
   );
   const submittedTask = recordValue(submittedPayload.task);
+  const artifactBaseTask = recordValue(artifactBase.parameters.task);
+  const executionTask = recordValue(executionParameters.task);
   const baseTask = mergeRecordValues(
-    recordValue(recordValue(artifactInput).task),
+    artifactBase.fromAuthoritativeDraft
+      ? executionTask
+      : artifactBaseTask,
     recordValue(baseParameters.task),
   );
   const editTask = { ...submittedTask };
