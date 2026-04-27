@@ -3240,7 +3240,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   useEffect(() => {
     if (
       pageMode.mode === "create" &&
-      selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG
+      (selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG ||
+        selectedPreset?.slug === JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG)
     ) {
       setPublishMode("none");
     }

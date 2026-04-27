@@ -361,14 +361,15 @@ def _downstream_task_payload(
     )
     runtime = _mapping(task_payload.get("runtime"))
     publish = _mapping(task_payload.get("publish"))
-    merge_automation = _mapping(
+    merge_automation_value = (
         task_payload.get("mergeAutomation")
         or task_payload.get("merge_automation")
         or publish.get("mergeAutomation")
         or publish.get("merge_automation")
     )
     if (
-        merge_automation
+        isinstance(merge_automation_value, Mapping)
+        and (merge_automation := dict(merge_automation_value))
         and _truthy(merge_automation.get("enabled"))
         and _string(publish.get("mode")).lower() == "pr"
     ):

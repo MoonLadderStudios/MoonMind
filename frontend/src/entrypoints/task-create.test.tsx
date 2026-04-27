@@ -5349,7 +5349,7 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
-  it("keeps parent publish controls active when selecting the Jira Breakdown and Orchestrate preset", async () => {
+  it("defaults parent publish mode to none while keeping controls active for the Jira Breakdown and Orchestrate preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -5399,8 +5399,14 @@ describe("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
-      ).toBe("pr");
+      ).toBe("none");
     });
+    expect((screen.getByLabelText("GitHub Repo") as HTMLInputElement).disabled).toBe(
+      false,
+    );
+    expect(
+      (screen.getByLabelText("Publish Mode") as HTMLSelectElement).disabled,
+    ).toBe(false);
   });
 
   it("shows only PR publish choices for the Jira Breakdown and Orchestrate preset inputs", async () => {
