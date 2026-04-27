@@ -284,6 +284,23 @@ describe('Tasks List Entrypoint', () => {
     expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
   });
 
+  it('preserves the default task scope in shared URLs when entry filters are set', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const baselineCalls = fetchSpy.mock.calls.length;
+
+    fireEvent.change(screen.getByLabelText('Entry'), { target: { value: 'manifest' } });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+    });
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&entry=manifest',
+    );
+    expect(window.location.search).toBe('?scope=tasks&entry=manifest&limit=50');
+  });
+
   it('labels the lifecycle filter as status and exposes canonical status options', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
