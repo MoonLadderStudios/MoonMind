@@ -9246,6 +9246,7 @@ export interface operations {
                 entry?: string | null;
                 repo?: string | null;
                 integration?: string | null;
+                scope?: string | null;
                 pageSize?: number;
                 nextPageToken?: string | null;
                 source?: string | null;

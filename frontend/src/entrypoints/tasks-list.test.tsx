@@ -40,6 +40,9 @@ describe('Tasks List Entrypoint', () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks',
+    );
 
     const scheduledHeaderButton = await screen.findByRole('button', {
       name: /Scheduled\. Sorted descending\. Activate to sort ascending\./i,
@@ -61,12 +64,59 @@ describe('Tasks List Entrypoint', () => {
     });
   });
 
+  it('defaults to user task scope but exposes raw all-workflows scope', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
 
-  it('renders executing task-list pills with the shared shimmer selector contract while keeping non-executing pills plain', async () => {
+    await screen.findAllByText('Example task');
+
+    const scopeFilter = screen.getByLabelText('Scope') as HTMLSelectElement;
+    expect(scopeFilter.value).toBe('tasks');
+    expect((screen.getByLabelText('Workflow Type') as HTMLSelectElement).disabled).toBe(true);
+
+    const baselineCalls = fetchSpy.mock.calls.length;
+    fireEvent.change(scopeFilter, { target: { value: 'all' } });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+    });
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=all',
+    );
+    expect((screen.getByLabelText('Workflow Type') as HTMLSelectElement).disabled).toBe(false);
+  });
+
+  it('keeps explicit task scope in the URL when entry filters are active', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const baselineCalls = fetchSpy.mock.calls.length;
+
+    fireEvent.change(screen.getByLabelText('Entry'), { target: { value: 'run' } });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+    });
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&entry=run',
+    );
+    expect(window.location.search).toContain('scope=tasks');
+    expect(window.location.search).toContain('entry=run');
+  });
+
+  it('renders active task-list pills with the shared shimmer selector contract while keeping inactive pills plain', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
       json: async () => ({
         items: [
+          {
+            taskId: 'task-planning',
+            source: 'temporal',
+            title: 'Planning task',
+            status: 'running',
+            state: 'planning',
+            rawState: 'planning',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
           {
             taskId: 'task-executing',
             source: 'temporal',
@@ -114,28 +164,34 @@ describe('Tasks List Entrypoint', () => {
         document.querySelectorAll(
           '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(4);
     });
 
-    const executingPills = document.querySelectorAll<HTMLElement>(
+    const activePills = document.querySelectorAll<HTMLElement>(
       '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
     );
-    expect(executingPills).toHaveLength(2);
-    for (const pill of executingPills) {
-      expect(pill.dataset.state).toBe('executing');
-      expect(pill.className).toContain('is-executing');
+    expect(activePills).toHaveLength(4);
+    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'planning')).toHaveLength(2);
+    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'executing')).toHaveLength(2);
+    for (const pill of activePills) {
+      const label = pill.dataset.state;
+      if (label !== 'planning' && label !== 'executing') {
+        throw new Error(`Unexpected active status pill state: ${label}`);
+      }
+      expect(pill.dataset.state).toBe(label);
+      expect(pill.className).toContain(`is-${label}`);
       expect(pill.className).toContain('status-running');
-      expect(pill.dataset.shimmerLabel).toBe('executing');
-      expect(pill.getAttribute('aria-label')).toBe('executing');
-      expect(pill.textContent).toBe('executing');
+      expect(pill.dataset.shimmerLabel).toBe(label);
+      expect(pill.getAttribute('aria-label')).toBe(label);
+      expect(pill.textContent).toBe(label);
       expect(pill.querySelector('.status-letter-wave')?.getAttribute('aria-hidden')).toBe('true');
       const glyphs = Array.from(pill.querySelectorAll<HTMLElement>('.status-letter-wave__glyph'));
-      expect(glyphs).toHaveLength('executing'.length);
-      expect(glyphs.map((glyph) => glyph.textContent).join('')).toBe('executing');
+      expect(glyphs).toHaveLength(label.length);
+      expect(glyphs.map((glyph) => glyph.textContent).join('')).toBe(label);
       expect(glyphs.map((glyph) => glyph.style.getPropertyValue('--mm-letter-index'))).toEqual(
-        Array.from({ length: 'executing'.length }, (_, index) => String(index)),
+        Array.from({ length: label.length }, (_, index) => String(index)),
       );
-      expect(glyphs.every((glyph) => glyph.style.getPropertyValue('--mm-letter-count') === String('executing'.length))).toBe(true);
+      expect(glyphs.every((glyph) => glyph.style.getPropertyValue('--mm-letter-count') === String(label.length))).toBe(true);
     }
 
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
@@ -228,7 +284,9 @@ describe('Tasks List Entrypoint', () => {
     await waitFor(() => {
       expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
     });
-    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe('/api/executions?source=temporal&pageSize=50&repo=owner%2Frepo');
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&repo=owner%2Frepo',
+    );
 
     fireEvent.change(screen.getByLabelText('Repository'), {
       target: { value: 'owner/repo ' },
@@ -239,6 +297,23 @@ describe('Tasks List Entrypoint', () => {
       expect(repositoryInput.value).toBe('owner/repo ');
     });
     expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+  });
+
+  it('preserves the default task scope in shared URLs when entry filters are set', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const baselineCalls = fetchSpy.mock.calls.length;
+
+    fireEvent.change(screen.getByLabelText('Entry'), { target: { value: 'manifest' } });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+    });
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&entry=manifest',
+    );
+    expect(window.location.search).toBe('?scope=tasks&entry=manifest&limit=50');
   });
 
   it('labels the lifecycle filter as status and exposes canonical status options', async () => {
@@ -273,7 +348,9 @@ describe('Tasks List Entrypoint', () => {
     await waitFor(() => {
       expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
     });
-    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe('/api/executions?source=temporal&pageSize=50&state=completed');
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&state=completed',
+    );
   });
 
   it('renders pagination as arrow buttons beside the table summary', async () => {

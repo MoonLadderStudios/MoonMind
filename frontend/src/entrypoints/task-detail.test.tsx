@@ -357,7 +357,7 @@ describe('Task Detail Entrypoint', () => {
   });
 
 
-  it('renders executing detail pills with the shared shimmer selector contract and keeps dependency pills non-executing when appropriate', async () => {
+  it('renders planning detail pills with the shared shimmer selector contract and keeps dependency pills inactive when appropriate', async () => {
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -367,11 +367,11 @@ describe('Task Detail Entrypoint', () => {
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
       workflowType: 'MoonMind.Run',
-      title: 'Executing detail task',
+      title: 'Planning detail task',
       summary: 'Execution summary',
       status: 'running',
-      state: 'executing',
-      rawState: 'executing',
+      state: 'planning',
+      rawState: 'planning',
       temporalStatus: 'running',
       createdAt: '2026-04-09T00:00:00Z',
       updatedAt: '2026-04-09T00:00:04Z',
@@ -401,19 +401,19 @@ describe('Task Detail Entrypoint', () => {
 
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
-    await screen.findByText('Executing detail task');
+    await screen.findByText('Planning detail task');
     const toolbarStatus = document.querySelector<HTMLElement>('.toolbar-identity-row [data-effect="shimmer-sweep"]');
-    expect(toolbarStatus?.dataset.state).toBe('executing');
+    expect(toolbarStatus?.dataset.state).toBe('planning');
     expect(toolbarStatus?.dataset.effect).toBe('shimmer-sweep');
-    expect(toolbarStatus?.className).toContain('is-executing');
+    expect(toolbarStatus?.className).toContain('is-planning');
     expect(toolbarStatus?.className).toContain('status-running');
-    expect(toolbarStatus?.dataset.shimmerLabel).toBe('executing');
-    expect(toolbarStatus?.getAttribute('aria-label')).toBe('executing');
+    expect(toolbarStatus?.dataset.shimmerLabel).toBe('planning');
+    expect(toolbarStatus?.getAttribute('aria-label')).toBe('planning');
     expect(toolbarStatus?.querySelector('.status-letter-wave')?.getAttribute('aria-hidden')).toBe('true');
     const glyphs = Array.from(toolbarStatus?.querySelectorAll<HTMLElement>('.status-letter-wave__glyph') || []);
-    expect(glyphs).toHaveLength('executing'.length);
-    expect(glyphs.map((glyph) => glyph.textContent).join('')).toBe('executing');
-    expect(toolbarStatus?.textContent).toBe('executing');
+    expect(glyphs).toHaveLength('planning'.length);
+    expect(glyphs.map((glyph) => glyph.textContent).join('')).toBe('planning');
+    expect(toolbarStatus?.textContent).toBe('planning');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
