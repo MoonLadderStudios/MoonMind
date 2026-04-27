@@ -6,12 +6,19 @@ import {
 } from './executionStatusPillClasses';
 
 describe('executionStatusPillProps', () => {
-  it('adds executing shimmer selector metadata only for executing status pills', () => {
+  it('adds shimmer selector metadata for executing and planning status pills', () => {
     expect(executionStatusPillProps('executing')).toMatchObject({
       className: 'status status-running is-executing',
       'data-state': 'executing',
       'data-effect': 'shimmer-sweep',
       'data-shimmer-label': 'executing',
+    });
+
+    expect(executionStatusPillProps('planning')).toMatchObject({
+      className: 'status status-running is-planning',
+      'data-state': 'planning',
+      'data-effect': 'shimmer-sweep',
+      'data-shimmer-label': 'planning',
     });
 
     expect(executionStatusPillProps('running')).toEqual({
@@ -26,6 +33,7 @@ describe('executionStatusPillProps', () => {
     expect(executionStatusPillProps('completed')).toEqual({ className: 'status status-completed' });
     expect(executionStatusPillProps('failed')).toEqual({ className: 'status status-failed' });
     expect(executionStatusPillProps('executing').className).toBe('status status-running is-executing');
+    expect(executionStatusPillProps('planning').className).toBe('status status-running is-planning');
 
     expect(executionStatusPillProps('waiting_on_dependencies')).toEqual({
       className: 'status status-waiting',
