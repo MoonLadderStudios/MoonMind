@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -42,6 +43,7 @@ MANAGED_SESSION_RECONCILE_SCHEDULE_ID = "mm-operational:managed-session-reconcil
 MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE = (
     "mm-operational:managed-session-reconcile:{{.ScheduleTime}}"
 )
+ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV = "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS"
 
 def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
     """Check whether *exc* is a Temporal ``RPCError`` with the given gRPC status.
@@ -157,6 +159,16 @@ class TemporalClientAdapter:
         """Get or initialize the Temporal client connection."""
         if self._client is not None:
             return self._client
+        if (
+            os.getenv("PYTEST_CURRENT_TEST")
+            and os.getenv(ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV) != "1"
+        ):
+            raise RuntimeError(
+                "Refusing to open an implicit live Temporal connection while pytest "
+                f"is running. Pass an injected Temporal client/adapter, or set "
+                f"{ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV}=1 for tests that intentionally "
+                "use a live Temporal server."
+            )
         async with self._lock:
             if self._client is None:
                 self._client = await Client.connect(
