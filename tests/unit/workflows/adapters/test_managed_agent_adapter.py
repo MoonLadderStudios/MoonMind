@@ -36,6 +36,7 @@ from moonmind.auth.env_shaping import (
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ProfileResolutionError,
+    _pr_resolver_status,
     build_managed_profile_launch_context,
 )
 from moonmind.workflows.temporal.artifacts import (
@@ -47,6 +48,20 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 
 pytestmark = [pytest.mark.asyncio]
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"state": "MERGED"}, "merged"),
+        ({"final": {"final_state": "MERGED"}}, "merged"),
+        ({"final": {"finalState": "MERGED"}}, "merged"),
+    ],
+)
+async def test_pr_resolver_status_accepts_final_state_aliases(
+    payload: dict[str, Any], expected: str
+) -> None:
+    assert _pr_resolver_status(payload) == expected
 
 # ---------------------------------------------------------------------------
 # DB fixture

@@ -1,12 +1,12 @@
 [
   {
-    "id": 3144433181,
+    "id": 3144784832,
     "disposition": "addressed",
-    "rationale": "Deployment update idempotency now uses the normalized reason only for update submissions, so omitted reasons produce a stable key segment while rollback submissions remain distinct. Covered by tests/unit/api/routers/test_deployment_operations.py."
+    "rationale": "Added top-level state plus nested final_state/finalState resolver status candidates and covered them with a focused unit test."
   },
   {
-    "id": 4177704240,
-    "disposition": "addressed",
-    "rationale": "Top-level review summarized the same deployment update idempotency issue; the service fix and regression test address that concern."
+    "id": 4178053000,
+    "disposition": "not-applicable",
+    "rationale": "Review summary only; the actionable linked review comment was addressed."
   }
 ]
