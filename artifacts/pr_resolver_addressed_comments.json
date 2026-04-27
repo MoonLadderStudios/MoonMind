@@ -1,22 +1,12 @@
 [
   {
-    "id": 3144342995,
+    "id": 3144433181,
     "disposition": "addressed",
-    "rationale": "Changed authoritative snapshot patch merging so snapshot top-level parameters overlay thinned execution parameters, preserving details such as requiredCapabilities."
+    "rationale": "Deployment update idempotency now uses the normalized reason only for update submissions, so omitted reasons produce a stable key segment while rollback submissions remain distinct. Covered by tests/unit/api/routers/test_deployment_operations.py."
   },
   {
-    "id": 4177624347,
-    "disposition": "not-applicable",
-    "rationale": "Review summary only; the actionable merge-order concern is tracked and addressed under comment 3144342995."
-  },
-  {
-    "id": 3144346169,
+    "id": 4177704240,
     "disposition": "addressed",
-    "rationale": "Gated artifact.draft handling on execution.taskInputSnapshot.reconstructionMode=authoritative and added regression coverage for regular artifacts with a draft key."
-  },
-  {
-    "id": 4177626871,
-    "disposition": "not-applicable",
-    "rationale": "Automated review wrapper text only; the actionable Codex review comment is tracked and addressed under comment 3144346169."
+    "rationale": "Top-level review summarized the same deployment update idempotency issue; the service fix and regression test address that concern."
   }
 ]

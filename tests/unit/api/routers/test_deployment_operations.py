@@ -245,6 +245,30 @@ def test_explicit_retry_submission_creates_distinct_audited_update_request(
     )
 
 
+def test_repeated_update_submission_without_reason_reuses_idempotency_key(
+    admin_client: tuple[TestClient, _FakeExecutionService],
+) -> None:
+    client, execution_service = admin_client
+    payload = _valid_update_payload()
+    payload.pop("reason")
+
+    first = client.post(
+        "/api/v1/operations/deployment/update",
+        json=payload,
+    )
+    second = client.post(
+        "/api/v1/operations/deployment/update",
+        json=payload,
+    )
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert len(execution_service.requests) == 2
+    assert execution_service.requests[0]["idempotency_key"] == (
+        execution_service.requests[1]["idempotency_key"]
+    )
+
+
 def test_non_admin_cannot_submit_deployment_update(
     user_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

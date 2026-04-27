@@ -317,7 +317,7 @@ class DeploymentOperationsService:
         normalized_reason = str(submission.reason or "").strip()
         explicit_action_key = (
             uuid4().hex
-            if submission.operation_kind == "rollback" or not normalized_reason
+            if submission.operation_kind == "rollback"
             else normalized_reason
         )
         return "|".join(
