@@ -101,8 +101,11 @@ def _pr_resolver_status(payload: dict[str, Any]) -> str:
 
     status = _first_terminal_pr_resolver_status(
         payload.get("status"),
+        payload.get("state"),
         payload.get("merge_outcome"),
         payload.get("outcome"),
+        payload.get("final_state"),
+        payload.get("finalState"),
     )
     if status:
         return status
@@ -114,6 +117,8 @@ def _pr_resolver_status(payload: dict[str, Any]) -> str:
             final.get("status"),
             final.get("merge_outcome"),
             final.get("outcome"),
+            final.get("final_state"),
+            final.get("finalState"),
         )
     return ""
 
@@ -357,6 +362,8 @@ def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
         payload.get("latest_head_sha"),
         payload.get("headOid"),
         payload.get("head_oid"),
+        payload.get("headCommit"),
+        payload.get("head_commit"),
         final.get("headRefOid"),
         final.get("headSha"),
         final.get("head_sha"),
@@ -364,6 +371,8 @@ def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
         final.get("latest_head_sha"),
         final.get("headOid"),
         final.get("head_oid"),
+        final.get("headCommit"),
+        final.get("head_commit"),
     )
     if head_sha:
         metadata["headSha"] = head_sha
