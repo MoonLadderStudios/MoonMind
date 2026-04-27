@@ -48,7 +48,17 @@ _FORBIDDEN_STEP_KEYS = frozenset(
     }
 )
 _SUPPORTED_INPUT_TYPES = frozenset(
-    {"text", "textarea", "markdown", "enum", "boolean", "user", "team", "repo_path"}
+    {
+        "text",
+        "textarea",
+        "markdown",
+        "enum",
+        "boolean",
+        "user",
+        "team",
+        "repo_path",
+        "jira_board",
+    }
 )
 _JIRA_BREAKDOWN_SLUG = "jira-breakdown"
 _JIRA_BREAKDOWN_ORCHESTRATE_SLUG = "jira-breakdown-orchestrate"
@@ -826,6 +836,7 @@ class TaskTemplateCatalogService:
                     )
             else:
                 normalized_options = []
+            placeholder = str(raw_input.get("placeholder") or "").strip()
             names.add(name)
             validated.append(
                 {
@@ -835,6 +846,7 @@ class TaskTemplateCatalogService:
                     "required": bool(raw_input.get("required", False)),
                     "default": raw_input.get("default"),
                     **({"options": normalized_options} if normalized_options else {}),
+                    **({"placeholder": placeholder} if placeholder else {}),
                 }
             )
         return validated

@@ -6349,7 +6349,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "text" | "textarea" | "markdown" | "enum" | "boolean" | "user" | "team" | "repo_path";
+            type: "text" | "textarea" | "markdown" | "enum" | "boolean" | "user" | "team" | "repo_path" | "jira_board";
             /**
              * Required
              * @default false
@@ -6359,6 +6359,8 @@ export interface components {
             default?: unknown;
             /** Options */
             options?: string[];
+            /** Placeholder */
+            placeholder?: string | null;
         };
         /**
          * TaskTemplateListResponseSchema

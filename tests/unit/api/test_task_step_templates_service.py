@@ -997,6 +997,7 @@ async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
                 "jira": {
                     "projectKey": "TOOL",
                     "issueTypeName": "Story",
+                    "boardId": "",
                     "dependencyMode": "linear_blocker_chain",
                 },
             }
@@ -1054,6 +1055,7 @@ async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
             assert expanded["steps"][1]["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Story",
+                "boardId": "",
                 "dependencyMode": "none",
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
@@ -1120,6 +1122,7 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 "jira": {
                     "projectKey": "GAME",
                     "issueTypeName": "Story",
+                    "boardId": "",
                     "dependencyMode": "linear_blocker_chain",
                 },
             }
@@ -1168,6 +1171,7 @@ async def test_jira_breakdown_replaces_tool_placeholder_with_single_allowed_proj
             assert expanded["steps"][1]["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Story",
+                "boardId": "",
                 "dependencyMode": "none",
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
@@ -1405,6 +1409,7 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
                     "jira_issue_type": "Story",
+                    "jira_board_id": "84",
                     "jira_dependency_mode": "linear_blocker_chain",
                     "repository": "MoonLadderStudios/MoonMind",
                     "orchestration_mode": "runtime",
@@ -1421,6 +1426,7 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
             assert expanded["steps"][1]["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Story",
+                "boardId": "84",
                 "dependencyMode": "linear_blocker_chain",
             }
             downstream = expanded["steps"][2]
@@ -1428,6 +1434,7 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
             assert "Create one Jira Orchestrate task" in downstream["instructions"]
             assert "dependsOn" in downstream["instructions"]
             assert "MM-404" in downstream["instructions"]
+            assert "Selected Jira board ID: 84" in expanded["steps"][1]["instructions"]
             assert downstream["jiraOrchestration"]["task"] == {
                 "repository": "MoonLadderStudios/MoonMind",
                 "runtime": {"mode": "codex_cli"},
