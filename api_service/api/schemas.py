@@ -340,11 +340,20 @@ class TaskTemplateInputSchema(BaseModel):
     name: str
     label: str
     type: Literal[
-        "text", "textarea", "markdown", "enum", "boolean", "user", "team", "repo_path"
+        "text",
+        "textarea",
+        "markdown",
+        "enum",
+        "boolean",
+        "user",
+        "team",
+        "repo_path",
+        "jira_board",
     ]
     required: bool = False
     default: Any = None
     options: list[str] = Field(default_factory=list)
+    placeholder: Optional[str] = None
 
 class TaskTemplateStepSkillSchema(BaseModel):
     """Skill payload attached to a template step."""
