@@ -1,27 +1,17 @@
 [
   {
-    "id": 3144649411,
+    "id": 3144756846,
     "disposition": "addressed",
-    "rationale": "Moved the docker compose run -e flag before the pytest service token in tools/test_integration.sh so the environment option is parsed by compose."
+    "rationale": "Persisted explicit task scope when entry or workflow filters are active and added a tasks-list URL regression test."
   },
   {
-    "id": 4177919845,
+    "id": 4178025727,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary comment with no distinct actionable request beyond the inline comments."
+    "rationale": "Automated Codex review summary; the actionable child review comment is tracked separately."
   },
   {
-    "id": 3144652319,
-    "disposition": "addressed",
-    "rationale": "Imported ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV and TemporalClientAdapter at module scope in tests/unit/conftest.py."
-  },
-  {
-    "id": 3144652324,
-    "disposition": "addressed",
-    "rationale": "Replaced the hardcoded Temporal live-test environment variable string with ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV."
-  },
-  {
-    "id": 4177922493,
+    "id": 4178026060,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary comment that restates the same maintainability feedback addressed by the inline comments."
+    "rationale": "Gemini review body explicitly stated there was no feedback to address."
   }
 ]
