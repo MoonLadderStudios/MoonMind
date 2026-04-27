@@ -1997,9 +1997,9 @@ async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
 
             result = await activities.agent_runtime_publish_artifacts(
                 AgentRunResult(
-                    summary="Completed integration tests.",
+                    summary="Completed.",
                     metadata={
-                        "assistantText": "# Integration test report\n\nAll tests passed.",
+                        "operator_summary": "# Integration test report\n\nAll tests passed.",
                         "moonmind": {
                             "reportOutput": {
                                 "enabled": True,
@@ -2033,6 +2033,12 @@ async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
             assert reports[0].metadata_json["report_type"] == "integration_test_report"
             assert reports[0].metadata_json["report_scope"] == "final"
             assert reports[0].metadata_json["is_final_report"] is True
+            _artifact, path = await service.read_path(
+                artifact_id=reports[0].artifact_id,
+                principal="system:agent_runtime",
+            )
+            body = path.read_bytes()
+            assert body.decode("utf-8") == "# Integration test report\n\nAll tests passed.\n"
 
 async def test_agent_runtime_publish_artifacts_fails_required_report_on_publish_error(
     tmp_path: Path,
