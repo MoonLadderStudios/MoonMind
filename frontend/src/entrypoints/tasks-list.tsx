@@ -211,7 +211,8 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
   const syncUrl = useCallback(() => {
     const params = new URLSearchParams();
-    if (listScope !== 'tasks') params.set('scope', listScope);
+    const scopeSensitiveFilterActive = Boolean(entry || workflowType);
+    if (listScope !== 'tasks' || scopeSensitiveFilterActive) params.set('scope', listScope);
     if (listScope !== 'tasks' && workflowType) params.set('workflowType', workflowType);
     if (temporalState) params.set('state', temporalState);
     if (entry) params.set('entry', entry);

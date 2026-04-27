@@ -85,6 +85,24 @@ describe('Tasks List Entrypoint', () => {
     expect((screen.getByLabelText('Workflow Type') as HTMLSelectElement).disabled).toBe(false);
   });
 
+  it('keeps explicit task scope in the URL when entry filters are active', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const baselineCalls = fetchSpy.mock.calls.length;
+
+    fireEvent.change(screen.getByLabelText('Entry'), { target: { value: 'run' } });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+    });
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&entry=run',
+    );
+    expect(window.location.search).toContain('scope=tasks');
+    expect(window.location.search).toContain('entry=run');
+  });
+
   it('renders executing task-list pills with the shared shimmer selector contract while keeping non-executing pills plain', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,

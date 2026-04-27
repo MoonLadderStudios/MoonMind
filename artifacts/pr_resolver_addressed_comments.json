@@ -1,12 +1,17 @@
 [
   {
-    "id": 3144433181,
+    "id": 3144756846,
     "disposition": "addressed",
-    "rationale": "Deployment update idempotency now uses the normalized reason only for update submissions, so omitted reasons produce a stable key segment while rollback submissions remain distinct. Covered by tests/unit/api/routers/test_deployment_operations.py."
+    "rationale": "Persisted explicit task scope when entry or workflow filters are active and added a tasks-list URL regression test."
   },
   {
-    "id": 4177704240,
-    "disposition": "addressed",
-    "rationale": "Top-level review summarized the same deployment update idempotency issue; the service fix and regression test address that concern."
+    "id": 4178025727,
+    "disposition": "not-applicable",
+    "rationale": "Automated Codex review summary; the actionable child review comment is tracked separately."
+  },
+  {
+    "id": 4178026060,
+    "disposition": "not-applicable",
+    "rationale": "Gemini review body explicitly stated there was no feedback to address."
   }
 ]
