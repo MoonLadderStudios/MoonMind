@@ -2898,6 +2898,133 @@ def _snapshot_source_payload_from_parameters(
     }
     return payload, task
 
+
+def _artifact_id_from_ref(value: Any) -> str | None:
+    ref = _coerce_artifact_ref(value)
+    if not ref:
+        return None
+    ref = ref.removeprefix("artifact://")
+    ref = ref.removeprefix("input/")
+    return ref.strip() or None
+
+
+def _snapshot_task_from_artifact_payload(
+    artifact_payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    draft = artifact_payload.get("draft")
+    source = draft if isinstance(draft, Mapping) else artifact_payload
+    task_value = source.get("task") if isinstance(source, Mapping) else None
+    task = dict(task_value) if isinstance(task_value, Mapping) else {}
+    instructions = str(source.get("instructions") or "").strip()
+    if instructions and not str(task.get("instructions") or "").strip():
+        task["instructions"] = instructions
+    capabilities_value = source.get("requiredCapabilities")
+    target_runtime = source.get("targetRuntime") or artifact_payload.get(
+        "targetRuntime"
+    )
+    if not target_runtime and isinstance(source.get("runtime"), str):
+        target_runtime = source.get("runtime")
+    payload = {
+        "repository": source.get("repository") or artifact_payload.get("repository"),
+        "targetRuntime": target_runtime,
+        "requiredCapabilities": (
+            list(capabilities_value) if isinstance(capabilities_value, list) else []
+        ),
+    }
+    return payload, task
+
+
+def _merge_task_preserving_artifact_instructions(
+    artifact_task: Mapping[str, Any],
+    parameter_task: Mapping[str, Any],
+) -> dict[str, Any]:
+    merged = {**dict(artifact_task), **dict(parameter_task)}
+    artifact_instructions = str(artifact_task.get("instructions") or "").strip()
+    parameter_instructions = str(parameter_task.get("instructions") or "").strip()
+    if artifact_instructions and not parameter_instructions:
+        merged["instructions"] = artifact_task.get("instructions")
+
+    artifact_steps = artifact_task.get("steps")
+    parameter_steps = parameter_task.get("steps")
+    if isinstance(artifact_steps, list) and isinstance(parameter_steps, list):
+        merged_steps: list[Any] = []
+        for index, parameter_step in enumerate(parameter_steps):
+            if not isinstance(parameter_step, Mapping):
+                merged_steps.append(parameter_step)
+                continue
+            artifact_step = (
+                artifact_steps[index]
+                if index < len(artifact_steps)
+                and isinstance(artifact_steps[index], Mapping)
+                else {}
+            )
+            step = {**dict(artifact_step), **dict(parameter_step)}
+            artifact_step_instructions = str(
+                artifact_step.get("instructions") or ""
+            ).strip()
+            parameter_step_instructions = str(
+                parameter_step.get("instructions") or ""
+            ).strip()
+            if artifact_step_instructions and not parameter_step_instructions:
+                step["instructions"] = artifact_step.get("instructions")
+            merged_steps.append(step)
+        merged["steps"] = merged_steps
+    return merged
+
+
+async def _snapshot_source_payload_from_parameters_and_artifact(
+    *,
+    session: AsyncSession,
+    user: User,
+    record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+    parameters: Mapping[str, Any],
+    input_artifact_ref: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    parameter_payload, parameter_task = _snapshot_source_payload_from_parameters(
+        parameters
+    )
+    artifact_ref = (
+        input_artifact_ref
+        or str(parameters.get("inputArtifactRef") or "").strip()
+        or str(getattr(record, "input_ref", None) or "").strip()
+    )
+    artifact_id = _artifact_id_from_ref(artifact_ref)
+    if not artifact_id:
+        return parameter_payload, parameter_task
+    try:
+        artifact_service = get_temporal_artifact_service(session)
+        _artifact, body = await artifact_service.read(
+            artifact_id=artifact_id,
+            principal=str(getattr(user, "id", "") or "system"),
+            allow_restricted_raw=True,
+        )
+        decoded = json.loads(body.decode("utf-8"))
+    except Exception as exc:
+        logger.warning(
+            "Failed to hydrate task input snapshot from artifact %s: %s",
+            artifact_id,
+            exc,
+        )
+        return parameter_payload, parameter_task
+    if not isinstance(decoded, Mapping):
+        return parameter_payload, parameter_task
+
+    artifact_payload, artifact_task = _snapshot_task_from_artifact_payload(decoded)
+    payload = {
+        **artifact_payload,
+        **{
+            key: value
+            for key, value in parameter_payload.items()
+            if value not in (None, [], "")
+        },
+    }
+    if artifact_task and parameter_task:
+        return payload, _merge_task_preserving_artifact_instructions(
+            artifact_task,
+            parameter_task,
+        )
+    return payload, parameter_task or artifact_task
+
 async def _persist_original_task_input_snapshot(
     *,
     session: AsyncSession,
@@ -2985,6 +3112,7 @@ async def _persist_original_task_input_snapshot(
             target_record.artifact_refs = refs
     return completed.artifact_id
 
+
 async def _persist_original_task_input_snapshot_from_parameters(
     *,
     session: AsyncSession,
@@ -2995,12 +3123,19 @@ async def _persist_original_task_input_snapshot_from_parameters(
     source_kind: str,
     source_workflow_id: str | None = None,
     source_run_id: str | None = None,
+    input_artifact_ref: str | None = None,
 ) -> str:
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
     if workflow_type_value != "MoonMind.Run":
         return ""
-    snapshot_payload, snapshot_task = _snapshot_source_payload_from_parameters(
-        parameters
+    snapshot_payload, snapshot_task = (
+        await _snapshot_source_payload_from_parameters_and_artifact(
+            session=session,
+            user=user,
+            record=record,
+            parameters=parameters,
+            input_artifact_ref=input_artifact_ref,
+        )
     )
     if not snapshot_task:
         return ""
@@ -3958,6 +4093,7 @@ async def create_execution(
         user=user,
         parameters=dict(getattr(record, "parameters", None) or {}),
         source_kind="create",
+        input_artifact_ref=getattr(record, "input_ref", None),
     )
     if snapshot_ref:
         await session.commit()
@@ -4436,6 +4572,7 @@ async def update_execution(
             ),
             source_workflow_id=record.workflow_id,
             source_run_id=getattr(record, "run_id", None),
+            input_artifact_ref=payload.input_artifact_ref,
         )
     if is_task_editing_update:
         accepted = bool(update_result.get("accepted", True))
@@ -4816,6 +4953,7 @@ async def rerun_execution(
         source_kind="rerun",
         source_workflow_id=canonical.workflow_id,
         source_run_id=canonical.run_id,
+        input_artifact_ref=canonical.input_ref,
     )
 
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)

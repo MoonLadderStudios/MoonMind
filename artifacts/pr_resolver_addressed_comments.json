@@ -1,12 +1,22 @@
 [
   {
-    "id": 3144784832,
+    "id": 3144759361,
     "disposition": "addressed",
-    "rationale": "Added top-level state plus nested final_state/finalState resolver status candidates and covered them with a focused unit test."
+    "rationale": "Updated _artifact_id_from_ref to strip artifact:// and input/ independently, and added unit coverage for input/art-full-input and artifact://input/art-full-input refs."
   },
   {
-    "id": 4178053000,
+    "id": 4178027939,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the actionable linked review comment was addressed."
+    "rationale": "Review summary only; the actionable artifact-ref robustness feedback is tracked and addressed by comment 3144759361."
+  },
+  {
+    "id": 3144764304,
+    "disposition": "addressed",
+    "rationale": "Removed artifact tail-step reintroduction from the snapshot merge and added unit coverage proving edited rerun step deletions are preserved."
+  },
+  {
+    "id": 4178032734,
+    "disposition": "not-applicable",
+    "rationale": "Codex review metadata wrapper only; the actionable feedback is tracked and addressed by comment 3144764304."
   }
 ]
