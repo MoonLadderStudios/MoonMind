@@ -1997,7 +1997,7 @@ async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
 
             result = await activities.agent_runtime_publish_artifacts(
                 AgentRunResult(
-                    summary="Completed with status completed",
+                    summary="Completed.",
                     metadata={
                         "operator_summary": "# Integration test report\n\nAll tests passed.",
                         "moonmind": {

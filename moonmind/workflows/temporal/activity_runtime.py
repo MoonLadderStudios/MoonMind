@@ -46,6 +46,9 @@ from moonmind.schemas.temporal_activity_models import (
     PlanGenerateInput,
 )
 from moonmind.workflows.tasks.routing import _coerce_bool
+from moonmind.workflows.temporal.completion_summary import (
+    is_generic_completion_summary,
+)
 from moonmind.auth.env_shaping import _should_filter_base_env_var
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
@@ -3403,25 +3406,15 @@ class TemporalAgentRuntimeActivities:
                     return value.strip()
             return ""
 
-        def _is_generic_completion_summary(value: Any) -> bool:
-            normalized = " ".join(str(value or "").strip().lower().split())
-            return normalized in {
-                "",
-                "completed with status completed",
-                "workflow completed successfully",
-                "codex managed-session turn completed.",
-                "codex managed-session turn completed",
-                "agent run completed without a textual report body.",
-                "agent run completed without a textual report body",
-            } or normalized.startswith("process exited with code")
-
         result_summary = result_dict.get("summary") or result_dict.get("raw", "")
         operator_summary = self._sanitize_operator_summary(
             _metadata_text("operator_summary", "operatorSummary")
         )
         effective_summary = (
             operator_summary
-            if operator_summary and _is_generic_completion_summary(result_summary)
+            if operator_summary
+            and not is_generic_completion_summary(operator_summary)
+            and is_generic_completion_summary(result_summary)
             else result_summary
         )
 

@@ -67,6 +67,9 @@ from moonmind.workflows.temporal.step_ledger import (
     upsert_step_check,
     update_step_row,
 )
+from moonmind.workflows.temporal.completion_summary import (
+    is_generic_completion_summary,
+)
 from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_TASK_QUEUE,
     INTEGRATIONS_TASK_QUEUE,
@@ -2775,6 +2778,7 @@ class MoonMindRunWorkflow:
             or normalized.startswith("executing plan step")
             or (normalized.startswith("executed") and "plan step" in normalized)
         )
+
     def _resolve_publish_payload(self, parameters: Mapping[str, Any]) -> dict[str, Any]:
         task_payload = self._mapping_value(parameters, "task")
         publish_payload = self._mapping_value(parameters, "publish")
@@ -3037,16 +3041,20 @@ class MoonMindRunWorkflow:
                 max_chars=1600,
             )
         )
-        if operator_summary:
+        meaningful_operator_summary = (
+            operator_summary
+            if operator_summary and not is_generic_completion_summary(operator_summary)
+            else None
+        )
+        if meaningful_operator_summary:
             self._operator_summary = operator_summary
 
+        step_summary = meaningful_operator_summary or self._coerce_text(
+            outputs.get("summary") or outputs.get("message"),
+            max_chars=1600,
+        )
         self._last_step_summary = self._sanitize_operator_summary(
-            self._coerce_text(
-                operator_summary
-                or outputs.get("summary")
-                or outputs.get("message"),
-                max_chars=1600,
-            )
+            step_summary
         )
 
         self._last_diagnostics_ref = self._coerce_text(
@@ -3218,6 +3226,7 @@ class MoonMindRunWorkflow:
         self,
         *,
         publish_detail: str | None = None,
+        publish_mode: str = "",
     ) -> str:
         parts = ["Workflow completed successfully"]
         detail = self._coerce_text(publish_detail, max_chars=180)
@@ -3229,21 +3238,25 @@ class MoonMindRunWorkflow:
 
         operator_summary = self._coerce_text(self._operator_summary, max_chars=700)
         last_step_summary = self._coerce_text(self._last_step_summary, max_chars=700)
-        final_summary = operator_summary or last_step_summary
-        if final_summary and not self._is_transient_summary(final_summary):
-            final_summary_lower = final_summary.lower()
-            if final_summary_lower not in {
-                "completed with status completed",
-                "workflow completed successfully",
-            } and not final_summary_lower.startswith("process exited with code"):
-                parts.append(f"Final result: {final_summary}")
+        final_summary = None
+        for candidate in (last_step_summary, operator_summary):
+            if (
+                candidate
+                and not self._is_transient_summary(candidate)
+                and not is_generic_completion_summary(candidate)
+            ):
+                final_summary = candidate
+                break
+        if final_summary:
+            parts.append(f"Final result: {final_summary}")
 
-        pull_request_url = self._coerce_text(
-            self._publish_context.get("pullRequestUrl"),
-            max_chars=200,
-        )
-        if pull_request_url:
-            parts.append(f"Pull request: {pull_request_url}")
+        if publish_mode == "pr":
+            pull_request_url = self._coerce_text(
+                self._publish_context.get("pullRequestUrl"),
+                max_chars=200,
+            )
+            if pull_request_url:
+                parts.append(f"Pull request: {pull_request_url}")
 
         if len(parts) == 1:
             return parts[0]
@@ -3257,7 +3270,11 @@ class MoonMindRunWorkflow:
     ) -> tuple[str, str, bool]:
         publish_mode = self._publish_mode(parameters)
         if publish_mode == "none":
-            return ("success", self._compose_success_completion_message(), False)
+            return (
+                "success",
+                self._compose_success_completion_message(publish_mode=publish_mode),
+                False,
+            )
 
         if self._publish_status == "skipped":
             if publish_mode == "pr":
@@ -3275,6 +3292,7 @@ class MoonMindRunWorkflow:
                 "success",
                 self._compose_success_completion_message(
                     publish_detail=self._publish_reason,
+                    publish_mode=publish_mode,
                 ),
                 False,
             )
@@ -3296,10 +3314,18 @@ class MoonMindRunWorkflow:
             )
 
         if self._publish_status == "published":
+            publish_detail = self._publish_reason
+            if (
+                publish_mode == "pr"
+                and publish_detail
+                and publish_detail.startswith("Jira issue output succeeded")
+            ):
+                publish_detail = None
             return (
                 "success",
                 self._compose_success_completion_message(
-                    publish_detail=self._publish_reason,
+                    publish_detail=publish_detail,
+                    publish_mode=publish_mode,
                 ),
                 False,
             )
@@ -3317,7 +3343,11 @@ class MoonMindRunWorkflow:
                 True,
             )
 
-        return ("success", self._compose_success_completion_message(), False)
+        return (
+            "success",
+            self._compose_success_completion_message(publish_mode=publish_mode),
+            False,
+        )
 
     def _merge_automation_request(
         self,
