@@ -836,6 +836,7 @@ class TaskTemplateCatalogService:
                     )
             else:
                 normalized_options = []
+            placeholder = str(raw_input.get("placeholder") or "").strip()
             names.add(name)
             validated.append(
                 {
@@ -845,11 +846,7 @@ class TaskTemplateCatalogService:
                     "required": bool(raw_input.get("required", False)),
                     "default": raw_input.get("default"),
                     **({"options": normalized_options} if normalized_options else {}),
-                    **(
-                        {"placeholder": str(raw_input.get("placeholder") or "").strip()}
-                        if str(raw_input.get("placeholder") or "").strip()
-                        else {}
-                    ),
+                    **({"placeholder": placeholder} if placeholder else {}),
                 }
             )
         return validated

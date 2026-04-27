@@ -121,6 +121,14 @@ function withJiraIntegration(payload: BootPayload = mockPayload): BootPayload {
   };
 }
 
+async function clickApplyButton() {
+  const button = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+  await waitFor(() => {
+    expect(button.disabled).toBe(false);
+  });
+  fireEvent.click(button);
+}
+
 function withAttachmentPolicy(payload: BootPayload = mockPayload): BootPayload {
   const initialData = payload.initialData as {
     dashboardConfig: {
@@ -5050,7 +5058,7 @@ describe("Task Create Entrypoint", () => {
       screen.getByLabelText("Feature Request / Initial Instructions"),
       { target: { value: "docs/Design.md" } },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
 
     await waitFor(() => {
       const expandCall = fetchSpy.mock.calls.find(([url]) =>
@@ -5061,6 +5069,258 @@ describe("Task Create Entrypoint", () => {
       expect(expandCall).toBeTruthy();
       const body = JSON.parse(String(expandCall?.[1]?.body || "{}"));
       expect(body.inputs.jira_board_id).toBe("7");
+    });
+  });
+
+  it("preserves typed preset text spacing and submits unchecked boolean inputs", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "option-demo",
+                scope: "global",
+                title: "Option Demo",
+                description: "Preset options.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/task-step-templates/option-demo?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "option-demo",
+            scope: "global",
+            title: "Option Demo",
+            description: "Preset options.",
+            latestVersion: "1.0.0",
+            version: "1.0.0",
+            inputs: [
+              {
+                name: "feature_request",
+                label: "Feature Request",
+                type: "markdown",
+                required: true,
+              },
+              {
+                name: "notes",
+                label: "Notes",
+                type: "text",
+                required: false,
+              },
+              {
+                name: "enabled",
+                label: "Enabled",
+                type: "boolean",
+                required: false,
+                default: true,
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/task-step-templates/option-demo:expand?scope=global")) {
+        const body = JSON.parse(String(init?.body || "{}"));
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:option-demo:1.0.0:01",
+                title: "Options",
+                instructions: JSON.stringify(body.inputs),
+              },
+            ],
+            appliedTemplate: {
+              slug: "option-demo",
+              version: "1.0.0",
+              inputs: body.inputs,
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const notesInput = (await screen.findByLabelText("Notes")) as HTMLInputElement;
+    fireEvent.change(notesInput, { target: { value: "hello " } });
+    expect(notesInput.value).toBe("hello ");
+    fireEvent.click(screen.getByLabelText("Enabled"));
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      { target: { value: "Build configurable options." } },
+    );
+    await clickApplyButton();
+
+    await waitFor(() => {
+      const expandCall = fetchSpy.mock.calls.find(([url]) =>
+        String(url).startsWith(
+          "/api/task-step-templates/option-demo:expand?scope=global",
+        ),
+      );
+      expect(expandCall).toBeTruthy();
+      const body = JSON.parse(String(expandCall?.[1]?.body || "{}"));
+      expect(body.inputs.notes).toBe("hello");
+      expect(body.inputs.enabled).toBe(false);
+    });
+  });
+
+  it("clears remembered preset input values when switching presets", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "preset-a",
+                scope: "global",
+                title: "Preset A",
+                description: "First preset.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+              {
+                slug: "preset-b",
+                scope: "global",
+                title: "Preset B",
+                description: "Second preset.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/task-step-templates/preset-a?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "preset-a",
+            scope: "global",
+            title: "Preset A",
+            description: "First preset.",
+            latestVersion: "1.0.0",
+            version: "1.0.0",
+            inputs: [
+              {
+                name: "feature_request",
+                label: "Feature Request",
+                type: "markdown",
+                required: true,
+              },
+              {
+                name: "jira_dependency_mode",
+                label: "Jira Dependency Mode",
+                type: "enum",
+                required: true,
+                default: "linear_blocker_chain",
+                options: ["linear_blocker_chain", "none"],
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/task-step-templates/preset-b?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "preset-b",
+            scope: "global",
+            title: "Preset B",
+            description: "Second preset.",
+            latestVersion: "1.0.0",
+            version: "1.0.0",
+            inputs: [
+              {
+                name: "feature_request",
+                label: "Feature Request",
+                type: "markdown",
+                required: true,
+              },
+              {
+                name: "jira_dependency_mode",
+                label: "Jira Dependency Mode",
+                type: "enum",
+                required: true,
+                default: "none",
+                options: ["linear_blocker_chain", "none"],
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/task-step-templates/preset-b:expand?scope=global")) {
+        const body = JSON.parse(String(init?.body || "{}"));
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:preset-b:1.0.0:01",
+                title: "Preset B",
+                instructions: body.inputs.jira_dependency_mode,
+              },
+            ],
+            appliedTemplate: {
+              slug: "preset-b",
+              version: "1.0.0",
+              inputs: body.inputs,
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.value === "global::::preset-a",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, { target: { value: "global::::preset-a" } });
+    await screen.findByLabelText("Jira Dependency Mode");
+    fireEvent.change(screen.getByLabelText("Jira Dependency Mode"), {
+      target: { value: "linear_blocker_chain" },
+    });
+    fireEvent.change(presetSelect, { target: { value: "global::::preset-b" } });
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Jira Dependency Mode") as HTMLSelectElement).value,
+      ).toBe("none");
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      { target: { value: "Build the second preset." } },
+    );
+    await clickApplyButton();
+
+    await waitFor(() => {
+      const expandCall = fetchSpy.mock.calls.find(([url]) =>
+        String(url).startsWith("/api/task-step-templates/preset-b:expand?scope=global"),
+      );
+      expect(expandCall).toBeTruthy();
+      const body = JSON.parse(String(expandCall?.[1]?.body || "{}"));
+      expect(body.inputs.jira_dependency_mode).toBe("none");
     });
   });
 
@@ -5299,7 +5559,7 @@ describe("Task Create Entrypoint", () => {
     fireEvent.change(presetSelect, {
       target: { value: "global::::pr-resolver" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
 
     await screen.findByDisplayValue("Resolve the current branch PR.");
     await waitFor(() => {
@@ -6842,7 +7102,7 @@ describe("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
 
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
@@ -7007,7 +7267,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "Route Jira child tasks correctly." },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -7080,7 +7340,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "Task Create" },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
     );
@@ -7124,7 +7384,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "Task Create" },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
     );
@@ -7208,7 +7468,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "Task Create" },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
     );
@@ -7313,7 +7573,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "Task Create" },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
     );
@@ -8774,7 +9034,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "Task Create" },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
     );
@@ -8837,7 +9097,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: importedText },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
     );
@@ -8881,7 +9141,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "Task Create" },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
     );
@@ -8945,7 +9205,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "Task Create" },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
     );
@@ -9392,7 +9652,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "Task Create" },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
     );

@@ -2315,7 +2315,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [templateInputValues, setTemplateInputValues] = useState<
-    Record<string, string>
+    Record<string, string | boolean>
   >({});
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
   const [presetReapplyNeeded, setPresetReapplyNeeded] = useState(false);
@@ -4269,7 +4269,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
       let normalized: unknown;
       if (inputType === "boolean") {
-        normalized = Boolean(value);
+        if (typeof value === "boolean") {
+          normalized = value;
+        } else {
+          const lowered = String(value).trim().toLowerCase();
+          normalized = ["1", "true", "yes", "on"].includes(lowered);
+        }
       } else {
         normalized = String(value).trim();
       }
@@ -4298,7 +4303,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   ): string {
     const explicit = templateInputValues[definition.name];
     if (explicit !== undefined) {
-      return explicit;
+      return String(explicit);
     }
     if (definition.type === "jira_board") {
       return String(definition.default || jiraIntegration?.defaultBoardId || "").trim();
@@ -4316,9 +4321,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   function updateTemplateInputValue(
     definition: TaskTemplateInputDefinition,
-    value: string,
+    value: string | boolean,
   ) {
-    const normalized = value.trim();
+    const normalized = value;
     setTemplateInputValues((current) => {
       const next = { ...current, [definition.name]: normalized };
       if (isJiraProjectInputKey(definition.name) && presetJiraBoardInput) {
@@ -4341,6 +4346,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setTemplateMessage("Choose a preset first.");
       return;
     }
+    const detail = selectedPresetDetailQuery.data;
+    if (!detail) {
+      setTemplateMessage(
+        selectedPresetDetailQuery.isError
+          ? "Failed to load preset details."
+          : "Preset options are still loading.",
+      );
+      return;
+    }
     setIsApplyingPreset(true);
     setPresetReapplyNeeded(false);
     setTemplateMessage("Applying preset...");
@@ -4350,29 +4364,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         scope: selectedPreset.scope,
         scopeRef: selectedPreset.scopeRef || undefined,
       };
-      let detail = selectedPresetDetailQuery.data;
-      if (!detail) {
-        const detailResponse = await fetch(
-          withQueryParams(
-            interpolatePath(taskTemplateDetailEndpoint, {
-              slug: selectedPreset.slug,
-            }),
-            scopeParams,
-          ),
-          {
-            headers: { Accept: "application/json" },
-          },
-        );
-        if (!detailResponse.ok) {
-          throw new Error(
-            await responseErrorMessage(
-              detailResponse,
-              "Failed to load preset details.",
-            ),
-          );
-        }
-        detail = (await detailResponse.json()) as TaskTemplateDetail;
-      }
       const { values: inputs, assumptions } = resolveTemplateInputs(
         detail.inputs || [],
       );
@@ -5579,8 +5570,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         "Choose a valid GitHub repository before selecting a branch"
       : "Select the branch to check out before the task starts";
   const publishModeTooltip = "Select how MoonMind publishes task changes";
+  const applyPresetDisabled = Boolean(
+    isApplyingPreset || (selectedPreset && selectedPresetDetailQuery.isLoading),
+  );
   const applyPresetTooltip = presetReapplyNeeded
     ? "Reapply the selected preset to update preset-derived steps"
+    : selectedPreset && selectedPresetDetailQuery.isLoading
+      ? "Loading preset options..."
     : "Apply the selected preset to the task draft";
   const modeLoadError =
     pageMode.mode !== "create" && !temporalTaskEditingEnabled
@@ -6306,6 +6302,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 onChange={(event) => {
                   setSelectedPresetKey(event.target.value);
                   setTemplateInputValues({});
+                  templateInputMemoryRef.current = {};
                   setTemplateMessage(null);
                   setPresetReapplyNeeded(false);
                 }}
@@ -6454,7 +6451,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                             onChange={(event) =>
                               updateTemplateInputValue(
                                 definition,
-                                event.target.checked ? "true" : "false",
+                                event.target.checked,
                               )
                             }
                           />
@@ -6646,9 +6643,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 type="button"
                 id="queue-template-apply"
                 onClick={handleApplyPreset}
-                aria-disabled={isApplyingPreset}
+                aria-disabled={applyPresetDisabled}
                 aria-busy={isApplyingPreset}
                 title={applyPresetTooltip}
+                disabled={applyPresetDisabled}
               >
                 {presetReapplyNeeded ? "Reapply preset" : "Apply"}
               </button>

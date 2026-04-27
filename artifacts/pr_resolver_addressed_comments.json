@@ -1,47 +1,37 @@
 [
   {
-    "id": 4177457111,
+    "id": 3144367004,
+    "disposition": "addressed",
+    "rationale": "Preset text inputs now preserve in-progress whitespace while typing; values are trimmed only when resolving inputs for expansion. Added a regression test for trailing-space editing."
+  },
+  {
+    "id": 4177646619,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary stated there was no feedback to address."
+    "rationale": "Review summary comment. The actionable inline comments from the same review were addressed individually."
   },
   {
-    "id": 3144162425,
+    "id": 3144367005,
     "disposition": "addressed",
-    "rationale": "Planner now generates a synthetic targetBranch only when a MoonSpec breakdown step will create a new story breakdown artifact, preserving authored branch-only Jira import flows."
+    "rationale": "Template input placeholder normalization now assigns the stripped value once and reuses it."
   },
   {
-    "id": 4177457338,
+    "id": 3144367007,
+    "disposition": "addressed",
+    "rationale": "Apply now relies on the React Query preset detail result instead of performing a duplicate manual fetch; the Apply button is disabled while preset details are loading."
+  },
+  {
+    "id": 3144369447,
+    "disposition": "addressed",
+    "rationale": "Changing presets clears both visible template input state and the hidden template input memory ref. Added a regression test for stale remembered values after switching presets."
+  },
+  {
+    "id": 3144369448,
+    "disposition": "addressed",
+    "rationale": "Boolean preset options are now stored as booleans from checkbox changes and resolved without treating the string false as truthy. Added a regression test for unchecked boolean submission."
+  },
+  {
+    "id": 4177649280,
     "disposition": "not-applicable",
-    "rationale": "Automated Codex review wrapper contained no separate actionable feedback beyond discussion_r3144162425."
-  },
-  {
-    "id": 3144190036,
-    "disposition": "addressed",
-    "rationale": "Centralized Jira project default resolution, reused it for schema defaults and submitted input overrides, and now replaces explicit TOOL placeholders with repository or single-allowed project defaults."
-  },
-  {
-    "id": 3144190038,
-    "disposition": "addressed",
-    "rationale": "Simplified the effective schema loop with mutually exclusive branches and moved configured repository lookup outside the loop."
-  },
-  {
-    "id": 4177478709,
-    "disposition": "not-applicable",
-    "rationale": "Informational review summary; the actionable child comments from this review were handled separately."
-  },
-  {
-    "id": 3144190046,
-    "disposition": "addressed",
-    "rationale": "Replaced repeated default lookups with a single schema default map built once per contextual override pass."
-  },
-  {
-    "id": 3144192988,
-    "disposition": "addressed",
-    "rationale": "Required repository inputs without a value now skip generic autofill instead of falling back to feature request or instruction text."
-  },
-  {
-    "id": 4177481852,
-    "disposition": "not-applicable",
-    "rationale": "Informational Codex review wrapper; the actionable repository autofill comment from this review was handled separately."
+    "rationale": "Automated review summary. The actionable inline comments were addressed individually."
   }
 ]
