@@ -2861,10 +2861,8 @@ def _artifact_id_from_ref(value: Any) -> str | None:
     ref = _coerce_artifact_ref(value)
     if not ref:
         return None
-    if ref.startswith("artifact://"):
-        ref = ref.removeprefix("artifact://")
-        if ref.startswith("input/"):
-            ref = ref.removeprefix("input/")
+    ref = ref.removeprefix("artifact://")
+    ref = ref.removeprefix("input/")
     return ref.strip() or None
 
 
@@ -2928,8 +2926,6 @@ def _merge_task_preserving_artifact_instructions(
             if artifact_step_instructions and not parameter_step_instructions:
                 step["instructions"] = artifact_step.get("instructions")
             merged_steps.append(step)
-        if len(artifact_steps) > len(parameter_steps):
-            merged_steps.extend(artifact_steps[len(parameter_steps) :])
         merged["steps"] = merged_steps
     return merged
 

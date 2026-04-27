@@ -17,6 +17,8 @@ from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.api.routers.executions import (
     _get_service,
+    _artifact_id_from_ref,
+    _merge_task_preserving_artifact_instructions,
     get_temporal_client,
     _serialize_execution,
     router,
@@ -4172,6 +4174,27 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
     assert steps[0]["instructions"] == "First step instructions."
     assert steps[1]["instructions"] == "Second step instructions."
     session.commit.assert_awaited_once()
+
+
+def test_task_input_snapshot_artifact_id_strips_input_prefix_without_scheme() -> None:
+    assert _artifact_id_from_ref("input/art-full-input") == "art-full-input"
+    assert _artifact_id_from_ref("artifact://input/art-full-input") == "art-full-input"
+
+
+def test_task_input_snapshot_merge_preserves_step_deletions() -> None:
+    merged = _merge_task_preserving_artifact_instructions(
+        {
+            "steps": [
+                {"id": "step-1", "title": "First", "instructions": "Original first"},
+                {"id": "step-2", "title": "Second", "instructions": "Original second"},
+            ]
+        },
+        {"steps": [{"id": "step-1", "title": "First edited"}]},
+    )
+
+    assert merged["steps"] == [
+        {"id": "step-1", "title": "First edited", "instructions": "Original first"}
+    ]
 
 
 def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:

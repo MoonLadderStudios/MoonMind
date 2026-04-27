@@ -1,12 +1,22 @@
 [
   {
-    "id": 3144433181,
+    "id": 3144759361,
     "disposition": "addressed",
-    "rationale": "Deployment update idempotency now uses the normalized reason only for update submissions, so omitted reasons produce a stable key segment while rollback submissions remain distinct. Covered by tests/unit/api/routers/test_deployment_operations.py."
+    "rationale": "Updated _artifact_id_from_ref to strip artifact:// and input/ independently, and added unit coverage for input/art-full-input and artifact://input/art-full-input refs."
   },
   {
-    "id": 4177704240,
+    "id": 4178027939,
+    "disposition": "not-applicable",
+    "rationale": "Review summary only; the actionable artifact-ref robustness feedback is tracked and addressed by comment 3144759361."
+  },
+  {
+    "id": 3144764304,
     "disposition": "addressed",
-    "rationale": "Top-level review summarized the same deployment update idempotency issue; the service fix and regression test address that concern."
+    "rationale": "Removed artifact tail-step reintroduction from the snapshot merge and added unit coverage proving edited rerun step deletions are preserved."
+  },
+  {
+    "id": 4178032734,
+    "disposition": "not-applicable",
+    "rationale": "Codex review metadata wrapper only; the actionable feedback is tracked and addressed by comment 3144764304."
   }
 ]
