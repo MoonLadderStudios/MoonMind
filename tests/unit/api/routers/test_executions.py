@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Iterator
@@ -4056,6 +4057,122 @@ def test_request_rerun_update_redirects_response_to_created_rerun_execution() ->
         assert service.describe_execution.await_args_list[-1].args == (
             "mm:rerun-created",
         )
+
+
+def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    source_record = _build_execution_record(has_task_input_snapshot=False)
+    rerun_record = _build_execution_record(has_task_input_snapshot=False)
+    rerun_record.workflow_id = "mm:rerun-created"
+    rerun_record.run_id = "run-rerun"
+    rerun_record.input_ref = "art-full-input"
+    rerun_record.parameters = {
+        "repository": "Moon/Mind",
+        "targetRuntime": "codex_cli",
+        "task": {
+            "title": "Hydrated rerun",
+            "steps": [
+                {"id": "step-1", "title": "First"},
+                {"id": "step-2", "title": "Second"},
+            ],
+        },
+    }
+    service.describe_execution.side_effect = [source_record, rerun_record]
+    service.update_execution.return_value = {
+        "accepted": True,
+        "applied": "continue_as_new",
+        "message": "Rerun requested. New execution created.",
+        "continue_as_new_cause": "manual_rerun",
+        "workflow_id": "mm:rerun-created",
+    }
+    app.dependency_overrides[_get_service] = lambda: service
+    _override_temporal_client(app)
+    user = _override_user_dependencies(app, is_superuser=True)
+    session = AsyncMock()
+    app.dependency_overrides[get_async_session] = lambda: session
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "temporal_task_editing_enabled", True
+    )
+    artifact_payload = {
+        "repository": "Moon/Mind",
+        "targetRuntime": "codex_cli",
+        "task": {
+            "title": "Hydrated rerun",
+            "instructions": "Top-level rerun instructions.",
+            "steps": [
+                {
+                    "id": "step-1",
+                    "title": "First",
+                    "instructions": "First step instructions.",
+                },
+                {
+                    "id": "step-2",
+                    "title": "Second",
+                    "instructions": "Second step instructions.",
+                },
+            ],
+        },
+    }
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                SimpleNamespace(artifact_id="art-full-input"),
+                json.dumps(artifact_payload).encode("utf-8"),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+    captured_task_payload: dict[str, object] = {}
+
+    async def _persist_snapshot(**kwargs) -> str:
+        captured_task_payload.update(kwargs["task_payload"])
+        target_record = kwargs["record"]
+        target_record.memo = {
+            **dict(target_record.memo or {}),
+            "task_input_snapshot_ref": "art_snapshot_hydrated",
+            "task_input_snapshot_version": 1,
+            "task_input_snapshot_source_kind": "rerun",
+        }
+        return "art_snapshot_hydrated"
+
+    persist_mock = AsyncMock(side_effect=_persist_snapshot)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._persist_original_task_input_snapshot",
+        persist_mock,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={
+                "updateName": "RequestRerun",
+                "idempotencyKey": "rerun-1",
+                "inputArtifactRef": "artifact://input/art-full-input",
+                "parametersPatch": rerun_record.parameters,
+            },
+        )
+
+    assert response.status_code == 200
+    artifact_service.read.assert_awaited_once_with(
+        artifact_id="art-full-input",
+        principal=str(user.id),
+        allow_restricted_raw=True,
+    )
+    persist_mock.assert_awaited_once()
+    assert captured_task_payload["instructions"] == "Top-level rerun instructions."
+    steps = captured_task_payload["steps"]
+    assert steps[0]["instructions"] == "First step instructions."
+    assert steps[1]["instructions"] == "Second step instructions."
+    session.commit.assert_awaited_once()
+
 
 def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
     metrics = Mock()
