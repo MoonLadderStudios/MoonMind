@@ -83,6 +83,7 @@ if ! is_in_container && is_wsl && [[ "${MOONMIND_FORCE_LOCAL_TESTS:-0}" != "1" ]
 fi
 
 export MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP=1
+export MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS=0
 
 # Clear worker-specific overrides so WorkflowSettings-based tests use
 # repository defaults instead of container env hints.
