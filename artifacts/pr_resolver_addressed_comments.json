@@ -1,32 +1,12 @@
 [
   {
-    "id": 3144759291,
+    "id": 3144784832,
     "disposition": "addressed",
-    "rationale": "Moved generic completion summary normalization to a shared helper that strips trailing periods and updated the activity runtime to use it."
+    "rationale": "Added top-level state plus nested final_state/finalState resolver status candidates and covered them with a focused unit test."
   },
   {
-    "id": 4178027876,
+    "id": 4178053000,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the actionable line comments from the same review were handled individually."
-  },
-  {
-    "id": 3144759293,
-    "disposition": "addressed",
-    "rationale": "Workflow completion now uses the shared generic-summary helper and chooses the first non-generic, non-transient candidate."
-  },
-  {
-    "id": 3144767903,
-    "disposition": "addressed",
-    "rationale": "Completion text now prefers the latest meaningful step summary over a stale prior operator summary."
-  },
-  {
-    "id": 3144767906,
-    "disposition": "addressed",
-    "rationale": "Pull request URL completion text is now appended only when the current publish mode is pr."
-  },
-  {
-    "id": 4178036111,
-    "disposition": "not-applicable",
-    "rationale": "Automated review wrapper text with no standalone actionable request."
+    "rationale": "Review summary only; the actionable linked review comment was addressed."
   }
 ]
