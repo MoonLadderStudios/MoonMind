@@ -1106,11 +1106,13 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                     "jira_issue_type": "Story",
                     "jira_dependency_mode": "linear_blocker_chain",
                     "orchestration_mode": "runtime",
-                    "runtime_mode": "codex_cli",
                     "publish_mode": "pr",
                     "source_issue_key": "GAME-404",
                 },
-                context={"repository": "ExampleOrg/Game"},
+                context={
+                    "repository": "ExampleOrg/Game",
+                    "targetRuntime": "gemini_cli",
+                },
             )
 
             assert "Jira Story issue in project GAME" in expanded["steps"][1][
@@ -1129,8 +1131,16 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
             assert expanded["steps"][2]["jiraOrchestration"]["task"]["repository"] == (
                 "ExampleOrg/Game"
             )
+            assert expanded["steps"][2]["jiraOrchestration"]["task"]["runtime"] == {
+                "mode": "gemini_cli"
+            }
+            assert expanded["steps"][2]["jiraOrchestration"]["task"]["publish"] == {
+                "mode": "pr",
+                "mergeAutomation": {"enabled": False},
+            }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "GAME"
-            assert expanded["appliedTemplate"]["inputs"]["repository"] == "ExampleOrg/Game"
+            assert "repository" not in expanded["appliedTemplate"]["inputs"]
+            assert "runtime_mode" not in expanded["appliedTemplate"]["inputs"]
 
 async def test_jira_breakdown_replaces_tool_placeholder_with_single_allowed_project(
     tmp_path,
@@ -1208,18 +1218,22 @@ async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
                     "jira_project_key": "PLAT",
                     "jira_issue_type": "Story",
                     "jira_dependency_mode": "linear_blocker_chain",
-                    "repository": "ExampleOrg/Platform",
                     "orchestration_mode": "runtime",
-                    "runtime_mode": "codex_cli",
                     "publish_mode": "pr",
                     "source_issue_key": "PLAT-404",
                 },
-                context={"repository": "ExampleOrg/Game"},
+                context={
+                    "repository": "ExampleOrg/Game",
+                    "targetRuntime": "claude_code",
+                },
             )
 
             assert expanded["steps"][1]["storyOutput"]["jira"]["projectKey"] == "PLAT"
             assert expanded["steps"][2]["jiraOrchestration"]["task"]["repository"] == (
-                "ExampleOrg/Platform"
+                "ExampleOrg/Game"
+            )
+            assert expanded["steps"][2]["jiraOrchestration"]["task"]["runtime"] == (
+                {"mode": "claude_code"}
             )
 
 async def test_jira_breakdown_requires_project_when_multiple_allowed_without_repo_policy(
@@ -1411,13 +1425,14 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
                     "jira_issue_type": "Story",
                     "jira_board_id": "84",
                     "jira_dependency_mode": "linear_blocker_chain",
-                    "repository": "MoonLadderStudios/MoonMind",
                     "orchestration_mode": "runtime",
-                    "runtime_mode": "codex_cli",
-                    "publish_mode": "pr",
+                    "publish_mode": "pr_with_merge_automation",
                     "source_issue_key": "MM-404",
                 },
-                context={},
+                context={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                },
             )
 
             assert len(expanded["steps"]) == 3

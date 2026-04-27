@@ -68,6 +68,7 @@ _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS = frozenset(
 _JIRA_BREAKDOWN_PROJECT_INPUT = "jira_project_key"
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 _UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"{{\s*[^}]+\s*}}")
+_NATIVE_BOOLEAN_TEMPLATE_PATTERN = re.compile(r"^\{\{.*\}\}$", re.DOTALL)
 _STEP_RESERVED_KEYS = frozenset(
     {
         "id",
@@ -285,7 +286,12 @@ def _render_value(
 ) -> Any:
     if isinstance(value, str):
         rendered = env.from_string(value).render(**variables)
-        return rendered.strip()
+        stripped = rendered.strip()
+        if _NATIVE_BOOLEAN_TEMPLATE_PATTERN.match(value.strip()):
+            lowered = stripped.lower()
+            if lowered in {"true", "false"}:
+                return lowered == "true"
+        return stripped
     if isinstance(value, list):
         return [_render_value(env, item, variables=variables) for item in value]
     if isinstance(value, dict):

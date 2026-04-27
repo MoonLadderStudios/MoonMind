@@ -5349,7 +5349,7 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
-  it("sets parent publish mode to none when selecting the Jira Breakdown and Orchestrate preset", async () => {
+  it("defaults parent publish mode to none while keeping controls active for the Jira Breakdown and Orchestrate preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -5401,6 +5401,96 @@ describe("Task Create Entrypoint", () => {
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
       ).toBe("none");
     });
+    expect((screen.getByLabelText("GitHub Repo") as HTMLInputElement).disabled).toBe(
+      false,
+    );
+    expect(
+      (screen.getByLabelText("Publish Mode") as HTMLSelectElement).disabled,
+    ).toBe(false);
+  });
+
+  it("shows only PR publish choices for the Jira Breakdown and Orchestrate preset inputs", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "jira-breakdown-orchestrate",
+                scope: "global",
+                title: "Jira Breakdown and Orchestrate",
+                description: "Create dependent Jira Orchestrate tasks.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/task-step-templates/jira-breakdown-orchestrate?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "jira-breakdown-orchestrate",
+            scope: "global",
+            title: "Jira Breakdown and Orchestrate",
+            description: "Create dependent Jira Orchestrate tasks.",
+            latestVersion: "1.0.0",
+            version: "1.0.0",
+            inputs: [
+              {
+                name: "feature_request",
+                label: "Declarative Design Path or Text",
+                type: "markdown",
+                required: true,
+              },
+              {
+                name: "jira_project_key",
+                label: "Jira Project Key",
+                type: "text",
+                required: true,
+                default: "MM",
+              },
+              {
+                name: "publish_mode",
+                label: "Publish Mode",
+                type: "enum",
+                required: true,
+                default: "pr_with_merge_automation",
+                options: ["pr", "pr_with_merge_automation"],
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-breakdown-orchestrate" },
+    });
+
+    const presetSection = screen.getByLabelText("Task Presets");
+    const presetPublishSelect = (await within(presetSection).findByLabelText(
+      "Publish Mode",
+    )) as HTMLSelectElement;
+    expect(presetPublishSelect.value).toBe("pr_with_merge_automation");
+    expect(Array.from(presetPublishSelect.options).map((option) => option.text)).toEqual([
+      "PR",
+      "PR with Merge Automation",
+    ]);
+    expect(within(presetSection).queryByLabelText("Repository")).toBeNull();
+    expect(within(presetSection).queryByLabelText("Runtime Mode")).toBeNull();
   });
 
   it("passes a preset-selected Jira board into Jira Breakdown expansion", async () => {

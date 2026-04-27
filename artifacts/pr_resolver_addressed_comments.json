@@ -1,22 +1,27 @@
 [
   {
-    "id": 3144759361,
+    "id": 3148978246,
     "disposition": "addressed",
-    "rationale": "Updated _artifact_id_from_ref to strip artifact:// and input/ independently, and added unit coverage for input/art-full-input and artifact://input/art-full-input refs."
+    "rationale": "Restored the Jira Breakdown and Orchestrate parent task publish default to none while keeping repository and publish controls active for child-task inheritance."
   },
   {
-    "id": 4178027939,
-    "disposition": "not-applicable",
-    "rationale": "Review summary only; the actionable artifact-ref robustness feedback is tracked and addressed by comment 3144759361."
-  },
-  {
-    "id": 3144764304,
+    "id": 3148978254,
     "disposition": "addressed",
-    "rationale": "Removed artifact tail-step reintroduction from the snapshot merge and added unit coverage proving edited rerun step deletions are preserved."
+    "rationale": "Made mergeAutomation propagation require a mapping before reading enabled or unpacking the value, with regression coverage for boolean input."
   },
   {
-    "id": 4178032734,
+    "id": 4182817543,
     "disposition": "not-applicable",
-    "rationale": "Codex review metadata wrapper only; the actionable feedback is tracked and addressed by comment 3144764304."
+    "rationale": "Automated review summary; the concrete referenced findings are tracked by review comments 3148978246 and 3148978254."
+  },
+  {
+    "id": 4182820069,
+    "disposition": "not-applicable",
+    "rationale": "Automated review header and metadata only; no separate actionable feedback was present."
+  },
+  {
+    "id": 3148980366,
+    "disposition": "addressed",
+    "rationale": "Restored non-publishing default behavior for the jira-breakdown-orchestrate parent execution and added focused UI regression coverage."
   }
 ]

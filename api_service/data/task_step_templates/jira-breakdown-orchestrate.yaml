@@ -42,11 +42,6 @@ inputs:
     options:
       - linear_blocker_chain
       - none
-  - name: repository
-    label: Repository
-    type: text
-    required: true
-    default: ""
   - name: orchestration_mode
     label: Orchestration Mode
     type: enum
@@ -55,25 +50,14 @@ inputs:
     options:
       - runtime
       - docs
-  - name: runtime_mode
-    label: Runtime Mode
-    type: enum
-    required: true
-    default: codex_cli
-    options:
-      - codex_cli
-      - gemini_cli
-      - claude_code
-      - codex_cloud
-      - jules
   - name: publish_mode
     label: Publish Mode
     type: enum
     required: true
-    default: pr
+    default: pr_with_merge_automation
     options:
-      - none
       - pr
+      - pr_with_merge_automation
   - name: source_issue_key
     label: Source Jira Issue Key
     type: text
@@ -126,13 +110,13 @@ steps:
       Report created tasks, skipped stories, dependency edges, partial failures, and no-downstream-task outcomes honestly.
     jiraOrchestration:
       task:
-        repository: "{{ inputs.repository }}"
+        repository: "{{ context.repository }}"
         runtime:
-          mode: "{{ inputs.runtime_mode }}"
+          mode: "{{ context.targetRuntime }}"
         publish:
-          mode: "{{ inputs.publish_mode }}"
+          mode: "pr"
           mergeAutomation:
-            enabled: true
+            enabled: "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
         orchestrationMode: "{{ inputs.orchestration_mode }}"
       traceability:
         sourceIssueKey: "{{ inputs.source_issue_key }}"
