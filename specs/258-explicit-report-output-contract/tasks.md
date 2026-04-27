@@ -7,3 +7,4 @@
 - [x] T005 Add fail-closed behavior for required report publication failures.
 - [x] T006 Add focused unit tests for workflow/activity boundaries.
 - [x] T007 Run targeted unit verification.
+- [x] T008 Prefer captured final-answer/operator summaries over generic completion text in report artifacts and terminal execution summaries.

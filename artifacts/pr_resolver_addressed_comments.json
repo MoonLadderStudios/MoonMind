@@ -1,17 +1,32 @@
 [
   {
-    "id": 3144756846,
+    "id": 3144759291,
     "disposition": "addressed",
-    "rationale": "Persisted explicit task scope when entry or workflow filters are active and added a tasks-list URL regression test."
+    "rationale": "Moved generic completion summary normalization to a shared helper that strips trailing periods and updated the activity runtime to use it."
   },
   {
-    "id": 4178025727,
+    "id": 4178027876,
     "disposition": "not-applicable",
-    "rationale": "Automated Codex review summary; the actionable child review comment is tracked separately."
+    "rationale": "Review summary only; the actionable line comments from the same review were handled individually."
   },
   {
-    "id": 4178026060,
+    "id": 3144759293,
+    "disposition": "addressed",
+    "rationale": "Workflow completion now uses the shared generic-summary helper and chooses the first non-generic, non-transient candidate."
+  },
+  {
+    "id": 3144767903,
+    "disposition": "addressed",
+    "rationale": "Completion text now prefers the latest meaningful step summary over a stale prior operator summary."
+  },
+  {
+    "id": 3144767906,
+    "disposition": "addressed",
+    "rationale": "Pull request URL completion text is now appended only when the current publish mode is pr."
+  },
+  {
+    "id": 4178036111,
     "disposition": "not-applicable",
-    "rationale": "Gemini review body explicitly stated there was no feedback to address."
+    "rationale": "Automated review wrapper text with no standalone actionable request."
   }
 ]
