@@ -185,7 +185,11 @@ describe('OperationsSettingsSection deployment update card', () => {
 
     const workerCard = await screen.findByRole('region', { name: /worker operations/i });
     await within(workerCard).findByRole('button', { name: /pause workers/i });
-    fireEvent.change(within(workerCard).getAllByLabelText(/^reason$/i)[0], {
+    const pauseReasonInput = within(workerCard).getAllByLabelText(/^reason$/i)[0];
+    if (!pauseReasonInput) {
+      throw new Error('Expected worker pause reason input to render.');
+    }
+    fireEvent.change(pauseReasonInput, {
       target: { value: 'Maintenance window' },
     });
     fireEvent.click(within(workerCard).getByRole('button', { name: /pause workers/i }));
