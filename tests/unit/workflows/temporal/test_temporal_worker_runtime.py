@@ -734,6 +734,8 @@ async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
     assert refreshed_projection.memo["task_input_snapshot_ref"] == "art_task_snapshot_1"
     assert refreshed_source.memo["task_input_snapshot_source_kind"] == "create"
     assert refreshed_projection.artifact_refs == ["art_task_snapshot_1"]
+    assert artifact_service.create_calls[0]["principal"] == "owner-1"
+    assert artifact_service.write_calls[0]["principal"] == "owner-1"
     assert artifact_service.create_calls[0]["link"] == {
         "namespace": "default",
         "workflow_id": "mm:child-run",

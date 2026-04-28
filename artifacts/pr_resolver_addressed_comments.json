@@ -1,27 +1,32 @@
 [
   {
-    "id": 3148978246,
+    "id": 3151717102,
     "disposition": "addressed",
-    "rationale": "Restored the Jira Breakdown and Orchestrate parent task publish default to none while keeping repository and publish controls active for child-task inheritance."
+    "rationale": "Replaced the explicit step loop with an any() expression while limiting fallback eligibility to reconstructable step instructions."
   },
   {
-    "id": 3148978254,
+    "id": 3151717106,
     "disposition": "addressed",
-    "rationale": "Made mergeAutomation propagation require a mapping before reading enabled or unpacking the value, with regression coverage for boolean input."
+    "rationale": "Split child-run snapshot persistence into payload-building, artifact-write, record-update, and owner-principal helper functions with concrete type hints."
   },
   {
-    "id": 4182817543,
+    "id": 4186018939,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary; the concrete referenced findings are tracked by review comments 3148978246 and 3148978254."
+    "rationale": "Review summary only; its actionable items are tracked by the associated line comments."
   },
   {
-    "id": 4182820069,
+    "id": 4186033771,
     "disposition": "not-applicable",
-    "rationale": "Automated review header and metadata only; no separate actionable feedback was present."
+    "rationale": "Automated review header/details only; no separate code action requested."
   },
   {
-    "id": 3148980366,
+    "id": 3151730897,
     "disposition": "addressed",
-    "rationale": "Restored non-publishing default behavior for the jira-breakdown-orchestrate parent execution and added focused UI regression coverage."
+    "rationale": "Jira child-run snapshot artifacts are now created and completed with the execution owner principal instead of service:jira-orchestrate."
+  },
+  {
+    "id": 3151730902,
+    "disposition": "addressed",
+    "rationale": "Title-only steps no longer enable edit/rerun parameter fallback without an authoritative snapshot."
   }
 ]

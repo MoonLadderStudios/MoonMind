@@ -1814,14 +1814,12 @@ def _has_reconstructable_task_parameters(record) -> bool:
     if instructions:
         return True
     steps = task_payload.get("steps")
-    if isinstance(steps, list):
-        for item in steps:
-            if not isinstance(item, Mapping):
-                continue
-            if str(item.get("instructions") or "").strip():
-                return True
-            if str(item.get("title") or "").strip():
-                return True
+    if isinstance(steps, list) and any(
+        isinstance(item, Mapping)
+        and str(item.get("instructions") or "").strip()
+        for item in steps
+    ):
+        return True
     return any(
         task_payload.get(key)
         for key in ("tool", "skill", "skills", "inputArtifactRef")

@@ -4673,6 +4673,43 @@ def test_terminal_task_editing_actions_allow_parameter_fallback_without_snapshot
     assert "canRerun" not in actions.disabled_reasons
 
 
+def test_terminal_task_editing_actions_reject_title_only_parameter_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    record = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED,
+        has_task_input_snapshot=False,
+    )
+    record.parameters = {
+        "requestType": "task",
+        "repository": "Moon/Mind",
+        "targetRuntime": "codex_cli",
+        "task": {
+            "steps": [
+                {
+                    "id": "step-1",
+                    "title": "Title without reconstructable instructions",
+                }
+            ],
+        },
+    }
+
+    actions = _serialize_execution(record).actions
+
+    assert actions.can_edit_for_rerun is False
+    assert actions.can_rerun is False
+    assert (
+        actions.disabled_reasons["canEditForRerun"]
+        == "original_task_input_snapshot_missing"
+    )
+    assert (
+        actions.disabled_reasons["canRerun"]
+        == "original_task_input_snapshot_missing"
+    )
+
+
 def test_describe_execution_disables_actions_when_feature_flag_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
