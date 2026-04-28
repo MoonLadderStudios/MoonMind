@@ -10,11 +10,25 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.auth_providers import get_current_user
 from api_service.api.routers import settings as settings_router
 from api_service.db import base as db_base
-from api_service.db.models import Base, ManagedSecret, SecretStatus
+from api_service.db.models import Base, ManagedSecret, SecretStatus, SettingsOverride
 from api_service.main import app
+from api_service.services.settings_catalog import (
+    SettingMigrationRule,
+    SettingsCatalogService,
+)
 
 
 SETTINGS_USER_DEP = get_current_user()
+
+
+def _install_settings_migration_rules(monkeypatch, rules):
+    service_cls = SettingsCatalogService
+
+    def _factory(*args, **kwargs):
+        kwargs.setdefault("migration_rules", rules)
+        return service_cls(*args, **kwargs)
+
+    monkeypatch.setattr(settings_router, "SettingsCatalogService", _factory)
 
 
 @pytest.fixture
@@ -167,6 +181,124 @@ async def test_settings_write_to_unexposed_key_returns_setting_not_exposed():
     assert body["key"] == "workflow.github_token"
     assert body["scope"] == "workspace"
     assert "raw-token" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_patch_deprecated_setting_key_is_rejected_without_echoing_value(
+    settings_api_db,
+    monkeypatch,
+):
+    _install_settings_migration_rules(
+        monkeypatch,
+        (
+            SettingMigrationRule(
+                old_key="test.removed_token",
+                state="removed",
+                message="test.removed_token was removed.",
+            ),
+        ),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"test.removed_token": "ghp_should_never_echo"},
+                "expected_versions": {"test.removed_token": 1},
+            },
+        )
+
+    assert response.status_code == 423
+    assert response.json()["error"] == "read_only_setting"
+    assert response.json()["key"] == "test.removed_token"
+    assert "ghp_should_never_echo" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_effective_setting_endpoint_resolves_renamed_override(
+    settings_api_db,
+    monkeypatch,
+):
+    _install_settings_migration_rules(
+        monkeypatch,
+        (
+            SettingMigrationRule(
+                old_key="workflow.legacy_publish_mode",
+                new_key="workflow.default_publish_mode",
+                state="renamed",
+                message="workflow.legacy_publish_mode was renamed.",
+            ),
+        ),
+    )
+    async with settings_api_db() as session:
+        session.add(
+            SettingsOverride(
+                scope="workspace",
+                key="workflow.legacy_publish_mode",
+                value_json="branch",
+                value_version=5,
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/v1/settings/effective/workflow.default_publish_mode",
+            params={"scope": "workspace"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["value"] == "branch"
+    assert body["source"] == "migrated_workspace_override"
+    assert body["value_version"] == 5
+    assert body["diagnostics"][0]["code"] == "setting_renamed_override"
+
+
+@pytest.mark.asyncio
+async def test_settings_diagnostics_include_deprecated_override_without_plaintext(
+    settings_api_db,
+    monkeypatch,
+):
+    _install_settings_migration_rules(
+        monkeypatch,
+        (
+            SettingMigrationRule(
+                old_key="workflow.removed_secret",
+                state="removed",
+                message="workflow.removed_secret was removed.",
+            ),
+        ),
+    )
+    async with settings_api_db() as session:
+        session.add(
+            SettingsOverride(
+                scope="workspace",
+                key="workflow.removed_secret",
+                value_json="ghp_removed_plaintext",
+                value_version=7,
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/v1/settings/diagnostics",
+            params={"scope": "workspace"},
+        )
+
+    assert response.status_code == 200
+    value = response.json()["values"]["workflow.removed_secret"]
+    assert value["source"] == "deprecated_override"
+    assert value["diagnostics"][0]["code"] == "setting_deprecated_override"
+    assert value["diagnostics"][0]["details"]["value_version"] == 7
+    assert "ghp_removed_plaintext" not in response.text
 
 
 @pytest.mark.asyncio

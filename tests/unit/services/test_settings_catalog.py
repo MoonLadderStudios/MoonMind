@@ -11,10 +11,12 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
     SecretStatus,
     SettingsAuditEvent,
+    SettingsOverride,
 )
 from api_service.services.settings_catalog import (
     SETTINGS_PERMISSION_NAMES,
     SettingAuditPolicy,
+    SettingMigrationRule,
     SettingsCatalogService,
 )
 
@@ -353,6 +355,204 @@ async def _workspace_override_persists_and_reports_version(settings_session):
         updated.values["workflow.default_publish_mode"].activation_state
         == "pending_next_boundary"
     )
+
+
+@pytest.mark.asyncio
+async def test_rename_migration_preserves_old_workspace_override(settings_session_maker):
+    entry_type = SettingsCatalogService(env={})._registry[0].__class__
+    registry = (
+        entry_type(
+            key="test.new_runtime",
+            title="New Runtime",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="default-runtime",
+            order=1,
+            apply_mode="next_task",
+            applies_to=("task_creation",),
+        ),
+    )
+    rules = (
+        SettingMigrationRule(
+            old_key="test.old_runtime",
+            new_key="test.new_runtime",
+            state="renamed",
+            message="test.old_runtime was renamed to test.new_runtime.",
+        ),
+    )
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsOverride(
+                scope="workspace",
+                workspace_id=UUID("00000000-0000-0000-0000-000000000000"),
+                user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                key="test.old_runtime",
+                value_json="preserved-runtime",
+                value_version=3,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(
+            env={},
+            registry=registry,
+            migration_rules=rules,
+            session=settings_session,
+        )
+        effective = await service.effective_value_async(
+            "test.new_runtime", scope="workspace"
+        )
+
+    assert effective.value == "preserved-runtime"
+    assert effective.source == "migrated_workspace_override"
+    assert effective.value_version == 3
+    assert [diagnostic.code for diagnostic in effective.diagnostics] == [
+        "setting_renamed_override"
+    ]
+    assert effective.diagnostics[0].details == {
+        "old_key": "test.old_runtime",
+        "new_key": "test.new_runtime",
+        "state": "renamed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_deprecated_override_diagnostics_do_not_expose_raw_value(
+    settings_session_maker,
+):
+    rules = (
+        SettingMigrationRule(
+            old_key="test.removed_token",
+            state="removed",
+            message="test.removed_token was removed and requires migration.",
+        ),
+    )
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsOverride(
+                scope="workspace",
+                workspace_id=UUID("00000000-0000-0000-0000-000000000000"),
+                user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                key="test.removed_token",
+                value_json="ghp_should_never_leak",
+                value_version=2,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(
+            env={},
+            registry=(),
+            migration_rules=rules,
+            session=settings_session,
+        )
+        diagnostics = await service.diagnostics(scope="workspace")
+
+    deprecated = diagnostics.values["test.removed_token"]
+    assert deprecated.source == "deprecated_override"
+    assert deprecated.diagnostics[0].code == "setting_deprecated_override"
+    assert deprecated.diagnostics[0].details == {
+        "old_key": "test.removed_token",
+        "state": "removed",
+        "value_version": 2,
+        "schema_version": 1,
+    }
+    assert "ghp_should_never_leak" not in deprecated.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_schema_version_mismatch_requires_explicit_type_migration(
+    settings_session_maker,
+):
+    entry_type = SettingsCatalogService(env={})._registry[0].__class__
+    registry = (
+        entry_type(
+            key="test.threshold",
+            title="Threshold",
+            category="Test",
+            section="user-workspace",
+            value_type="integer",
+            ui="number",
+            scopes=("workspace",),
+            default_value=10,
+            order=1,
+            apply_mode="next_task",
+            applies_to=("task_creation",),
+        ),
+    )
+    rules = (
+        SettingMigrationRule(
+            old_key="test.threshold",
+            state="type_changed",
+            expected_schema_version=2,
+            message="test.threshold type changed and needs migration.",
+        ),
+    )
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsOverride(
+                scope="workspace",
+                workspace_id=UUID("00000000-0000-0000-0000-000000000000"),
+                user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                key="test.threshold",
+                value_json="10",
+                schema_version=1,
+                value_version=4,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(
+            env={},
+            registry=registry,
+            migration_rules=rules,
+            session=settings_session,
+        )
+        effective = await service.effective_value_async(
+            "test.threshold", scope="workspace"
+        )
+
+    assert effective.value is None
+    assert effective.source == "type_migration_required"
+    assert effective.value_version == 4
+    assert effective.diagnostics[0].code == "setting_type_migration_required"
+    assert effective.diagnostics[0].details == {
+        "key": "test.threshold",
+        "state": "type_changed",
+        "schema_version": 1,
+        "expected_schema_version": 2,
+    }
+
+
+def test_catalog_invariant_gate_for_future_integrations():
+    service = SettingsCatalogService(env={})
+    catalog = service.catalog(scope="workspace")
+    descriptors = [
+        descriptor
+        for values in catalog.categories.values()
+        for descriptor in values
+    ]
+
+    assert descriptors
+    for descriptor in descriptors:
+        assert descriptor.key
+        assert "workspace" in descriptor.scopes
+        assert descriptor.source_explanation
+        assert descriptor.apply_mode
+        assert descriptor.audit is not None
+        assert descriptor.ui != "raw_secret"
+        assert descriptor.type != "password"
+        assert descriptor.key not in {"workflow.github_token"}
+
+    github_ref = next(
+        item for item in descriptors if item.key == "integrations.github.token_ref"
+    )
+    assert github_ref.ui == "secret_ref_picker"
+    assert github_ref.secret_role == "github_token"
+    assert github_ref.audit.redact is True
 
 
 @pytest.mark.asyncio
