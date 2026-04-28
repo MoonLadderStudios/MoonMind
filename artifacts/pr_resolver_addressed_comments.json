@@ -1,27 +1,17 @@
 [
   {
-    "id": 4192185054,
+    "id": 4192598542,
     "disposition": "not-applicable",
-    "rationale": "Positive Gemini review summary with no requested change."
+    "rationale": "Summary review comment only; the two concrete inline comments were classified separately."
   },
   {
-    "id": 3157002480,
+    "id": 3157353680,
     "disposition": "addressed",
-    "rationale": "Key-scoped diagnostics now skip unrelated deprecated override diagnostics; regression test covers diagnostics(scope, key)."
+    "rationale": "Simplified the Claude display-label reconciliation branch by using a single legacy-label predicate and direct mapping lookup."
   },
   {
-    "id": 3157002486,
+    "id": 3157353686,
     "disposition": "addressed",
-    "rationale": "Resolution now clears cached migration diagnostics for the key before fresh override/default resolution; regression test covers reused service instances."
-  },
-  {
-    "id": 4192187854,
-    "disposition": "not-applicable",
-    "rationale": "Codex automated review container comment; actionable child review comments are tracked separately."
-  },
-  {
-    "id": 3157002490,
-    "disposition": "addressed",
-    "rationale": "Migration rule validation now rejects duplicate renamed new_key targets; regression test covers fail-fast behavior."
+    "rationale": "Moved the Claude legacy model alias constant out of the import/logging block and next to related provider-profile constants."
   }
 ]
