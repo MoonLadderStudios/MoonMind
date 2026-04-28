@@ -9,7 +9,7 @@
 Validation commands:
 
 ```bash
-pytest tests/unit/api/test_secrets_api.py tests/unit/services/test_secrets.py tests/unit/api_service/api/routers/test_settings_api.py -q
+pytest tests/unit/api/test_secrets_api.py tests/unit/services/test_secrets.py tests/unit/api_service/api/routers/test_settings_api.py tests/unit/services/test_settings_catalog.py -q
 npm run ui:test -- frontend/src/components/secrets/SecretManager.test.tsx
-MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/test_secrets_api.py tests/unit/services/test_secrets.py tests/unit/api_service/api/routers/test_settings_api.py --ui-args frontend/src/components/secrets/SecretManager.test.tsx
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/test_secrets_api.py tests/unit/services/test_secrets.py tests/unit/api_service/api/routers/test_settings_api.py tests/unit/services/test_settings_catalog.py --ui-args frontend/src/components/secrets/SecretManager.test.tsx
 ```

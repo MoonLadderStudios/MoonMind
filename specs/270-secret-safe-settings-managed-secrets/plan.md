@@ -39,7 +39,7 @@ Close the remaining secret-safety gaps in the existing Settings and Managed Secr
 - **Primary Dependencies**: FastAPI, Pydantic v2, SQLAlchemy async ORM, React, TanStack Query, Vitest, pytest.
 - **Storage**: Existing `managed_secrets` and settings override tables; no new persistent tables.
 - **Unit Testing**: pytest for API/service behavior; Vitest/Testing Library for frontend component behavior.
-- **Integration Testing**: Existing API route tests via FastAPI TestClient / AsyncClient and Settings API route tests.
+- **Integration Testing**: Existing FastAPI route tests via TestClient / AsyncClient, Settings API route tests, and the repo unit wrapper with `--ui-args` to execute the focused React component test alongside backend coverage.
 - **Target Platform**: Mission Control Settings page and MoonMind API.
 - **Project Type**: Web application plus API service.
 - **Performance Goals**: Secret metadata and diagnostics remain bounded list/detail responses; no plaintext is serialized.
