@@ -28,12 +28,12 @@
 
 **Traceability IDs**: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SCN-006, DESIGN-REQ-001, DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-023.
 
-- [X] T005 Add failing frontend test that renders workspace descriptors by category, source badge, scope badge, diagnostics, affected subsystems, and reload badges in `frontend/src/components/settings/GeneratedSettingsSection.test.tsx` for FR-001, FR-003, SCN-001, DESIGN-REQ-001, and DESIGN-REQ-004.
+- [X] T005 Add failing frontend test that renders workspace descriptors by category, source badge, scope badge, diagnostics, affected subsystems, and reload badges in `frontend/src/components/settings/GeneratedSettingsSection.test.tsx` for FR-001, FR-003, SCN-001, SC-001, DESIGN-REQ-001, and DESIGN-REQ-004.
 - [X] T006 Add failing frontend test that switches to user scope and fetches only user-scope descriptors in `frontend/src/components/settings/GeneratedSettingsSection.test.tsx` for FR-004 and SCN-002.
-- [X] T007 Add failing frontend test that edits enum, boolean, number, text, list, key/value, and SecretRef descriptors and previews only changed keys in `frontend/src/components/settings/GeneratedSettingsSection.test.tsx` for FR-002, FR-005, FR-006, and FR-009.
-- [X] T008 Add failing frontend test that save sends only changed keys with expected versions and refreshes catalog in `frontend/src/components/settings/GeneratedSettingsSection.test.tsx` for FR-005 and FR-010.
-- [X] T009 Add failing frontend test that read-only descriptors show lock reasons and disable ordinary edits in `frontend/src/components/settings/GeneratedSettingsSection.test.tsx` for FR-008 and SCN-004.
-- [X] T010 Add failing frontend test that reset-to-inherited calls the reset route only for override sources and refreshes catalog in `frontend/src/components/settings/GeneratedSettingsSection.test.tsx` for FR-007 and DESIGN-REQ-023.
+- [X] T007 Add failing frontend test that edits enum, boolean, number, text, list, key/value, and SecretRef descriptors and previews only changed keys in `frontend/src/components/settings/GeneratedSettingsSection.test.tsx` for FR-002, FR-005, FR-006, FR-009, SC-002, and SC-004.
+- [X] T008 Add failing frontend test that save sends only changed keys with expected versions and refreshes catalog in `frontend/src/components/settings/GeneratedSettingsSection.test.tsx` for FR-005, FR-010, and SC-002.
+- [X] T009 Add failing frontend test that read-only descriptors show lock reasons and disable ordinary edits in `frontend/src/components/settings/GeneratedSettingsSection.test.tsx` for FR-008, SCN-004, and SC-003.
+- [X] T010 Add failing frontend test that reset-to-inherited calls the reset route only for override sources and refreshes catalog in `frontend/src/components/settings/GeneratedSettingsSection.test.tsx` for FR-007, SC-005, and DESIGN-REQ-023.
 - [X] T011 Implement descriptor fetch, filters, category grouping, source/scope badges, diagnostics, and row metadata in `frontend/src/components/settings/GeneratedSettingsSection.tsx` for FR-001, FR-003, and FR-004.
 - [X] T012 Implement generated controls for boolean, string, bounded number, enum, list, key/value, SecretRef, and read-only settings in `frontend/src/components/settings/GeneratedSettingsSection.tsx` for FR-002, FR-008, and FR-009.
 - [X] T013 Implement pending change state, preview, discard, save request body, sanitized error display, and catalog refresh in `frontend/src/components/settings/GeneratedSettingsSection.tsx` for FR-005, FR-006, and FR-010.
@@ -44,7 +44,7 @@
 
 - [X] T016 Run `npm run ui:test -- frontend/src/components/settings/GeneratedSettingsSection.test.tsx` and record the result.
 - [X] T017 Run `./tools/test_unit.sh tests/unit/api_service/api/routers/test_settings_api.py tests/unit/services/test_settings_catalog.py --ui-args frontend/src/components/settings/GeneratedSettingsSection.test.tsx` and record the result.
-- [X] T018 Run final `/moonspec-verify` work and preserve MM-539, source mappings, and test evidence in final verification.
+- [X] T018 Run final `/moonspec-verify` work and preserve MM-539, source mappings, SC-006, and test evidence in final verification.
 
 ## Dependencies and Execution Order
 

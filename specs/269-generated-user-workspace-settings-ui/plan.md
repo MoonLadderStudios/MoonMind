@@ -30,6 +30,12 @@ Implement the missing generated User / Workspace Settings UI on top of the exist
 | SCN-004 | partial | Backend read-only metadata exists | Render disabled controls and lock reason | frontend unit |
 | SCN-005 | partial | Backend reset exists | Add reset button and refresh | frontend unit |
 | SCN-006 | partial | Backend SecretRef descriptor exists | Add SecretRef reference control and tests | frontend unit |
+| SC-001 | partial | Backend catalog exists; generated frontend renderer absent at planning time | Add descriptor-driven User / Workspace UI without bespoke forms | frontend unit |
+| SC-002 | partial | Backend patch route exists; frontend changed-key submission absent at planning time | Add pending change tracking, save, and refresh behavior | frontend unit + API integration evidence |
+| SC-003 | partial | Backend read-only metadata exists; frontend lock behavior absent at planning time | Add disabled read-only controls and lock reason display | frontend unit |
+| SC-004 | partial | Backend SecretRef diagnostics and validation exist; generic reference UI absent at planning time | Add SecretRef reference control without plaintext secret handling | frontend unit |
+| SC-005 | partial | Backend reset route exists; frontend reset action absent at planning time | Add reset-to-inherited action and catalog refresh | frontend unit + API integration evidence |
+| SC-006 | implemented_verified | MM-539 and source IDs preserved in `spec.md` | Preserve through tasks and final verification | traceability review |
 | DESIGN-REQ-001 | partial | Backend catalog and scoped overrides exist; UI missing | Add UI over existing backend | frontend unit + backend tests |
 | DESIGN-REQ-004 | partial | Backend catalog section `user-workspace`; UI placeholder | Render catalog-driven section | frontend unit |
 | DESIGN-REQ-009 | partial | Descriptor metadata and server validation exist; UI missing controls/preview | Add UI controls and metadata display | frontend unit |
