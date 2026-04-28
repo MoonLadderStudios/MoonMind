@@ -5,6 +5,12 @@
 **Status**: Draft
 **Input**: User description: "Use the Jira preset brief for MM-556 as the canonical Moon Spec orchestration input. Implement MM-556: Unify Step Type authoring controls. Build the task authoring experience so the step editor has exactly one user-facing Step Type control covering Tool, Skill, and Preset. The selected Step Type must determine which type-specific configuration UI is shown. When the user changes Step Type, preserve compatible fields where possible and clearly handle incompatible fields before data is lost. User-facing copy must consistently use Step Type for the discriminator and avoid exposing internal runtime terminology such as Capability, Activity, Invocation, Command, or Script as the step type label. Preserve MM-556 in generated spec artifacts and pull request references. Source Reference: docs/Steps/StepTypes.md sections 1, 2, 3, 4, 6.1, 6.2, and 10. Coverage IDs: DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-015."
 
+## Original Preset Brief
+
+Jira issue: MM-556
+
+As a task author, I want one Step Type control in the step editor so I can choose Tool, Skill, or Preset without learning MoonMind internal runtime terminology.
+
 ## User Story - Unified Step Type Selection
 
 **Summary**: As a task author, I want one Step Type control in the step editor so I can choose Tool, Skill, or Preset without learning MoonMind internal runtime terminology.
