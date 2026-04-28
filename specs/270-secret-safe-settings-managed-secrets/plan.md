@@ -13,25 +13,25 @@ Close the remaining secret-safety gaps in the existing Settings and Managed Secr
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | partial | `frontend/src/components/secrets/SecretManager.tsx` clears create/update plaintext; rotate flow closes modal | Add tests preserving one-way behavior while modifying UI | frontend unit |
-| FR-002 | partial | `SecretMetadataResponse` omits ciphertext but lacks `secretRef` | Add `secretRef` to metadata response derived from slug | API unit |
-| FR-003 | missing | Secret list shows slug/status/actions only | Add copy SecretRef action and UI test | frontend unit |
+| FR-001 | implemented_verified | `frontend/src/components/secrets/SecretManager.tsx` keeps plaintext write-only and `frontend/src/components/secrets/SecretManager.test.tsx` asserts plaintext is not rendered. | Preserve with final verification | frontend unit |
+| FR-002 | implemented_verified | `SecretMetadataResponse.secretRef` derives `db://<slug>` from metadata and API tests assert plaintext/ciphertext are absent. | Preserve with final verification | API unit |
+| FR-003 | implemented_verified | Managed Secrets UI displays and copies canonical `db://<slug>` SecretRefs. | Preserve with final verification | frontend unit |
 | FR-004 | implemented_verified | `api_service/services/settings_catalog.py`, `tests/unit/api_service/api/routers/test_settings_api.py` reject raw secret refs | Preserve with final verification | existing pytest |
 | FR-005 | implemented_verified | `integrations.github.token_ref` stores `env://` and backend returns reference only | Preserve with final verification | existing pytest |
-| FR-006 | partial | `GET /api/v1/secrets/{slug}/validate` returns only `{valid}` after plaintext lookup | Add redacted diagnostic response with status and timestamp | API unit |
-| FR-007 | partial | Settings catalog diagnoses missing `env://`; `db://` status not checked | Add `db://` managed-secret diagnostics for missing/inactive refs | service/API unit |
+| FR-006 | implemented_verified | `GET /api/v1/secrets/{slug}/validate` returns metadata-only diagnostics with status and timestamp. | Preserve with final verification | API unit |
+| FR-007 | implemented_verified | Settings catalog primes managed-secret metadata and diagnoses active, missing, and inactive `db://` refs. | Preserve with final verification | service/API unit |
 | FR-008 | implemented_verified | Registry only exposes explicit SecretRef descriptor; unsafe payload scan exists | Preserve with final verification | existing pytest |
 | FR-009 | implemented_verified | Settings PATCH uses catalog descriptors and auth dependencies | Preserve with final verification | existing pytest |
 | FR-010 | implemented_verified | MM-540 preserved in `spec.md` | Preserve in downstream artifacts and verification | traceability review |
-| SC-001 | partial | Existing metadata tests assert no ciphertext; validation response too small | Add response redaction assertions for create/list/validate | API unit |
-| SC-002 | missing | No SecretRef copy action | Add UI copy test and implementation | frontend unit |
+| SC-001 | implemented_verified | API/service tests assert `secretRef` metadata, validation diagnostics, and no plaintext/ciphertext exposure. | Preserve with final verification | API unit |
+| SC-002 | implemented_verified | Frontend test asserts SecretRef display/copy behavior and plaintext suppression. | Preserve with final verification | frontend unit |
 | SC-003 | implemented_verified | Existing test rejects `ghp_raw_plaintext` | Preserve with final verification | existing pytest |
-| SC-004 | partial | Missing `env://` diagnostics; no `db://` inactive diagnostics | Add managed secret status diagnostics | service/API unit |
+| SC-004 | implemented_verified | Settings API tests cover active, disabled, and missing `db://` diagnostics. | Preserve with final verification | service/API unit |
 | SC-005 | implemented_verified | MM-540 and source IDs present in `spec.md` | Preserve through tasks and final verification | traceability review |
-| DESIGN-REQ-002 | partial | Secrets service owns storage/resolution; Settings UI exposes workflows | Keep changes at API/UI boundary without redefining storage | API + UI unit |
+| DESIGN-REQ-002 | implemented_verified | Secrets service owns metadata validation and Settings UI exposes references without redefining storage. | Preserve with final verification | API + UI unit |
 | DESIGN-REQ-010 | implemented_verified | Generic override rejection and SecretRef storage exist | Preserve and cover `db://` diagnostics | API/service unit |
-| DESIGN-REQ-011 | partial | No plaintext readback mostly exists; validation diagnostics need redacted shape | Add redacted validation response and UI SecretRef reference | API + UI unit |
-| DESIGN-REQ-018 | partial | Most security requirements exist; validation diagnostics and db diagnostics incomplete | Add focused hardening | API/service unit |
+| DESIGN-REQ-011 | implemented_verified | Managed-secret metadata, validation, and UI display expose references and diagnostics without plaintext readback. | Preserve with final verification | API + UI unit |
+| DESIGN-REQ-018 | implemented_verified | Validation and broken-reference diagnostics are redacted and tested for `db://` SecretRefs. | Preserve with final verification | API/service unit |
 
 ## Technical Context
 

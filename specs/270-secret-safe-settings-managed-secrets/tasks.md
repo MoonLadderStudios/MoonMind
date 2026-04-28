@@ -4,7 +4,7 @@
 
 **Prerequisites**: Existing Settings API, Secrets API, Managed Secrets service, and Settings UI remain in place.
 
-**Unit Test Command**: `pytest tests/unit/api/test_secrets_api.py tests/unit/services/test_secrets.py tests/unit/api_service/api/routers/test_settings_api.py -q`
+**Unit Test Command**: `pytest tests/unit/api/test_secrets_api.py tests/unit/services/test_secrets.py tests/unit/api_service/api/routers/test_settings_api.py tests/unit/services/test_settings_catalog.py -q`
 
 **Integration Test Command**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/test_secrets_api.py tests/unit/services/test_secrets.py tests/unit/api_service/api/routers/test_settings_api.py tests/unit/services/test_settings_catalog.py --ui-args frontend/src/components/secrets/SecretManager.test.tsx`
 
