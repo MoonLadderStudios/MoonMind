@@ -36,6 +36,12 @@ interface SettingDescriptor {
   override_value?: unknown;
   source: string;
   source_explanation: string;
+  apply_mode: string;
+  activation_state: string;
+  active: boolean;
+  pending_value?: unknown;
+  affected_process_or_worker?: string | null;
+  completion_guidance?: string | null;
   options?: SettingOption[] | null;
   constraints?: SettingConstraints | null;
   sensitive: boolean;
@@ -80,6 +86,24 @@ const SOURCE_LABELS: Record<string, string> = {
   secret_reference: 'Secret reference',
 };
 
+const APPLY_MODE_LABELS: Record<string, string> = {
+  immediate: 'Applies immediately',
+  next_request: 'Applies on next request',
+  next_task: 'Applies on next task',
+  next_launch: 'Applies on next launch',
+  worker_reload: 'Requires worker reload',
+  process_restart: 'Requires process restart',
+  manual_operation: 'Requires manual operation',
+};
+
+const ACTIVATION_STATE_LABELS: Record<string, string> = {
+  active: 'Active',
+  pending_next_boundary: 'Pending next boundary',
+  pending_reload: 'Pending reload',
+  pending_restart: 'Pending restart',
+  pending_manual_operation: 'Pending manual operation',
+};
+
 const SETTING_FIELD_CLASS_NAMES = [
   'w-full',
   'rounded-xl',
@@ -105,6 +129,14 @@ function settingFieldClassName(...classNames: string[]): string {
 
 function sourceLabel(source: string): string {
   return SOURCE_LABELS[source] ?? source.replaceAll('_', ' ');
+}
+
+function applyModeLabel(applyMode: string): string {
+  return APPLY_MODE_LABELS[applyMode] ?? applyMode.replaceAll('_', ' ');
+}
+
+function activationStateLabel(activationState: string): string {
+  return ACTIVATION_STATE_LABELS[activationState] ?? activationState.replaceAll('_', ' ');
 }
 
 function displayValue(value: unknown): string {
@@ -590,6 +622,12 @@ export function GeneratedSettingsSection() {
                       <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
                         {SCOPE_LABELS[scope]}
                       </span>
+                      <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-medium text-sky-800 dark:bg-sky-900/40 dark:text-sky-200">
+                        {applyModeLabel(descriptor.apply_mode)}
+                      </span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                        {activationStateLabel(descriptor.activation_state)}
+                      </span>
                       {reloadBadges(descriptor).map((badge) => (
                         <span key={badge} className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
                           {badge}
@@ -600,6 +638,19 @@ export function GeneratedSettingsSection() {
                       <p className="text-sm text-slate-600 dark:text-slate-400">{descriptor.description}</p>
                     ) : null}
                     <p className="text-xs text-slate-500 dark:text-slate-500">{descriptor.source_explanation}</p>
+                    {descriptor.affected_process_or_worker ? (
+                      <p className="text-xs text-slate-500 dark:text-slate-500">
+                        Affects {descriptor.affected_process_or_worker}
+                      </p>
+                    ) : null}
+                    {!descriptor.active && descriptor.pending_value !== null && descriptor.pending_value !== undefined ? (
+                      <p className="text-xs text-slate-500 dark:text-slate-500">
+                        Pending: {displayValue(descriptor.pending_value)}
+                      </p>
+                    ) : null}
+                    {descriptor.completion_guidance ? (
+                      <p className="text-sm text-slate-600 dark:text-slate-400">{descriptor.completion_guidance}</p>
+                    ) : null}
                     {descriptor.read_only && descriptor.read_only_reason ? (
                       <p className="text-sm font-medium text-amber-700 dark:text-amber-300">{descriptor.read_only_reason}</p>
                     ) : null}

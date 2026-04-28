@@ -47,6 +47,12 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
     assert default_runtime.scopes == ["workspace"]
     assert default_runtime.constraints is None
     assert default_runtime.source == "config_or_default"
+    assert default_runtime.apply_mode == "next_task"
+    assert default_runtime.activation_state == "pending_next_boundary"
+    assert default_runtime.active is False
+    assert default_runtime.completion_guidance == (
+        "New tasks will use this value when they are created."
+    )
     assert default_runtime.requires_reload is False
     assert default_runtime.requires_worker_restart is False
     assert default_runtime.requires_process_restart is False
@@ -64,6 +70,25 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
         for descriptor in descriptors
     }
     assert "workflow.github_token" not in all_keys
+
+
+def test_catalog_rejects_descriptor_without_apply_mode():
+    broken_entry = SettingsCatalogService(env={})._registry[0].__class__(
+        key="broken.apply_mode",
+        title="Broken Apply Mode",
+        category="Broken",
+        section="user-workspace",
+        value_type="string",
+        ui="text",
+        scopes=("workspace",),
+        order=999,
+        apply_mode="",  # type: ignore[arg-type]
+        applies_to=("task_creation",),
+    )
+    service = SettingsCatalogService(env={}, registry=(broken_entry,))
+
+    with pytest.raises(ValueError, match="invalid_apply_mode"):
+        service.catalog(section="user-workspace", scope="workspace")
 
 
 def test_catalog_exposes_provider_profile_reference_without_launch_semantics():
@@ -596,6 +621,32 @@ async def test_audit_entries_persist_actor_identity(settings_session_maker):
 
 
 @pytest.mark.asyncio
+async def test_audit_entries_expose_apply_mode_and_affected_systems(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"workflow.default_publish_mode": "branch"},
+            expected_versions={"workflow.default_publish_mode": 1},
+            reason="configure publish mode",
+        )
+
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+    assert entries[0].event_type == "settings.override.updated"
+    assert entries[0].key == "workflow.default_publish_mode"
+    assert entries[0].scope == "workspace"
+    assert entries[0].apply_mode == "next_task"
+    assert entries[0].affected_systems == ["task_creation", "publishing"]
+    assert entries[0].validation_outcome == "accepted"
+    assert entries[0].created_at is not None
+
+
+@pytest.mark.asyncio
 async def test_audit_redactor_blocks_secret_like_values_even_without_descriptor(
     settings_session_maker,
 ):
@@ -693,6 +744,13 @@ async def test_settings_diagnostics_include_source_restart_and_recent_change(
     assert github.source == "workspace_override"
     assert github.recent_change is not None
     assert github.recent_change.reason == "wire github token"
+    assert github.apply_mode == "next_launch"
+    assert github.activation_state == "pending_next_boundary"
+    assert github.active is False
+    assert github.completion_guidance == (
+        "New launches will use this value the next time they start."
+    )
+    assert github.affected_process_or_worker == "github, integrations"
     assert github.diagnostics[0].code == "unresolved_secret_ref"
     assert github.diagnostics[0].details["launch_blocker"] is True
     assert "missing-token" not in github.model_dump_json()
