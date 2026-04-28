@@ -871,7 +871,10 @@ class SettingsCatalogService:
             for entry, data in resolved.values()
             if entry.key == "workflow.default_provider_profile_ref"
         )
-        recent_changes = await self._recent_changes([entry.key for entry in entries])
+        recent_changes = await self._recent_changes(
+            [entry.key for entry in entries],
+            scope=scope,
+        )
         values = {}
         for entry, data in resolved.values():
             diagnostics = list(self._diagnostics_for_override(entry, data[0], data[3]))
@@ -1403,18 +1406,17 @@ class SettingsCatalogService:
         return None
 
     async def _recent_changes(
-        self, keys: list[str]
+        self, keys: list[str], *, scope: SettingScope
     ) -> dict[str, SettingsRecentChange]:
         if self._session is None or not keys:
             return {}
+        subject_id = self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID
         result = await self._session.execute(
             select(SettingsAuditEvent)
             .where(
                 SettingsAuditEvent.workspace_id == self._workspace_id,
                 SettingsAuditEvent.key.in_(keys),
-                SettingsAuditEvent.user_id.in_(
-                    {_DEFAULT_SUBJECT_ID, self._user_id}
-                ),
+                SettingsAuditEvent.user_id == subject_id,
             )
             .order_by(desc(SettingsAuditEvent.created_at))
         )

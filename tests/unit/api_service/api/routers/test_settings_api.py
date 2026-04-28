@@ -639,6 +639,54 @@ async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output
 
 
 @pytest.mark.asyncio
+async def test_settings_diagnostics_recent_change_matches_requested_scope(
+    settings_api_db,
+    settings_user_override,
+):
+    workspace_id = uuid4()
+    user_id = uuid4()
+    settings_user_override(
+        permissions={
+            "settings.workspace.write",
+            "settings.user.write",
+            "settings.effective.read",
+        },
+        user_id=user_id,
+        workspace_id=workspace_id,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"integrations.github.token_ref": "db://workspace-token"},
+                "expected_versions": {"integrations.github.token_ref": 1},
+                "reason": "workspace token",
+            },
+        )
+        await client.patch(
+            "/api/v1/settings/user",
+            json={
+                "changes": {"integrations.github.token_ref": "db://user-token"},
+                "expected_versions": {"integrations.github.token_ref": 1},
+                "reason": "user token",
+            },
+        )
+        response = await client.get(
+            "/api/v1/settings/diagnostics",
+            params={"scope": "workspace", "key": "integrations.github.token_ref"},
+        )
+
+    assert response.status_code == 200
+    recent_change = response.json()["values"]["integrations.github.token_ref"][
+        "recent_change"
+    ]
+    assert recent_change["reason"] == "workspace token"
+
+
+@pytest.mark.asyncio
 async def test_settings_diagnostics_endpoint_falls_back_without_db(monkeypatch):
     class FailingSessionMaker:
         def __call__(self):
