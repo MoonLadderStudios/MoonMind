@@ -111,14 +111,8 @@ async def test_get_secret(mock_db_session):
 @pytest.mark.asyncio
 async def test_validate_secret_ref_returns_redacted_active_diagnostic(mock_db_session):
     slug = "test-secret"
-    existing_secret = ManagedSecret(
-        slug=slug,
-        ciphertext="sk-test-secret-value",
-        status=SecretStatus.ACTIVE,
-    )
-
     mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = existing_secret
+    mock_result.scalar_one_or_none.return_value = SecretStatus.ACTIVE
 
     async def mock_execute(*args, **kwargs):
         return mock_result
@@ -130,7 +124,9 @@ async def test_validate_secret_ref_returns_redacted_active_diagnostic(mock_db_se
     assert result["valid"] is True
     assert result["status"] == "active"
     assert result["diagnostics"][0]["code"] == "secret_ref_resolvable"
-    assert "sk-test-secret-value" not in str(result)
+    execute_statement = mock_db_session.execute.call_args.args[0]
+    assert "managed_secrets.status" in str(execute_statement)
+    assert "managed_secrets.ciphertext" not in str(execute_statement)
 
 
 @pytest.mark.asyncio

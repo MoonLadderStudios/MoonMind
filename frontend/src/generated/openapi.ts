@@ -5793,6 +5793,8 @@ export interface components {
             createdAt: string;
             /** Updatedat */
             updatedAt?: string | null;
+            /** Secretref */
+            readonly secretRef: string;
         };
         /**
          * SecretStatusUpdateRequest
@@ -8894,7 +8896,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: boolean;
+                        [key: string]: unknown;
                     };
                 };
             };

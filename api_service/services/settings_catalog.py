@@ -752,9 +752,9 @@ class SettingsCatalogService:
             for value in values
             if isinstance(value, str) and value.startswith("db://")
         }
-        missing = sorted(
+        missing = [
             slug for slug in slugs if slug not in self._managed_secret_status_by_slug
-        )
+        ]
         if not missing:
             return
         result = await self._session.execute(
@@ -762,15 +762,14 @@ class SettingsCatalogService:
                 ManagedSecret.slug.in_(missing)
             )
         )
-        found: set[str] = set()
-        for slug, status in result.all():
-            found.add(slug)
-            self._managed_secret_status_by_slug[slug] = (
-                status.value if isinstance(status, SecretStatus) else str(status)
-            )
+
+        statuses_from_db = {
+            slug: status.value if isinstance(status, SecretStatus) else str(status)
+            for slug, status in result.all()
+        }
+
         for slug in missing:
-            if slug not in found:
-                self._managed_secret_status_by_slug[slug] = None
+            self._managed_secret_status_by_slug[slug] = statuses_from_db.get(slug)
 
     def _resolve_value_from_overrides(
         self,

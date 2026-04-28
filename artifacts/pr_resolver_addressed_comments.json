@@ -1,32 +1,22 @@
 [
   {
-    "id": 3152319940,
+    "id": 3152883195,
     "disposition": "addressed",
-    "rationale": "Replaced JSON.stringify comparison with order-stable recursive equality that handles arrays, objects, symbols, undefined values, and circular references without throwing."
+    "rationale": "Simplified managed secret status cache priming by mapping database statuses once and filling missing slugs with null."
   },
   {
-    "id": 3152319945,
-    "disposition": "addressed",
-    "rationale": "Moved the shared field Tailwind classes into SETTING_FIELD_CLASS_NAMES and settingFieldClassName for a reusable, readable control style helper."
-  },
-  {
-    "id": 4186702059,
+    "id": 4187341440,
     "disposition": "not-applicable",
-    "rationale": "Summary review body only; its two concrete feedback items are tracked and addressed by comments 3152319940 and 3152319945."
+    "rationale": "Top-level review summary with no separate actionable request beyond inline comment 3152883195."
   },
   {
-    "id": 3152323513,
+    "id": 3152919926,
     "disposition": "addressed",
-    "rationale": "Made the settings catalog route load persisted overrides through SettingsCatalogService.catalog_async so descriptors expose override-aware effective values and value_version."
+    "rationale": "Changed validate_secret_ref to select only ManagedSecret.status and updated the unit test to assert ciphertext is not selected."
   },
   {
-    "id": 3152323519,
-    "disposition": "addressed",
-    "rationale": "Gated Reset visibility to overrides at the active selected scope and added frontend coverage for inherited workspace overrides in user scope."
-  },
-  {
-    "id": 4186705950,
+    "id": 4187391626,
     "disposition": "not-applicable",
-    "rationale": "Automated review wrapper text only; its concrete stale-position comments are tracked separately and addressed where they still apply."
+    "rationale": "Automated review wrapper; actionable content is represented by inline comment 3152919926."
   }
 ]
