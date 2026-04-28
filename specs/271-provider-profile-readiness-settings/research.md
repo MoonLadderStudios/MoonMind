@@ -34,11 +34,11 @@ Test implications: Backend unit tests for disabled, missing SecretRef, missing O
 
 ## FR-006 Provider Profile Reference Diagnostics
 
-Decision: No generic provider-profile reference setting exists in the current settings catalog. Cover the launch-blocker model through readiness and preserve this as final verification evidence.
-Evidence: Targeted searches in `api_service/services/settings_catalog.py` and tests found no provider-profile reference key.
-Rationale: Adding a new setting key would expand scope beyond provider profile management; the story can still ensure missing/unready profile diagnostics exist at the profile boundary.
-Alternatives considered: Add a `workflow.default_provider_profile_ref` setting now. Rejected because MM-537/MM-539 own settings catalog/effective-value surfaces.
-Test implications: Verify no generic setting inlines runtime launch semantics; test readiness blocker shape for missing metadata.
+Decision: Add a narrow `workflow.default_provider_profile_ref` setting that stores only a provider profile identifier and emits launch-blocker diagnostics when the referenced profile is missing or disabled.
+Evidence: `api_service/services/settings_catalog.py`; `tests/unit/services/test_settings_catalog.py`; `tests/unit/api_service/api/routers/test_settings_api.py`.
+Rationale: The spec requires user/workspace settings to reference provider profiles without inlining provider-profile launch semantics. A typed reference setting plus diagnostics satisfies the requirement while keeping runtime construction, credentials, environment shaping, generated files, process launch, and capability checks outside generic settings.
+Alternatives considered: Leave provider-profile references out of the settings catalog. Rejected during alignment because FR-006 and SC-004 explicitly require missing/disabled references to produce effective-setting diagnostics and launch blockers.
+Test implications: Unit tests for catalog exposure, missing/disabled provider profile diagnostics, and user-scope effective settings shape.
 
 ## FR-007 and FR-008 Runtime Boundary
 
