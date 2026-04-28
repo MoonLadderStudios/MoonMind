@@ -14,6 +14,7 @@ from api_service.db.models import (
 )
 from api_service.services.settings_catalog import (
     SETTINGS_PERMISSION_NAMES,
+    SettingAuditPolicy,
     SettingsCatalogService,
 )
 
@@ -89,7 +90,7 @@ def test_catalog_rejects_descriptor_without_apply_mode():
     )
     service = SettingsCatalogService(env={}, registry=(broken_entry,))
 
-    with pytest.raises(ValueError, match="invalid_apply_mode"):
+    with pytest.raises(ValueError, match="broken\\.apply_mode"):
         service.catalog(section="user-workspace", scope="workspace")
 
 
@@ -606,6 +607,50 @@ async def _unsafe_values_rejected_but_secret_refs_are_allowed(settings_session):
         expected_versions={"integrations.github.token_ref": 1},
     )
     assert response.values["integrations.github.token_ref"].value == "env://GITHUB_TOKEN"
+    assert (
+        response.values["integrations.github.token_ref"].pending_value
+        == "env://GITHUB_TOKEN"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pending_activation_redacts_sensitive_non_reference_values(
+    settings_session_maker,
+):
+    entry_type = SettingsCatalogService(env={})._registry[0].__class__
+    registry = (
+        entry_type(
+            key="test.sensitive_runtime_value",
+            title="Sensitive Runtime Value",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            order=1,
+            apply_mode="process_restart",
+            requires_process_restart=True,
+            applies_to=("api_service",),
+            sensitive=True,
+            audit=SettingAuditPolicy(redact=True),
+        ),
+    )
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            registry=registry,
+            session=settings_session,
+        )
+
+        response = await service.apply_overrides(
+            scope="workspace",
+            changes={"test.sensitive_runtime_value": "sensitive-runtime-secret"},
+            expected_versions={"test.sensitive_runtime_value": 1},
+        )
+
+    value = response.values["test.sensitive_runtime_value"]
+    assert value.activation_state == "pending_restart"
+    assert value.pending_value == "[redacted]"
 
 
 @pytest.mark.asyncio

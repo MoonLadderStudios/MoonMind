@@ -974,15 +974,24 @@ class SettingsCatalogService:
     def _validate_registry(self) -> None:
         for entry in self._registry:
             if not entry.apply_mode:
-                raise ValueError("invalid_apply_mode")
+                raise ValueError(f"invalid_apply_mode for setting {entry.key!r}")
             if entry.apply_mode == "worker_reload" and not entry.requires_reload:
-                raise ValueError("invalid_apply_mode")
+                raise ValueError(
+                    f"invalid_apply_mode for setting {entry.key!r}: "
+                    "worker_reload requires requires_reload"
+                )
             if entry.apply_mode == "process_restart" and not (
                 entry.requires_worker_restart or entry.requires_process_restart
             ):
-                raise ValueError("invalid_apply_mode")
+                raise ValueError(
+                    f"invalid_apply_mode for setting {entry.key!r}: "
+                    "process_restart requires a restart flag"
+                )
             if entry.apply_mode not in {"immediate"} and not entry.applies_to:
-                raise ValueError("invalid_apply_mode")
+                raise ValueError(
+                    f"invalid_apply_mode for setting {entry.key!r}: "
+                    "non-immediate settings require affected systems"
+                )
 
     def _activation_metadata(
         self,
@@ -1012,8 +1021,12 @@ class SettingsCatalogService:
         if pending_activation and entry.apply_mode != "immediate":
             activation_state = pending_state_by_mode[entry.apply_mode]
         pending_value = None if activation_state == "active" else value
-        if entry.value_type == "secret_ref":
-            pending_value = None
+        if (
+            activation_state != "active"
+            and entry.value_type != "secret_ref"
+            and (entry.sensitive or entry.audit.redact)
+        ):
+            pending_value = "[redacted]"
         return {
             "apply_mode": entry.apply_mode,
             "activation_state": activation_state,

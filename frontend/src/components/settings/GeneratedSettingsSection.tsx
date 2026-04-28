@@ -643,7 +643,7 @@ export function GeneratedSettingsSection() {
                         Affects {descriptor.affected_process_or_worker}
                       </p>
                     ) : null}
-                    {!descriptor.active && descriptor.pending_value !== null && descriptor.pending_value !== undefined ? (
+                    {!descriptor.active && descriptor.pending_value !== undefined ? (
                       <p className="text-xs text-slate-500 dark:text-slate-500">
                         Pending: {displayValue(descriptor.pending_value)}
                       </p>

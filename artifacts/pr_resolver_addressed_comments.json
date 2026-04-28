@@ -8,5 +8,25 @@
     "id": 4191816834,
     "disposition": "not-applicable",
     "rationale": "Automated review summary container with no independent actionable request beyond the inline review comment."
+  },
+  {
+    "id": 3156699062,
+    "disposition": "addressed",
+    "rationale": "Pending activation values now redact sensitive non-reference values while preserving safe SecretRef strings such as db:// and env:// references."
+  },
+  {
+    "id": 3156699081,
+    "disposition": "addressed",
+    "rationale": "Registry apply-mode validation errors now include the failing setting key and the specific consistency rule."
+  },
+  {
+    "id": 3156699085,
+    "disposition": "addressed",
+    "rationale": "Mission Control now renders pending values whenever a setting is inactive and pending_value is present, including explicit null resets displayed as Not set."
+  },
+  {
+    "id": 4191835297,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary container; the actionable findings from the summary are tracked by the inline review comment ids."
   }
 ]
