@@ -516,10 +516,13 @@ interface StepAttachmentRef {
   sizeBytes: number;
 }
 
+type StepType = "tool" | "skill" | "preset";
+
 interface StepState {
   localId: string;
   id: string;
   title: string;
+  stepType: StepType;
   instructions: string;
   skillId: string;
   skillArgs: string;
@@ -1097,6 +1100,7 @@ function createStepStateEntry(
     localId: `step-${index}`,
     id: "",
     title: "",
+    stepType: "skill",
     instructions: "",
     skillId: "",
     skillArgs: "",
@@ -4391,6 +4395,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         }
         const nextStep = { ...step, ...updates };
         if (
+          Object.prototype.hasOwnProperty.call(updates, "stepType") &&
+          nextStep.stepType !== "skill"
+        ) {
+          nextStep.skillId = "";
+          nextStep.skillArgs = "";
+          nextStep.skillRequiredCapabilities = "";
+        }
+        if (
           Object.prototype.hasOwnProperty.call(updates, "instructions") &&
           nextStep.templateStepId &&
           nextStep.id === nextStep.templateStepId &&
@@ -4418,6 +4430,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const { [localId]: _removed, ...rest } = current;
       return rest;
     });
+  }
+
+  function handleStepTypeChange(localId: string, value: string) {
+    const nextType: StepType =
+      value === "tool" || value === "preset" ? value : "skill";
+    updateStep(localId, { stepType: nextType });
   }
 
   function addStep() {
@@ -5105,7 +5123,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
 
-    const primarySkillId = primaryValidation.value.skillId.trim() || "auto";
+    const primaryStepIsSkill = primaryStep?.stepType === "skill";
+    const primarySkillId = primaryStepIsSkill
+      ? primaryValidation.value.skillId.trim() || "auto"
+      : "auto";
     const effectiveSubmissionSkillId = resolveEffectiveSkillId(
       primarySkillId,
       appliedTemplates,
@@ -5114,10 +5135,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       isResolverSkill(effectiveSubmissionSkillId) && isMergeAutomationPublishMode(publishMode)
         ? "none"
         : normalizedPublishMode;
-    const primarySkillArgsRaw = showAdvancedStepOptions
+    const primarySkillArgsRaw = primaryStepIsSkill && showAdvancedStepOptions
       ? String(primaryStep?.skillArgs || "").trim()
       : "";
-    const taskSkillRequiredCapabilities = showAdvancedStepOptions
+    const taskSkillRequiredCapabilities = primaryStepIsSkill && showAdvancedStepOptions
       ? parseCapabilitiesCsv(String(primaryStep?.skillRequiredCapabilities || ""))
       : [];
 
@@ -5174,11 +5195,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (!step) {
         continue;
       }
-      const stepSkillId = step.skillId.trim();
-      const stepSkillArgsRaw = showAdvancedStepOptions
+      const stepIsSkill = step.stepType === "skill";
+      const stepSkillId = stepIsSkill ? step.skillId.trim() : "";
+      const stepSkillArgsRaw = stepIsSkill && showAdvancedStepOptions
         ? step.skillArgs.trim()
         : "";
-      const stepSkillCaps = showAdvancedStepOptions
+      const stepSkillCaps = stepIsSkill && showAdvancedStepOptions
         ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
         : [];
       const stepAttachmentFiles = selectedStepAttachmentFiles[step.localId] || [];
@@ -6252,6 +6274,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     </div>
                   </div>
 
+                  <label className="queue-step-type-field">
+                    Step Type
+                    <select
+                      data-step-field="stepType"
+                      data-step-index={String(index)}
+                      value={step.stepType}
+                      onChange={(event) =>
+                        handleStepTypeChange(step.localId, event.target.value)
+                      }
+                    >
+                      <option value="tool">Tool</option>
+                      <option value="skill">Skill</option>
+                      <option value="preset">Preset</option>
+                    </select>
+                  </label>
+
                   <div className="stack">
                     <div className="queue-field-heading">
                       <label htmlFor={`queue-step-instructions-${step.localId}`}>
@@ -6492,66 +6530,130 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     ) : null}
                   </div>
 
-                  <label>
-                    Skill (optional)
-                    <input
-                      data-step-field="skillId"
-                      data-step-index={String(index)}
-                      list={SKILL_OPTIONS_DATALIST_ID}
-                      value={step.skillId}
-                      placeholder={
-                        isPrimaryStep
-                          ? "auto (default), moonspec-orchestrate, ..."
-                          : "inherit primary step skill"
-                      }
-                      onChange={(event) =>
-                        updateStep(step.localId, {
-                          skillId: event.target.value,
-                        })
-                      }
-                    />
-                    {isPrimaryStep ? null : (
-                      <span className="small">
-                        Leave skill blank to inherit primary step defaults.
-                      </span>
-                    )}
-                  </label>
-
-                  {showSkillArgsField ? (
-                    <label
-                      className="queue-step-skill-args-field"
-                      data-skill-args-index={String(index)}
-                    >
-                      {`Step ${index + 1} Skill Args (optional JSON object)`}
-                      <textarea
-                        className="queue-step-skill-args"
-                        data-step-field="skillArgs"
-                        data-step-index={String(index)}
-                        placeholder='{"notes":"optional context"}'
-                        value={step.skillArgs}
-                        onChange={(event) =>
-                          updateStep(step.localId, {
-                            skillArgs: event.target.value,
-                          })
-                        }
-                      />
-                    </label>
+                  {step.stepType === "tool" ? (
+                    <div className="stack queue-step-type-panel">
+                      <label>
+                        Tool
+                        <input
+                          data-step-field="toolId"
+                          data-step-index={String(index)}
+                          placeholder="Select a typed operation"
+                          value=""
+                          readOnly
+                        />
+                      </label>
+                      <p className="small">
+                        Tool steps run a typed integration or system operation.
+                      </p>
+                    </div>
                   ) : null}
-                  {showAdvancedStepOptions ? (
-                    <label>
-                      {`Step ${index + 1} Skill Required Capabilities (optional CSV)`}
-                      <input
-                        data-step-field="skillRequiredCapabilities"
-                        data-step-index={String(index)}
-                        value={step.skillRequiredCapabilities}
-                        placeholder="docker,qdrant,unity"
-                        onChange={(event) =>
-                          updateStep(step.localId, {
-                            skillRequiredCapabilities: event.target.value,
-                          })
-                        }
-                      />
-                    </label>
+
+                  {step.stepType === "skill" ? (
+                    <>
+                      <label>
+                        Skill (optional)
+                        <input
+                          data-step-field="skillId"
+                          data-step-index={String(index)}
+                          list={SKILL_OPTIONS_DATALIST_ID}
+                          value={step.skillId}
+                          placeholder={
+                            isPrimaryStep
+                              ? "auto (default), moonspec-orchestrate, ..."
+                              : "inherit primary step skill"
+                          }
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              skillId: event.target.value,
+                            })
+                          }
+                        />
+                        {isPrimaryStep ? null : (
+                          <span className="small">
+                            Leave skill blank to inherit primary step defaults.
+                          </span>
+                        )}
+                      </label>
+
+                      {showSkillArgsField ? (
+                        <label
+                          className="queue-step-skill-args-field"
+                          data-skill-args-index={String(index)}
+                        >
+                          {`Step ${index + 1} Skill Args (optional JSON object)`}
+                          <textarea
+                            className="queue-step-skill-args"
+                            data-step-field="skillArgs"
+                            data-step-index={String(index)}
+                            placeholder='{"notes":"optional context"}'
+                            value={step.skillArgs}
+                            onChange={(event) =>
+                              updateStep(step.localId, {
+                                skillArgs: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                      ) : null}
+                      {showAdvancedStepOptions ? (
+                        <label>
+                          {`Step ${index + 1} Skill Required Capabilities (optional CSV)`}
+                          <input
+                            data-step-field="skillRequiredCapabilities"
+                            data-step-index={String(index)}
+                            value={step.skillRequiredCapabilities}
+                            placeholder="docker,qdrant,unity"
+                            onChange={(event) =>
+                              updateStep(step.localId, {
+                                skillRequiredCapabilities: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                      ) : null}
+                    </>
+                  ) : null}
+
+                  {step.stepType === "preset" ? (
+                    <div
+                      className="stack queue-step-type-panel"
+                      aria-label="Step Preset"
+                    >
+                      <label>
+                        Preset
+                        <select
+                          value={selectedPresetKey}
+                          onChange={(event) => {
+                            setSelectedPresetKey(event.target.value);
+                            setTemplateInputValues({});
+                            templateInputMemoryRef.current = {};
+                            setTemplateMessage(null);
+                            setPresetReapplyNeeded(false);
+                          }}
+                        >
+                          <option value="">Select preset...</option>
+                          {templateItems.map((item) => (
+                            <option key={item.key} value={item.key}>
+                              {`${item.title} (${scopeLabel(item.scope)})`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        className="secondary"
+                        aria-disabled={applyPresetDisabled}
+                        aria-busy={isApplyingPreset}
+                        title={applyPresetTooltip}
+                        disabled={applyPresetDisabled}
+                        onClick={handleApplyPreset}
+                      >
+                        Apply
+                      </button>
+                      {presetStatusText ? (
+                        <p className="small">{presetStatusText}</p>
+                      ) : null}
+                    </div>
                   ) : null}
                 </section>
               );
@@ -6578,7 +6680,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         {taskTemplateCatalogEnabled ? (
           <section
             className="card stack"
-            data-canonical-create-section="Task Presets"
             aria-label="Task Presets"
           >
             <div className="actions">

@@ -2464,7 +2464,7 @@ describe("Task Create Entrypoint", () => {
     expect(screen.getByLabelText("Runtime")).toBeTruthy();
     expect(screen.getByLabelText("Publish Mode")).toBeTruthy();
     expect(canonicalCreateSections()).toEqual(
-      expect.arrayContaining(["Task Presets", "Dependencies"]),
+      expect.arrayContaining(["Steps", "Dependencies"]),
     );
     expect(
       screen.getByRole("button", {
@@ -6687,7 +6687,6 @@ describe("Task Create Entrypoint", () => {
     expect(canonicalCreateSections()).toEqual([
       "Header",
       "Steps",
-      "Task Presets",
       "Dependencies",
       "Execution context",
       "Execution controls",
@@ -6703,7 +6702,6 @@ describe("Task Create Entrypoint", () => {
     expect(canonicalCreateSections()).toEqual([
       "Header",
       "Steps",
-      "Task Presets",
       "Dependencies",
       "Execution context",
       "Execution controls",
@@ -6722,12 +6720,121 @@ describe("Task Create Entrypoint", () => {
     expect(canonicalCreateSections()).toEqual([
       "Header",
       "Steps",
-      "Task Presets",
       "Dependencies",
       "Execution context",
       "Execution controls",
       "Submit",
     ]);
+  });
+
+  it("offers one Step Type control with Tool Skill and Preset choices", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+
+    const stepType = within(primaryStep as HTMLElement).getByLabelText(
+      "Step Type",
+    ) as HTMLSelectElement;
+    expect(
+      Array.from(stepType.options).map((option) => option.textContent),
+    ).toEqual(["Tool", "Skill", "Preset"]);
+    expect(stepType.value).toBe("skill");
+    expect(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+    ).toBeTruthy();
+  });
+
+  it("switches Step Type configuration areas while preserving instructions", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+    const step = primaryStep as HTMLElement;
+    const instructions = within(step).getByLabelText("Instructions") as HTMLTextAreaElement;
+    const stepType = within(step).getByLabelText("Step Type") as HTMLSelectElement;
+
+    fireEvent.change(instructions, {
+      target: { value: "Keep this Step Type instruction." },
+    });
+    fireEvent.change(stepType, { target: { value: "tool" } });
+
+    expect(instructions.value).toBe("Keep this Step Type instruction.");
+    expect(within(step).getByLabelText("Tool")).toBeTruthy();
+    expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
+    expect(within(step).queryByLabelText("Preset")).toBeNull();
+
+    fireEvent.change(stepType, { target: { value: "preset" } });
+
+    expect(instructions.value).toBe("Keep this Step Type instruction.");
+    expect(within(step).getByLabelText("Preset")).toBeTruthy();
+    expect(within(step).getByRole("button", { name: "Apply" })).toBeTruthy();
+    expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
+    expect(within(step).queryByLabelText("Tool")).toBeNull();
+  });
+
+  it("does not submit hidden Skill fields after switching Step Type away from Skill", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+    const step = primaryStep as HTMLElement;
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(within(step).getByLabelText(/Skill \(optional\)/), {
+      target: { value: "custom-skill" },
+    });
+    fireEvent.change(
+      within(step).getByLabelText("Step 1 Skill Args (optional JSON object)"),
+      {
+        target: { value: '{"hidden":true}' },
+      },
+    );
+    fireEvent.change(
+      within(step).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
+      {
+        target: { value: "docker, qdrant" },
+      },
+    );
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "tool" },
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Run a tool Step Type submission." },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+    const request = latestCreateRequest();
+    expect(request.payload).toMatchObject({
+      requiredCapabilities: ["codex_cli", "git", "gh"],
+    });
+    const payload = request.payload as {
+      task: {
+        tool?: Record<string, unknown>;
+        skill?: Record<string, unknown>;
+        inputs?: Record<string, unknown>;
+      };
+    };
+    expect(payload.task.tool?.name).toBe("auto");
+    expect(payload.task.skill?.id).toBe("auto");
+    expect(payload.task.inputs).toBeUndefined();
   });
 
   it("keeps manual authoring available without optional presets Jira or image upload", async () => {
