@@ -8,5 +8,35 @@
     "id": 3151677015,
     "disposition": "addressed",
     "rationale": "Added the reenter_gate constant, passed next_step through resolver result writers, and mapped run_fix_* next steps to reenter_gate."
+  },
+  {
+    "id": 3151717102,
+    "disposition": "addressed",
+    "rationale": "Replaced the explicit step loop with an any() expression while limiting fallback eligibility to reconstructable step instructions."
+  },
+  {
+    "id": 3151717106,
+    "disposition": "addressed",
+    "rationale": "Split child-run snapshot persistence into payload-building, artifact-write, record-update, and owner-principal helper functions with concrete type hints."
+  },
+  {
+    "id": 4186018939,
+    "disposition": "not-applicable",
+    "rationale": "Review summary only; its actionable items are tracked by the associated line comments."
+  },
+  {
+    "id": 4186033771,
+    "disposition": "not-applicable",
+    "rationale": "Automated review header/details only; no separate code action requested."
+  },
+  {
+    "id": 3151730897,
+    "disposition": "addressed",
+    "rationale": "Jira child-run snapshot artifacts are now created and completed with the execution owner principal instead of service:jira-orchestrate."
+  },
+  {
+    "id": 3151730902,
+    "disposition": "addressed",
+    "rationale": "Title-only steps no longer enable edit/rerun parameter fallback without an authoritative snapshot."
   }
 ]

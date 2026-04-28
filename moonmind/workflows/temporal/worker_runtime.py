@@ -29,12 +29,19 @@ from typing import Any, Mapping
 import temporalio.activity
 import temporalio.workflow
 from opentelemetry import trace as otel_trace
+from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
+from api_service.db.models import (
+    TemporalArtifactRetentionClass,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionOwnerType,
+    TemporalExecutionRecord,
+)
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.deployment_execution import (
     register_deployment_update_tool_handler,
@@ -112,6 +119,12 @@ from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workloads.tool_bridge import register_workload_tool_handlers
 
 logger = logging.getLogger(__name__)
+
+_TASK_INPUT_SNAPSHOT_CONTENT_TYPE = (
+    "application/vnd.moonmind.task-input-snapshot+json;version=1"
+)
+_TASK_INPUT_SNAPSHOT_LINK_TYPE = "input.original_snapshot"
+_TASK_INPUT_SNAPSHOT_VERSION = 1
 
 _MANAGED_SESSION_LOG_FIELD_MAP: tuple[tuple[str, str], ...] = (
     ("taskRunId", "managed_session_task_run_id"),
@@ -255,6 +268,194 @@ async def _expand_task_template_for_child_run(
     parameters["stepCount"] = len(expanded_steps)
     return parameters
 
+
+def _enum_value(value: Any) -> str:
+    raw = getattr(value, "value", value)
+    return str(raw or "").strip()
+
+
+def _child_task_snapshot_shape(task_payload: Mapping[str, Any]) -> str:
+    instructions = str(task_payload.get("instructions") or "").strip()
+    steps = task_payload.get("steps")
+    if isinstance(steps, list) and steps:
+        return "multi_step"
+    if task_payload.get("inputArtifactRef"):
+        return "artifact_backed"
+    if task_payload.get("appliedStepTemplates"):
+        return "template_derived"
+    if not instructions and (
+        isinstance(task_payload.get("tool"), Mapping)
+        or isinstance(task_payload.get("skill"), Mapping)
+        or task_payload.get("skills")
+    ):
+        return "skill_only"
+    return "inline_instructions"
+
+
+def _owner_principal_for_child_snapshot(
+    record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
+) -> str:
+    owner_type = getattr(record, "owner_type", None)
+    owner_type_value = _enum_value(owner_type).lower()
+    owner_id = str(getattr(record, "owner_id", "") or "").strip()
+    if owner_type_value == TemporalExecutionOwnerType.USER.value and owner_id:
+        return owner_id
+    if owner_id:
+        return owner_id
+    return "service:jira-orchestrate"
+
+
+def _build_child_run_task_input_snapshot_payload(
+    *,
+    parameters: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "snapshotVersion": _TASK_INPUT_SNAPSHOT_VERSION,
+        "source": {"kind": "create"},
+        "draft": {
+            "taskShape": _child_task_snapshot_shape(task_payload),
+            "repository": parameters.get("repository"),
+            "targetRuntime": parameters.get("targetRuntime"),
+            "requiredCapabilities": list(parameters.get("requiredCapabilities") or []),
+            "task": dict(task_payload),
+        },
+        "largeContentRefs": {},
+        "attachmentRefs": [],
+        "lineage": {},
+        "excluded": {
+            "schedule": (
+                "Schedule controls are creation-only and are not editable through "
+                "task edit/rerun."
+            )
+        },
+    }
+
+
+async def _create_child_run_task_input_snapshot_artifact(
+    *,
+    service: TemporalArtifactService,
+    canonical: TemporalExecutionCanonicalRecord,
+    snapshot_payload: Mapping[str, Any],
+    principal: str,
+) -> str:
+    body = json.dumps(snapshot_payload, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    artifact, _upload = await service.create(
+        principal=principal,
+        content_type=_TASK_INPUT_SNAPSHOT_CONTENT_TYPE,
+        size_bytes=len(body),
+        retention_class=TemporalArtifactRetentionClass.LONG,
+        link={
+            "namespace": canonical.namespace,
+            "workflow_id": canonical.workflow_id,
+            "run_id": canonical.run_id,
+            "link_type": _TASK_INPUT_SNAPSHOT_LINK_TYPE,
+            "label": "Original task input snapshot",
+        },
+        metadata_json={
+            "artifact_class": _TASK_INPUT_SNAPSHOT_LINK_TYPE,
+            "snapshot_version": _TASK_INPUT_SNAPSHOT_VERSION,
+            "workflow_type": "MoonMind.Run",
+            "source_kind": "create",
+            "draft_shape": snapshot_payload["draft"]["taskShape"],
+            "schema_name": "OriginalTaskInputSnapshot",
+            "created_by": principal,
+            "attachment_refs": [],
+        },
+    )
+    completed = await service.write_complete(
+        artifact_id=artifact.artifact_id,
+        principal=principal,
+        payload=body,
+        content_type=_TASK_INPUT_SNAPSHOT_CONTENT_TYPE,
+    )
+    return completed.artifact_id
+
+
+def _apply_child_snapshot_ref_to_records(
+    *,
+    records: list[TemporalExecutionCanonicalRecord | TemporalExecutionRecord],
+    artifact_id: str,
+) -> None:
+    for target_record in records:
+        memo = dict(target_record.memo or {})
+        memo["task_input_snapshot_ref"] = artifact_id
+        memo["task_input_snapshot_version"] = _TASK_INPUT_SNAPSHOT_VERSION
+        memo["task_input_snapshot_source_kind"] = "create"
+        target_record.memo = memo
+        artifact_refs = list(target_record.artifact_refs or [])
+        if artifact_id not in artifact_refs:
+            artifact_refs.append(artifact_id)
+        target_record.artifact_refs = artifact_refs
+
+
+async def _persist_child_run_task_input_snapshot(
+    *,
+    session: AsyncSession,
+    record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+    parameters: Mapping[str, Any],
+    artifact_service: TemporalArtifactService | None = None,
+) -> str:
+    """Persist the original task payload for worker-created child runs.
+
+    Jira Orchestrate creates child executions from a worker activity, bypassing
+    the API route that normally stores the authoritative edit/rerun snapshot.
+    The detail UI intentionally gates edit and rerun actions on this compact
+    artifact ref so that reconstruction does not depend on mutable workflow
+    parameters alone.
+    """
+
+    if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.Run":
+        return ""
+    task_payload = _coerce_mapping(parameters.get("task"))
+    if not task_payload:
+        return ""
+
+    workflow_id = str(getattr(record, "workflow_id", "") or "").strip()
+    if not workflow_id:
+        return ""
+    canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+    if canonical is None:
+        return ""
+    existing_ref = str(
+        (canonical.memo or {}).get("task_input_snapshot_ref") or ""
+    ).strip()
+    if existing_ref:
+        return existing_ref
+
+    service = artifact_service or TemporalArtifactService(
+        TemporalArtifactRepository(session)
+    )
+    principal = _owner_principal_for_child_snapshot(canonical)
+    snapshot_payload = _build_child_run_task_input_snapshot_payload(
+        parameters=parameters,
+        task_payload=task_payload,
+    )
+    artifact_id = await _create_child_run_task_input_snapshot_artifact(
+        service=service,
+        canonical=canonical,
+        snapshot_payload=snapshot_payload,
+        principal=principal,
+    )
+
+    projection = await session.get(TemporalExecutionRecord, workflow_id)
+    records_to_update = [canonical]
+    if projection is not None:
+        records_to_update.append(projection)
+    _apply_child_snapshot_ref_to_records(
+        records=records_to_update,
+        artifact_id=artifact_id,
+    )
+
+    await session.commit()
+    await session.refresh(canonical)
+    if projection is not None:
+        await session.refresh(projection)
+    return artifact_id
+
+
 def _build_jira_orchestrate_execution_creator():
     async def _create_execution(**kwargs):
         async with get_async_session_context() as session:
@@ -264,6 +465,11 @@ def _build_jira_orchestrate_execution_creator():
             )
             service = TemporalExecutionService(session)
             record = await service.create_execution(**kwargs)
+            await _persist_child_run_task_input_snapshot(
+                session=session,
+                record=record,
+                parameters=kwargs["initial_parameters"],
+            )
             return {
                 "workflowId": record.workflow_id,
                 "runId": record.run_id,

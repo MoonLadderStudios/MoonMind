@@ -1804,6 +1804,28 @@ async def _load_execution_step_ledger(
             },
         ) from exc
 
+
+def _has_reconstructable_task_parameters(record) -> bool:
+    parameters = dict(getattr(record, "parameters", None) or {})
+    task_payload = parameters.get("task")
+    if not isinstance(task_payload, Mapping):
+        return False
+    instructions = str(task_payload.get("instructions") or "").strip()
+    if instructions:
+        return True
+    steps = task_payload.get("steps")
+    if isinstance(steps, list) and any(
+        isinstance(item, Mapping)
+        and str(item.get("instructions") or "").strip()
+        for item in steps
+    ):
+        return True
+    return any(
+        task_payload.get(key)
+        for key in ("tool", "skill", "skills", "inputArtifactRef")
+    )
+
+
 def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     raw_state = str(record.state.value).strip().lower()
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
@@ -1868,12 +1890,16 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "timed_out": {"can_edit_for_rerun", "can_rerun"},
     }
     enabled = state_actions.get(raw_state, set())
+    has_task_input_snapshot = bool(
+        _task_input_snapshot_ref_from_memo(dict(getattr(record, "memo", None) or {}))
+    )
+    has_task_parameter_fallback = _has_reconstructable_task_parameters(record)
     if workflow_type_value != "MoonMind.Run" or not temporal_task_editing_enabled:
         enabled = enabled - {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}
-    elif not _task_input_snapshot_ref_from_memo(
-        dict(getattr(record, "memo", None) or {})
-    ):
-        enabled = enabled - {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}
+    elif not has_task_input_snapshot:
+        enabled = enabled - {"can_update_inputs"}
+        if not has_task_parameter_fallback:
+            enabled = enabled - {"can_edit_for_rerun", "can_rerun"}
     capability_values = {
         "can_set_title": "canSetTitle",
         "can_update_inputs": "canUpdateInputs",
@@ -1898,11 +1924,13 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             if not temporal_task_editing_enabled:
                 disabled_reasons[alias] = "temporal_task_editing_disabled"
                 continue
-            if not _task_input_snapshot_ref_from_memo(
-                dict(getattr(record, "memo", None) or {})
-            ):
+            if field_name == "can_update_inputs" and not has_task_input_snapshot:
                 disabled_reasons[alias] = "original_task_input_snapshot_missing"
                 continue
+            if field_name in {"can_edit_for_rerun", "can_rerun"}:
+                if not has_task_input_snapshot and not has_task_parameter_fallback:
+                    disabled_reasons[alias] = "original_task_input_snapshot_missing"
+                    continue
         disabled_reasons[alias] = "state_not_eligible"
     return ExecutionActionCapabilityModel(
         can_set_title="can_set_title" in enabled,
