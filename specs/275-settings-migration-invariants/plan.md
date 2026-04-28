@@ -5,34 +5,34 @@
 
 ## Summary
 
-Implement MM-546 by adding an explicit Settings System migration/deprecation rule boundary on top of the existing catalog, override, diagnostics, and audit service. Current code already enforces explicit catalog exposure, scoped writes, value validation, SecretRef redaction, source explainability, reset inheritance, audit redaction, version conflict handling, and settings permissions. The missing runtime gap is deterministic handling for renamed, removed/deprecated, and type-changed setting keys so maintainers can prove old overrides are preserved or rejected intentionally rather than silently ignored or reinterpreted. The plan is TDD-first with focused service and API tests, then final unit verification.
+Implement MM-546 by adding an explicit Settings System migration/deprecation rule boundary on top of the existing catalog, override, diagnostics, and audit service. Current code already enforces explicit catalog exposure, scoped writes, value validation, SecretRef redaction, source explainability, reset inheritance, audit redaction, version conflict handling, and settings permissions. This story adds deterministic handling for renamed, removed/deprecated, and type-changed setting keys so maintainers can prove old overrides are preserved or rejected intentionally rather than silently ignored or reinterpreted. The plan is TDD-first with focused service and API tests, then final unit verification.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
 | FR-001 | implemented_verified | `SettingsCatalogService` uses an explicit `_REGISTRY`; API rejects unexposed keys; tests cover `workflow.github_token` rejection | preserve with regression tests | unit + API |
-| FR-002 | missing | no rename migration rule or old-key override resolution path found | add migration rule model and old-to-new override resolution | unit + API |
-| FR-003 | missing | unknown/removed keys are rejected but no deprecated-value diagnostics for existing rows | add removed/deprecated key write rejection plus diagnostics visibility | unit + API |
-| FR-004 | missing | `SettingsOverride.schema_version` exists but resolver does not enforce expected schema version | require explicit type migration when schema versions differ | unit |
-| FR-005 | partial | audit and diagnostics exist; migration/deprecation events do not | add redacted diagnostics and audit evidence for migrations | unit + API |
-| FR-006 | partial | existing tests cover catalog, scope, validation, constraints, version conflict, and drift partially | add catalog invariant snapshot-style test focused on exposed descriptors | unit |
+| FR-002 | implemented_verified | `api_service/services/settings_catalog.py` defines `SettingMigrationRule` and resolves renamed old-key overrides; `tests/unit/services/test_settings_catalog.py` and `tests/unit/api_service/api/routers/test_settings_api.py` verify old override preservation | no new implementation | focused unit + API passed |
+| FR-003 | implemented_verified | removed/deprecated keys reject writes and diagnostics expose historical rows without raw values in service and API tests | no new implementation | focused unit + API passed |
+| FR-004 | implemented_verified | schema-version mismatch produces `setting_type_migration_required` instead of reinterpreting stored JSON | no new implementation | focused unit passed |
+| FR-005 | implemented_verified | migration/deprecation diagnostics provide redacted evidence; tests assert secret-like values are absent from diagnostics and API responses | no new implementation | focused unit + API passed |
+| FR-006 | implemented_verified | `test_catalog_invariant_gate_for_future_integrations` verifies descriptor exposure, safe UI type, scope, source, audit, and SecretRef invariants | no new implementation | focused unit passed |
 | FR-007 | implemented_verified | SecretRef and provider-profile tests prove no plaintext readback and sanitized diagnostics | preserve with final verification | unit |
 | FR-008 | implemented_verified | effective value source, user/workspace inheritance, reset, and operator/read-only patterns exist | preserve with final verification | unit |
 | FR-009 | implemented_verified | audit endpoint tests cover redaction, version conflicts, and permission checks | preserve with final verification | unit + API |
-| FR-010 | partial | future integrations receive descriptor/effective/diagnostic APIs but no explicit invariant test binds them to safe fields | add contract test for descriptor-driven, scoped, validated, audited, secret-safe surfaces | unit |
-| FR-011 | missing | new spec preserves `MM-546`; downstream artifacts and verification not complete | preserve Jira key and brief through artifacts and final report | artifact review |
-| SC-001 | missing | no rename migration test exists | add service/API tests | unit + API |
-| SC-002 | missing | no removed-key diagnostic test exists | add service/API tests | unit + API |
-| SC-003 | missing | no schema/type mismatch failure test exists | add service test | unit |
-| SC-004 | partial | broad coverage exists; no single invariant drift test for MM-546 | add invariant coverage | unit |
-| SC-005 | partial | APIs expose safe settings surfaces; no MM-546 future integration contract test | add contract/invariant test | unit |
-| SC-006 | missing | artifacts in progress | preserve traceability | artifact review |
+| FR-010 | implemented_verified | invariant test and `contracts/settings-migration-invariants.md` bind future settings consumers to descriptor-driven, scoped, validated, audited, secret-safe surfaces | no new implementation | focused unit passed |
+| FR-011 | implemented_verified | `spec.md`, `plan.md`, `tasks.md`, quickstart, contract, and final report preserve `MM-546` and the canonical preset brief | no new implementation | artifact review |
+| SC-001 | implemented_verified | service and API tests verify renamed old-key overrides resolve under the new key with migration diagnostics | no new implementation | focused unit + API passed |
+| SC-002 | implemented_verified | service and API tests verify removed/deprecated keys reject writes and expose safe diagnostics without raw values | no new implementation | focused unit + API passed |
+| SC-003 | implemented_verified | service test verifies schema-version mismatch blocks ambiguous type reinterpretation | no new implementation | focused unit passed |
+| SC-004 | implemented_verified | invariant gate test covers unsafe descriptor exposure, scope, validation, source, audit, and SecretRef regressions | no new implementation | focused unit passed |
+| SC-005 | implemented_verified | contract and invariant tests preserve descriptor-driven exposure, scoped overrides, server-side validation, auditability, and secret-safe behavior | no new implementation | focused unit passed |
+| SC-006 | implemented_verified | `rg` traceability checks and artifacts preserve `MM-546` plus DESIGN-REQ-020/021/024/027/028 | no new implementation | artifact review |
 | DESIGN-REQ-020 | implemented_verified | explicit registry and API rejection tests enforce non-goals | preserve with invariant tests | unit + API |
-| DESIGN-REQ-021 | missing | migration/deprecation/type-change rules absent | implement rule boundary and tests | unit + API |
-| DESIGN-REQ-024 | partial | many tests exist; drift and migration gate gaps remain | add focused regression tests | unit |
-| DESIGN-REQ-027 | partial | descriptor/effective/diagnostic surfaces exist | add future integration invariant test | unit |
-| DESIGN-REQ-028 | partial | most invariants exist; migration/type-change proof missing | add migration invariant tests | unit + API |
+| DESIGN-REQ-021 | implemented_verified | explicit migration rule boundary, deprecated diagnostics, write rejection, and schema-version gate implemented and tested | no new implementation | focused unit + API passed |
+| DESIGN-REQ-024 | implemented_verified | focused invariant and migration tests cover the MM-546 regression gate; full unit suite passed | no new implementation | full unit passed |
+| DESIGN-REQ-027 | implemented_verified | contract and invariant test preserve descriptor-driven exposure, scoped overrides, server-side validation, auditability, and secret safety | no new implementation | focused unit passed |
+| DESIGN-REQ-028 | implemented_verified | migration/type-change proof added while existing SecretRef, provider profile, source explainability, reset, audit, and permission tests remain passing | no new implementation | full unit passed |
 
 ## Technical Context
 
