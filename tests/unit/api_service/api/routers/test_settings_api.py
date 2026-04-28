@@ -738,6 +738,7 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
     assert active_value["diagnostics"] == []
     assert "active-plaintext" not in active.text
     assert disabled.status_code == 200
+    assert disabled_value["pending_value"] is None
     assert disabled_value["diagnostics"] == [
         {
             "code": "unresolved_secret_ref",
@@ -755,6 +756,7 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
     ]
     assert "disabled-plaintext" not in disabled.text
     assert missing.status_code == 200
+    assert missing_value["pending_value"] is None
     assert missing_value["diagnostics"] == [
         {
             "code": "unresolved_secret_ref",
@@ -767,6 +769,6 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
                     "ref_scheme": "db",
                     "status": "missing",
                     "launch_blocker": True,
-                },
+            },
         }
     ]

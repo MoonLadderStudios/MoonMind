@@ -156,7 +156,13 @@ const workspaceCatalog = {
         order: 40,
         audit: { store_old_value: true, store_new_value: true, redact: true },
         value_version: 1,
-        diagnostics: [],
+        diagnostics: [
+          {
+            code: 'unresolved_secret_ref',
+            message: 'integrations.github.token_ref references a managed secret that does not exist.',
+            severity: 'error',
+          },
+        ],
       },
     ],
     Advanced: [
@@ -287,7 +293,8 @@ const workspaceCatalog = {
         active: false,
         pending_value: 'normal',
         affected_process_or_worker: 'operations',
-        completion_guidance: 'Use the related operation control to activate this value.',
+        completion_guidance:
+          'Use the related operation control to activate this value after coordinating affected operational workers and confirming no task launch is in progress.',
         options: null,
         constraints: null,
         sensitive: false,
@@ -374,10 +381,19 @@ describe('GeneratedSettingsSection', () => {
     expect(screen.getAllByText('Applies on next task')).not.toHaveLength(0);
     expect(screen.getAllByText('Pending next boundary')).not.toHaveLength(0);
     expect(screen.getAllByText('New tasks will use this value when they are created.')).not.toHaveLength(0);
+    expect(
+      screen.getByText(
+        'Use the related operation control to activate this value after coordinating affected operational workers and confirming no task launch is in progress.',
+      ),
+    ).toBeTruthy();
     expect(screen.getByText('task_creation')).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('Search settings'), { target: { value: 'github' } });
     expect(screen.getByText('GitHub Token Reference')).toBeTruthy();
+    expect(
+      screen.getByText('integrations.github.token_ref references a managed secret that does not exist.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('github-token-plaintext')).toBeNull();
     expect(screen.queryByText('Default Publish Mode')).toBeNull();
 
     fireEvent.change(screen.getByLabelText('Category'), { target: { value: 'Integrations' } });

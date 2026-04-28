@@ -40,6 +40,14 @@ Use the full hermetic integration suite before final verification when implement
 
 Run the full unit suite before `/moonspec-verify` or final handoff.
 
+## Generated OpenAPI Note
+
+The settings API route returns Pydantic service models directly, and Mission Control's
+generated settings section uses local descriptor types rather than
+`frontend/src/generated/openapi.ts`. No static OpenAPI refresh is required for this
+story unless the project later wires these settings models into generated frontend
+clients.
+
 ## Manual Story Check
 
 1. Open Settings and inspect user/workspace descriptors.
