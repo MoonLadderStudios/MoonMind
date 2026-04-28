@@ -8,9 +8,13 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from moonmind.rag.context_pack import ContextPack
+from moonmind.rag.embedding import EmbeddingError
 from moonmind.rag.overlay import upsert_overlay_files
 from moonmind.rag.overlay_cleanup import clean_overlay_run
-from moonmind.rag.service import ContextRetrievalService
+from moonmind.rag.service import (
+    ContextRetrievalService,
+    RetrievalBudgetExceededError,
+)
 from moonmind.rag.settings import RagRuntimeSettings
 
 class CliError(RuntimeError):
@@ -64,14 +68,17 @@ def run_search(
     budgets = _build_budget_config(cli_budgets)
     resolved_transport = settings.resolved_transport(transport)
     service = ContextRetrievalService(settings=settings, env=os.environ)
-    pack = service.retrieve(
-        query=query,
-        filters=filters,
-        top_k=top_k or settings.similarity_top_k,
-        overlay_policy=overlay_policy,
-        budgets=budgets,
-        transport=resolved_transport,
-    )
+    try:
+        pack = service.retrieve(
+            query=query,
+            filters=filters,
+            top_k=top_k or settings.similarity_top_k,
+            overlay_policy=overlay_policy,
+            budgets=budgets,
+            transport=resolved_transport,
+        )
+    except (EmbeddingError, RetrievalBudgetExceededError, RuntimeError) as exc:
+        raise CliError(str(exc)) from exc
     if output_file:
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text(pack.to_json(), encoding="utf-8")
