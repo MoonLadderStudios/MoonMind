@@ -425,6 +425,7 @@ describe("Task Create Entrypoint", () => {
   beforeEach(() => {
     window.history.pushState({}, "Task Create", "/tasks/new");
     window.sessionStorage.clear();
+    window.localStorage.clear();
     vi.mocked(navigateTo).mockReset();
     consoleInfoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     executionResponseOverride = null;
@@ -2214,6 +2215,7 @@ describe("Task Create Entrypoint", () => {
     fetchSpy.mockRestore();
     consoleInfoSpy.mockRestore();
     window.sessionStorage.clear();
+    window.localStorage.clear();
   });
 
   it("resolves task submit mode with rerun taking precedence over edit", () => {
@@ -4267,6 +4269,54 @@ describe("Task Create Entrypoint", () => {
       target: { value: "Custom/Repo" },
     });
     expect((repositoryInput as HTMLInputElement).value).toBe("Custom/Repo");
+  });
+
+  it("remembers the last selected repository option when it is still available", async () => {
+    const { unmount } = renderWithClient(
+      <TaskCreatePage payload={withRepositoryOptions()} />,
+    );
+
+    const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
+    fireEvent.change(repositoryInput, {
+      target: { value: "Octo/Repo" },
+    });
+    expect(window.localStorage.getItem("moonmind.task-create.last-repository-option"))
+      .toBe("Octo/Repo");
+
+    unmount();
+    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+
+    expect((await screen.findByLabelText(/GitHub Repo/) as HTMLInputElement).value)
+      .toBe("Octo/Repo");
+  });
+
+  it("clears the remembered repository option for custom repository entries", async () => {
+    window.localStorage.setItem(
+      "moonmind.task-create.last-repository-option",
+      "Octo/Repo",
+    );
+
+    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+
+    const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
+    fireEvent.change(repositoryInput, {
+      target: { value: "Custom/Repo" },
+    });
+
+    expect(window.localStorage.getItem("moonmind.task-create.last-repository-option"))
+      .toBeNull();
+  });
+
+  it("ignores remembered repository values that are not current options", async () => {
+    window.localStorage.setItem(
+      "moonmind.task-create.last-repository-option",
+      "Missing/Repo",
+    );
+
+    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+
+    expect((await screen.findByLabelText(/GitHub Repo/) as HTMLInputElement).value)
+      .toBe("MoonLadderStudios/MoonMind");
   });
 
   it("submits a selected repository option without changing unrelated draft fields", async () => {
@@ -9961,7 +10011,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira images for objective attachments",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -9981,7 +10031,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira images for Step 1 attachments",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     expect(
@@ -9998,7 +10048,7 @@ describe("Task Create Entrypoint", () => {
     ).toBeTruthy();
   });
 
-  it("imports Jira images into the objective attachment target without changing text", async () => {
+  it("imports Jira text and images into the objective target from the issue browser", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -10051,12 +10101,12 @@ describe("Task Create Entrypoint", () => {
     });
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira images for objective attachments",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     expect(
       (await screen.findByLabelText("Import target") as HTMLSelectElement).value,
-    ).toBe("preset-attachments");
+    ).toBe("preset-text");
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
@@ -10064,12 +10114,12 @@ describe("Task Create Entrypoint", () => {
     });
 
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
-      "Keep objective text.",
+      "Keep objective text.\n\n---\n\nENG-202: Build browser shell\n\nLet operators browse Jira stories.",
     );
     expect(await screen.findByText("wireframe.png")).toBeTruthy();
   });
 
-  it("imports Jira images into a step attachment target", async () => {
+  it("imports Jira text and images into a step target from the issue browser", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -10120,7 +10170,7 @@ describe("Task Create Entrypoint", () => {
     });
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira images for Step 1 attachments",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -10130,12 +10180,12 @@ describe("Task Create Entrypoint", () => {
     });
 
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
-      "Keep step text.",
+      "Keep step text.\n\n---\n\nComplete Jira issue ENG-202: Build browser shell",
     );
     expect(await screen.findByText("wireframe.png")).toBeTruthy();
   });
 
-  it("does not import Jira images when importing into text targets", async () => {
+  it("imports Jira images automatically when importing into text targets", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     let attachmentDownloads = 0;
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -10204,8 +10254,8 @@ describe("Task Create Entrypoint", () => {
       expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
     });
 
-    expect(attachmentDownloads).toBe(0);
-    expect(screen.queryByText("wireframe.png")).toBeNull();
+    expect(attachmentDownloads).toBe(2);
+    expect(await screen.findAllByText("wireframe.png")).toHaveLength(2);
     expect(
       (screen.getByLabelText(
         "Feature Request / Initial Instructions",
@@ -10213,6 +10263,82 @@ describe("Task Create Entrypoint", () => {
     ).toBe("ENG-202: Build browser shell\n\nLet operators browse Jira stories.");
     expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(
       "Complete Jira issue ENG-202: Build browser shell",
+    );
+  });
+
+  it("imports Jira images when preset target text is unchanged", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    let attachmentDownloads = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "ENG-202",
+            summary: "Build browser shell",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "Let operators browse Jira stories.",
+            recommendedImports: {
+              presetInstructions:
+                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+              stepInstructions:
+                "Complete Jira issue ENG-202: Build browser shell",
+            },
+            attachments: [
+              {
+                id: "img-1",
+                filename: "wireframe.png",
+                contentType: "image/png",
+                sizeBytes: 10,
+                downloadUrl: "/api/jira/attachments/wireframe.png",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/attachments/wireframe.png") {
+        attachmentDownloads += 1;
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["fake image"], { type: "image/png" }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(
+      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+    );
+
+    const presetInstructions = await screen.findByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(presetInstructions, {
+      target: {
+        value: "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+      },
+    });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issues for preset instructions",
+      }),
+    );
+    fireEvent.change(await screen.findByLabelText("Text import"), {
+      target: { value: "replace" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
+    expect(attachmentDownloads).toBe(1);
+    expect(await screen.findByText("wireframe.png")).toBeTruthy();
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
     );
   });
 
@@ -10285,7 +10411,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira images for Step 1 attachments",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));

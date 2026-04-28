@@ -38,8 +38,10 @@ def test_create_secret(mock_secrets_service):
     assert resp.status_code == 201
     data = resp.json()
     assert data["slug"] == "NEW_KEY"
+    assert data["secretRef"] == "db://NEW_KEY"
     assert data["status"] == "active"
     assert "ciphertext" not in data
+    assert "new-secret-val" not in resp.text
 
 def test_create_secret_conflict(mock_secrets_service):
     from api_service.db.models import ManagedSecret
@@ -65,6 +67,7 @@ def test_list_secrets(mock_secrets_service):
     data = resp.json()
     assert len(data["items"]) == 1
     assert data["items"][0]["slug"] == "TEST_API_KEY"
+    assert data["items"][0]["secretRef"] == "db://TEST_API_KEY"
 
 def test_update_secret(mock_secrets_service):
     from api_service.db.models import ManagedSecret
@@ -113,11 +116,54 @@ def test_delete_secret(mock_secrets_service):
     assert resp.status_code == 204
 
 def test_validate_secret(mock_secrets_service):
-    from api_service.db.models import ManagedSecret
-    
-    mock_secret = ManagedSecret()
-    mock_secrets_service.get_secret.return_value = mock_secret
+    mock_secrets_service.validate_secret_ref.return_value = {
+        "valid": True,
+        "status": "active",
+        "checkedAt": "2026-04-28T00:00:00+00:00",
+        "diagnostics": [
+            {
+                "code": "secret_ref_resolvable",
+                "message": "Managed secret is active.",
+                "severity": "info",
+            }
+        ],
+    }
     
     resp = client.get("/api/v1/secrets/TEST_API_KEY/validate")
     assert resp.status_code == 200
-    assert resp.json()["valid"] is True
+    assert resp.json() == {
+        "valid": True,
+        "status": "active",
+        "checkedAt": "2026-04-28T00:00:00+00:00",
+        "diagnostics": [
+            {
+                "code": "secret_ref_resolvable",
+                "message": "Managed secret is active.",
+                "severity": "info",
+            }
+        ],
+    }
+
+
+def test_validate_secret_response_is_redacted(mock_secrets_service):
+    raw_secret = "sk-test-secret-value"
+    mock_secrets_service.validate_secret_ref.return_value = {
+        "valid": False,
+        "status": "missing",
+        "checkedAt": "2026-04-28T00:00:00+00:00",
+        "diagnostics": [
+            {
+                "code": "secret_ref_unresolved",
+                "message": f"Managed secret is missing; token={raw_secret}",
+                "severity": "error",
+            }
+        ],
+    }
+
+    resp = client.get("/api/v1/secrets/MISSING_SECRET/validate")
+
+    assert resp.status_code == 200
+    assert raw_secret not in resp.text
+    assert resp.json()["diagnostics"][0]["message"] == (
+        "Managed secret is missing; token=[REDACTED]"
+    )

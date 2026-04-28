@@ -150,6 +150,61 @@ class SecretsService:
         return secret.ciphertext
 
     @classmethod
+    async def validate_secret_ref(cls, db: AsyncSession, slug: str) -> dict[str, Any]:
+        """Return redacted metadata-only validation diagnostics for a managed secret."""
+        checked_at = datetime.now(timezone.utc).isoformat()
+        result = await db.execute(
+            select(ManagedSecret.status).where(ManagedSecret.slug == slug)
+        )
+        status = result.scalar_one_or_none()
+
+        if status is None:
+            return {
+                "valid": False,
+                "status": "missing",
+                "checkedAt": checked_at,
+                "diagnostics": [
+                    {
+                        "code": "secret_ref_unresolved",
+                        "message": "Managed secret is missing.",
+                        "severity": "error",
+                    }
+                ],
+            }
+
+        secret_status = (
+            status.value
+            if isinstance(status, SecretStatus)
+            else str(status)
+        )
+        if secret_status == SecretStatus.ACTIVE.value:
+            return {
+                "valid": True,
+                "status": secret_status,
+                "checkedAt": checked_at,
+                "diagnostics": [
+                    {
+                        "code": "secret_ref_resolvable",
+                        "message": "Managed secret is active.",
+                        "severity": "info",
+                    }
+                ],
+            }
+
+        return {
+            "valid": False,
+            "status": secret_status,
+            "checkedAt": checked_at,
+            "diagnostics": [
+                {
+                    "code": "secret_ref_unresolved",
+                    "message": f"Managed secret is {secret_status}.",
+                    "severity": "error",
+                }
+            ],
+        }
+
+    @classmethod
     async def import_from_env(
         cls,
         db: AsyncSession,
