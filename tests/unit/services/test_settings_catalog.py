@@ -8,8 +8,12 @@ from api_service.db.models import (
     ManagedSecret,
     ProviderCredentialSource,
     RuntimeMaterializationMode,
+    SettingsAuditEvent,
 )
-from api_service.services.settings_catalog import SettingsCatalogService
+from api_service.services.settings_catalog import (
+    SETTINGS_PERMISSION_NAMES,
+    SettingsCatalogService,
+)
 
 
 @pytest.fixture
@@ -429,3 +433,141 @@ async def _reset_deletes_only_override_and_preserves_secret_and_audit(settings_s
     audit_count = await service.audit_event_count()
     assert secret_count == 1
     assert audit_count >= 2
+
+
+def test_settings_permission_taxonomy_includes_least_privilege_actions():
+    assert {
+        "settings.catalog.read",
+        "settings.effective.read",
+        "settings.user.write",
+        "settings.workspace.write",
+        "settings.system.read",
+        "settings.system.write",
+        "secrets.metadata.read",
+        "secrets.value.write",
+        "secrets.rotate",
+        "secrets.disable",
+        "secrets.delete",
+        "provider_profiles.read",
+        "provider_profiles.write",
+        "operations.read",
+        "operations.invoke",
+        "settings.audit.read",
+    }.issubset(SETTINGS_PERMISSION_NAMES)
+
+
+@pytest.mark.asyncio
+async def test_audit_entries_redact_secret_ref_without_metadata_permission(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"integrations.github.token_ref": "env://GITHUB_TOKEN"},
+            expected_versions={"integrations.github.token_ref": 1},
+            reason="configure integration",
+        )
+
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.key == "integrations.github.token_ref"
+    assert entry.redacted is True
+    assert entry.old_value is None
+    assert entry.new_value is None
+    assert "descriptor_policy" in entry.redaction_reasons
+    assert "env://GITHUB_TOKEN" not in entry.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_audit_entries_expose_secret_ref_metadata_with_permission(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"integrations.github.token_ref": "env://GITHUB_TOKEN"},
+            expected_versions={"integrations.github.token_ref": 1},
+        )
+
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read", "secrets.metadata.read"},
+        )
+
+    assert entries[0].new_value == "env://GITHUB_TOKEN"
+    assert entries[0].redacted is False
+
+
+@pytest.mark.asyncio
+async def test_audit_redactor_blocks_secret_like_values_even_without_descriptor(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsAuditEvent(
+                event_type="settings.override.updated",
+                key="workflow.default_publish_mode",
+                scope="workspace",
+                old_value_json="branch",
+                new_value_json="github_pat_raw_token",
+                redacted=False,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(env={}, session=settings_session)
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+    assert entries[0].old_value == "branch"
+    assert entries[0].new_value is None
+    assert entries[0].redacted is True
+    assert "secret_like_value" in entries[0].redaction_reasons
+    assert "github_pat_raw_token" not in entries[0].model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_settings_diagnostics_include_source_restart_and_recent_change(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"integrations.github.token_ref": "db://missing-token"},
+            expected_versions={"integrations.github.token_ref": 1},
+            reason="wire github token",
+        )
+
+        diagnostics = await service.diagnostics(scope="workspace")
+
+    github = diagnostics.values["integrations.github.token_ref"]
+    assert github.source == "workspace_override"
+    assert github.recent_change is not None
+    assert github.recent_change.reason == "wire github token"
+    assert github.diagnostics[0].code == "unresolved_secret_ref"
+    assert github.diagnostics[0].details["launch_blocker"] is True
+    assert "missing-token" not in github.model_dump_json()
+
+
+def test_invalid_secret_ref_diagnostic_does_not_fallback_to_sensitive_source(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_should_not_be_used")
+    service = SettingsCatalogService(
+        env={
+            "MOONMIND_GITHUB_TOKEN_REF": "env://MISSING_TOKEN",
+            "GITHUB_TOKEN": "ghp_should_not_be_used",
+        }
+    )
+
+    effective = service.effective_value(
+        "integrations.github.token_ref", scope="workspace"
+    )
+
+    assert effective.diagnostics[0].code == "unresolved_secret_ref"
+    assert "ghp_should_not_be_used" not in effective.model_dump_json()

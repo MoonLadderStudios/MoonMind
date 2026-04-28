@@ -4,21 +4,26 @@ from __future__ import annotations
 
 from typing import Annotated, Any, get_args
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
+from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
 from api_service.services.settings_catalog import (
+    SettingsAuditResponse,
     SettingScope,
     SettingSection,
     SettingsCatalogService,
     SettingsError,
+    has_settings_permission,
     settings_error,
+    settings_permissions_for_user,
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+SETTINGS_CURRENT_USER_DEP = get_current_user()
 
 VALID_SETTING_SCOPES = set(get_args(SettingScope))
 VALID_SETTING_SECTIONS = set(get_args(SettingSection))
@@ -41,6 +46,33 @@ class SettingsPatchRequest(BaseModel):
     changes: dict[str, Any] = Field(default_factory=dict)
     expected_versions: dict[str, int] = Field(default_factory=dict)
     reason: str | None = None
+
+
+def _permission_denied_response(permission: str) -> JSONResponse:
+    return _error_response(
+        403,
+        settings_error(
+            "permission_denied",
+            f"Missing required settings permission: {permission}.",
+            details={"required_permission": permission},
+        ),
+    )
+
+
+def _require_permission(user: Any, permission: str) -> JSONResponse | None:
+    if has_settings_permission(user, permission):
+        return None
+    return _permission_denied_response(permission)
+
+
+def _write_permission_for_scope(scope: SettingScope) -> str | None:
+    if scope == "user":
+        return "settings.user.write"
+    if scope == "workspace":
+        return "settings.workspace.write"
+    if scope == "system":
+        return "settings.system.write"
+    return None
 
 
 def _error_response(status_code: int, error: SettingsError) -> JSONResponse:
@@ -97,7 +129,11 @@ def _coerce_section(section: str | None) -> SettingSection | JSONResponse | None
 async def get_settings_catalog(
     section: Annotated[str | None, Query()] = None,
     scope: Annotated[str | None, Query()] = None,
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
+    denied = _require_permission(user, "settings.catalog.read")
+    if denied is not None:
+        return denied
     resolved_section = _coerce_section(section)
     if isinstance(resolved_section, JSONResponse):
         return resolved_section
@@ -122,7 +158,13 @@ async def get_settings_catalog(
 
 
 @router.get("/effective")
-async def get_effective_settings(scope: Annotated[str, Query()] = "workspace"):
+async def get_effective_settings(
+    scope: Annotated[str, Query()] = "workspace",
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
+):
+    denied = _require_permission(user, "settings.effective.read")
+    if denied is not None:
+        return denied
     resolved_scope = _coerce_scope(scope)
     if isinstance(resolved_scope, JSONResponse):
         return resolved_scope
@@ -141,7 +183,11 @@ async def get_effective_settings(scope: Annotated[str, Query()] = "workspace"):
 async def get_effective_setting(
     key: str,
     scope: Annotated[str, Query()] = "workspace",
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
+    denied = _require_permission(user, "settings.effective.read")
+    if denied is not None:
+        return denied
     resolved_scope = _coerce_scope(scope)
     if isinstance(resolved_scope, JSONResponse):
         return resolved_scope
@@ -197,12 +243,100 @@ async def get_effective_setting(
         )
 
 
+@router.get("/diagnostics")
+async def get_settings_diagnostics(
+    scope: Annotated[str, Query()] = "workspace",
+    key: Annotated[str | None, Query()] = None,
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
+):
+    denied = _require_permission(user, "settings.effective.read")
+    if denied is not None:
+        return denied
+    resolved_scope = _coerce_scope(scope)
+    if isinstance(resolved_scope, JSONResponse):
+        return resolved_scope
+    try:
+        async with db_base.async_session_maker() as session:
+            service = SettingsCatalogService(session=session)
+            return await service.diagnostics(scope=resolved_scope, key=key)
+    except SQLAlchemyError:
+        return _settings_db_error_response(key=key, scope=resolved_scope)
+    except KeyError:
+        return _error_response(
+            404,
+            settings_error(
+                "unknown_setting",
+                f"Unknown setting: {key}.",
+                key=key,
+                scope=scope,
+            ),
+        )
+    except ValueError:
+        return _error_response(
+            400,
+            settings_error(
+                "invalid_scope",
+                f"Setting {key} is not available at scope {scope}.",
+                key=key,
+                scope=scope,
+            ),
+        )
+
+
+@router.get("/audit")
+async def get_settings_audit(
+    key: Annotated[str | None, Query()] = None,
+    scope: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
+):
+    denied = _require_permission(user, "settings.audit.read")
+    if denied is not None:
+        return denied
+    resolved_scope = None
+    if scope is not None:
+        coerced_scope = _coerce_scope(scope)
+        if isinstance(coerced_scope, JSONResponse):
+            return coerced_scope
+        resolved_scope = coerced_scope
+    try:
+        async with db_base.async_session_maker() as session:
+            service = SettingsCatalogService(session=session)
+            return SettingsAuditResponse(
+                items=await service.list_audit_events(
+                    permissions=settings_permissions_for_user(user),
+                    key=key,
+                    scope=resolved_scope,
+                    limit=limit,
+                )
+            )
+    except SQLAlchemyError:
+        return _settings_db_error_response(key=key, scope=scope or "workspace")
+
+
 @router.patch("/{scope}")
-async def patch_settings(scope: str, payload: SettingsPatchRequest):
+async def patch_settings(
+    scope: str,
+    payload: SettingsPatchRequest,
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
+):
     service = SettingsCatalogService()
     resolved_scope = _coerce_scope(scope)
     if isinstance(resolved_scope, JSONResponse):
         return resolved_scope
+    required_permission = _write_permission_for_scope(resolved_scope)
+    if required_permission is None:
+        return _error_response(
+            400,
+            settings_error(
+                "invalid_scope",
+                f"Setting writes are not available at scope {resolved_scope}.",
+                scope=resolved_scope,
+            ),
+        )
+    denied = _require_permission(user, required_permission)
+    if denied is not None:
+        return denied
     if not payload.changes:
         return _error_response(
             400,
@@ -285,11 +419,29 @@ async def patch_settings(scope: str, payload: SettingsPatchRequest):
 
 
 @router.delete("/{scope}/{key:path}")
-async def reset_setting(scope: str, key: str):
+async def reset_setting(
+    scope: str,
+    key: str,
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
+):
     service = SettingsCatalogService()
     resolved_scope = _coerce_scope(scope)
     if isinstance(resolved_scope, JSONResponse):
         return resolved_scope
+    required_permission = _write_permission_for_scope(resolved_scope)
+    if required_permission is None:
+        return _error_response(
+            400,
+            settings_error(
+                "invalid_scope",
+                f"Setting writes are not available at scope {resolved_scope}.",
+                key=key,
+                scope=resolved_scope,
+            ),
+        )
+    denied = _require_permission(user, required_permission)
+    if denied is not None:
+        return denied
     try:
         service.ensure_write_allowed(key, scope=resolved_scope)
     except KeyError:
