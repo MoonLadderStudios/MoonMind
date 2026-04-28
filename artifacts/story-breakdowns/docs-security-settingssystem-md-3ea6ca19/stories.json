@@ -1,0 +1,988 @@
+{
+  "outputMode": "jira",
+  "source": {
+    "title": "Settings System",
+    "path": "docs/Security/SettingsSystem.md",
+    "referencePath": "docs/Security/SettingsSystem.md",
+    "originalDesignText": "# Settings System\n\n**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md)\n\nStatus: **Desired-State Design**\nOwners: MoonMind Engineering\nLast Updated: 2026-04-27\n\n> [!NOTE]\n> This document defines the desired-state MoonMind Settings System.\n> It is a declarative contract for how Mission Control exposes, validates, persists, resolves, audits, and safely applies user, workspace, provider, secret, and operational configuration.\n>\n> This document is not an implementation checklist. Rollout sequencing, migration tasks, and backlog tickets belong in MoonSpec artifacts, gitignored handoffs, or `docs/tmp/` implementation plans.\n\n---\n\n## 1. Summary\n\nMoonMind needs a unified Settings System that gives users and operators a single, predictable place to configure the product without turning the UI into a manually maintained collection of one-off forms.\n\nThe Settings System should make Mission Control the human-facing configuration plane for:\n\n- provider profiles,\n- managed secrets,\n- OAuth-backed credential volumes,\n- user preferences,\n- workspace defaults,\n- runtime and workflow defaults,\n- safe operator controls, and\n- diagnostic configuration state.\n\nThe central design decision is:\n\n> MoonMind settings are exposed through a **declarative settings catalog** and persisted as **scoped overrides**, while sensitive values are represented by **SecretRef bindings** rather than raw plaintext.\n\nThis means:\n\n- settings are discoverable through a backend-owned registry,\n- UI forms are generated from typed descriptors rather than duplicated frontend knowledge,\n- every editable setting is validated server-side,\n- effective values can be explained by source and scope,\n- secrets are managed through the Secrets System and are never retrieved as plaintext by Settings UI,\n- provider profiles remain the execution contract for runtimes and providers, and\n- operator actions remain explicit, auditable, and authorization-gated.\n\nThe Settings System is therefore not merely a page. It is the durable contract that connects configuration metadata, scoped persistence, effective-value resolution, UI rendering, security boundaries, and runtime application behavior.\n\n---\n\n## 2. Document Boundaries\n\nThe Settings System depends on, but does not replace, adjacent MoonMind systems.\n\n### 2.1 What the Settings System owns\n\nThe Settings System is the semantic owner of:\n\n- Settings page navigation and section taxonomy\n- settings catalog descriptors\n- setting eligibility rules\n- user/workspace/system scope semantics\n- scoped override persistence\n- effective-value resolution and source explanation\n- UI control metadata for editable settings\n- settings update APIs\n- settings reset APIs\n- server-side setting validation\n- setting-change audit records\n- settings read/write authorization boundaries\n- settings change notifications and reload semantics\n- integration points to Provider Profiles, Secrets, OAuth, and Operations\n\n### 2.2 What the Secrets System owns\n\nThe Secrets System remains the semantic owner of:\n\n- `SecretRef` semantics\n- managed secret storage\n- encryption-at-rest behavior\n- root key custody\n- supported secret backend classes\n- secret resolution\n- secret rotation and revocation\n- secret-specific audit events\n- plaintext redaction rules\n\nThe Settings System may expose secret management workflows and SecretRef pickers, but it must not redefine how secrets are stored, decrypted, resolved, or materialized.\n\n### 2.3 What Provider Profiles own\n\nProvider Profiles remain the semantic owner of:\n\n- runtime selection\n- provider selection\n- credential source class\n- profile-level routing metadata\n- default model intent for a runtime/provider combination\n- runtime materialization strategy\n- launch shaping\n- profile-level concurrency and cooldown policy\n\nThe Settings System may provide the page and forms used to view or edit Provider Profiles, but the Provider Profile contract remains authoritative for execution semantics.\n\n### 2.4 What Operations own\n\nOperational subsystems remain the semantic owner of:\n\n- worker pause, drain, quiesce, and resume semantics\n- runtime health state\n- queue state\n- scheduler state\n- destructive or disruptive operational actions\n\nThe Settings System may expose operational controls, but it must treat them as explicit commands with status feedback, not ordinary preferences.\n\n### 2.5 What runtime strategies own\n\nRuntime strategies remain the semantic owner of:\n\n- command construction\n- environment shaping\n- generated runtime files\n- process launch behavior\n- runtime-specific capability checks\n\nSettings may influence runtime strategies through typed effective configuration, but they do not replace runtime-specific launch logic.\n\n---\n\n## 3. Goals\n\nThe Settings System must support all of the following:\n\n1. **Unified configuration surface**\n   - Mission Control exposes Providers & Secrets, User / Workspace settings, and Operations under one stable Settings page.\n\n2. **Declarative catalog**\n   - Editable settings are described by backend-owned descriptors with type, scope, category, validation, UI metadata, sensitivity, and reload behavior.\n\n3. **Safe exhaustiveness**\n   - Every setting that is intentionally eligible for UI adjustment can be surfaced without manually building a bespoke form.\n   - Ineligible, secret, or operator-only settings remain hidden, read-only, or routed to a specialized manager.\n\n4. **Scoped overrides**\n   - User and workspace overrides are persisted separately from built-in defaults, config files, and environment variables.\n\n5. **Explainable effective values**\n   - The UI and API can explain whether a value came from a default, environment/config source, workspace override, user override, provider profile, or operator lock.\n\n6. **Server-side validation**\n   - All writes are validated on the backend using the authoritative type and constraint model.\n\n7. **Secret-safe behavior**\n   - Raw secrets are never stored in generic setting overrides and are never rendered back to the browser after submission.\n   - Settings that need sensitive values use SecretRef pickers or the Managed Secrets UI.\n\n8. **Provider-aware configuration**\n   - Provider Profiles are configurable from Settings while preserving the separation between profile semantics and secret semantics.\n\n9. **Operational safety**\n   - Operational controls are discoverable from Settings but remain explicit, authorized, auditable actions.\n\n10. **Local-first baseline**\n    - A personal or local deployment can start with minimal external prerequisites, then configure secrets and settings through Mission Control.\n\n11. **Auditable changes**\n    - Operators can answer who changed what, when, at which scope, and with what effect, without exposing sensitive values.\n\n12. **Runtime application semantics**\n    - Settings clearly indicate whether changes apply immediately, on next run, after worker reload, or after process restart.\n\n13. **Extensible contracts**\n    - New settings, sections, scopes, UI controls, backends, and validators can be added without breaking existing settings data.\n\n---\n\n## 4. Non-Goals\n\nThis design does **not** attempt to:\n\n- expose every backend field or Pydantic setting automatically,\n- allow raw environment-variable editing from the browser,\n- replace the Secrets System,\n- reveal stored secrets to users or operators,\n- replace Provider Profiles with generic settings,\n- turn Operations into ordinary key/value preferences,\n- guarantee every setting can be hot-reloaded,\n- remove the need for runtime-specific strategy code,\n- make MoonMind a general-purpose enterprise configuration management product,\n- create a generic admin UI for every database table, or\n- make the frontend the authority for validation or eligibility.\n\nThe Settings System is a typed, product-specific configuration plane, not a generic database editor and not a generic secret manager.\n\n---\n\n## 5. Core Principles\n\n### 5.1 Backend-Owned Truth\n\nThe backend owns the settings catalog, setting types, validation rules, sensitivity rules, authorization rules, and effective-value resolution.\n\nThe frontend renders descriptors and submits user intent. It does not decide which backend settings are safe to expose.\n\n### 5.2 Explicit Exposure\n\nA setting is editable in the UI only if it is explicitly marked as exposed by the backend registry.\n\nSensitive or ambiguous fields must default to hidden.\n\n### 5.3 References Over Secrets\n\nAny setting that requires sensitive material must store a reference, not a raw value.\n\nExamples:\n\n```yaml\nprovider.github.token_ref: db://github-pat-main\nprovider.anthropic.api_key_ref: db://anthropic-team-api-key\n```\n\nGeneric setting overrides must not contain:\n\n- API keys,\n- access tokens,\n- refresh tokens,\n- passwords,\n- private keys,\n- OAuth session state, or\n- generated config containing credentials.\n\n### 5.4 Scoped Overrides, Not Mutable Defaults\n\nDefaults remain defaults. User and workspace changes are stored as overrides.\n\nA reset operation removes an override and reverts to the inherited effective value.\n\n### 5.5 Explainability\n\nEvery effective setting value must be explainable.\n\nThe system should answer:\n\n- What is the effective value?\n- Which scope supplied it?\n- Is it inherited or overridden?\n- Is it locked by operator policy?\n- What is the default?\n- Does it require reload or restart?\n- Which dependent systems are affected?\n\n### 5.6 Least Privilege\n\nReading settings metadata, editing personal preferences, editing workspace defaults, managing secrets, managing provider profiles, and invoking operations are separate permissions.\n\n### 5.7 Fail Fast\n\nInvalid settings, missing SecretRefs, broken provider profile bindings, locked values, and unsupported scopes must fail explicitly with actionable errors.\n\nThe system must not silently fall back to another sensitive source.\n\n### 5.8 UI as a Safe Control Plane\n\nThe UI should guide users toward valid configuration, but backend validation and authorization remain authoritative.\n\n### 5.9 Durable Contracts Over Ad Hoc Forms\n\nThe catalog contract should outlive individual UI components.\n\nA setting descriptor should be usable by:\n\n- the Settings page,\n- API clients,\n- CLI tooling,\n- tests,\n- diagnostics,\n- onboarding flows, and\n- documentation generators.\n\n---\n\n## 6. Settings Page Topology\n\nThe desired top-level Settings page contains three primary sections.\n\n```text\nSettings\n  Providers & Secrets\n  User / Workspace\n  Operations\n```\n\n### 6.1 Providers & Secrets\n\nThis section contains configuration that makes runtimes launchable and provider access resolvable.\n\nIt includes:\n\n- Provider Profiles\n- Managed Secrets\n- OAuth credential flows and OAuth volume status\n- SecretRef usage and validation\n- provider-profile readiness state\n- runtime/provider binding diagnostics\n\nThis section should clearly communicate:\n\n- provider profiles hold references and launch metadata,\n- managed secrets hold encrypted values or external references,\n- OAuth volumes hold runtime-specific credential state,\n- raw secrets are not re-rendered after creation, and\n- readiness is a product of profile validity plus secret/OAuth resolvability.\n\n### 6.2 User / Workspace\n\nThis section contains schema-driven settings for user and workspace behavior.\n\nIt includes:\n\n- user preferences,\n- personal runtime defaults,\n- workspace task defaults,\n- workspace routing defaults,\n- workspace feature flags,\n- non-secret integration defaults,\n- configurable policy knobs, and\n- SecretRef bindings that are not provider-profile-specific.\n\nThis section is catalog-driven.\n\nNew eligible settings should land here by adding backend metadata and validation rather than writing an entirely new bespoke UI panel.\n\n### 6.3 Operations\n\nThis section contains operational controls and status-backed administrative settings.\n\nIt includes:\n\n- worker pause/resume controls,\n- drain/quiesce controls,\n- operational mode toggles,\n- queue and runtime health summaries,\n- maintenance-window controls, and\n- safe diagnostic switches.\n\nOperations controls are not ordinary preferences. They are explicit commands or statusful controls that must show current state, authorization, expected effect, and audit trail.\n\n---\n\n## 7. Key Concepts\n\n### 7.1 Setting Key\n\nA setting key is a stable dotted identifier.\n\nExamples:\n\n```text\nworkflow.default_task_runtime\nworkflow.default_publish_mode\nskills.policy_mode\nskills.canary_percent\nintegrations.github.token_ref\nlive_sessions.default_mode\noperations.worker_pause_default_reason\n```\n\nSetting keys must be:\n\n- stable across releases,\n- unique within the catalog,\n- safe for URLs and JSON payloads,\n- independent of display labels, and\n- never overloaded to mean different things in different scopes.\n\n### 7.2 Setting Descriptor\n\nA setting descriptor is backend-owned metadata describing a setting.\n\nIt defines:\n\n- key,\n- title,\n- description,\n- category,\n- type,\n- UI control,\n- allowed scopes,\n- default value,\n- constraints,\n- options,\n- sensitivity,\n- read-only status,\n- source information,\n- reload behavior,\n- dependencies,\n- validation hints, and\n- audit behavior.\n\n### 7.3 Scope\n\nA scope defines where an override applies.\n\nSupported desired-state scopes:\n\n- `user`\n- `workspace`\n- `system`\n- `operator`\n\nOnly `user` and `workspace` are normal editable scopes for most users.\n\n`system` and `operator` are generally read-only, admin-only, or deployment-owned.\n\n### 7.4 Override\n\nAn override is a persisted scoped value that intentionally differs from the inherited value.\n\nOverrides are sparse. Absence of an override means \u201cinherit.\u201d\n\n### 7.5 Effective Value\n\nThe effective value is the resolved value after applying defaults, environment/config, workspace overrides, user overrides, and operator locks according to the setting\u2019s resolution policy.\n\n### 7.6 Source\n\nA source explains where a value came from.\n\nExamples:\n\n- `default`\n- `config_file`\n- `environment`\n- `workspace_override`\n- `user_override`\n- `provider_profile`\n- `secret_ref`\n- `operator_lock`\n\n### 7.7 Lock\n\nA lock is an operator-enforced value that cannot be changed through the normal UI.\n\nLocks may come from:\n\n- environment variables,\n- deployment config,\n- system policy,\n- administrative policy, or\n- runtime safety constraints.\n\n### 7.8 Eligibility\n\nEligibility determines whether a setting can appear in the catalog and whether it can be edited.\n\nEligibility is not the same as existence. A backend setting can exist without being eligible for UI editing.\n\n### 7.9 SecretRef Setting\n\nA SecretRef setting is a non-secret pointer to a secret managed elsewhere.\n\nThe setting value is a reference such as:\n\n```text\ndb://github-pat-main\nenv://GITHUB_TOKEN\nexec://onepassword/moonmind/github-token\n```\n\nThe referenced secret value is not part of the setting override.\n\n---\n\n## 8. Settings Catalog Contract\n\n### 8.1 Descriptor Shape\n\nThe desired-state descriptor shape is:\n\n```yaml\nSettingDescriptor:\n  key: string\n  title: string\n  description: string | null\n  category: string\n  section: string                    # providers-secrets | user-workspace | operations\n  type: string                       # boolean | string | integer | number | enum | string_list | object | secret_ref\n  ui: string                         # toggle | input | number | select | tag_editor | key_value | secret_ref_picker | readonly\n  scopes: [string]                   # user | workspace | system | operator\n  default_value: any\n  effective_value: any\n  override_value: any | null\n  source: string\n  options: [SettingOption] | null\n  constraints: SettingConstraints | null\n  sensitive: boolean\n  secret_role: string | null\n  read_only: boolean\n  read_only_reason: string | null\n  requires_reload: boolean\n  requires_worker_restart: boolean\n  requires_process_restart: boolean\n  applies_to: [string]\n  depends_on: [SettingDependency]\n  order: integer\n  audit: SettingAuditPolicy\n```\n\nExample:\n\n```yaml\nkey: workflow.default_task_runtime\ntitle: Default Task Runtime\ndescription: Runtime used when a task does not explicitly request one.\ncategory: Workflow\nsection: user-workspace\ntype: enum\nui: select\nscopes: [workspace]\ndefault_value: codex_cli\neffective_value: codex_cli\noverride_value: null\nsource: default\noptions:\n  - value: codex_cli\n    label: Codex CLI\n  - value: claude_code\n    label: Claude Code\nsensitive: false\nread_only: false\nrequires_reload: false\nrequires_worker_restart: false\nrequires_process_restart: false\napplies_to: [task_creation, workflow_runtime]\norder: 10\naudit:\n  store_old_value: true\n  store_new_value: true\n  redact: false\n```\n\nExample SecretRef setting:\n\n```yaml\nkey: integrations.github.token_ref\ntitle: GitHub Token\ndescription: Secret reference used for GitHub API access.\ncategory: Integrations\nsection: user-workspace\ntype: secret_ref\nui: secret_ref_picker\nscopes: [user, workspace]\ndefault_value: null\neffective_value: db://github-pat-main\noverride_value: db://github-pat-main\nsource: workspace_override\nsecret_role: github_token\nsensitive: false\nread_only: false\nrequires_reload: false\nrequires_worker_restart: false\nrequires_process_restart: false\n```\n\nThe SecretRef is not sensitive by itself in the same way as plaintext, but it is still security-relevant metadata and must be access controlled.\n\n### 8.2 Descriptor Generation\n\nDescriptors may be generated from typed backend configuration models, hand-authored registry entries, or a combination of both.\n\nThe desired-state registry should support:\n\n- extracting type information from backend models,\n- preserving descriptions,\n- preserving enum values,\n- preserving numeric bounds,\n- preserving list and object constraints,\n- adding MoonMind-specific UI metadata,\n- adding security metadata,\n- adding scope metadata,\n- adding reload metadata, and\n- adding authorization metadata.\n\n### 8.3 Explicit Metadata\n\nA setting must include explicit MoonMind metadata before it becomes UI-editable.\n\nExample:\n\n```python\njson_schema_extra={\n    \"moonmind\": {\n        \"expose\": True,\n        \"section\": \"user-workspace\",\n        \"category\": \"Workflow\",\n        \"scopes\": [\"workspace\"],\n        \"ui\": \"select\",\n        \"requires_reload\": False,\n    }\n}\n```\n\nAbsence of explicit metadata means the field is not editable through Settings.\n\n### 8.4 Catalog Stability\n\nThe catalog is a durable API contract.\n\nChanges to descriptors should preserve:\n\n- stable keys,\n- stable option values,\n- stable scope semantics,\n- backwards-compatible validation where possible,\n- clear migration behavior when a setting is renamed or removed, and\n- diagnostic visibility for deprecated settings.\n\n---\n\n## 9. Eligibility Rules\n\n### 9.1 Editable Setting Eligibility\n\nA setting may be editable through User / Workspace if all of the following are true:\n\n1. It has explicit `expose: true` metadata.\n2. It is not plaintext-sensitive.\n3. It has at least one editable scope.\n4. It has a supported UI representation.\n5. It can be validated server-side.\n6. It does not require direct mutation of deployment environment variables.\n7. It does not bypass a specialized subsystem such as Secrets or Provider Profiles.\n8. Its change semantics are understood and documented.\n\n### 9.2 Supported Generic UI Types\n\nThe generic settings renderer may support:\n\n| Backend shape | UI control |\n|---|---|\n| `bool` | toggle |\n| `str` | text input |\n| bounded `int` / `float` | number input |\n| enum / literal | select |\n| `list[str]` | tag editor |\n| `dict[str, str]` | key/value editor |\n| SecretRef string | secret ref picker |\n| read-only computed value | read-only field |\n\n### 9.3 Ineligible Settings\n\nA setting must not be exposed as an ordinary editable field if it is:\n\n- a raw secret,\n- a password,\n- an access token,\n- a refresh token,\n- a private key,\n- an OAuth state blob,\n- a provider credential value,\n- a complex deployment-only infrastructure setting,\n- a setting that requires manual operator migration,\n- a field owned by Provider Profiles,\n- a field owned by Operations command semantics,\n- a value that cannot be validated safely, or\n- a value whose change impact cannot be explained.\n\n### 9.4 Sensitive-Name Heuristics\n\nThe registry must reject or require manual review for fields whose key, alias, or description contains terms such as:\n\n- `secret`\n- `token`\n- `password`\n- `api_key`\n- `apikey`\n- `credential`\n- `private_key`\n- `refresh`\n- `oauth`\n\nA field matching these heuristics may still be represented as a SecretRef picker, but it must not be represented as a plaintext input unless it is inside the Managed Secrets creation or replacement flow.\n\n---\n\n## 10. Resolution Model\n\n### 10.1 Default Resolution Chain\n\nFor ordinary user/workspace settings, the default resolution chain is:\n\n```text\nbuilt-in default\n  < config file / environment default\n  < workspace override\n  < user override\n```\n\nThe first item is weakest; the last applicable item wins.\n\n### 10.2 Operator-Locked Resolution Chain\n\nFor operator-locked settings, the resolution chain is:\n\n```text\nbuilt-in default\n  < workspace override\n  < user override\n  < operator lock\n```\n\nOperator locks win and make the field read-only for non-operator editors.\n\n### 10.3 Provider Profile Resolution\n\nProvider Profiles are not generic setting overrides. They are resources managed in the Providers & Secrets section.\n\nA setting may select or reference a provider profile, but it must not inline provider profile semantics into a generic setting value.\n\nExample:\n\n```yaml\nworkflow.default_provider_profile_ref: claude_anthropic_api_team\n```\n\n### 10.4 SecretRef Resolution\n\nSecretRef settings resolve only to references during settings resolution.\n\nThe plaintext value is resolved only by the Secrets System at controlled execution boundaries such as:\n\n- provider-profile-backed launch,\n- tool execution,\n- integration validation,\n- proxy-owned outbound calls, or\n- explicit validation flows.\n\n### 10.5 Missing Values\n\nThe resolver must distinguish:\n\n- no default exists,\n- inherited value is null,\n- override is intentionally null,\n- SecretRef exists but cannot resolve,\n- provider profile reference is missing,\n- value is blocked by policy, and\n- value is invalid after migration.\n\nThese states should produce explicit diagnostics rather than silent fallback.\n\n---\n\n## 11. Persistence Model\n\n### 11.1 Settings Overrides Table\n\nDesired-state scoped override storage:\n\n```sql\nCREATE TABLE settings_overrides (\n    id UUID PRIMARY KEY,\n    scope TEXT NOT NULL,\n    workspace_id UUID NULL,\n    user_id UUID NULL,\n    key TEXT NOT NULL,\n    value_json JSONB NOT NULL,\n    schema_version INTEGER NOT NULL DEFAULT 1,\n    value_version INTEGER NOT NULL DEFAULT 1,\n    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    created_by UUID NULL,\n    updated_by UUID NULL,\n    UNIQUE (scope, workspace_id, user_id, key)\n);\n```\n\n### 11.2 Settings Audit Table\n\nDesired-state audit storage:\n\n```sql\nCREATE TABLE settings_audit_events (\n    id UUID PRIMARY KEY,\n    event_type TEXT NOT NULL,\n    key TEXT NOT NULL,\n    scope TEXT NOT NULL,\n    workspace_id UUID NULL,\n    user_id UUID NULL,\n    actor_user_id UUID NULL,\n    old_value_json JSONB NULL,\n    new_value_json JSONB NULL,\n    redacted BOOLEAN NOT NULL DEFAULT FALSE,\n    reason TEXT NULL,\n    request_id TEXT NULL,\n    created_at TIMESTAMPTZ NOT NULL DEFAULT now()\n);\n```\n\n### 11.3 Persistence Rules\n\nSettings override rows may store:\n\n- booleans,\n- numbers,\n- strings,\n- enums,\n- lists,\n- small structured JSON values,\n- SecretRef strings, and\n- resource references.\n\nSettings override rows must not store:\n\n- raw secret values,\n- OAuth session blobs,\n- decrypted credential files,\n- runtime-generated config containing secrets,\n- large artifacts,\n- workflow payloads, or\n- operational command history beyond audit metadata.\n\n### 11.4 Deletion and Reset\n\nResetting a setting deletes the relevant override row.\n\nIt does not delete:\n\n- inherited defaults,\n- provider profiles,\n- managed secrets,\n- OAuth volumes, or\n- audit history.\n\n---\n\n## 12. API Contract\n\n### 12.1 Catalog APIs\n\n```http\nGET /api/v1/settings/catalog?section=user-workspace&scope=workspace\nGET /api/v1/settings/catalog?section=user-workspace&scope=user\nGET /api/v1/settings/catalog?section=providers-secrets\nGET /api/v1/settings/catalog?section=operations\n```\n\nThe catalog response returns descriptors grouped into sections and categories.\n\n### 12.2 Effective Settings APIs\n\n```http\nGET /api/v1/settings/effective?scope=user\nGET /api/v1/settings/effective?scope=workspace\nGET /api/v1/settings/effective/{key}?scope=workspace\n```\n\nThese endpoints return resolved values with source explanations.\n\n### 12.3 Update APIs\n\n```http\nPATCH /api/v1/settings/user\nPATCH /api/v1/settings/workspace\n```\n\nExample payload:\n\n```json\n{\n  \"changes\": {\n    \"workflow.default_task_runtime\": \"codex_cli\",\n    \"skills.canary_percent\": 25\n  },\n  \"expected_versions\": {\n    \"workflow.default_task_runtime\": 3,\n    \"skills.canary_percent\": 1\n  },\n  \"reason\": \"Update default workflow behavior for current workspace.\"\n}\n```\n\nThe response returns the refreshed descriptors for affected settings.\n\n### 12.4 Reset APIs\n\n```http\nDELETE /api/v1/settings/user/{key}\nDELETE /api/v1/settings/workspace/{key}\n```\n\nReset removes the override and returns the inherited effective value.\n\n### 12.5 Validation APIs\n\n```http\nPOST /api/v1/settings/validate\nPOST /api/v1/settings/preview\n```\n\nValidation checks proposed changes without committing them.\n\nPreview returns effective-value changes, dependency warnings, and reload requirements.\n\n### 12.6 Audit APIs\n\n```http\nGET /api/v1/settings/audit?key=workflow.default_task_runtime\nGET /api/v1/settings/audit?scope=workspace\n```\n\nAudit APIs must redact sensitive or security-relevant values according to the descriptor\u2019s audit policy.\n\n### 12.7 Error Shape\n\nSettings API errors should be structured.\n\n```json\n{\n  \"error\": \"invalid_setting_value\",\n  \"message\": \"skills.canary_percent must be between 0 and 100.\",\n  \"key\": \"skills.canary_percent\",\n  \"scope\": \"workspace\",\n  \"details\": {\n    \"minimum\": 0,\n    \"maximum\": 100,\n    \"received\": 101\n  }\n}\n```\n\nCommon errors:\n\n- `unknown_setting`\n- `setting_not_exposed`\n- `scope_not_allowed`\n- `read_only_setting`\n- `operator_locked`\n- `invalid_setting_value`\n- `secret_ref_not_resolvable`\n- `provider_profile_not_found`\n- `version_conflict`\n- `permission_denied`\n- `requires_confirmation`\n\n---\n\n## 13. UI Contract\n\n### 13.1 Common UI Elements\n\nEvery settings row should show:\n\n- title,\n- description,\n- current control or read-only value,\n- source badge,\n- scope badge,\n- reset action when overridden,\n- validation errors,\n- reload/restart badge when relevant, and\n- lock reason when read-only.\n\n### 13.2 Page-Level UI Elements\n\nSettings pages should support:\n\n- search,\n- category filtering,\n- scope switching,\n- modified-only filtering,\n- read-only filtering,\n- validation before save,\n- save/discard controls,\n- reset-to-inherited action,\n- source explanation, and\n- audit or change-history link where authorized.\n\n### 13.3 Source Badges\n\nRecommended source labels:\n\n```text\nDefault\nConfig\nEnvironment\nWorkspace override\nUser override\nProvider profile\nSecret reference\nOperator locked\n```\n\n### 13.4 Change Preview\n\nBefore committing multi-setting updates, the UI should be able to show:\n\n- changed keys,\n- old effective values,\n- new effective values,\n- validation status,\n- affected subsystems,\n- reload requirements, and\n- warnings about missing dependencies.\n\n### 13.5 SecretRef Picker\n\nSecretRef settings use a picker rather than a plaintext input.\n\nThe picker should show:\n\n- secret label,\n- backend type,\n- status,\n- presence indicator,\n- last updated time,\n- validation status,\n- usage count, and\n- SecretRef value.\n\nIt should not show plaintext.\n\n### 13.6 Managed Secret Editor\n\nManaged secret creation and replacement flows may accept plaintext input, but only as a one-way submission.\n\nAfter saving, the UI must clear the input and show only metadata.\n\n### 13.7 Operations UI\n\nOperational controls should show:\n\n- current state,\n- command impact,\n- confirmation requirements,\n- actor authorization,\n- last action and actor,\n- pending transitions,\n- failure reason, and\n- safe rollback or resume action where available.\n\n---\n\n## 14. Secrets Integration\n\nThe Settings System exposes secret management but does not own secret storage semantics.\n\n### 14.1 Managed Secrets\n\nThe Settings page should let authorized users:\n\n- create managed secrets,\n- replace secret values,\n- rotate secrets,\n- disable secrets,\n- re-enable secrets,\n- delete or tombstone secrets,\n- validate secrets,\n- inspect usage, and\n- copy SecretRefs.\n\n### 14.2 No Plaintext Readback\n\nStored secret values are write-only from the Settings UI perspective.\n\nThere is no default \u201creveal secret\u201d action.\n\n### 14.3 Secret Validation\n\nSecret validation should be provider- or integration-aware when possible.\n\nValidation flow:\n\n1. User requests validation.\n2. Backend resolves secret in memory.\n3. Backend performs a safe provider-specific or resolver-specific check.\n4. Backend discards plaintext.\n5. Backend stores redacted validation metadata.\n6. UI receives status, timestamp, and redacted diagnostics.\n\n### 14.4 Secret Usage\n\nThe Settings UI should show where a secret is referenced, including:\n\n- provider profiles,\n- setting overrides,\n- tool bindings,\n- integrations,\n- scheduled task definitions, and\n- runtime materialization templates.\n\nUsage views must show references and object names, not plaintext.\n\n### 14.5 Broken SecretRefs\n\nIf a setting or provider profile references a missing, disabled, or revoked secret, the UI must surface that state clearly and prevent affected launches where appropriate.\n\n---\n\n## 15. Provider Profiles Integration\n\nProvider Profiles are first-class resources inside Providers & Secrets.\n\nThe Settings UI may create, update, delete, validate, enable, disable, and select defaults for provider profiles.\n\n### 15.1 Profile Editing\n\nProvider profile forms should be descriptor-assisted but not reduced to generic key/value editing.\n\nProvider profiles contain structured execution semantics and therefore need specialized UI for:\n\n- runtime,\n- provider,\n- credential source class,\n- runtime materialization mode,\n- default model,\n- model overrides,\n- SecretRef role bindings,\n- OAuth volume metadata,\n- concurrency,\n- cooldown,\n- tags,\n- priority,\n- default profile status, and\n- readiness.\n\n### 15.2 Secret Role Binding\n\nWhen a provider profile requires a secret, the UI should present a role-aware SecretRef picker.\n\nExample:\n\n```yaml\nsecret_refs:\n  anthropic_api_key: db://anthropic-team-api-key\n```\n\nThe role name describes what the profile needs. The SecretRef identifies where the value can be resolved.\n\n### 15.3 Readiness\n\nProvider profile readiness should combine:\n\n- profile schema validity,\n- required fields,\n- SecretRef resolvability,\n- OAuth volume status,\n- provider-specific validation status,\n- enabled/disabled state,\n- concurrency availability, and\n- cooldown state where applicable.\n\n### 15.4 Defaults and Routing\n\nUser / Workspace settings may select default provider profiles or provider selectors, but Provider Profiles remain the source of truth for launch semantics.\n\n---\n\n## 16. User / Workspace Settings\n\n### 16.1 User Settings\n\nUser settings describe personal preferences and defaults.\n\nExamples:\n\n- preferred default runtime,\n- personal profile selector,\n- UI density,\n- notification preferences,\n- personal Git author defaults,\n- personal integration SecretRef bindings, and\n- personal task creation defaults.\n\nUser settings must not override workspace safety policies unless the specific setting explicitly allows it.\n\n### 16.2 Workspace Settings\n\nWorkspace settings describe shared behavior for a workspace.\n\nExamples:\n\n- default task runtime,\n- default publish mode,\n- workspace provider routing defaults,\n- skill policy mode,\n- allowed skill list,\n- canary percentages,\n- task proposal defaults,\n- live session defaults,\n- workspace Git defaults,\n- integration defaults, and\n- policy constraints.\n\n### 16.3 Workspace Policy Constraints\n\nWorkspace settings may define constraints on user settings.\n\nExamples:\n\n- allowed runtimes,\n- allowed providers,\n- maximum canary percentage,\n- allowed publication modes,\n- allowed SecretRef backends,\n- allowed operations during maintenance mode.\n\n### 16.4 Inheritance\n\nUser settings inherit workspace defaults unless explicitly overridden and permitted by policy.\n\nThe UI must make inheritance visible.\n\n---\n\n## 17. Operations Settings\n\nOperations belong in Settings for discoverability, but they are not ordinary preferences.\n\n### 17.1 Operational Controls\n\nExamples:\n\n- pause workers,\n- resume workers,\n- drain queue,\n- quiesce runtime family,\n- enable maintenance mode,\n- disable launch scheduling,\n- update operational reason text, and\n- set temporary operational banners.\n\n### 17.2 Command Semantics\n\nOperational actions should be modeled as commands with:\n\n- actor,\n- target,\n- requested state,\n- reason,\n- confirmation state,\n- timestamp,\n- idempotency key,\n- audit event,\n- result status, and\n- rollback or resume path where possible.\n\n### 17.3 Safety\n\nOperational controls must avoid accidental disruptive changes.\n\nThe UI should require confirmation for actions that:\n\n- stop active work,\n- prevent new launches,\n- affect all workers,\n- affect all runtimes,\n- delete data,\n- revoke credentials, or\n- change global routing behavior.\n\n---\n\n## 18. Validation Model\n\n### 18.1 Backend Validation\n\nAll setting writes must be validated server-side.\n\nValidation includes:\n\n- key exists,\n- key is exposed,\n- scope is allowed,\n- actor is authorized,\n- value type is correct,\n- enum value is allowed,\n- numeric bounds are satisfied,\n- string constraints are satisfied,\n- list constraints are satisfied,\n- object constraints are satisfied,\n- SecretRef is syntactically valid,\n- referenced resource exists where required,\n- dependencies are satisfied, and\n- workspace policy allows the value.\n\n### 18.2 Cross-Setting Validation\n\nSome settings are only valid in combination.\n\nExamples:\n\n- provider profile selector must reference an enabled profile,\n- canary percentage must be zero if the feature is disabled,\n- default runtime must be in the workspace allowed runtime list,\n- SecretRef backend must be allowed by workspace policy,\n- operational mode must not conflict with maintenance policy.\n\n### 18.3 Validation Timing\n\nValidation should occur:\n\n- when catalog descriptors are generated,\n- when a write request is received,\n- before persistence,\n- after persistence during effective-value preview,\n- before launch or operation execution, and\n- during diagnostic readiness checks.\n\n---\n\n## 19. Change Application Semantics\n\n### 19.1 Apply Modes\n\nEach setting must declare how changes apply.\n\nSupported desired-state apply modes:\n\n- `immediate`\n- `next_request`\n- `next_task`\n- `next_launch`\n- `worker_reload`\n- `process_restart`\n- `manual_operation`\n\n### 19.2 Change Events\n\nCommitted setting changes should emit structured events.\n\nExample:\n\n```json\n{\n  \"event_type\": \"setting_changed\",\n  \"key\": \"workflow.default_task_runtime\",\n  \"scope\": \"workspace\",\n  \"source\": \"workspace_override\",\n  \"apply_mode\": \"next_task\",\n  \"actor_user_id\": \"...\",\n  \"changed_at\": \"2026-04-27T00:00:00Z\"\n}\n```\n\n### 19.3 Reload Behavior\n\nConsumers may subscribe to settings change events where appropriate.\n\nExamples:\n\n- Mission Control refreshes catalog state.\n- Task creation uses updated defaults.\n- Provider profile manager syncs profile-related changes.\n- Workers reload non-disruptive settings.\n- Operational controls update runtime status.\n\n### 19.4 Restart Visibility\n\nIf a setting requires restart, the UI must show:\n\n- current effective value,\n- pending value if applicable,\n- restart requirement,\n- affected process or worker,\n- whether the value is already active, and\n- how to complete activation.\n\n---\n\n## 20. Authorization Model\n\n### 20.1 Permissions\n\nDesired-state permissions include:\n\n- `settings.catalog.read`\n- `settings.effective.read`\n- `settings.user.write`\n- `settings.workspace.write`\n- `settings.system.read`\n- `settings.system.write`\n- `secrets.metadata.read`\n- `secrets.value.write`\n- `secrets.rotate`\n- `secrets.disable`\n- `secrets.delete`\n- `provider_profiles.read`\n- `provider_profiles.write`\n- `operations.read`\n- `operations.invoke`\n- `settings.audit.read`\n\n### 20.2 Role Examples\n\n| Role | Capabilities |\n|---|---|\n| User | Read catalog, edit own user settings, view allowed inherited values |\n| Workspace Admin | Edit workspace settings, manage workspace provider profiles and secrets |\n| Secret Manager | Manage secret metadata and write secret values, without broad operations access |\n| Operator | Invoke operational controls and inspect operational status |\n| System Admin | Manage system/operator settings and locks |\n| Auditor | Read settings and secret metadata audit logs without plaintext access |\n\n### 20.3 Authorization Rules\n\nAuthorization must be checked on every write and every sensitive metadata read.\n\nThe frontend may hide unavailable controls, but hidden UI is not a security boundary.\n\n---\n\n## 21. Audit and Observability\n\n### 21.1 Audit Events\n\nSettings audit should record:\n\n- setting key,\n- scope,\n- actor,\n- old value where allowed,\n- new value where allowed,\n- redaction status,\n- source IP or request ID where available,\n- reason where supplied,\n- validation outcome,\n- apply mode, and\n- affected systems.\n\n### 21.2 Redaction\n\nAudit events must redact:\n\n- raw secret values,\n- sensitive generated config,\n- OAuth state,\n- private keys,\n- token-like values,\n- provider-returned sensitive diagnostics, and\n- any value whose descriptor marks audit redaction.\n\nSecretRef values may be recorded when authorized by policy, but they should be treated as security-relevant metadata.\n\n### 21.3 Diagnostics\n\nThe Settings UI should include diagnostics that answer:\n\n- why is this setting read-only?\n- why is this value effective?\n- where did this value come from?\n- what changed recently?\n- why did validation fail?\n- what needs restart?\n- which provider profile or secret is missing?\n- which setting is blocking launch readiness?\n\n---\n\n## 22. Security Requirements\n\nThe desired-state Settings System must satisfy all of the following:\n\n1. Raw secrets are not stored in generic setting overrides.\n2. Stored secrets are not rendered back to the browser after creation or replacement.\n3. Secret-like backend fields are hidden unless explicitly represented as SecretRef settings or managed through the Managed Secrets UI.\n4. The backend is authoritative for catalog generation, eligibility, validation, and authorization.\n5. Unknown setting keys are rejected.\n6. Client-supplied descriptor metadata is ignored for authorization and validation.\n7. Operator-locked settings cannot be overwritten through ordinary user/workspace APIs.\n8. Settings changes are audited with redaction according to descriptor policy.\n9. Settings APIs enforce CSRF/session protections appropriate to MoonMind\u2019s auth model.\n10. Values are size-limited and schema-validated before persistence.\n11. Object settings do not permit arbitrary executable code, templates, or commands unless explicitly owned by a specialized subsystem.\n12. Operational commands require explicit authorization and confirmation where disruptive.\n13. Secret validation returns redacted diagnostics only.\n14. Provider profile materialization never stores resolved plaintext in settings rows.\n\n---\n\n## 23. Backup and Recovery\n\nSettings overrides are ordinary application configuration data and should be included in database backups.\n\nBackups may contain:\n\n- setting keys,\n- non-sensitive values,\n- SecretRef values,\n- resource references,\n- audit records, and\n- metadata.\n\nBackups must not contain raw managed secret plaintext.\n\nRestoring settings without restoring the corresponding secrets, OAuth volumes, or provider profiles may produce broken references. The UI must surface those broken references clearly.\n\n---\n\n## 24. Migration and Deprecation\n\n### 24.1 Renaming Settings\n\nRenaming a setting requires:\n\n- a new descriptor key,\n- a migration from old overrides to new overrides,\n- a deprecation descriptor for the old key where helpful,\n- audit visibility, and\n- tests proving effective values are preserved.\n\n### 24.2 Removing Settings\n\nRemoving a setting requires:\n\n- rejecting new writes,\n- preserving or migrating existing values,\n- explaining deprecated values in diagnostics, and\n- avoiding silent loss of operator intent.\n\n### 24.3 Changing Types\n\nChanging a setting type requires an explicit migration.\n\nThe resolver must not reinterpret existing JSON values ambiguously.\n\n---\n\n## 25. Testing Requirements\n\nThe desired-state Settings System should include tests for:\n\n1. Catalog generation includes all explicitly exposed eligible settings.\n2. Catalog generation excludes sensitive fields by default.\n3. Secret-like fields are represented only as SecretRef pickers or specialized secret flows.\n4. Unknown keys are rejected.\n5. Invalid scopes are rejected.\n6. Type validation works for booleans, strings, numbers, enums, lists, objects, and SecretRefs.\n7. Numeric and string constraints are enforced.\n8. Workspace overrides affect effective values.\n9. User overrides inherit from and override workspace values where allowed.\n10. Operator locks make settings read-only.\n11. Reset removes overrides and restores inherited values.\n12. Audit events are written for changes.\n13. Audit values are redacted when required.\n14. Version conflicts are detected.\n15. Provider profile references are validated.\n16. SecretRef references are validated without resolving plaintext into durable state.\n17. UI renders each generic control type.\n18. UI displays source badges and reset actions correctly.\n19. Operations controls require proper authorization.\n20. Snapshot tests detect accidental catalog drift.\n\n---\n\n## 26. Suggested Internal Components\n\nThe desired-state backend architecture includes:\n\n```text\nSettingsRegistry\n  Owns descriptor registration and eligibility filtering.\n\nSettingsCatalogBuilder\n  Builds user/workspace/operations catalog responses.\n\nSettingsOverrideStore\n  Persists and retrieves scoped overrides.\n\nSettingsResolver\n  Resolves effective values and explains sources.\n\nSettingsValidator\n  Validates write payloads, dependencies, and policies.\n\nSettingsAuditWriter\n  Writes redacted audit events.\n\nSettingsChangePublisher\n  Emits change notifications to interested subsystems.\n\nSettingsAuthorizationService\n  Enforces scope and action permissions.\n```\n\nFrontend architecture includes:\n\n```text\nSettingsPage\n  Owns section navigation.\n\nSettingsCatalogSection\n  Fetches catalog and groups settings.\n\nSettingControlRenderer\n  Renders generic controls by descriptor.ui.\n\nSecretRefPicker\n  Selects SecretRefs without exposing plaintext.\n\nManagedSecretsPanel\n  Creates, replaces, rotates, disables, deletes, validates, and shows usage.\n\nProviderProfilesPanel\n  Manages provider profile resources.\n\nOperationsPanel\n  Shows status-backed operational controls.\n```\n\n---\n\n## 27. Example End-to-End Flows\n\n### 27.1 Change Workspace Default Runtime\n\n1. User opens Settings \u2192 User / Workspace \u2192 Workspace.\n2. UI fetches catalog.\n3. UI renders `workflow.default_task_runtime` as a select.\n4. User selects `codex_cli`.\n5. UI previews change.\n6. Backend validates scope, permission, enum value, and policy.\n7. Backend stores workspace override.\n8. Backend writes audit event.\n9. Backend emits change event.\n10. UI refreshes descriptor showing source `workspace_override`.\n11. Future task creation uses the new effective default.\n\n### 27.2 Add GitHub Token\n\n1. User opens Settings \u2192 Providers & Secrets \u2192 Managed Secrets.\n2. User creates secret `github-pat-main` with plaintext value.\n3. Backend encrypts and stores the value through the Secrets System.\n4. UI clears plaintext input.\n5. UI shows metadata and `db://github-pat-main`.\n6. User opens User / Workspace integration setting.\n7. User selects `db://github-pat-main` from SecretRef picker.\n8. Backend stores only the SecretRef.\n9. GitHub integration resolves the secret only when needed.\n\n### 27.3 Reset User Override\n\n1. User opens User / Workspace \u2192 User.\n2. UI shows setting source `user_override`.\n3. User clicks Reset.\n4. Backend deletes user override row.\n5. Resolver returns inherited workspace or default value.\n6. UI shows source `workspace_override` or `default`.\n\n### 27.4 Pause Workers\n\n1. Operator opens Settings \u2192 Operations.\n2. UI shows current worker state.\n3. Operator chooses Pause Workers and provides reason.\n4. Backend validates operation permission and confirmation.\n5. Backend invokes operation command.\n6. Operation subsystem records status.\n7. Audit event records actor, reason, target, and result.\n8. UI shows paused state and resume action.\n\n---\n\n## 28. Open Integration Points\n\nThe Settings System intentionally leaves room for:\n\n- external configuration exporters,\n- CLI settings management,\n- generated documentation from descriptors,\n- workspace templates,\n- import/export of non-sensitive settings,\n- policy-as-code for operator locks,\n- stronger RBAC models,\n- settings drift detection,\n- multi-workspace inheritance,\n- external secret managers,\n- real-time settings update subscriptions, and\n- richer provider-specific validation.\n\nThe durable contract is that all integrations must preserve descriptor-driven exposure, scoped overrides, server-side validation, auditability, and secret-safe behavior.\n\n---\n\n## 29. Desired-State Invariants\n\nThe Settings System is correct only if the following invariants hold:\n\n1. A setting cannot be edited unless the backend catalog explicitly exposes it.\n2. A setting cannot be written at a scope not declared by its descriptor.\n3. A setting cannot bypass backend validation.\n4. A setting cannot store raw secret plaintext in a generic override.\n5. A stored secret cannot be retrieved as plaintext by the Settings UI.\n6. A SecretRef can be selected, validated, and audited without revealing the referenced value.\n7. A provider profile can reference secrets without embedding them.\n8. An effective value can always explain its source.\n9. A reset returns to inheritance rather than mutating defaults.\n10. An operator lock cannot be overwritten by ordinary user/workspace writes.\n11. Operational commands are authorization-gated and audited.\n12. Catalog changes are testable and intentional.\n\n"
+  },
+  "extractedAt": "2026-04-28T04:33:46Z",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "designSummary": "The Settings System design defines Mission Control as a unified, backend-driven configuration plane for provider profiles, managed secrets, user/workspace settings, operational controls, and diagnostics. Its core contract is a declarative settings catalog plus scoped overrides, effective-value resolution, server-side validation, auditability, and SecretRef-only handling for sensitive values. The implementation boundary is explicit: Settings may expose adjacent subsystem workflows, but Secrets, Provider Profiles, Operations, and runtime strategies remain authoritative for their own semantics. Security, durability, observability, migration, and test requirements are first-class design constraints rather than optional follow-up work.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Unified Mission Control settings surface",
+      "type": "requirement",
+      "source_section": "1. Summary; 3. Goals; 6. Settings Page Topology",
+      "explanation": "Mission Control must expose Providers & Secrets, User / Workspace, and Operations under one stable Settings page instead of one-off forms."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Adjacent subsystem ownership boundaries",
+      "type": "constraint",
+      "source_section": "2. Document Boundaries",
+      "explanation": "Settings may expose workflows for Secrets, Provider Profiles, Operations, and runtime strategies, but those systems remain authoritative for their semantics."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Backend-owned declarative catalog",
+      "type": "requirement",
+      "source_section": "5.1 Backend-Owned Truth; 8. Settings Catalog Contract",
+      "explanation": "The backend owns catalog descriptors, setting types, validation, sensitivity, authorization, and effective-value resolution."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Explicit exposure and eligibility",
+      "type": "security",
+      "source_section": "5.2 Explicit Exposure; 9. Eligibility Rules",
+      "explanation": "Settings become editable only through explicit exposure metadata and eligibility rules; sensitive or ambiguous fields default to hidden."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Stable setting keys and descriptor shape",
+      "type": "artifact",
+      "source_section": "7.1 Setting Key; 8.1 Descriptor Shape; 8.4 Catalog Stability",
+      "explanation": "Setting keys are stable dotted identifiers and descriptors expose durable typed metadata including scopes, values, options, constraints, reload behavior, and audit policy."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Scoped overrides and reset inheritance",
+      "type": "state-model",
+      "source_section": "4. Scoped Overrides; 7.3-7.5; 11.4 Deletion and Reset",
+      "explanation": "User and workspace changes are sparse scoped overrides; reset deletes an override and returns to inherited defaults or higher-scope values."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Explainable effective values",
+      "type": "state-model",
+      "source_section": "5.5 Explainability; 10. Resolution Model",
+      "explanation": "Effective values must resolve defaults, config/environment, overrides, provider profiles, SecretRefs, and locks with source explanations and explicit missing-value diagnostics."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Settings API contracts",
+      "type": "integration",
+      "source_section": "12. API Contract",
+      "explanation": "Catalog, effective, update, reset, validation, preview, audit APIs and structured errors define the external contract for settings clients."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Generated UI controls and page behaviors",
+      "type": "requirement",
+      "source_section": "9.2 Supported Generic UI Types; 13. UI Contract",
+      "explanation": "The UI renders supported controls from descriptors and provides search, filtering, scope switching, preview, save/discard, reset, source badges, and audit links."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Secret-safe generic settings behavior",
+      "type": "security",
+      "source_section": "5.3 References Over Secrets; 10.4 SecretRef Resolution; 22. Security Requirements",
+      "explanation": "Generic setting overrides store SecretRefs or resource references, never plaintext secrets, OAuth state, decrypted files, or generated credential config."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Managed secrets workflows from Settings",
+      "type": "integration",
+      "source_section": "14. Secrets Integration",
+      "explanation": "Settings exposes managed secret create, replace, rotate, disable, delete, validate, usage, and copy-SecretRef workflows without plaintext readback."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Provider profile configuration and readiness",
+      "type": "integration",
+      "source_section": "15. Provider Profiles Integration",
+      "explanation": "Provider Profiles are first-class resources in Providers & Secrets, with specialized profile editing, role-aware SecretRef binding, readiness, defaults, and routing."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Operations as commands, not preferences",
+      "type": "requirement",
+      "source_section": "17. Operations Settings",
+      "explanation": "Operational controls are explicit commands or statusful controls with state, authorization, confirmation, audit events, idempotency, and rollback/resume paths."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Granular authorization model",
+      "type": "security",
+      "source_section": "5.6 Least Privilege; 20. Authorization Model",
+      "explanation": "Reading metadata, writing user/workspace settings, managing secrets, managing provider profiles, invoking operations, and reading audit logs require distinct permissions."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Auditable and redacted changes",
+      "type": "observability",
+      "source_section": "11.2 Settings Audit Table; 21. Audit and Observability",
+      "explanation": "Settings changes must produce audit records that capture actor, scope, values where allowed, redaction status, validation outcome, apply mode, and affected systems."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Runtime application and reload semantics",
+      "type": "state-model",
+      "source_section": "19. Change Application Semantics",
+      "explanation": "Settings declare apply modes, emit change events, support subscriber refresh/reload behavior, and make pending restart requirements visible."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Settings override persistence model",
+      "type": "state-model",
+      "source_section": "11. Persistence Model",
+      "explanation": "Overrides and audit events use scoped durable rows with version fields, uniqueness constraints, allowed JSON values, and explicit prohibited data classes."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Security invariants for APIs and persistence",
+      "type": "security",
+      "source_section": "22. Security Requirements; 29. Desired-State Invariants",
+      "explanation": "Unknown keys, client-supplied descriptor metadata, unsupported scopes, operator-locked writes, oversized values, executable object payloads, and unprotected APIs must be rejected."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Backup and recovery behavior",
+      "type": "durability",
+      "source_section": "23. Backup and Recovery",
+      "explanation": "Backups include non-sensitive settings data, SecretRefs, resource references, audit records, and metadata, but not raw managed secret plaintext; broken references after restore must be surfaced."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Migration and deprecation semantics",
+      "type": "migration",
+      "source_section": "24. Migration and Deprecation",
+      "explanation": "Renaming, removing, or changing setting types requires explicit migration, deprecation diagnostics, tests, and no silent loss or ambiguous reinterpretation."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Required test coverage",
+      "type": "requirement",
+      "source_section": "25. Testing Requirements",
+      "explanation": "Tests must cover catalog generation, sensitive-field exclusion, validation, inheritance, locks, reset, audit redaction, provider/SecretRef validation, UI controls, operations auth, and catalog drift."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Extensible component architecture",
+      "type": "integration",
+      "source_section": "5.9 Durable Contracts; 26. Suggested Internal Components; 28. Open Integration Points",
+      "explanation": "Backend and frontend components should support descriptor reuse by Settings UI, API clients, CLI tooling, tests, diagnostics, onboarding, docs, and future integrations."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "Local-first configuration baseline",
+      "type": "requirement",
+      "source_section": "3. Goals; README Quick Start alignment",
+      "explanation": "A personal or local deployment starts with minimal prerequisites and lets users configure secrets and settings through Mission Control."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "Explicit non-goals",
+      "type": "non-goal",
+      "source_section": "4. Non-Goals",
+      "explanation": "The Settings System is not a generic database editor, generic secret manager, raw env editor, generic admin UI, provider-profile replacement, or Operations preference layer."
+    },
+    {
+      "id": "DESIGN-REQ-025",
+      "title": "Fail-fast diagnostics",
+      "type": "observability",
+      "source_section": "5.7 Fail Fast; 10.5 Missing Values; 21.3 Diagnostics",
+      "explanation": "Invalid settings, missing SecretRefs, broken profile bindings, locked values, unsupported scopes, validation failures, restart needs, and launch blockers produce actionable diagnostics without silent sensitive fallback."
+    },
+    {
+      "id": "DESIGN-REQ-026",
+      "title": "User and workspace policy inheritance",
+      "type": "state-model",
+      "source_section": "16. User / Workspace Settings",
+      "explanation": "User settings inherit workspace defaults unless explicitly overridden and permitted by workspace policy constraints."
+    },
+    {
+      "id": "DESIGN-REQ-027",
+      "title": "Open integrations preserve core invariants",
+      "type": "integration",
+      "source_section": "28. Open Integration Points",
+      "explanation": "Future exporters, CLI management, docs generation, templates, imports, policy-as-code, RBAC, drift detection, and external secret managers must preserve descriptor-driven exposure, scoped overrides, validation, auditability, and secret safety."
+    },
+    {
+      "id": "DESIGN-REQ-028",
+      "title": "Desired-state invariants are enforceable",
+      "type": "constraint",
+      "source_section": "29. Desired-State Invariants",
+      "explanation": "The system is correct only if catalog exposure, scope declarations, validation, secret safety, explainability, reset inheritance, operator locks, operational audit, and intentional catalog changes hold together."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Settings catalog and effective-value contract",
+      "shortName": "settings-catalog-contract",
+      "description": "As a MoonMind operator or settings client, I can read a backend-owned settings catalog and effective-value explanations so configuration surfaces are discoverable, typed, scoped, and authoritative.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "1. Summary",
+          "5. Core Principles",
+          "7. Key Concepts",
+          "8. Settings Catalog Contract",
+          "10. Resolution Model",
+          "12. API Contract",
+          "26. Suggested Internal Components"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-022"
+        ]
+      },
+      "scope": [
+        "Implement descriptor registration/generation for explicitly described settings.",
+        "Return catalog descriptors grouped by section/category and effective values with source explanations.",
+        "Expose structured catalog, effective, validation, preview, update/reset, and error contract primitives required by downstream stories."
+      ],
+      "outOfScope": [
+        "Mission Control visual rendering",
+        "Managed secret value storage",
+        "Operational command execution"
+      ],
+      "independentTest": "Call Settings catalog and effective-value APIs against a seeded registry and assert descriptor shape, stable keys, scopes, source explanations, and structured errors without rendering the UI.",
+      "acceptanceCriteria": [
+        "Given an explicitly exposed setting, the catalog returns its stable key, type, section, category, scopes, constraints, source, reload metadata, dependency metadata, and audit policy.",
+        "Given an unexposed backend setting, the catalog omits it and write attempts return `setting_not_exposed`.",
+        "Given defaults, config/environment inputs, workspace overrides, user overrides, SecretRefs, provider-profile references, and operator locks, the effective API returns the winning value and its source explanation.",
+        "Given missing defaults, null inherited values, unresolved SecretRefs, missing provider profile references, policy-blocked values, or invalid migrated values, the resolver returns explicit diagnostics instead of silently falling back.",
+        "Settings API errors use the documented structured error shape for unknown keys, invalid scopes, read-only settings, operator locks, invalid values, version conflicts, and permission failures."
+      ],
+      "requirements": [
+        "The backend is the authority for descriptor metadata and effective-value resolution.",
+        "Catalog responses are reusable by UI, API clients, CLI tooling, tests, diagnostics, onboarding, and documentation generators.",
+        "Descriptor keys and option values remain stable durable API contract values."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-003",
+          "title": "Backend-owned declarative catalog",
+          "ownership": "Implements backend-owned descriptor registration, generation, and catalog API output."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "title": "Stable setting keys and descriptor shape",
+          "ownership": "Defines and validates stable keys, descriptor fields, options, constraints, sensitivity, reload metadata, and audit policy."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "title": "Explainable effective values",
+          "ownership": "Builds effective-value resolution and source explanation across defaults, config, overrides, SecretRefs, provider profiles, and locks."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "title": "Settings API contracts",
+          "ownership": "Delivers the public Settings API contracts with structured response and error shapes."
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "title": "Extensible component architecture",
+          "ownership": "Builds reusable backend/frontend components and contracts that can serve UI, API clients, CLI, tests, diagnostics, onboarding, and docs."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Existing FastAPI and Pydantic v2 conventions can represent descriptor and effective-value models."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Scoped override persistence and inheritance",
+      "shortName": "scoped-settings-overrides",
+      "description": "As a workspace admin or user, I can save, inspect, and reset scoped settings overrides so user and workspace configuration inherits predictably without mutating built-in defaults.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "3. Goals",
+          "4. Scoped Overrides",
+          "7.3 Scope",
+          "7.4 Override",
+          "7.5 Effective Value",
+          "11. Persistence Model",
+          "16. User / Workspace Settings"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-026"
+        ]
+      },
+      "scope": [
+        "Persist user and workspace overrides separately from defaults, config files, and environment sources.",
+        "Support versioned update and reset semantics for sparse overrides.",
+        "Make workspace policy constraints visible when user settings inherit or are blocked."
+      ],
+      "outOfScope": [
+        "Provider Profile resource editing",
+        "Managed secret plaintext storage",
+        "Catalog UI rendering"
+      ],
+      "independentTest": "Exercise override store and resolver integration with seeded defaults, workspace policies, and user overrides, then reset an override and verify the inherited effective value returns.",
+      "acceptanceCriteria": [
+        "Given no override, the effective value inherits from the default or higher configured source.",
+        "Given a workspace override, task/workspace resolution reflects the workspace value and records version metadata.",
+        "Given an allowed user override, user resolution wins over workspace inheritance while preserving workspace policy constraints.",
+        "Given reset of a user or workspace override, the override row is deleted and defaults, provider profiles, managed secrets, OAuth volumes, and audit history are not deleted.",
+        "Given conflicting expected versions, update returns `version_conflict` and does not persist a partial change."
+      ],
+      "requirements": [
+        "Override storage must enforce unique scope/workspace/user/key rows.",
+        "Override rows may store only allowed JSON values, SecretRefs, and resource references.",
+        "Override rows must never store raw secrets, OAuth state blobs, decrypted files, generated credential config, large artifacts, workflow payloads, or operational history beyond audit metadata."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-006",
+          "title": "Scoped overrides and reset inheritance",
+          "ownership": "Persists sparse user/workspace overrides and implements reset by deleting overrides rather than mutating defaults."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "title": "Settings override persistence model",
+          "ownership": "Creates or adapts durable storage for scoped overrides and audit events with versioning and prohibited-value safeguards."
+        },
+        {
+          "id": "DESIGN-REQ-026",
+          "title": "User and workspace policy inheritance",
+          "ownership": "Implements workspace policy constraints and visible inheritance for user settings."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "If existing settings storage tables differ from the desired-state shape, this story adapts them only when they preserve the documented semantics."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Generated User and Workspace settings UI",
+      "shortName": "generated-settings-ui",
+      "description": "As a Mission Control user, I can configure eligible user and workspace settings through generated controls so local-first configuration is discoverable without bespoke forms for every setting.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "3. Goals",
+          "6. Settings Page Topology",
+          "9. Eligibility Rules",
+          "13. UI Contract",
+          "16. User / Workspace Settings",
+          "27. Example End-to-End Flows"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-023"
+        ]
+      },
+      "scope": [
+        "Render Settings page navigation with Providers & Secrets, User / Workspace, and Operations sections.",
+        "Generate User / Workspace controls from backend descriptors for supported UI types.",
+        "Support page-level search, category filters, scope switching, modified-only/read-only filters, preview, save/discard, reset, source explanation, and audit link entry points."
+      ],
+      "outOfScope": [
+        "Specialized Provider Profile editor internals",
+        "Managed secret value entry flows",
+        "Actual worker pause/resume command execution"
+      ],
+      "independentTest": "Render Mission Control Settings with a mocked catalog containing each supported generic UI type and assert controls, filters, preview, reset, source badges, and local-first onboarding states behave correctly.",
+      "acceptanceCriteria": [
+        "Given descriptors for boolean, string, bounded number, enum, list, key/value, SecretRef, and read-only settings, the UI renders the documented controls and submits only user intent.",
+        "Given a read-only or operator-locked descriptor, the UI displays the lock reason and does not enable ordinary editing.",
+        "Given a modified setting, the UI can preview validation and affected subsystem information before save.",
+        "Given an overridden value, the UI shows reset-to-inherited behavior and source badges using documented labels.",
+        "A fresh local deployment can reach Settings and configure initial non-secret settings and SecretRef bindings through Mission Control without requiring hand-edited frontend forms."
+      ],
+      "requirements": [
+        "The frontend must not decide backend eligibility, validation, sensitivity, or authorization.",
+        "Ineligible, secret, or operator-only settings must remain hidden, read-only, or routed to specialized managers according to backend descriptors.",
+        "Generic settings UI must not allow direct environment-variable editing from the browser."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "title": "Unified Mission Control settings surface",
+          "ownership": "Defines the stable Settings topology and verifies catalog responses group by the three top-level sections."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "title": "Explicit exposure and eligibility",
+          "ownership": "Implements explicit exposure metadata, eligibility filters, and sensitive-name rejection or manual review."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "title": "Generated UI controls and page behaviors",
+          "ownership": "Renders descriptor-driven controls and page-level editing workflows in Mission Control."
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "title": "Local-first configuration baseline",
+          "ownership": "Validates that local users can bootstrap configuration through Mission Control without required external prerequisites beyond documented local setup."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Mission Control already has a Settings entrypoint that can be extended rather than replaced wholesale."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Secret-safe Settings and Managed Secrets workflows",
+      "shortName": "secret-safe-settings",
+      "description": "As a secret manager or workspace admin, I can create and bind managed secrets from Settings while generic settings store only SecretRefs and never reveal plaintext after submission.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "2.2 What the Secrets System owns",
+          "5.3 References Over Secrets",
+          "7.9 SecretRef Setting",
+          "10.4 SecretRef Resolution",
+          "14. Secrets Integration",
+          "22. Security Requirements"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "scope": [
+        "Expose Managed Secrets metadata workflows from Settings while delegating storage, encryption, resolution, rotation, revocation, and plaintext redaction to the Secrets System.",
+        "Implement SecretRef picker semantics for generic settings and provider/integration bindings.",
+        "Validate SecretRefs and show usage/broken-reference state without resolving plaintext into settings rows or browser responses."
+      ],
+      "outOfScope": [
+        "Redefining Secrets System storage semantics",
+        "Replacing Provider Profiles with generic secret settings",
+        "Adding a reveal-secret action"
+      ],
+      "independentTest": "Submit managed secret creation/replacement and SecretRef setting updates through Settings APIs/UI, then assert plaintext is accepted only in one-way secret flows, cleared from UI state, absent from overrides/audit/readback, and represented by SecretRef metadata.",
+      "acceptanceCriteria": [
+        "Generic overrides reject API keys, access tokens, refresh tokens, passwords, private keys, OAuth state, and credential-bearing generated config.",
+        "Secret-like backend fields are hidden unless explicitly represented as SecretRef pickers or managed through the Managed Secrets creation/replacement flow.",
+        "Managed secret create and replace flows accept plaintext only as one-way submissions, then clear browser input and show metadata plus SecretRef.",
+        "Secret validation resolves plaintext only in memory at controlled execution boundaries, discards it, stores redacted metadata, and returns redacted diagnostics.",
+        "Broken, disabled, revoked, or missing SecretRefs are surfaced clearly and prevent affected launches where appropriate."
+      ],
+      "requirements": [
+        "Settings must not redefine SecretRef semantics, secret storage, encryption at rest, root key custody, backend classes, resolution, rotation, revocation, audit, or plaintext redaction rules.",
+        "SecretRef values are security-relevant metadata and must be access controlled.",
+        "Settings APIs must ignore client-supplied descriptor metadata and enforce session/CSRF protections appropriate to MoonMind auth."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-002",
+          "title": "Adjacent subsystem ownership boundaries",
+          "ownership": "Preserves subsystem boundaries by keeping Settings as the page/API surface while specialized systems own semantics."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "title": "Secret-safe generic settings behavior",
+          "ownership": "Enforces SecretRef-only generic settings and blocks plaintext credentials in overrides, audit, and readback."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "title": "Managed secrets workflows from Settings",
+          "ownership": "Adds managed secret metadata workflows and validation surfaces without exposing plaintext after submission."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "title": "Security invariants for APIs and persistence",
+          "ownership": "Turns security requirements into API, validator, persistence, CSRF/session, and descriptor-metadata enforcement tests."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [
+        "The existing Secrets System remains the authoritative implementation for encrypted storage and secret resolution."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Provider Profile management and readiness in Settings",
+      "shortName": "provider-profile-settings",
+      "description": "As a workspace admin, I can manage provider profiles in Settings and see readiness diagnostics while Provider Profiles remain the execution contract for runtime/provider launch semantics.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "2.3 What Provider Profiles own",
+          "6.1 Providers & Secrets",
+          "10.3 Provider Profile Resolution",
+          "15. Provider Profiles Integration",
+          "27.2 Add GitHub Token"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "scope": [
+        "Add specialized Provider Profile forms and list/detail surfaces inside Providers & Secrets.",
+        "Support profile create, update, delete, validate, enable, disable, default selection, role-aware SecretRef binding, and readiness state.",
+        "Allow User / Workspace settings to reference provider profiles or selectors without inlining profile semantics into generic settings."
+      ],
+      "outOfScope": [
+        "Replacing provider-profile execution semantics with generic settings",
+        "Resolving plaintext secrets in settings rows",
+        "Runtime-specific command construction"
+      ],
+      "independentTest": "Create and validate provider profiles with required fields, SecretRef bindings, OAuth volume status, enabled/disabled state, cooldown, and concurrency conditions, then assert readiness diagnostics and default profile references are reflected in Settings.",
+      "acceptanceCriteria": [
+        "Provider profile editing exposes runtime, provider, credential source class, materialization mode, default model, overrides, SecretRef role bindings, OAuth volume metadata, concurrency, cooldown, tags, priority, default status, and readiness where applicable.",
+        "Provider profile readiness combines schema validity, required fields, SecretRef resolvability, OAuth volume status, provider validation, enabled state, concurrency availability, and cooldown state.",
+        "A workspace or user setting may select a provider profile reference, but generic setting values do not inline runtime launch semantics.",
+        "Missing provider profile references return explicit diagnostics and launch blockers rather than silent fallback.",
+        "Runtime strategies still own command construction, environment shaping, generated runtime files, process launch, and capability checks."
+      ],
+      "requirements": [
+        "Provider Profiles remain first-class resources inside Providers & Secrets.",
+        "Role-aware SecretRef pickers must describe what the profile needs and where the value can be resolved.",
+        "Readiness state must be observable before affected launches run."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-002",
+          "title": "Adjacent subsystem ownership boundaries",
+          "ownership": "Preserves subsystem boundaries by keeping Settings as the page/API surface while specialized systems own semantics."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "title": "Provider profile configuration and readiness",
+          "ownership": "Adds specialized Provider Profile management and readiness diagnostics while preserving provider-profile execution semantics."
+        },
+        {
+          "id": "DESIGN-REQ-025",
+          "title": "Fail-fast diagnostics",
+          "ownership": "Surfaces actionable diagnostics for invalid values, missing references, lock conflicts, unsupported scopes, restart needs, and launch blockers."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Existing provider profile models can be surfaced through descriptor-assisted specialized forms."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Operations controls exposed as authorized commands",
+      "shortName": "operations-command-settings",
+      "description": "As an operator, I can invoke operational controls from Settings with current state, impact, confirmation, authorization, audit trail, and rollback or resume feedback instead of editing ordinary preferences.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "2.4 What Operations own",
+          "6.3 Operations",
+          "17. Operations Settings",
+          "20. Authorization Model",
+          "27.4 Pause Workers"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "scope": [
+        "Expose operational status and controls in the Settings Operations section.",
+        "Model pause, resume, drain, quiesce, maintenance mode, launch scheduling, reason text, and operational banners as explicit commands or statusful controls.",
+        "Require permission checks, confirmations for disruptive actions, idempotency keys, audit events, result statuses, and rollback/resume paths where available."
+      ],
+      "outOfScope": [
+        "Treating operations as generic key/value preferences",
+        "Owning worker pause/drain/quiesce semantics inside Settings",
+        "Bypassing operation subsystem state"
+      ],
+      "independentTest": "Invoke an Operations command through the Settings surface with and without required authorization/confirmation and assert state feedback, command payload, idempotency, audit event, failure reason, and resume path behavior.",
+      "acceptanceCriteria": [
+        "Operational controls show current state, command impact, confirmation requirements, actor authorization, last action and actor, pending transitions, failure reason, and safe rollback/resume action where available.",
+        "Actions that stop active work, prevent launches, affect all workers/runtimes, delete data, revoke credentials, or change global routing require confirmation.",
+        "Operations commands include actor, target, requested state, reason, confirmation state, timestamp, idempotency key, audit event, result status, and rollback/resume path where possible.",
+        "Unauthorized users cannot invoke operations even if frontend controls are hidden or manipulated.",
+        "Operational subsystems remain authoritative for worker, queue, scheduler, health, and destructive/disruptive semantics."
+      ],
+      "requirements": [
+        "Settings exposes Operations for discoverability only; Operations remains the semantic owner of command effects.",
+        "Operations controls are auditable actions, not mutable preferences.",
+        "The UI must communicate expected effect before the command is submitted."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-002",
+          "title": "Adjacent subsystem ownership boundaries",
+          "ownership": "Preserves subsystem boundaries by keeping Settings as the page/API surface while specialized systems own semantics."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "title": "Operations as commands, not preferences",
+          "ownership": "Models operational controls as explicit authorized commands with confirmations, state feedback, and audit events."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "title": "Granular authorization model",
+          "ownership": "Applies granular permission checks to settings reads/writes, secret metadata/value actions, provider profile management, operations, and audit reads."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Existing operational subsystems expose command or service methods that Settings can call instead of duplicating behavior."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Authorization, audit, redaction, and diagnostics",
+      "shortName": "settings-audit-diagnostics",
+      "description": "As an auditor or authorized operator, I can inspect settings changes and diagnostics with least-privilege permissions and redaction so configuration changes are accountable without exposing sensitive values.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "5.6 Least Privilege",
+          "5.7 Fail Fast",
+          "11.2 Settings Audit Table",
+          "12.6 Audit APIs",
+          "20. Authorization Model",
+          "21. Audit and Observability",
+          "22. Security Requirements"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "scope": [
+        "Enforce permission checks for every write and sensitive metadata read.",
+        "Write settings audit events with descriptor-driven redaction and expose authorized audit/history APIs and UI links.",
+        "Provide diagnostics explaining read-only state, effective source, recent changes, validation failures, restart needs, missing provider profiles/secrets, and launch readiness blockers."
+      ],
+      "outOfScope": [
+        "Plaintext secret audit storage",
+        "Broad enterprise RBAC redesign beyond the documented permission surface",
+        "Operations command implementation internals"
+      ],
+      "independentTest": "Run authorized and unauthorized settings, secret metadata, provider profile, operations, and audit-read flows, then assert audit records, redaction, diagnostics, and permission failures match the documented model.",
+      "acceptanceCriteria": [
+        "Permission checks distinguish catalog read, effective read, user write, workspace write, system read/write, secret metadata read, secret value write, secret rotation/disable/delete, provider profile write, operations invoke, and audit read.",
+        "Audit records include setting key, scope, actor, permitted old/new values, redaction status, request/source metadata where available, reason, validation outcome, apply mode, and affected systems.",
+        "Audit values redact raw secrets, sensitive generated config, OAuth state, private keys, token-like values, provider-returned sensitive diagnostics, and descriptor-redacted values.",
+        "SecretRef values are recorded only when authorized by policy and treated as security-relevant metadata.",
+        "Diagnostics answer why a setting is read-only, why a value is effective, where it came from, what changed, why validation failed, what needs restart, and which missing profile/secret/setting blocks launch readiness."
+      ],
+      "requirements": [
+        "Frontend-hidden controls are not a security boundary.",
+        "Settings changes must be auditable without exposing sensitive values.",
+        "Fail-fast diagnostics must be actionable and must not silently fall back to another sensitive source."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-014",
+          "title": "Granular authorization model",
+          "ownership": "Applies granular permission checks to settings reads/writes, secret metadata/value actions, provider profile management, operations, and audit reads."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "title": "Auditable and redacted changes",
+          "ownership": "Writes redacted audit records and exposes change history/diagnostics according to descriptor audit policy."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "title": "Security invariants for APIs and persistence",
+          "ownership": "Turns security requirements into API, validator, persistence, CSRF/session, and descriptor-metadata enforcement tests."
+        },
+        {
+          "id": "DESIGN-REQ-025",
+          "title": "Fail-fast diagnostics",
+          "ownership": "Surfaces actionable diagnostics for invalid values, missing references, lock conflicts, unsupported scopes, restart needs, and launch blockers."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-004",
+        "STORY-006"
+      ],
+      "assumptions": [
+        "Existing auth/session services can be used for permission checks and CSRF/session protections."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-008",
+      "summary": "Change application, reload, restart, and recovery semantics",
+      "shortName": "settings-change-lifecycle",
+      "description": "As an operator, I can understand when settings take effect and recover from backup/restore reference gaps so runtime behavior changes are visible, durable, and safe.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "18. Validation Model",
+          "19. Change Application Semantics",
+          "23. Backup and Recovery",
+          "27. Example End-to-End Flows"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "scope": [
+        "Declare and enforce setting apply modes: immediate, next_request, next_task, next_launch, worker_reload, process_restart, and manual_operation.",
+        "Emit structured change events and support subscriber refresh/reload behavior for Mission Control, task creation, provider profile manager, workers, and operational controls.",
+        "Expose backup/restore-safe diagnostics for settings whose referenced secrets, OAuth volumes, or provider profiles are missing after recovery."
+      ],
+      "outOfScope": [
+        "Implementing every subscriber reload in all runtime strategies at once",
+        "Storing raw secrets in backups",
+        "Changing Secrets System backup semantics"
+      ],
+      "independentTest": "Commit settings with different apply modes, observe emitted change events and UI restart/reload badges, then simulate restore with missing references and assert broken-reference diagnostics appear without plaintext leakage.",
+      "acceptanceCriteria": [
+        "Each setting declares how changes apply and descriptors expose reload, worker restart, process restart, and affected subsystem metadata.",
+        "Committed changes emit structured events containing event type, key, scope, source, apply mode, actor, and timestamp.",
+        "Consumers can refresh catalog state, use updated task defaults, sync profile-related changes, reload non-disruptive worker settings, and update operational status where applicable.",
+        "When restart is required, the UI shows current effective value, pending value if applicable, affected process or worker, whether active, and how to complete activation.",
+        "After restore without corresponding secrets, OAuth volumes, or provider profiles, Settings surfaces broken references clearly while backups exclude raw managed secret plaintext."
+      ],
+      "requirements": [
+        "Validation must occur at descriptor generation, write receipt, before persistence, after persistence during preview, before launch or operation execution, and during readiness diagnostics where applicable.",
+        "Backups may contain setting keys, non-sensitive values, SecretRefs, resource references, audit records, and metadata only.",
+        "Runtime application behavior must be observable rather than implicit."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-016",
+          "title": "Runtime application and reload semantics",
+          "ownership": "Implements apply modes, change events, consumer refresh behavior, and restart visibility."
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "title": "Backup and recovery behavior",
+          "ownership": "Documents and validates backup/restore behavior for settings data and broken SecretRef/profile references."
+        },
+        {
+          "id": "DESIGN-REQ-025",
+          "title": "Fail-fast diagnostics",
+          "ownership": "Surfaces actionable diagnostics for invalid values, missing references, lock conflicts, unsupported scopes, restart needs, and launch blockers."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-007"
+      ],
+      "assumptions": [
+        "Existing event or notification infrastructure can carry settings change events to relevant consumers."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-009",
+      "summary": "Migration, non-goals, invariants, and test gate",
+      "shortName": "settings-invariant-gate",
+      "description": "As a maintainer, I can evolve the Settings System safely because migrations, non-goals, future integrations, and desired-state invariants are enforced by tests and diagnostics rather than tribal knowledge.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "4. Non-Goals",
+          "24. Migration and Deprecation",
+          "25. Testing Requirements",
+          "28. Open Integration Points",
+          "29. Desired-State Invariants"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-024",
+          "DESIGN-REQ-027",
+          "DESIGN-REQ-028"
+        ]
+      },
+      "scope": [
+        "Add migration/deprecation handling for renamed, removed, or type-changed settings with explicit diagnostics.",
+        "Codify non-goals and desired-state invariants as regression tests and catalog drift checks.",
+        "Define extension expectations for future exporters, CLI management, documentation generation, templates, import/export, policy-as-code, RBAC, drift detection, multi-workspace inheritance, external secret managers, subscriptions, and provider validation."
+      ],
+      "outOfScope": [
+        "Implementing all open integration points",
+        "Creating a generic admin UI",
+        "Guaranteeing hot reload for every setting",
+        "Replacing specialized subsystem contracts"
+      ],
+      "independentTest": "Run the Settings System test gate against seeded descriptors and migrations, including catalog drift snapshots, sensitive-field exclusion, invalid write cases, inheritance, locks, reset, audit redaction, provider/SecretRef validation, UI controls, and Operations authorization.",
+      "acceptanceCriteria": [
+        "Renaming a setting uses a new descriptor key, migrates old overrides, exposes deprecation diagnostics where helpful, records audit visibility, and tests effective-value preservation.",
+        "Removing a setting rejects new writes, preserves or migrates existing values, explains deprecated values in diagnostics, and avoids silent loss of operator intent.",
+        "Changing a setting type requires explicit migration and the resolver does not ambiguously reinterpret existing JSON values.",
+        "Regression coverage proves catalog exposure, scope declarations, backend validation, secret safety, SecretRef validation/audit without plaintext, provider profile secret references, source explainability, reset inheritance, operator locks, operational audit, and intentional catalog changes.",
+        "Future integration contracts explicitly preserve descriptor-driven exposure, scoped overrides, server-side validation, auditability, and secret-safe behavior."
+      ],
+      "requirements": [
+        "The Settings System must not become a generic database editor, generic secret manager, raw env editor, generic admin UI, or frontend-authoritative validation layer.",
+        "Catalog drift must be visible through snapshot or equivalent regression tests.",
+        "Non-goals and invariants must remain enforceable as the implementation evolves."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-020",
+          "title": "Migration and deprecation semantics",
+          "ownership": "Defines rename, remove, and type-change handling with explicit migration and diagnostics tests."
+        },
+        {
+          "id": "DESIGN-REQ-021",
+          "title": "Required test coverage",
+          "ownership": "Provides the test gate for catalog, validation, inheritance, locks, reset, audit, SecretRef/provider validation, UI controls, operations, and drift."
+        },
+        {
+          "id": "DESIGN-REQ-024",
+          "title": "Explicit non-goals",
+          "ownership": "Guards against expanding Settings into prohibited generic env, database, admin, secret, provider, operations, or validation authority roles."
+        },
+        {
+          "id": "DESIGN-REQ-027",
+          "title": "Open integrations preserve core invariants",
+          "ownership": "Requires future integrations to preserve descriptor-driven exposure, scoped overrides, validation, auditability, and secret-safe behavior."
+        },
+        {
+          "id": "DESIGN-REQ-028",
+          "title": "Desired-state invariants are enforceable",
+          "ownership": "Collects desired-state invariants into enforceable acceptance criteria and regression coverage."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-004",
+        "STORY-005",
+        "STORY-006",
+        "STORY-007",
+        "STORY-008"
+      ],
+      "assumptions": [
+        "Snapshot tests are acceptable for detecting accidental descriptor drift in addition to focused unit and integration tests."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-004",
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-006",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-008"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-004",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-008"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-009"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-009"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-009"
+    ],
+    "DESIGN-REQ-025": [
+      "STORY-005",
+      "STORY-007",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-026": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-027": [
+      "STORY-009"
+    ],
+    "DESIGN-REQ-028": [
+      "STORY-009"
+    ]
+  },
+  "recommendedFirstStory": "STORY-001"
+}
