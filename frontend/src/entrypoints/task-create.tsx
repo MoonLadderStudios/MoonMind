@@ -28,10 +28,9 @@ const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
 const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
-const JIRA_ORCHESTRATE_HIDDEN_INPUT_KEYS = new Set([
-  "sourcedesignpath",
-  "constraints",
-]);
+const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
+  [JIRA_ORCHESTRATE_PRESET_SLUG]: new Set(["sourcedesignpath", "constraints"]),
+};
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
 const JIRA_LAST_PROJECT_SESSION_KEY =
   "moonmind.task-create.jira.last-project-key";
@@ -1550,12 +1549,10 @@ function isVisiblePresetInput(
   if (isFeatureRequestInputKey(definition.name)) {
     return false;
   }
-  if (
-    presetSlug === JIRA_ORCHESTRATE_PRESET_SLUG &&
-    JIRA_ORCHESTRATE_HIDDEN_INPUT_KEYS.has(
-      normalizeTemplateInputKey(definition.name),
-    )
-  ) {
+  const hiddenKeys = presetSlug
+    ? HIDDEN_PRESET_INPUT_KEYS[presetSlug]
+    : undefined;
+  if (hiddenKeys?.has(normalizeTemplateInputKey(definition.name))) {
     return false;
   }
   return true;

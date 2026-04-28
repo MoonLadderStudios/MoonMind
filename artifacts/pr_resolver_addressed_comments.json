@@ -1,27 +1,12 @@
 [
   {
-    "id": 3148978246,
+    "id": 3151679728,
     "disposition": "addressed",
-    "rationale": "Restored the Jira Breakdown and Orchestrate parent task publish default to none while keeping repository and publish controls active for child-task inheritance."
+    "rationale": "Replaced the Jira-specific hidden input set and conditional with a preset-to-hidden-input map used by isVisiblePresetInput."
   },
   {
-    "id": 3148978254,
+    "id": 4185978924,
     "disposition": "addressed",
-    "rationale": "Made mergeAutomation propagation require a mapping before reading enabled or unpacking the value, with regression coverage for boolean input."
-  },
-  {
-    "id": 4182817543,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary; the concrete referenced findings are tracked by review comments 3148978246 and 3148978254."
-  },
-  {
-    "id": 4182820069,
-    "disposition": "not-applicable",
-    "rationale": "Automated review header and metadata only; no separate actionable feedback was present."
-  },
-  {
-    "id": 3148980366,
-    "disposition": "addressed",
-    "rationale": "Restored non-publishing default behavior for the jira-breakdown-orchestrate parent execution and added focused UI regression coverage."
+    "rationale": "Summary review feedback requested the same generic hidden-input mapping, which is now implemented."
   }
 ]
