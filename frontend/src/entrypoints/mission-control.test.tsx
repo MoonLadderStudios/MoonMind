@@ -489,8 +489,21 @@ describe('Mission Control shared entry', () => {
       /background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),\s*calc\(var\(--mm-executing-sweep-start-x\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-x\)\)\s*calc\(var\(--mm-executing-sweep-start-y\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-y\)\)/,
     );
     expect(missionControlCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,\s*\.status-running\.is-executing \.status-letter-wave,\s*\.status-running\.is-planning \.status-letter-wave[\s\S]*?animation: none;[\s\S]*?-webkit-text-fill-color: currentcolor;[\s\S]*?background-image: none;/,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,\s*\.status-running\.is-executing \.status-letter-wave,\s*\.status-running\.is-planning \.status-letter-wave[\s\S]*?animation: none;[\s\S]*?-webkit-text-fill-color: currentcolor;[\s\S]*?background-image: none;[\s\S]*?-webkit-background-clip: border-box;[\s\S]*?background-clip: border-box;/,
     );
+
+    const forcedColorsLetterWaveBlock = cssRuleBlockMatching(
+      missionControlCss,
+      (rule) =>
+        rule.selector.includes('.status-letter-wave') &&
+        Boolean(rule.parent?.toString().startsWith('@media (forced-colors: active)')),
+    );
+    expect(forcedColorsLetterWaveBlock).toContain('color: ButtonText');
+    expect(forcedColorsLetterWaveBlock).toContain('animation: none');
+    expect(forcedColorsLetterWaveBlock).toContain('-webkit-text-fill-color: ButtonText');
+    expect(forcedColorsLetterWaveBlock).toContain('background-image: none');
+    expect(forcedColorsLetterWaveBlock).toContain('-webkit-background-clip: border-box');
+    expect(forcedColorsLetterWaveBlock).toContain('background-clip: border-box');
   });
 
   it('enforces MM-430 additive shared styling modifiers', async () => {

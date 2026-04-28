@@ -1427,7 +1427,22 @@ tr[data-proposal-id].proposal-consuming td {
       animation: none;
       -webkit-text-fill-color: currentcolor;
       background-image: none;
+      -webkit-background-clip: border-box;
+      background-clip: border-box;
     }
+  }
+}
+
+@media (forced-colors: active) {
+  .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
+  .status-running.is-executing .status-letter-wave,
+  .status-running.is-planning .status-letter-wave {
+    color: ButtonText;
+    animation: none;
+    -webkit-text-fill-color: ButtonText;
+    background-image: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
   }
 }
 
