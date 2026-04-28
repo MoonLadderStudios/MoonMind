@@ -80,6 +80,29 @@ const SOURCE_LABELS: Record<string, string> = {
   secret_reference: 'Secret reference',
 };
 
+const SETTING_FIELD_CLASS_NAMES = [
+  'w-full',
+  'rounded-xl',
+  'border',
+  'border-slate-300',
+  'bg-white',
+  'px-3',
+  'py-2',
+  'text-sm',
+  'text-slate-900',
+  'disabled:bg-slate-100',
+  'disabled:text-slate-500',
+  'dark:border-slate-700',
+  'dark:bg-slate-950',
+  'dark:text-white',
+  'dark:disabled:bg-slate-900',
+  'dark:disabled:text-slate-500',
+];
+
+function settingFieldClassName(...classNames: string[]): string {
+  return [...SETTING_FIELD_CLASS_NAMES, ...classNames].filter(Boolean).join(' ');
+}
+
 function sourceLabel(source: string): string {
   return SOURCE_LABELS[source] ?? source.replaceAll('_', ' ');
 }
@@ -145,8 +168,48 @@ function parseKeyValue(raw: string): Record<string, string> {
   return parsed;
 }
 
-function valuesEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+function enumerableKeys(value: object): Array<string | symbol> {
+  return Reflect.ownKeys(value)
+    .filter((key) => Object.prototype.propertyIsEnumerable.call(value, key))
+    .sort((left, right) => String(left).localeCompare(String(right)));
+}
+
+function valuesEqual(left: unknown, right: unknown, seen = new WeakMap<object, WeakSet<object>>()): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null) {
+    return false;
+  }
+  const seenRights = seen.get(left);
+  if (seenRights?.has(right)) {
+    return true;
+  }
+  if (seenRights) {
+    seenRights.add(right);
+  } else {
+    seen.set(left, new WeakSet([right]));
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((item, index) => valuesEqual(item, right[index], seen))
+    );
+  }
+  const leftKeys = enumerableKeys(left);
+  const rightKeys = enumerableKeys(right);
+  const leftRecord = left as Record<string | symbol, unknown>;
+  const rightRecord = right as Record<string | symbol, unknown>;
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] &&
+        valuesEqual(leftRecord[key], rightRecord[key], seen),
+    )
+  );
 }
 
 function coerceInputValue(descriptor: SettingDescriptor, raw: string | boolean): PendingChange {
@@ -200,8 +263,11 @@ function reloadBadges(descriptor: SettingDescriptor): string[] {
   return badges;
 }
 
-function canReset(descriptor: SettingDescriptor): boolean {
-  return descriptor.source === 'workspace_override' || descriptor.source === 'user_override';
+function canReset(descriptor: SettingDescriptor, scope: SettingScope): boolean {
+  return (
+    (scope === 'workspace' && descriptor.source === 'workspace_override') ||
+    (scope === 'user' && descriptor.source === 'user_override')
+  );
 }
 
 async function fetchCatalog(scope: SettingScope): Promise<SettingsCatalogResponse> {
@@ -554,7 +620,7 @@ export function GeneratedSettingsSection() {
                     {renderControl(descriptor, currentValue, updatePending)}
                     <div className="flex items-center justify-between gap-3">
                       <span className="font-mono text-xs text-slate-500 dark:text-slate-500">{descriptor.key}</span>
-                      {canReset(descriptor) ? (
+                      {canReset(descriptor, scope) ? (
                         <button
                           type="button"
                           className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
@@ -582,8 +648,7 @@ function renderControl(
   onChange: (descriptor: SettingDescriptor, value: string | boolean) => void,
 ) {
   const disabled = descriptor.read_only;
-  const commonClassName =
-    'w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:disabled:bg-slate-900 dark:disabled:text-slate-500';
+  const commonClassName = settingFieldClassName();
 
   if (descriptor.type === 'boolean' || descriptor.ui === 'toggle') {
     return (

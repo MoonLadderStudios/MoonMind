@@ -98,7 +98,6 @@ async def get_settings_catalog(
     section: Annotated[str | None, Query()] = None,
     scope: Annotated[str | None, Query()] = None,
 ):
-    service = SettingsCatalogService()
     resolved_section = _coerce_section(section)
     if isinstance(resolved_section, JSONResponse):
         return resolved_section
@@ -108,6 +107,17 @@ async def get_settings_catalog(
         if isinstance(coerced_scope, JSONResponse):
             return coerced_scope
         resolved_scope = coerced_scope
+    if resolved_scope is not None and _should_attempt_settings_db():
+        try:
+            async with db_base.async_session_maker() as session:
+                service = SettingsCatalogService(session=session)
+                return await service.catalog_async(
+                    section=resolved_section,
+                    scope=resolved_scope,
+                )
+        except SQLAlchemyError:
+            return _settings_db_error_response(scope=resolved_scope)
+    service = SettingsCatalogService()
     return service.catalog(section=resolved_section, scope=resolved_scope)
 
 

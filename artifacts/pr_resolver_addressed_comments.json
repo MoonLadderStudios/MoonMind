@@ -1,37 +1,32 @@
 [
   {
-    "id": 4186388482,
+    "id": 3152319940,
+    "disposition": "addressed",
+    "rationale": "Replaced JSON.stringify comparison with order-stable recursive equality that handles arrays, objects, symbols, undefined values, and circular references without throwing."
+  },
+  {
+    "id": 3152319945,
+    "disposition": "addressed",
+    "rationale": "Moved the shared field Tailwind classes into SETTING_FIELD_CLASS_NAMES and settingFieldClassName for a reusable, readable control style helper."
+  },
+  {
+    "id": 4186702059,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the referenced N+1 service issues were addressed in the settings catalog changes."
+    "rationale": "Summary review body only; its two concrete feedback items are tracked and addressed by comments 3152319940 and 3152319945."
   },
   {
-    "id": 3152036177,
+    "id": 3152323513,
     "disposition": "addressed",
-    "rationale": "effective_values_async now bulk-fetches relevant user/workspace overrides and resolves values in memory instead of calling the per-key lookup path."
+    "rationale": "Made the settings catalog route load persisted overrides through SettingsCatalogService.catalog_async so descriptors expose override-aware effective values and value_version."
   },
   {
-    "id": 3152036185,
+    "id": 3152323519,
     "disposition": "addressed",
-    "rationale": "apply_overrides now bulk-fetches existing override rows for all changed keys before validation and mutation."
+    "rationale": "Gated Reset visibility to overrides at the active selected scope and added frontend coverage for inherited workspace overrides in user scope."
   },
   {
-    "id": 3152036187,
-    "disposition": "addressed",
-    "rationale": "apply_overrides now builds the response from known mutated rows without issuing one effective-value query per changed key."
-  },
-  {
-    "id": 4186394244,
+    "id": 4186705950,
     "disposition": "not-applicable",
-    "rationale": "Automated review preamble only; no actionable code change requested in this comment."
-  },
-  {
-    "id": 3152041879,
-    "disposition": "addressed",
-    "rationale": "The settings effective routes now return a structured 500 when DB reads fail, keeping fallback defaults only for explicit local test mode."
-  },
-  {
-    "id": 3152041886,
-    "disposition": "addressed",
-    "rationale": "Batch writes now lock fetched rows with SELECT FOR UPDATE and translate concurrent insert conflicts into version_conflict."
+    "rationale": "Automated review wrapper text only; its concrete stale-position comments are tracked separately and addressed where they still apply."
   }
 ]

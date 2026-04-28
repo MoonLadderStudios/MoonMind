@@ -344,6 +344,16 @@ describe('GeneratedSettingsSection', () => {
     expect(screen.queryByText('Default Publish Mode')).toBeNull();
   });
 
+  it('does not offer reset for inherited workspace overrides in user scope', async () => {
+    renderWithClient(<GeneratedSettingsSection />);
+
+    await screen.findByText('Default Publish Mode');
+    fireEvent.click(screen.getByRole('button', { name: 'User' }));
+
+    await screen.findByDisplayValue('env://WORKSPACE_TOKEN');
+    expect(screen.queryByRole('button', { name: 'Reset GitHub Token Reference' })).toBeNull();
+  });
+
   it('edits generated controls and previews only changed keys', async () => {
     renderWithClient(<GeneratedSettingsSection />);
 

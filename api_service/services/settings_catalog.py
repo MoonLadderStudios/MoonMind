@@ -316,6 +316,36 @@ class SettingsCatalogService:
             categories=categories,
         )
 
+    async def catalog_async(
+        self,
+        *,
+        section: SettingSection | None = None,
+        scope: SettingScope | None = None,
+    ) -> SettingsCatalogResponse:
+        entries = [
+            entry
+            for entry in sorted(self._registry, key=lambda item: item.order)
+            if (section is None or entry.section == section)
+            and (scope is None or scope in entry.scopes)
+        ]
+        overrides = await self._get_effective_overrides(
+            scope=scope,
+            keys=[entry.key for entry in entries],
+        )
+        categories: dict[str, list[SettingDescriptor]] = {}
+        for entry in entries:
+            descriptor = self._descriptor(
+                entry,
+                scope=scope,
+                overrides=overrides,
+            )
+            categories.setdefault(entry.category, []).append(descriptor)
+        return SettingsCatalogResponse(
+            section=section,
+            scope=scope,
+            categories=categories,
+        )
+
     def effective_values(self, *, scope: SettingScope) -> EffectiveSettingsResponse:
         values = {
             entry.key: self.effective_value(entry.key, scope=scope)
@@ -354,8 +384,23 @@ class SettingsCatalogService:
         if entry.read_only:
             raise PermissionError(entry.read_only_reason or "Setting is read-only.")
 
-    def _descriptor(self, entry: SettingRegistryEntry) -> SettingDescriptor:
-        value, source = self._resolve_value(entry)
+    def _descriptor(
+        self,
+        entry: SettingRegistryEntry,
+        *,
+        scope: SettingScope | None = None,
+        overrides: dict[tuple[SettingScope, str], SettingsOverride] | None = None,
+    ) -> SettingDescriptor:
+        if scope is not None and overrides is not None:
+            value, source, version, override_present = self._resolve_value_from_overrides(
+                entry,
+                scope=scope,
+                overrides=overrides,
+            )
+        else:
+            value, source = self._resolve_value(entry)
+            version = 1
+            override_present = False
         return SettingDescriptor(
             key=entry.key,
             title=entry.title,
@@ -387,7 +432,8 @@ class SettingsCatalogService:
             depends_on=list(entry.depends_on),
             order=entry.order,
             audit=entry.audit,
-            diagnostics=self._diagnostics(entry, value),
+            value_version=version,
+            diagnostics=[] if override_present else self._diagnostics(entry, value),
         )
 
     async def effective_value_async(
@@ -677,7 +723,7 @@ class SettingsCatalogService:
     async def _get_effective_overrides(
         self,
         *,
-        scope: SettingScope,
+        scope: SettingScope | None,
         keys: list[str],
     ) -> dict[tuple[SettingScope, str], SettingsOverride]:
         if self._session is None or not keys:
