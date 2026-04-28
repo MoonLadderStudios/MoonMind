@@ -38,6 +38,7 @@ As a task author, I want one Step Type control in the step editor so I can choos
 
 - Runtime mode applies: this story changes the Create page task-authoring behavior and validates it with frontend tests.
 - The first delivered slice may keep the existing execution payload semantics for executable Skill steps while moving preset use into the step-authoring surface.
+- The legacy `Task Presets` section may remain temporarily for preset management actions such as save/delete and existing advanced preset inputs; it is not the canonical Step Type discriminator surface for choosing Preset while authoring a step.
 
 ## Source Design Requirements
 
@@ -70,4 +71,4 @@ As a task author, I want one Step Type control in the step editor so I can choos
 - **SC-001**: A rendered step has one accessible control named Step Type with exactly Tool, Skill, and Preset options.
 - **SC-002**: Switching among Tool, Skill, and Preset changes the visible configuration area without removing existing instructions.
 - **SC-003**: Frontend tests cover Skill, Tool, and Preset Step Type rendering and hidden Skill field submission behavior.
-- **SC-004**: The Create page no longer presents preset use as a separate canonical authoring section outside the step editor.
+- **SC-004**: The Create page presents preset use inside the step editor when Step Type is Preset; any remaining `Task Presets` section is temporary management/advanced-input UI and is not the canonical Step Type authoring surface.

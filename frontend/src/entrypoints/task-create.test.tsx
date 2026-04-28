@@ -6777,7 +6777,52 @@ describe("Task Create Entrypoint", () => {
     expect(within(step).queryByLabelText("Tool")).toBeNull();
   });
 
-  it("does not submit hidden Skill fields after switching Step Type away from Skill", async () => {
+  it("keeps Preset selections scoped to each step", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add Step" }));
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    const secondStep = (await screen.findByText("Step 2")).closest(
+      "section",
+    ) as HTMLElement;
+
+    fireEvent.change(within(primaryStep).getByLabelText("Step Type"), {
+      target: { value: "preset" },
+    });
+    fireEvent.change(within(secondStep).getByLabelText("Step Type"), {
+      target: { value: "preset" },
+    });
+
+    const firstPreset = within(primaryStep).getByLabelText(
+      "Preset",
+    ) as HTMLSelectElement;
+    const secondPreset = within(secondStep).getByLabelText(
+      "Preset",
+    ) as HTMLSelectElement;
+
+    await waitFor(() => {
+      expect(firstPreset.options.length).toBeGreaterThan(2);
+    });
+    const firstValue = firstPreset.options[1]?.value || "";
+    const secondValue = firstPreset.options[2]?.value || "";
+    expect(firstValue).not.toBe("");
+    expect(secondValue).not.toBe("");
+
+    fireEvent.change(firstPreset, { target: { value: firstValue } });
+    fireEvent.change(secondPreset, { target: { value: secondValue } });
+
+    expect(firstPreset.value).toBe(firstValue);
+    expect(secondPreset.value).toBe(secondValue);
+
+    fireEvent.change(firstPreset, { target: { value: secondValue } });
+
+    expect(firstPreset.value).toBe(secondValue);
+    expect(secondPreset.value).toBe(secondValue);
+  });
+
+  it("preserves hidden Skill fields but blocks Tool submissions without a selected Tool", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
@@ -6807,34 +6852,43 @@ describe("Task Create Entrypoint", () => {
     fireEvent.change(within(step).getByLabelText("Step Type"), {
       target: { value: "tool" },
     });
+    expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "skill" },
+    });
+    expect(
+      (within(step).getByLabelText(/Skill \(optional\)/) as HTMLInputElement)
+        .value,
+    ).toBe("custom-skill");
+    expect(
+      (
+        within(step).getByLabelText(
+          "Step 1 Skill Args (optional JSON object)",
+        ) as HTMLTextAreaElement
+      ).value,
+    ).toBe('{"hidden":true}');
+    expect(
+      (
+        within(step).getByLabelText(
+          /Step 1 Skill Required Capabilities \(optional CSV\)/,
+        ) as HTMLInputElement
+      ).value,
+    ).toBe("docker, qdrant");
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "tool" },
+    });
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Run a tool Step Type submission." },
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/executions",
-        expect.objectContaining({
-          method: "POST",
-        }),
-      );
-    });
-    const request = latestCreateRequest();
-    expect(request.payload).toMatchObject({
-      requiredCapabilities: ["codex_cli", "git", "gh"],
-    });
-    const payload = request.payload as {
-      task: {
-        tool?: Record<string, unknown>;
-        skill?: Record<string, unknown>;
-        inputs?: Record<string, unknown>;
-      };
-    };
-    expect(payload.task.tool?.name).toBe("auto");
-    expect(payload.task.skill?.id).toBe("auto");
-    expect(payload.task.inputs).toBeUndefined();
+    expect(
+      await screen.findByText("Select a Tool before submitting a Tool step."),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
   });
 
   it("keeps manual authoring available without optional presets Jira or image upload", async () => {

@@ -1,17 +1,37 @@
 [
   {
-    "id": 4192598542,
+    "id": 4192954412,
+    "disposition": "addressed",
+    "rationale": "Summary review covered by the concrete fixes for per-step preset state, non-destructive Step Type switching, Tool submission blocking, and spec alignment."
+  },
+  {
+    "id": 3157632598,
+    "disposition": "addressed",
+    "rationale": "Preset selector and status state now live on each StepState, with regression coverage for independent Preset selections across multiple steps."
+  },
+  {
+    "id": 3157632604,
+    "disposition": "addressed",
+    "rationale": "Step Type changes no longer clear hidden Skill fields; submission still filters them when Step Type is not Skill, and tests verify preserved values."
+  },
+  {
+    "id": 3157632608,
+    "disposition": "addressed",
+    "rationale": "Updated SC-004 and assumptions to reflect that step-editor Preset use is canonical while the remaining Task Presets section is temporary management/advanced-input UI."
+  },
+  {
+    "id": 3157641194,
+    "disposition": "addressed",
+    "rationale": "Tool Step Type submissions now fail fast until a typed Tool is selected, preventing accidental default skill execution."
+  },
+  {
+    "id": 3157641196,
+    "disposition": "addressed",
+    "rationale": "Preset selection is scoped per step instead of using the component-level selectedPresetKey, with a regression test covering two Preset steps."
+  },
+  {
+    "id": 4192965003,
     "disposition": "not-applicable",
-    "rationale": "Summary review comment only; the two concrete inline comments were classified separately."
-  },
-  {
-    "id": 3157353680,
-    "disposition": "addressed",
-    "rationale": "Simplified the Claude display-label reconciliation branch by using a single legacy-label predicate and direct mapping lookup."
-  },
-  {
-    "id": 3157353686,
-    "disposition": "addressed",
-    "rationale": "Moved the Claude legacy model alias constant out of the import/logging block and next to related provider-profile constants."
+    "rationale": "Informational automated review container with no separate actionable request beyond the individual review comments."
   }
 ]
