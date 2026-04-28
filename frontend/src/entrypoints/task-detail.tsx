@@ -3914,7 +3914,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     <div className="stack task-detail-page">
       <div className="toolbar">
         <div>
-          <h2 className="page-title">Temporal Task Detail</h2>
+          <h2 className="page-title">Task Detail</h2>
           <div className="toolbar-identity-row">
             <p className="page-meta">Task {taskId || '—'}</p>
             {execution ? (
