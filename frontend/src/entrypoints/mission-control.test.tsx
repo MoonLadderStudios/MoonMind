@@ -471,10 +471,25 @@ describe('Mission Control shared entry', () => {
     expect(glyphBlock).not.toContain('will-change');
     expect(missionControlCss).not.toContain('@keyframes mm-executing-letter-brighten');
     expect(missionControlCss).not.toContain('mm-executing-letter-brighten');
-    expect(missionControlCss).not.toContain('-webkit-text-fill-color: transparent');
-    expect(missionControlCss).not.toMatch(/\.status-running[\s\S]*?\.status-letter-wave__glyph[\s\S]*?color:\s*transparent/);
-    expect(missionControlCss).not.toMatch(
-      /@supports \(\(background-clip: text\) or \(-webkit-background-clip: text\)\)\s*\{[\s\S]*?\.status-running/,
+
+    const letterWaveBlock = cssRuleBlocks(
+      missionControlCss,
+      '.status-running[data-effect="shimmer-sweep"] .status-letter-wave, .status-running.is-executing .status-letter-wave, .status-running.is-planning .status-letter-wave',
+    ).join('\n');
+    expect(letterWaveBlock).toContain('animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite');
+    expect(letterWaveBlock).toContain('-webkit-text-fill-color: transparent');
+    expect(letterWaveBlock).toContain('background-clip: text');
+    expect(letterWaveBlock).toContain('-webkit-background-clip: text');
+    expect(letterWaveBlock).toContain('var(--mm-executing-letter-halo)');
+    expect(letterWaveBlock).toContain('white 50%');
+    expect(letterWaveBlock).toMatch(
+      /background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\),\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-core-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\)/,
+    );
+    expect(letterWaveBlock).toMatch(
+      /background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),\s*calc\(var\(--mm-executing-sweep-start-x\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-x\)\)\s*calc\(var\(--mm-executing-sweep-start-y\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-y\)\)/,
+    );
+    expect(missionControlCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,\s*\.status-running\.is-executing \.status-letter-wave,\s*\.status-running\.is-planning \.status-letter-wave[\s\S]*?animation: none;[\s\S]*?-webkit-text-fill-color: currentcolor;[\s\S]*?background-image: none;/,
     );
   });
 
