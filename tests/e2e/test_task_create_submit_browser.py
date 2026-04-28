@@ -401,7 +401,7 @@ def test_temporal_detail_resolves_source_and_fetches_latest_run_artifacts(server
         )
 
         page.goto(f"{base_url}/tasks/mm:workflow-123")
-        page.wait_for_selector("text=Temporal Task Detail")
+        page.wait_for_selector("text=Task Detail")
         assert page.url.endswith("/tasks/mm:workflow-123")
         assert ordered_calls[:3] == ["source", "detail", "artifacts"]
         browser.close()
