@@ -1,7 +1,17 @@
 from pathlib import Path
 
+import pytest
+
 from moonmind.rag import cli as rag_cli
 from moonmind.rag.context_pack import ContextItem, build_context_pack
+from moonmind.rag.embedding import EmbeddingError
+
+
+def test_top_level_cli_imports_without_schema_cycle():
+    import moonmind.cli as moonmind_cli
+
+    assert moonmind_cli.app is not None
+
 
 def test_run_search_returns_context_pack_and_writes_json(
     monkeypatch,
@@ -60,3 +70,40 @@ def test_run_search_returns_context_pack_and_writes_json(
     assert calls[0]["top_k"] == 7
     assert calls[0]["filters"] == {"job_id": "job-123", "repo": "moonmind"}
     assert calls[0]["transport"] == "direct"
+
+
+def test_run_search_wraps_embedding_errors_as_cli_errors(monkeypatch):
+    class StubSettings:
+        similarity_top_k = 7
+
+        def as_filter_metadata(self):
+            return {}
+
+        def resolved_transport(self, preferred):
+            return preferred or "direct"
+
+    class StubService:
+        def __init__(self, *, settings, env):
+            _ = settings, env
+
+        def retrieve(self, **kwargs):
+            _ = kwargs
+            raise EmbeddingError("GOOGLE_API_KEY is required for google embeddings")
+
+    monkeypatch.setattr(
+        rag_cli.RagRuntimeSettings,
+        "from_env",
+        classmethod(lambda _cls, _source=None: StubSettings()),
+    )
+    monkeypatch.setattr(rag_cli, "ContextRetrievalService", StubService)
+
+    with pytest.raises(rag_cli.CliError, match="GOOGLE_API_KEY"):
+        rag_cli.run_search(
+            query="How does worker retrieval work?",
+            filter_args=[],
+            budget_args=[],
+            top_k=None,
+            overlay_policy="include",
+            transport=None,
+            output_file=None,
+        )

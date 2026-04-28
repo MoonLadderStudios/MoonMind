@@ -7,7 +7,6 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from api_service.db import models as db_models
 from moonmind.core.artifacts import (
     TemporalArtifactStorageBackend,
     TemporalArtifactEncryption,
