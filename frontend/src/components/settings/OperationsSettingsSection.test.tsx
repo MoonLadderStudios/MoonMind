@@ -180,6 +180,31 @@ describe('OperationsSettingsSection deployment update card', () => {
     );
   }
 
+  it('confirms worker pause and submits operation command metadata', async () => {
+    renderOperations();
+
+    const workerCard = await screen.findByRole('region', { name: /worker operations/i });
+    await within(workerCard).findByRole('button', { name: /pause workers/i });
+    fireEvent.change(within(workerCard).getAllByLabelText(/^reason$/i)[0], {
+      target: { value: 'Maintenance window' },
+    });
+    fireEvent.click(within(workerCard).getByRole('button', { name: /pause workers/i }));
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Pause workers?'));
+      const workerCall = fetchSpy.mock.calls.find(
+        ([url]) => String(url) === '/api/worker-action',
+      );
+      expect(workerCall).toBeDefined();
+      expect(JSON.parse(String(workerCall?.[1]?.body))).toMatchObject({
+        action: 'pause',
+        mode: 'drain',
+        reason: 'Maintenance window',
+        confirmation: expect.stringContaining('Pause workers confirmed'),
+      });
+    });
+  });
+
   it('renders deployment state inside Operations without top-level deployment navigation', async () => {
     renderOperations();
 

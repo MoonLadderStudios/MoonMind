@@ -65,6 +65,9 @@ from api_service.api.routers.temporal_artifacts import (
 from api_service.api.routers.workflows import router as workflows_router
 from api_service.api.routers.secrets import router as secrets_router
 from api_service.api.routers.settings import router as settings_router
+from api_service.api.routers.system_operations import (
+    router as system_operations_router,
+)
 from api_service.api.routers.proxy import router as proxy_router
 from api_service.api.websockets import router as websockets_router
 from api_service.api.schemas import UserProfileUpdate
@@ -444,6 +447,7 @@ app.include_router(oauth_sessions_router, prefix="/api/v1")
 app.include_router(secrets_router, prefix="/api/v1/secrets")
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(proxy_router, prefix="/api/v1")
+app.include_router(system_operations_router)
 app.include_router(deployment_operations_router)
 app.include_router(executions_router)
 app.include_router(execution_integrations_router)
