@@ -508,6 +508,11 @@ Allowed values:
 
 This avoids making the merge-automation child infer too much from low-level resolver reasons.
 
+The terminal resolver result artifact, normally `var/pr_resolver/result.json`,
+MUST include this field. A resolver run that is explicitly launched by
+`MoonMind.MergeAutomation` but does not write a parseable resolver result is a
+resolver failure, not a generic successful child run.
+
 ---
 
 ## 14. Post-Resolver Re-Gating

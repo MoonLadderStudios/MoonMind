@@ -75,6 +75,9 @@ _PR_RESOLVER_MERGED_STATUSES: frozenset[str] = frozenset({"merged"})
 _PR_RESOLVER_TERMINAL_STATUSES: frozenset[str] = (
     _PR_RESOLVER_FAILURE_STATUSES | _PR_RESOLVER_MERGED_STATUSES
 )
+_PR_RESOLVER_RESULT_PATH_LIST = ", ".join(
+    str(path) for path in _PR_RESOLVER_RESULT_PATHS
+)
 
 
 def _normalize_pr_resolver_text(value: Any) -> str:
@@ -328,7 +331,13 @@ def _derive_pr_resolver_failure(
     """Return failure metadata from pr-resolver artifacts when present."""
     payload = _load_pr_resolver_result(workspace_path)
     if payload is None:
-        return None, None
+        return (
+            "user_error",
+            (
+                "pr-resolver result artifact missing; expected one of "
+                f"{_PR_RESOLVER_RESULT_PATH_LIST}"
+            ),
+        )
 
     status = _pr_resolver_status(payload)
     if status not in _PR_RESOLVER_FAILURE_STATUSES:
@@ -355,7 +364,10 @@ def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
     status = _pr_resolver_status(payload)
     reason = str(payload.get("final_reason") or payload.get("reason") or "").strip()
     metadata: dict[str, Any] = {}
-    if status in _PR_RESOLVER_MERGED_STATUSES:
+    explicit_disposition = str(payload.get("mergeAutomationDisposition") or "").strip()
+    if explicit_disposition:
+        metadata["mergeAutomationDisposition"] = explicit_disposition
+    elif status in _PR_RESOLVER_MERGED_STATUSES:
         metadata["mergeAutomationDisposition"] = (
             "already_merged" if reason == "already_merged" else "merged"
         )

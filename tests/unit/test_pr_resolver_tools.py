@@ -576,6 +576,7 @@ def test_orchestrate_actionable_comments_escalates_once_then_merges(
 
     assert exit_code == 0
     assert result["status"] == "merged"
+    assert result["mergeAutomationDisposition"] == "merged"
     assert len(full_calls) == 1
     assert full_calls[0][2] == "actionable_comments"
     assert sleeps == []
@@ -609,6 +610,7 @@ def test_orchestrate_caps_retries_with_attempts_exhausted(
     assert exit_code == 3
     assert result["status"] == "attempts_exhausted"
     assert result["merge_outcome"] == "attempts_exhausted"
+    assert result["mergeAutomationDisposition"] == "manual_review"
     assert result["final_reason"] == "actionable_comments"
 
 def test_orchestrate_ci_running_uses_finalize_only_retry_path(
@@ -645,6 +647,7 @@ def test_orchestrate_ci_running_uses_finalize_only_retry_path(
 
     assert exit_code == 0
     assert result["status"] == "merged"
+    assert result["mergeAutomationDisposition"] == "merged"
     assert full_invocations == 0
     assert sleeps == [15]
 
@@ -919,6 +922,7 @@ def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     payload = result_path.read_text(encoding="utf-8")
     assert '"status": "blocked"' in payload
     assert '"reason": "snapshot_refresh_failed"' in payload
+    assert '"mergeAutomationDisposition": "manual_review"' in payload
 
     monkeypatch.setattr(
         "sys.argv",
@@ -1022,6 +1026,7 @@ def test_finalize_snapshot_auth_failure_reports_publish_unavailable(
     assert payload["status"] == "blocked"
     assert payload["reason"] == "publish_unavailable"
     assert payload["next_step"] == "manual_review"
+    assert payload["mergeAutomationDisposition"] == "manual_review"
 
     monkeypatch.setattr(
         "sys.argv",
@@ -1172,6 +1177,7 @@ def test_finalize_pr_not_found_but_merged_succeeds(
     assert payload["status"] == "merged"
     assert payload["reason"] == "already_merged"
     assert payload["merge_outcome"] == "merged"
+    assert payload["mergeAutomationDisposition"] == "already_merged"
 
 # ---------------------------------------------------------------------------
 # Stale-commit bot comment filtering (Phase 1)
