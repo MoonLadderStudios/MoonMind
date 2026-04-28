@@ -410,11 +410,10 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).toMatch(/--mm-executing-sweep-end-y:\s*-160%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-x:\s*-12%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-y:\s*-10%/);
-    expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-width:\s*84%/);
-    expect(missionControlCss).toContain('--mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)');
-    expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-start-ratio:\s*0\.18/);
-    expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-travel-ratio:\s*0\.16/);
-    expect(missionControlCss).toMatch(/--mm-executing-letter-sweep-direction:\s*1/);
+    expect(missionControlCss).not.toContain('--mm-executing-letter-cycle-duration');
+    expect(missionControlCss).not.toContain('--mm-executing-letter-sweep-start-ratio');
+    expect(missionControlCss).not.toContain('--mm-executing-letter-sweep-travel-ratio');
+    expect(missionControlCss).not.toContain('--mm-executing-letter-sweep-direction');
     expect(missionControlCss).toContain('--mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32)');
     expect(missionControlCss).toContain('--mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, white 32%)');
 
@@ -466,19 +465,20 @@ describe('Mission Control shared entry', () => {
     expect(shimmerAfterBlock).toBe('');
     expect(cssRuleBlock(missionControlCss, '.status-letter-wave')).toContain('z-index: 2');
     const glyphBlock = cssRuleBlock(missionControlCss, '.status-letter-wave__glyph');
-    expect(glyphBlock).toContain('animation-name: mm-executing-letter-brighten');
-    expect(glyphBlock).toContain('animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration))');
-    expect(glyphBlock).toContain('var(--mm-executing-letter-sweep-direction)');
-    expect(glyphBlock).toContain('--mm-letter-phase-max: max(calc(var(--mm-letter-count, 1) - 1), 1)');
-    expect(glyphBlock).toContain('var(--mm-executing-letter-sweep-start-ratio)');
-    expect(glyphBlock).toContain('var(--mm-executing-letter-sweep-travel-ratio)');
-    expect(glyphBlock).toContain('animation-delay: calc(var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration)) * var(--mm-letter-delay-ratio))');
+    expect(glyphBlock).not.toContain('animation-name');
+    expect(glyphBlock).not.toContain('animation-delay');
+    expect(glyphBlock).not.toContain('--mm-letter-phase');
     expect(glyphBlock).not.toContain('will-change');
+    expect(missionControlCss).not.toContain('@keyframes mm-executing-letter-brighten');
+    expect(missionControlCss).not.toContain('mm-executing-letter-brighten');
     expect(missionControlCss).toMatch(
-      /@keyframes mm-executing-letter-brighten\s*\{[\s\S]*?0%\s*\{[\s\S]*?var\(--mm-executing-letter-bright[\s\S]*?3%\s*\{[\s\S]*?brightness\(1\.14\)[\s\S]*?5%,\s*100%\s*\{[\s\S]*?brightness\(1\)/,
+      /@supports \(\(background-clip: text\) or \(-webkit-background-clip: text\)\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,[\s\S]*?animation:\s*mm-status-pill-shimmer var\(--mm-executing-sweep-cycle-duration\) linear infinite;/,
     );
     expect(missionControlCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.status-letter-wave__glyph\s*\{[\s\S]*?animation: none !important;[\s\S]*?text-shadow: none !important;[\s\S]*?filter: none !important;/,
+      /@supports \(\(background-clip: text\) or \(-webkit-background-clip: text\)\)\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),[\s\S]*?calc\(var\(--mm-executing-sweep-start-x\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-x\)\)\s*calc\(var\(--mm-executing-sweep-start-y\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-y\)\);/,
+    );
+    expect(missionControlCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,[\s\S]*?animation: none !important;[\s\S]*?background-position:\s*50% 50%,/,
     );
   });
 
