@@ -60,6 +60,41 @@ async def test_settings_catalog_endpoint_returns_grouped_descriptors():
 
 
 @pytest.mark.asyncio
+async def test_settings_catalog_endpoint_reports_persisted_override_versions(settings_api_db):
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.default_publish_mode": "branch"},
+                "expected_versions": {"workflow.default_publish_mode": 1},
+            },
+        )
+        await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.default_publish_mode": "none"},
+                "expected_versions": {"workflow.default_publish_mode": 1},
+            },
+        )
+        response = await client.get(
+            "/api/v1/settings/catalog",
+            params={"section": "user-workspace", "scope": "workspace"},
+        )
+
+    assert response.status_code == 200
+    descriptor = next(
+        item
+        for item in response.json()["categories"]["Workflow"]
+        if item["key"] == "workflow.default_publish_mode"
+    )
+    assert descriptor["effective_value"] == "none"
+    assert descriptor["source"] == "workspace_override"
+    assert descriptor["value_version"] == 2
+
+
+@pytest.mark.asyncio
 async def test_effective_setting_endpoint_returns_structured_unknown_key_error():
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"

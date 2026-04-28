@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BootPayload } from '../boot/parseBootPayload';
 import { SecretManager } from '../components/secrets/SecretManager';
+import { GeneratedSettingsSection } from '../components/settings/GeneratedSettingsSection';
 import {
   OperationsSettingsSection,
   type WorkerPauseConfig,
@@ -265,14 +266,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
 
       {section === 'user-workspace' ? (
         <div className="space-y-6">
-          <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">User / Workspace</h3>
-            <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-              This section is reserved for the broader project settings model. The
-              unified Settings tab now provides a stable home for those controls as
-              Mission Control exposes more runtime, workspace, and operator preferences.
-            </p>
-          </section>
+          <GeneratedSettingsSection />
 
           <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
             {isLoading ? (
