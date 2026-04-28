@@ -69,7 +69,7 @@ Resume request:
 Response `200`: same snapshot shape as `GET`, with `signalStatus` set to the command result summary.
 
 Errors:
-- `400 worker_operation_invalid`: malformed action or mode.
+- `422 worker_operation_invalid`: malformed action or mode.
 - `403 worker_operation_forbidden`: authenticated actor may not invoke operations.
 - `409 worker_operation_conflict`: command conflicts with current operation state.
 - `422 worker_operation_confirmation_required`: disruptive operation lacks required confirmation.

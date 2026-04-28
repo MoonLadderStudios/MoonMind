@@ -30,7 +30,7 @@ Fields:
 - `target`: `workers`.
 - `reason`: operator-provided reason.
 - `confirmation`: explicit confirmation string for disruptive command classes.
-- `force_resume`: whether resume is allowed before drain completion.
+- `force_resume`: whether resume is allowed before drain completion; exposed on the public JSON contract as `forceResume`.
 - `requested_by_user_id`: authenticated actor identifier.
 - `requested_at`: server timestamp.
 - `idempotency_key`: stable command key derived from action, target, mode, actor, and reason unless the command is an explicit force/rollback class.

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,7 +52,7 @@ class WorkerOperationCommand(BaseModel):
     mode: str | None = None
     reason: str | None = None
     confirmation: str | None = None
-    force_resume: bool = False
+    force_resume: bool = Field(False, alias="forceResume")
 
 
 class _QueueSystemMetadata:

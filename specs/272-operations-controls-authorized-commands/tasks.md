@@ -49,7 +49,7 @@
 - [X] T011 [P] Add failing API test for GET `/api/system/worker-pause` returning system, metrics, audit, and signal status in `tests/unit/api/routers/test_system_operations.py` covering FR-001, FR-002, SC-001.
 - [X] T012 [P] Add failing API test for POST pause and resume returning updated snapshots and calling subsystem methods in `tests/unit/api/routers/test_system_operations.py` covering FR-004, FR-007, DESIGN-REQ-014.
 - [X] T013 [P] Add failing API test for non-admin POST rejection with no subsystem invocation in `tests/unit/api/routers/test_system_operations.py` covering FR-005, FR-006, SC-003.
-- [X] T014 [P] Add failing API test for missing confirmation and invalid command values in `tests/unit/api/routers/test_system_operations.py` covering FR-003, FR-008.
+- [X] T014 [P] Add failing API test for missing confirmation, forced resume `forceResume` validation, and invalid command values in `tests/unit/api/routers/test_system_operations.py` covering FR-003, FR-008.
 - [X] T015 [P] Add failing UI test for worker control expected impact, confirmation submission fields, actor/audit rendering, and error feedback in `frontend/src/components/settings/OperationsSettingsSection.test.tsx` covering FR-002, FR-003, FR-009.
 
 ### Integration Tests First

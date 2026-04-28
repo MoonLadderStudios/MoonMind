@@ -160,10 +160,22 @@ def test_missing_confirmation_and_invalid_values_are_rejected(
         "/api/system/worker-pause",
         json={"action": "shell", "reason": "Maintenance"},
     )
+    forced_resume_without_confirmation = client.post(
+        "/api/system/worker-pause",
+        json={
+            "action": "resume",
+            "reason": "Maintenance complete",
+            "forceResume": True,
+        },
+    )
 
     assert missing_confirmation.status_code == 422
     assert missing_confirmation.json()["detail"]["code"] == (
         "worker_operation_confirmation_required"
     )
     assert invalid_action.status_code == 422
+    assert forced_resume_without_confirmation.status_code == 422
+    assert forced_resume_without_confirmation.json()["detail"]["code"] == (
+        "worker_operation_confirmation_required"
+    )
     assert temporal.pause_calls == 0
