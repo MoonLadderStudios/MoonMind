@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
+    ManagedAgentProviderProfile,
     ManagedSecret,
     SecretStatus,
     SettingsAuditEvent,
@@ -276,6 +277,23 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         ),
         order=60,
     ),
+    SettingRegistryEntry(
+        key="workflow.default_provider_profile_ref",
+        title="Default Provider Profile",
+        description=(
+            "Provider profile reference used when a task or runtime request does "
+            "not select a profile explicitly."
+        ),
+        category="Workflow",
+        section="user-workspace",
+        value_type="string",
+        ui="provider_profile_picker",
+        scopes=("user", "workspace"),
+        default_value=None,
+        env_aliases=("MOONMIND_DEFAULT_PROVIDER_PROFILE_REF",),
+        applies_to=("task_creation", "workflow_runtime", "provider_profiles"),
+        order=70,
+    ),
 )
 
 
@@ -301,6 +319,7 @@ class SettingsCatalogService:
         self._workspace_id = workspace_id or _DEFAULT_SUBJECT_ID
         self._user_id = user_id or _DEFAULT_SUBJECT_ID
         self._managed_secret_status_by_slug: dict[str, str | None] = {}
+        self._provider_profile_enabled_by_id: dict[str, bool | None] = {}
 
     def catalog(
         self,
@@ -346,6 +365,16 @@ class SettingsCatalogService:
             )[0]
             for entry in entries
             if scope is not None
+        )
+        await self._prime_provider_profile_statuses(
+            self._resolve_value_from_overrides(
+                entry,
+                scope=scope,
+                overrides=overrides,
+            )[0]
+            for entry in entries
+            if scope is not None
+            and entry.key == "workflow.default_provider_profile_ref"
         )
         categories: dict[str, list[SettingDescriptor]] = {}
         for entry in entries:
@@ -469,6 +498,8 @@ class SettingsCatalogService:
             overrides=overrides,
         )
         await self._prime_managed_secret_statuses([value])
+        if entry.key == "workflow.default_provider_profile_ref":
+            await self._prime_provider_profile_statuses([value])
         return EffectiveSettingValue(
             key=entry.key,
             scope=scope,
@@ -502,6 +533,11 @@ class SettingsCatalogService:
         }
         await self._prime_managed_secret_statuses(
             data[0] for _entry, data in resolved.values()
+        )
+        await self._prime_provider_profile_statuses(
+            data[0]
+            for entry, data in resolved.values()
+            if entry.key == "workflow.default_provider_profile_ref"
         )
         values = {
             key: EffectiveSettingValue(
@@ -603,6 +639,11 @@ class SettingsCatalogService:
             for key in changes
         }
         await self._prime_managed_secret_statuses(data[0] for data in resolved.values())
+        await self._prime_provider_profile_statuses(
+            data[0]
+            for key, data in resolved.items()
+            if entries[key].key == "workflow.default_provider_profile_ref"
+        )
         values = {
             key: EffectiveSettingValue(
                 key=entries[key].key,
@@ -740,7 +781,11 @@ class SettingsCatalogService:
         value: Any,
         override_present: bool,
     ) -> list[SettingDiagnostic]:
-        if override_present and (entry.value_type != "secret_ref" or value is None):
+        if (
+            override_present
+            and entry.key != "workflow.default_provider_profile_ref"
+            and (entry.value_type != "secret_ref" or value is None)
+        ):
             return []
         return self._diagnostics(entry, value)
 
@@ -770,6 +815,31 @@ class SettingsCatalogService:
 
         for slug in missing:
             self._managed_secret_status_by_slug[slug] = statuses_from_db.get(slug)
+
+    async def _prime_provider_profile_statuses(self, values: Iterable[Any]) -> None:
+        if self._session is None:
+            return
+        profile_ids = {
+            value.strip()
+            for value in values
+            if isinstance(value, str) and value.strip()
+        }
+        missing = [
+            profile_id
+            for profile_id in profile_ids
+            if profile_id not in self._provider_profile_enabled_by_id
+        ]
+        if not missing:
+            return
+        result = await self._session.execute(
+            select(
+                ManagedAgentProviderProfile.profile_id,
+                ManagedAgentProviderProfile.enabled,
+            ).where(ManagedAgentProviderProfile.profile_id.in_(missing))
+        )
+        enabled_by_id = {profile_id: bool(enabled) for profile_id, enabled in result.all()}
+        for profile_id in missing:
+            self._provider_profile_enabled_by_id[profile_id] = enabled_by_id.get(profile_id)
 
     def _resolve_value_from_overrides(
         self,
@@ -1012,7 +1082,40 @@ class SettingsCatalogService:
             diagnostic = self._secret_ref_diagnostic(entry, value)
             if diagnostic is not None:
                 diagnostics.append(diagnostic)
+        if entry.key == "workflow.default_provider_profile_ref" and isinstance(value, str):
+            diagnostic = self._provider_profile_ref_diagnostic(entry, value)
+            if diagnostic is not None:
+                diagnostics.append(diagnostic)
         return diagnostics
+
+    def _provider_profile_ref_diagnostic(
+        self, entry: SettingRegistryEntry, value: str
+    ) -> SettingDiagnostic | None:
+        profile_id = value.strip()
+        if not profile_id:
+            return None
+        if profile_id not in self._provider_profile_enabled_by_id:
+            return None
+        enabled = self._provider_profile_enabled_by_id.get(profile_id)
+        if enabled is None:
+            return SettingDiagnostic(
+                code="provider_profile_not_found",
+                message=(
+                    f"{entry.key} references a provider profile that does not exist."
+                ),
+                severity="error",
+                details={"profile_id": profile_id, "launch_blocker": True},
+            )
+        if enabled is False:
+            return SettingDiagnostic(
+                code="provider_profile_disabled",
+                message=(
+                    f"{entry.key} references a disabled provider profile."
+                ),
+                severity="error",
+                details={"profile_id": profile_id, "launch_blocker": True},
+            )
+        return None
 
     def _secret_ref_diagnostic(
         self, entry: SettingRegistryEntry, value: str

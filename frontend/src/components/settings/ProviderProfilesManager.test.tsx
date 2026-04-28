@@ -354,6 +354,39 @@ describe('ProviderProfilesManager form controls', () => {
     },
   };
 
+  const profileWithReadiness: ProviderProfile = {
+    ...profile,
+    profile_id: 'codex-diagnostic',
+    provider_label: 'OpenAI Team',
+    default_model: 'gpt-5.4',
+    secret_refs: {
+      provider_api_key: 'db://openai-team-key',
+    },
+    max_parallel_runs: 3,
+    cooldown_after_429_seconds: 120,
+    tags: ['team', 'fast'],
+    priority: 250,
+    readiness: {
+      status: 'blocked',
+      launch_ready: false,
+      summary: 'Provider profile has launch blockers.',
+      checks: [
+        {
+          id: 'secret_refs',
+          label: 'SecretRef bindings',
+          status: 'error',
+          message: 'provider_api_key points at missing managed secret db://openai-team-key',
+        },
+        {
+          id: 'provider_validation',
+          label: 'Provider validation',
+          status: 'error',
+          message: 'Validation failed for token=[REDACTED]',
+        },
+      ],
+    },
+  };
+
   it('labels secret refs and resets create-form values', () => {
     renderProviderProfilesManager();
 
@@ -933,5 +966,43 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.getByText('Launch readiness: Ready')).toBeTruthy();
     expect(screen.getByText(/Previous token/)).toBeTruthy();
     expect(screen.queryByText(/sk-ant-secret/)).toBeNull();
+  });
+
+  it('renders provider profile readiness and launch metadata', () => {
+    renderProviderProfilesManager([profileWithReadiness]);
+
+    expect(screen.getByText('Readiness: Blocked')).toBeTruthy();
+    expect(screen.getByText('Provider profile has launch blockers.')).toBeTruthy();
+    expect(screen.getByText('Concurrency: 3')).toBeTruthy();
+    expect(screen.getByText('Cooldown: 120s')).toBeTruthy();
+    expect(screen.getByText('Priority: 250')).toBeTruthy();
+    expect(screen.getByText('Tags: team, fast')).toBeTruthy();
+    expect(screen.getByText('provider_api_key')).toBeTruthy();
+    expect(screen.getByText('db://openai-team-key')).toBeTruthy();
+    expect(screen.getByText(/Validation failed/)).toBeTruthy();
+    expect(screen.queryByText(/sk-ant/)).toBeNull();
+  });
+
+  it('describes SecretRef role bindings without plaintext values', () => {
+    const rawSecret = 'sk-test-plaintext-never-render';
+    renderProviderProfilesManager([
+      {
+        ...profileWithReadiness,
+        secret_refs: {
+          anthropic_api_key: 'db://claude-team-key',
+        },
+        readiness: {
+          status: 'ready',
+          launch_ready: true,
+          summary: 'Provider profile is ready for launch.',
+          checks: [],
+        },
+      },
+    ]);
+
+    expect(screen.getByText('anthropic_api_key')).toBeTruthy();
+    expect(screen.getByText('db://claude-team-key')).toBeTruthy();
+    expect(screen.getByText(/Role-aware SecretRefs/)).toBeTruthy();
+    expect(screen.queryByText(rawSecret)).toBeNull();
   });
 });

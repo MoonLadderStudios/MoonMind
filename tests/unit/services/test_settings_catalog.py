@@ -2,7 +2,13 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api_service.db.models import Base, ManagedSecret
+from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    ManagedSecret,
+    ProviderCredentialSource,
+    RuntimeMaterializationMode,
+)
 from api_service.services.settings_catalog import SettingsCatalogService
 
 
@@ -53,6 +59,26 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
         for descriptor in descriptors
     }
     assert "workflow.github_token" not in all_keys
+
+
+def test_catalog_exposes_provider_profile_reference_without_launch_semantics():
+    service = SettingsCatalogService(env={})
+
+    catalog = service.catalog(section="user-workspace", scope="workspace")
+
+    workflow = catalog.categories["Workflow"]
+    provider_profile = next(
+        item for item in workflow if item.key == "workflow.default_provider_profile_ref"
+    )
+    assert provider_profile.type == "string"
+    assert provider_profile.ui == "provider_profile_picker"
+    assert provider_profile.applies_to == [
+        "task_creation",
+        "workflow_runtime",
+        "provider_profiles",
+    ]
+    assert provider_profile.effective_value is None
+    assert provider_profile.diagnostics[0].code == "inherited_null"
 
 
 def test_effective_value_reports_environment_source_and_explanation():
@@ -170,6 +196,43 @@ async def _workspace_override_persists_and_reports_version(settings_session):
     )
     assert updated.values["workflow.default_publish_mode"].value == "none"
     assert updated.values["workflow.default_publish_mode"].value_version == 2
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_reference_reports_missing_and_disabled_diagnostics(
+    settings_session_maker,
+) -> None:
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            ManagedAgentProviderProfile(
+                profile_id="disabled-profile",
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                enabled=False,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(env={}, session=settings_session)
+        missing = await service.apply_overrides(
+            scope="workspace",
+            changes={"workflow.default_provider_profile_ref": "missing-profile"},
+            expected_versions={"workflow.default_provider_profile_ref": 1},
+        )
+        missing_value = missing.values["workflow.default_provider_profile_ref"]
+        assert missing_value.diagnostics[0].code == "provider_profile_not_found"
+        assert missing_value.diagnostics[0].details["launch_blocker"] is True
+
+        disabled = await service.apply_overrides(
+            scope="workspace",
+            changes={"workflow.default_provider_profile_ref": "disabled-profile"},
+            expected_versions={"workflow.default_provider_profile_ref": 1},
+        )
+        disabled_value = disabled.values["workflow.default_provider_profile_ref"]
+        assert disabled_value.diagnostics[0].code == "provider_profile_disabled"
+        assert disabled_value.diagnostics[0].details["launch_blocker"] is True
 
 
 @pytest.mark.asyncio

@@ -430,6 +430,120 @@ async def test_create_provider_profile_invalid_secret_refs(client_app: AsyncClie
     assert "Invalid secret reference" in response.text
 
 @pytest.mark.asyncio
+async def test_provider_profile_response_includes_readiness_blockers(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = "oauth_missing_metadata_readiness"
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="claude_code",
+                    provider_id="anthropic",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    volume_ref=None,
+                    volume_mount_path=None,
+                    enabled=False,
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert response.status_code == 200
+    readiness = response.json()["readiness"]
+    assert readiness["status"] == "blocked"
+    assert readiness["launch_ready"] is False
+    checks = {check["id"]: check for check in readiness["checks"]}
+    assert checks["enabled"]["status"] == "error"
+    assert checks["oauth_volume"]["status"] == "error"
+    assert "volume_ref" in checks["oauth_volume"]["message"]
+    assert "volume_mount_path" in checks["oauth_volume"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_readiness_reports_managed_secret_status(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = "missing_db_secret_readiness"
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.SECRET_REF,
+                    runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                    secret_refs={"provider_api_key": "db://does-not-exist"},
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert response.status_code == 200
+    readiness = response.json()["readiness"]
+    assert readiness["status"] == "blocked"
+    checks = {check["id"]: check for check in readiness["checks"]}
+    assert checks["secret_refs"]["status"] == "error"
+    assert "provider_api_key" in checks["secret_refs"]["message"]
+    assert "does-not-exist" in checks["secret_refs"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_readiness_redacts_provider_failure_text(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = "provider_failure_readiness_redaction"
+    raw_token = "sk-ant-secret-readiness-token"
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="claude_code",
+                    provider_id="anthropic",
+                    credential_source=ProviderCredentialSource.SECRET_REF,
+                    runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                    secret_refs={"anthropic_api_key": "env://ANTHROPIC_API_KEY"},
+                    command_behavior={
+                        "auth_readiness": {
+                            "launch_ready": False,
+                            "failure_reason": f"token={raw_token} expired",
+                        }
+                    },
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert response.status_code == 200
+    response_text = response.text
+    assert raw_token not in response_text
+    readiness = response.json()["readiness"]
+    checks = {check["id"]: check for check in readiness["checks"]}
+    assert checks["provider_validation"]["status"] == "error"
+    assert "[REDACTED]" in checks["provider_validation"]["message"]
+
+@pytest.mark.asyncio
 async def test_create_duplicate_profile(client_app: AsyncClient, _module_db):
     """Test creating a profile that already exists returns 409."""
     sample_profile = await get_or_create_sample_profile()

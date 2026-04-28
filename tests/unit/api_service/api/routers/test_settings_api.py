@@ -149,7 +149,10 @@ async def test_effective_settings_endpoint_filters_by_scope():
     assert response.status_code == 200
     body = response.json()
     assert body["scope"] == "user"
-    assert list(body["values"]) == ["integrations.github.token_ref"]
+    assert list(body["values"]) == [
+        "integrations.github.token_ref",
+        "workflow.default_provider_profile_ref",
+    ]
 
 
 @pytest.mark.asyncio
