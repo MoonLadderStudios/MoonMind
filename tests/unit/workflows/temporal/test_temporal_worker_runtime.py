@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+import json
 import logging
 import re
 from types import SimpleNamespace
@@ -8,7 +10,16 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base
+from api_service.db.models import (
+    Base,
+    MoonMindWorkflowState,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionOwnerType,
+    TemporalExecutionProjectionSourceMode,
+    TemporalExecutionProjectionSyncState,
+    TemporalExecutionRecord,
+    TemporalWorkflowType,
+)
 from moonmind.workflows.temporal.worker_runtime import (
     MoonMindAgentRun,
     MoonMindManifestIngest,
@@ -18,6 +29,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     _build_agent_runtime_deps,
     _enforce_codex_config_for_managed_fleet,
     _expand_task_template_for_child_run,
+    _persist_child_run_task_input_snapshot,
     _build_runtime_planner,
     _build_runtime_activities,
     _configure_worker_logging,
@@ -44,6 +56,21 @@ async def _template_db(tmp_path):
         yield async_session_maker
     finally:
         await engine.dispose()
+
+
+class _FakeTaskInputSnapshotArtifactService:
+    def __init__(self) -> None:
+        self.create_calls: list[dict[str, object]] = []
+        self.write_calls: list[dict[str, object]] = []
+
+    async def create(self, **kwargs):
+        self.create_calls.append(kwargs)
+        return SimpleNamespace(artifact_id="art_task_snapshot_1"), SimpleNamespace()
+
+    async def write_complete(self, **kwargs):
+        self.write_calls.append(kwargs)
+        return SimpleNamespace(artifact_id="art_task_snapshot_1")
+
 
 def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -> None:
     record = logging.LogRecord(
@@ -581,6 +608,148 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
     assert task["steps"][12]["title"] == "Move Jira issue to Code Review"
     assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
     assert len(task["appliedStepTemplates"][0]["stepIds"]) == 13
+
+
+@pytest.mark.asyncio
+async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
+    tmp_path,
+):
+    now = datetime.now(UTC)
+    parameters = {
+        "requestType": "task",
+        "repository": "MoonLadderStudios/MoonMind",
+        "targetRuntime": "codex_cli",
+        "task": {
+            "title": "Run Jira Orchestrate for MM-501",
+            "instructions": "Run Jira Orchestrate for MM-501.",
+            "steps": [
+                {
+                    "id": "step-1",
+                    "title": "First step",
+                    "instructions": "Do the first step.",
+                }
+            ],
+        },
+    }
+
+    async with _template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            source = TemporalExecutionCanonicalRecord(
+                workflow_id="mm:child-run",
+                run_id="run-child",
+                namespace="default",
+                workflow_type=TemporalWorkflowType.RUN,
+                owner_id="owner-1",
+                owner_type=TemporalExecutionOwnerType.USER,
+                state=MoonMindWorkflowState.INITIALIZING,
+                close_status=None,
+                entry="run",
+                search_attributes={},
+                memo={"title": "Child run"},
+                artifact_refs=[],
+                input_ref=None,
+                plan_ref=None,
+                manifest_ref=None,
+                parameters=parameters,
+                integration_state=None,
+                pending_parameters_patch=None,
+                paused=False,
+                awaiting_external=False,
+                waiting_reason=None,
+                attention_required=False,
+                step_count=0,
+                wait_cycle_count=0,
+                rerun_count=0,
+                create_idempotency_key="jira-orchestrate:MM-404:STORY-001:MM-501",
+                last_update_idempotency_key=None,
+                last_update_response=None,
+                created_at=now,
+                started_at=None,
+                updated_at=now,
+                closed_at=None,
+            )
+            projection = TemporalExecutionRecord(
+                workflow_id=source.workflow_id,
+                run_id=source.run_id,
+                namespace=source.namespace,
+                workflow_type=source.workflow_type,
+                owner_id=source.owner_id,
+                owner_type=source.owner_type,
+                state=source.state,
+                close_status=source.close_status,
+                entry=source.entry,
+                search_attributes={},
+                memo=dict(source.memo),
+                artifact_refs=[],
+                input_ref=None,
+                plan_ref=None,
+                manifest_ref=None,
+                parameters=parameters,
+                integration_state=None,
+                pending_parameters_patch=None,
+                paused=False,
+                awaiting_external=False,
+                waiting_reason=None,
+                attention_required=False,
+                step_count=0,
+                wait_cycle_count=0,
+                rerun_count=0,
+                create_idempotency_key=source.create_idempotency_key,
+                last_update_idempotency_key=None,
+                last_update_response=None,
+                projection_version=1,
+                last_synced_at=now,
+                sync_state=TemporalExecutionProjectionSyncState.FRESH,
+                sync_error=None,
+                source_mode=(
+                    TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+                ),
+                created_at=now,
+                started_at=None,
+                updated_at=now,
+                closed_at=None,
+            )
+            session.add_all([source, projection])
+            await session.commit()
+
+            artifact_service = _FakeTaskInputSnapshotArtifactService()
+            snapshot_ref = await _persist_child_run_task_input_snapshot(
+                session=session,
+                record=projection,
+                parameters=parameters,
+                artifact_service=artifact_service,
+            )
+
+            assert snapshot_ref == "art_task_snapshot_1"
+            refreshed_source = await session.get(
+                TemporalExecutionCanonicalRecord,
+                "mm:child-run",
+            )
+            refreshed_projection = await session.get(
+                TemporalExecutionRecord,
+                "mm:child-run",
+            )
+
+    assert refreshed_source.memo["task_input_snapshot_ref"] == "art_task_snapshot_1"
+    assert refreshed_projection.memo["task_input_snapshot_ref"] == "art_task_snapshot_1"
+    assert refreshed_source.memo["task_input_snapshot_source_kind"] == "create"
+    assert refreshed_projection.artifact_refs == ["art_task_snapshot_1"]
+    assert artifact_service.create_calls[0]["link"] == {
+        "namespace": "default",
+        "workflow_id": "mm:child-run",
+        "run_id": "run-child",
+        "link_type": "input.original_snapshot",
+        "label": "Original task input snapshot",
+    }
+    snapshot_payload = json.loads(artifact_service.write_calls[0]["payload"])
+    assert snapshot_payload["draft"]["taskShape"] == "multi_step"
+    assert snapshot_payload["draft"]["repository"] == "MoonLadderStudios/MoonMind"
+    assert snapshot_payload["draft"]["targetRuntime"] == "codex_cli"
+    assert (
+        snapshot_payload["draft"]["task"]["title"]
+        == "Run Jira Orchestrate for MM-501"
+    )
+
 
 def test_runtime_planner_uses_branch_handoff_for_jira_output_when_task_publish_none():
     planner = _build_runtime_planner()
