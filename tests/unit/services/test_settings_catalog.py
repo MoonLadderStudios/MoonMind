@@ -51,6 +51,24 @@ def test_effective_value_reports_environment_source_and_explanation():
     assert effective.diagnostics == []
 
 
+def test_environment_values_are_parsed_to_declared_types():
+    service = SettingsCatalogService(
+        env={
+            "WORKFLOW_SKILLS_CANARY_PERCENT": "42",
+            "MOONMIND_LIVE_SESSION_ENABLED_DEFAULT": "false",
+        }
+    )
+
+    canary = service.effective_value("skills.canary_percent", scope="workspace")
+    live_sessions = service.effective_value(
+        "live_sessions.default_enabled", scope="workspace"
+    )
+
+    assert canary.value == 42
+    assert isinstance(canary.value, int)
+    assert live_sessions.value is False
+
+
 def test_secret_ref_diagnostic_does_not_expose_secret_plaintext():
     service = SettingsCatalogService(
         env={"MOONMIND_GITHUB_TOKEN_REF": "env://MISSING_GITHUB_TOKEN"}
@@ -68,6 +86,23 @@ def test_secret_ref_diagnostic_does_not_expose_secret_plaintext():
     assert diagnostic.severity == "error"
     assert "MISSING_GITHUB_TOKEN" not in diagnostic.message
     assert "plaintext" not in diagnostic.model_dump_json().lower()
+
+
+def test_invalid_secret_ref_environment_value_is_redacted():
+    service = SettingsCatalogService(
+        env={"MOONMIND_GITHUB_TOKEN_REF": "raw-github-token"}
+    )
+
+    effective = service.effective_value(
+        "integrations.github.token_ref", scope="workspace"
+    )
+
+    assert effective.value is None
+    assert [diagnostic.code for diagnostic in effective.diagnostics] == [
+        "inherited_null",
+        "invalid_secret_ref",
+    ]
+    assert "raw-github-token" not in effective.model_dump_json()
 
 
 def test_null_secret_ref_reports_inherited_null_diagnostic():

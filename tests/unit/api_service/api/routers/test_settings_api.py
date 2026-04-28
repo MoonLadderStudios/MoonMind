@@ -89,3 +89,41 @@ async def test_effective_settings_endpoint_filters_by_scope():
     body = response.json()
     assert body["scope"] == "user"
     assert list(body["values"]) == ["integrations.github.token_ref"]
+
+
+@pytest.mark.asyncio
+async def test_effective_settings_endpoint_returns_structured_invalid_scope_error():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/v1/settings/effective",
+            params={"scope": "organization"},
+        )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_scope"
+    assert body["scope"] == "organization"
+    assert body["details"]["allowed_scopes"] == [
+        "operator",
+        "system",
+        "user",
+        "workspace",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_patch_settings_invalid_scope_uses_settings_error_contract():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.patch(
+            "/api/v1/settings/organization",
+            json={"changes": {"workflow.default_publish_mode": "branch"}},
+        )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_scope"
+    assert body["scope"] == "organization"

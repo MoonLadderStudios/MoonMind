@@ -102,7 +102,7 @@ class SettingsError(BaseModel):
     error: str
     message: str
     key: str | None = None
-    scope: SettingScope | None = None
+    scope: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -266,6 +266,7 @@ class SettingsCatalogService:
         self._env = env if env is not None else os.environ
         self._registry = registry
         self._entries_by_key = {entry.key: entry for entry in registry}
+        self._redacted_invalid_secret_refs: set[str] = set()
 
     def catalog(
         self,
@@ -364,7 +365,7 @@ class SettingsCatalogService:
     def _resolve_value(self, entry: SettingRegistryEntry) -> tuple[Any, str]:
         for alias in entry.env_aliases:
             if alias in self._env:
-                return self._env[alias], "environment"
+                return self._parse_env_value(entry, self._env[alias]), "environment"
         if entry.settings_path is not None:
             current: Any = self._settings
             try:
@@ -374,6 +375,26 @@ class SettingsCatalogService:
             except AttributeError:
                 return None, "missing"
         return entry.default_value, "default"
+
+    def _parse_env_value(self, entry: SettingRegistryEntry, raw_value: str) -> Any:
+        if entry.value_type == "integer":
+            try:
+                return int(raw_value)
+            except ValueError:
+                return raw_value
+        if entry.value_type == "boolean":
+            normalized = raw_value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+            return raw_value
+        if entry.value_type == "secret_ref":
+            diagnostic = self._secret_ref_diagnostic(entry, raw_value)
+            if diagnostic is not None and diagnostic.code == "invalid_secret_ref":
+                self._redacted_invalid_secret_refs.add(entry.key)
+                return None
+        return raw_value
 
     def _source_explanation(self, entry: SettingRegistryEntry, source: str) -> str:
         if source == "environment":
@@ -406,6 +427,14 @@ class SettingsCatalogService:
                     severity="info",
                 )
             )
+            if entry.key in self._redacted_invalid_secret_refs:
+                diagnostics.append(
+                    SettingDiagnostic(
+                        code="invalid_secret_ref",
+                        message=f"{entry.key} is not a valid SecretRef.",
+                        severity="error",
+                    )
+                )
         if entry.value_type == "secret_ref" and isinstance(value, str):
             diagnostic = self._secret_ref_diagnostic(entry, value)
             if diagnostic is not None:
@@ -441,7 +470,7 @@ def settings_error(
     message: str,
     *,
     key: str | None = None,
-    scope: SettingScope | None = None,
+    scope: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> SettingsError:
     return SettingsError(
