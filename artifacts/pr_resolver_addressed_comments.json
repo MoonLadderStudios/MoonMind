@@ -33,5 +33,15 @@
     "id": 3151714511,
     "disposition": "addressed",
     "rationale": "PATCH now preserves no-op handling for empty changes and returns a write-unavailable settings error if validation ever reaches writable settings before persistence exists."
+  },
+  {
+    "id": 3151679728,
+    "disposition": "addressed",
+    "rationale": "Replaced the Jira-specific hidden input set and conditional with a preset-to-hidden-input map used by isVisiblePresetInput."
+  },
+  {
+    "id": 4185978924,
+    "disposition": "addressed",
+    "rationale": "Summary review feedback requested the same generic hidden-input mapping, which is now implemented."
   }
 ]

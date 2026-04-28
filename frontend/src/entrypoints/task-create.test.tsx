@@ -5409,6 +5409,92 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
+  it("hides Source Design Path and Constraints inputs for the Jira Orchestrate preset", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "jira-orchestrate",
+                scope: "global",
+                title: "Jira Orchestrate",
+                description: "Run MoonSpec from a Jira issue.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/task-step-templates/jira-orchestrate?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "jira-orchestrate",
+            scope: "global",
+            title: "Jira Orchestrate",
+            description: "Run MoonSpec from a Jira issue.",
+            latestVersion: "1.0.0",
+            version: "1.0.0",
+            inputs: [
+              {
+                name: "jira_issue_key",
+                label: "Jira Issue Key",
+                type: "text",
+                required: true,
+              },
+              {
+                name: "orchestration_mode",
+                label: "Orchestration Mode",
+                type: "enum",
+                required: true,
+                default: "runtime",
+                options: ["runtime", "docs"],
+              },
+              {
+                name: "source_design_path",
+                label: "Source Design Path",
+                type: "text",
+                required: false,
+                default: "",
+              },
+              {
+                name: "constraints",
+                label: "Constraints",
+                type: "textarea",
+                required: false,
+                default: "",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetSection = screen.getByLabelText("Task Presets");
+    const presetSelect = await within(presetSection).findByLabelText("Preset");
+    await waitFor(() => {
+      expect((presetSelect as HTMLSelectElement).value).toBe(
+        "global::::jira-orchestrate",
+      );
+    });
+    expect(
+      await within(presetSection).findByLabelText("Jira Issue Key"),
+    ).not.toBeNull();
+    expect(
+      within(presetSection).getByLabelText("Orchestration Mode"),
+    ).not.toBeNull();
+    expect(within(presetSection).queryByLabelText("Source Design Path")).toBeNull();
+    expect(within(presetSection).queryByLabelText("Constraints")).toBeNull();
+  });
+
   it("shows only PR publish choices for the Jira Breakdown and Orchestrate preset inputs", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
