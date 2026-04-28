@@ -22,6 +22,12 @@ const workspaceCatalog = {
         override_value: null,
         source: 'config_or_default',
         source_explanation: 'Resolved from application settings.',
+        apply_mode: 'next_task',
+        activation_state: 'pending_next_boundary',
+        active: false,
+        pending_value: 'pr',
+        affected_process_or_worker: 'task_creation, publishing',
+        completion_guidance: 'New tasks will use this value when they are created.',
         options: [
           { value: 'none', label: 'None' },
           { value: 'branch', label: 'Branch' },
@@ -56,6 +62,12 @@ const workspaceCatalog = {
         override_value: null,
         source: 'workspace_override',
         source_explanation: 'Resolved from a workspace override.',
+        apply_mode: 'worker_reload',
+        activation_state: 'pending_reload',
+        active: false,
+        pending_value: true,
+        affected_process_or_worker: 'live_sessions',
+        completion_guidance: 'Reload affected workers to activate this value.',
         options: null,
         constraints: null,
         sensitive: false,
@@ -86,6 +98,12 @@ const workspaceCatalog = {
         override_value: null,
         source: 'workspace_override',
         source_explanation: 'Resolved from a workspace override.',
+        apply_mode: 'next_task',
+        activation_state: 'pending_next_boundary',
+        active: false,
+        pending_value: 25,
+        affected_process_or_worker: 'skills',
+        completion_guidance: 'New tasks will use this value when they are created.',
         options: null,
         constraints: { minimum: 0, maximum: 100 },
         sensitive: false,
@@ -118,6 +136,12 @@ const workspaceCatalog = {
         override_value: null,
         source: 'environment',
         source_explanation: 'Resolved from deployment environment.',
+        apply_mode: 'next_launch',
+        activation_state: 'pending_next_boundary',
+        active: false,
+        pending_value: 'env://GITHUB_TOKEN',
+        affected_process_or_worker: 'github, integrations',
+        completion_guidance: 'New launches will use this value the next time they start.',
         options: null,
         constraints: null,
         sensitive: false,
@@ -132,7 +156,13 @@ const workspaceCatalog = {
         order: 40,
         audit: { store_old_value: true, store_new_value: true, redact: true },
         value_version: 1,
-        diagnostics: [],
+        diagnostics: [
+          {
+            code: 'unresolved_secret_ref',
+            message: 'integrations.github.token_ref references a managed secret that does not exist.',
+            severity: 'error',
+          },
+        ],
       },
     ],
     Advanced: [
@@ -150,6 +180,12 @@ const workspaceCatalog = {
         override_value: null,
         source: 'default',
         source_explanation: 'Resolved from default.',
+        apply_mode: 'immediate',
+        activation_state: 'active',
+        active: true,
+        pending_value: null,
+        affected_process_or_worker: 'mission_control',
+        completion_guidance: null,
         options: null,
         constraints: { min_length: 3, max_length: 24 },
         sensitive: false,
@@ -180,6 +216,12 @@ const workspaceCatalog = {
         override_value: null,
         source: 'default',
         source_explanation: 'Resolved from default.',
+        apply_mode: 'immediate',
+        activation_state: 'active',
+        active: true,
+        pending_value: null,
+        affected_process_or_worker: 'notifications',
+        completion_guidance: null,
         options: null,
         constraints: null,
         sensitive: false,
@@ -210,6 +252,12 @@ const workspaceCatalog = {
         override_value: null,
         source: 'default',
         source_explanation: 'Resolved from default.',
+        apply_mode: 'immediate',
+        activation_state: 'active',
+        active: true,
+        pending_value: null,
+        affected_process_or_worker: 'git',
+        completion_guidance: null,
         options: null,
         constraints: null,
         sensitive: false,
@@ -240,6 +288,13 @@ const workspaceCatalog = {
         override_value: null,
         source: 'operator_locked',
         source_explanation: 'Resolved from operator policy.',
+        apply_mode: 'manual_operation',
+        activation_state: 'pending_manual_operation',
+        active: false,
+        pending_value: 'normal',
+        affected_process_or_worker: 'operations',
+        completion_guidance:
+          'Use the related operation control to activate this value after coordinating affected operational workers and confirming no task launch is in progress.',
         options: null,
         constraints: null,
         sensitive: false,
@@ -254,6 +309,42 @@ const workspaceCatalog = {
         order: 80,
         audit: { store_old_value: true, store_new_value: true, redact: false },
         value_version: 1,
+        diagnostics: [],
+      },
+      {
+        key: 'operations.reset_mode',
+        title: 'Pending Reset Mode',
+        description: 'A reset waiting for restart.',
+        category: 'Advanced',
+        section: 'user-workspace',
+        type: 'string',
+        ui: 'readonly',
+        scopes: ['workspace'],
+        default_value: null,
+        effective_value: null,
+        override_value: null,
+        source: 'workspace_override',
+        source_explanation: 'Resolved from a workspace override.',
+        apply_mode: 'process_restart',
+        activation_state: 'pending_restart',
+        active: false,
+        pending_value: null,
+        affected_process_or_worker: 'api_service',
+        completion_guidance: 'Restart the affected process to activate this value.',
+        options: null,
+        constraints: null,
+        sensitive: false,
+        secret_role: null,
+        read_only: true,
+        read_only_reason: null,
+        requires_reload: false,
+        requires_worker_restart: false,
+        requires_process_restart: true,
+        applies_to: ['api_service'],
+        depends_on: [],
+        order: 90,
+        audit: { store_old_value: true, store_new_value: true, redact: false },
+        value_version: 2,
         diagnostics: [],
       },
     ],
@@ -323,10 +414,23 @@ describe('GeneratedSettingsSection', () => {
     expect(screen.getAllByText('Workspace')).not.toHaveLength(0);
     expect(screen.getByText('Worker restart')).toBeTruthy();
     expect(screen.getByText('Worker restart required.')).toBeTruthy();
+    expect(screen.getAllByText('Applies on next task')).not.toHaveLength(0);
+    expect(screen.getAllByText('Pending next boundary')).not.toHaveLength(0);
+    expect(screen.getAllByText('New tasks will use this value when they are created.')).not.toHaveLength(0);
+    expect(
+      screen.getByText(
+        'Use the related operation control to activate this value after coordinating affected operational workers and confirming no task launch is in progress.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('Pending: Not set')).toBeTruthy();
     expect(screen.getByText('task_creation')).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('Search settings'), { target: { value: 'github' } });
     expect(screen.getByText('GitHub Token Reference')).toBeTruthy();
+    expect(
+      screen.getByText('integrations.github.token_ref references a managed secret that does not exist.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('github-token-plaintext')).toBeNull();
     expect(screen.queryByText('Default Publish Mode')).toBeNull();
 
     fireEvent.change(screen.getByLabelText('Category'), { target: { value: 'Integrations' } });

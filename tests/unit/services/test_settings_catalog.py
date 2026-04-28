@@ -9,10 +9,12 @@ from api_service.db.models import (
     ManagedSecret,
     ProviderCredentialSource,
     RuntimeMaterializationMode,
+    SecretStatus,
     SettingsAuditEvent,
 )
 from api_service.services.settings_catalog import (
     SETTINGS_PERMISSION_NAMES,
+    SettingAuditPolicy,
     SettingsCatalogService,
 )
 
@@ -47,6 +49,13 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
     assert default_runtime.scopes == ["workspace"]
     assert default_runtime.constraints is None
     assert default_runtime.source == "config_or_default"
+    assert default_runtime.apply_mode == "next_task"
+    assert default_runtime.activation_state == "active"
+    assert default_runtime.active is True
+    assert default_runtime.pending_value is None
+    assert default_runtime.completion_guidance == (
+        "New tasks will use this value when they are created."
+    )
     assert default_runtime.requires_reload is False
     assert default_runtime.requires_worker_restart is False
     assert default_runtime.requires_process_restart is False
@@ -64,6 +73,142 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
         for descriptor in descriptors
     }
     assert "workflow.github_token" not in all_keys
+
+
+def test_catalog_rejects_descriptor_without_apply_mode():
+    broken_entry = SettingsCatalogService(env={})._registry[0].__class__(
+        key="broken.apply_mode",
+        title="Broken Apply Mode",
+        category="Broken",
+        section="user-workspace",
+        value_type="string",
+        ui="text",
+        scopes=("workspace",),
+        order=999,
+        apply_mode="",  # type: ignore[arg-type]
+        applies_to=("task_creation",),
+    )
+    service = SettingsCatalogService(env={}, registry=(broken_entry,))
+
+    with pytest.raises(ValueError, match="broken\\.apply_mode"):
+        service.catalog(section="user-workspace", scope="workspace")
+
+
+def test_activation_metadata_covers_supported_apply_modes():
+    entry_type = SettingsCatalogService(env={})._registry[0].__class__
+    registry = (
+        entry_type(
+            key="test.immediate",
+            title="Immediate",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="ready",
+            order=1,
+            apply_mode="immediate",
+        ),
+        entry_type(
+            key="test.next_request",
+            title="Next Request",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="queued",
+            order=2,
+            apply_mode="next_request",
+            applies_to=("catalog",),
+        ),
+        entry_type(
+            key="test.next_task",
+            title="Next Task",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="queued",
+            order=3,
+            apply_mode="next_task",
+            applies_to=("task_creation",),
+        ),
+        entry_type(
+            key="test.next_launch",
+            title="Next Launch",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="queued",
+            order=4,
+            apply_mode="next_launch",
+            applies_to=("runtime_launch",),
+        ),
+        entry_type(
+            key="test.worker_reload",
+            title="Worker Reload",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="queued",
+            order=5,
+            apply_mode="worker_reload",
+            requires_reload=True,
+            applies_to=("worker",),
+        ),
+        entry_type(
+            key="test.process_restart",
+            title="Process Restart",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="queued",
+            order=6,
+            apply_mode="process_restart",
+            requires_process_restart=True,
+            applies_to=("api_service",),
+        ),
+        entry_type(
+            key="test.manual_operation",
+            title="Manual Operation",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="queued",
+            order=7,
+            apply_mode="manual_operation",
+            applies_to=("operations",),
+        ),
+    )
+    service = SettingsCatalogService(env={}, registry=registry)
+
+    descriptors = service.catalog(section="user-workspace", scope="workspace").categories[
+        "Test"
+    ]
+    by_key = {descriptor.key: descriptor for descriptor in descriptors}
+
+    assert by_key["test.immediate"].activation_state == "active"
+    assert by_key["test.immediate"].pending_value is None
+    assert by_key["test.next_request"].activation_state == "active"
+    assert by_key["test.next_task"].completion_guidance == (
+        "New tasks will use this value when they are created."
+    )
+    assert by_key["test.next_launch"].completion_guidance == (
+        "New launches will use this value the next time they start."
+    )
+    assert by_key["test.worker_reload"].activation_state == "active"
+    assert by_key["test.process_restart"].activation_state == "active"
+    assert by_key["test.manual_operation"].activation_state == "active"
 
 
 def test_catalog_exposes_provider_profile_reference_without_launch_semantics():
@@ -193,6 +338,9 @@ async def _workspace_override_persists_and_reports_version(settings_session):
     assert effective.value == "branch"
     assert effective.source == "workspace_override"
     assert effective.value_version == 1
+    assert effective.activation_state == "pending_next_boundary"
+    assert effective.active is False
+    assert effective.pending_value == "branch"
 
     updated = await service.apply_overrides(
         scope="workspace",
@@ -201,6 +349,10 @@ async def _workspace_override_persists_and_reports_version(settings_session):
     )
     assert updated.values["workflow.default_publish_mode"].value == "none"
     assert updated.values["workflow.default_publish_mode"].value_version == 2
+    assert (
+        updated.values["workflow.default_publish_mode"].activation_state
+        == "pending_next_boundary"
+    )
 
 
 @pytest.mark.asyncio
@@ -238,6 +390,63 @@ async def test_provider_profile_reference_reports_missing_and_disabled_diagnosti
         disabled_value = disabled.values["workflow.default_provider_profile_ref"]
         assert disabled_value.diagnostics[0].code == "provider_profile_disabled"
         assert disabled_value.diagnostics[0].details["launch_blocker"] is True
+
+
+@pytest.mark.asyncio
+async def test_late_diagnostics_report_restored_reference_gaps_without_plaintext(
+    settings_session_maker,
+) -> None:
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            ManagedSecret(
+                slug="restored-github-token",
+                ciphertext="restored-secret-plaintext",
+                status=SecretStatus.ACTIVE,
+                details={},
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"integrations.github.token_ref": "db://restored-github-token"},
+            expected_versions={"integrations.github.token_ref": 1},
+            reason="restore settings reference",
+        )
+        healthy = await service.diagnostics(
+            scope="workspace",
+            key="integrations.github.token_ref",
+        )
+        healthy_github = healthy.values["integrations.github.token_ref"]
+        assert healthy_github.diagnostics == []
+        assert healthy_github.pending_value is None
+
+        row = (
+            await settings_session.execute(
+                select(ManagedSecret).where(
+                    ManagedSecret.slug == "restored-github-token"
+                )
+            )
+        ).scalar_one()
+        row.status = SecretStatus.DISABLED
+        await settings_session.commit()
+
+        late_service = SettingsCatalogService(env={}, session=settings_session)
+        broken = await late_service.diagnostics(
+            scope="workspace",
+            key="integrations.github.token_ref",
+        )
+
+    github = broken.values["integrations.github.token_ref"]
+    assert github.diagnostics[0].code == "unresolved_secret_ref"
+    assert github.diagnostics[0].details == {
+        "ref_scheme": "db",
+        "status": "disabled",
+        "launch_blocker": True,
+    }
+    assert github.pending_value is None
+    assert "restored-secret-plaintext" not in github.model_dump_json()
 
 
 @pytest.mark.asyncio
@@ -398,6 +607,50 @@ async def _unsafe_values_rejected_but_secret_refs_are_allowed(settings_session):
         expected_versions={"integrations.github.token_ref": 1},
     )
     assert response.values["integrations.github.token_ref"].value == "env://GITHUB_TOKEN"
+    assert (
+        response.values["integrations.github.token_ref"].pending_value
+        == "env://GITHUB_TOKEN"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pending_activation_redacts_sensitive_non_reference_values(
+    settings_session_maker,
+):
+    entry_type = SettingsCatalogService(env={})._registry[0].__class__
+    registry = (
+        entry_type(
+            key="test.sensitive_runtime_value",
+            title="Sensitive Runtime Value",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            order=1,
+            apply_mode="process_restart",
+            requires_process_restart=True,
+            applies_to=("api_service",),
+            sensitive=True,
+            audit=SettingAuditPolicy(redact=True),
+        ),
+    )
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            registry=registry,
+            session=settings_session,
+        )
+
+        response = await service.apply_overrides(
+            scope="workspace",
+            changes={"test.sensitive_runtime_value": "sensitive-runtime-secret"},
+            expected_versions={"test.sensitive_runtime_value": 1},
+        )
+
+    value = response.values["test.sensitive_runtime_value"]
+    assert value.activation_state == "pending_restart"
+    assert value.pending_value == "[redacted]"
 
 
 @pytest.mark.asyncio
@@ -596,6 +849,32 @@ async def test_audit_entries_persist_actor_identity(settings_session_maker):
 
 
 @pytest.mark.asyncio
+async def test_audit_entries_expose_apply_mode_and_affected_systems(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"workflow.default_publish_mode": "branch"},
+            expected_versions={"workflow.default_publish_mode": 1},
+            reason="configure publish mode",
+        )
+
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+    assert entries[0].event_type == "settings.override.updated"
+    assert entries[0].key == "workflow.default_publish_mode"
+    assert entries[0].scope == "workspace"
+    assert entries[0].apply_mode == "next_task"
+    assert entries[0].affected_systems == ["task_creation", "publishing"]
+    assert entries[0].validation_outcome == "accepted"
+    assert entries[0].created_at is not None
+
+
+@pytest.mark.asyncio
 async def test_audit_redactor_blocks_secret_like_values_even_without_descriptor(
     settings_session_maker,
 ):
@@ -693,6 +972,13 @@ async def test_settings_diagnostics_include_source_restart_and_recent_change(
     assert github.source == "workspace_override"
     assert github.recent_change is not None
     assert github.recent_change.reason == "wire github token"
+    assert github.apply_mode == "next_launch"
+    assert github.activation_state == "active"
+    assert github.active is True
+    assert github.completion_guidance == (
+        "New launches will use this value the next time they start."
+    )
+    assert github.affected_process_or_worker == "github, integrations"
     assert github.diagnostics[0].code == "unresolved_secret_ref"
     assert github.diagnostics[0].details["launch_blocker"] is True
     assert "missing-token" not in github.model_dump_json()

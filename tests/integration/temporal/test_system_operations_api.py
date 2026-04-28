@@ -7,8 +7,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from api_service.api.routers.settings import SETTINGS_CURRENT_USER_DEP
 from api_service.api.routers.system_operations import _get_temporal_execution_service
 from api_service.db.base import get_async_session
+from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
 
@@ -80,3 +82,50 @@ def test_worker_pause_route_matches_settings_runtime_contract(tmp_path) -> None:
     assert command.status_code == 200
     assert command.json()["system"]["workersPaused"] is True
     assert command.json()["audit"]["latest"][0]["action"] == "pause"
+
+
+def test_settings_catalog_contract_exposes_apply_semantics(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/settings-contract-int.db")
+
+    async def _setup():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    asyncio_run = __import__("asyncio").run
+    asyncio_run(_setup())
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    original_session_maker = db_base.async_session_maker
+    db_base.async_session_maker = session_maker
+
+    async def _session_dep():
+        async with session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_async_session] = _session_dep
+    app.dependency_overrides[SETTINGS_CURRENT_USER_DEP] = _override_user
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/v1/settings/catalog",
+                params={"section": "user-workspace", "scope": "workspace"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+        db_base.async_session_maker = original_session_maker
+        asyncio_run(engine.dispose())
+
+    assert response.status_code == 200
+    workflow_descriptors = response.json()["categories"]["Workflow"]
+    default_runtime = next(
+        descriptor
+        for descriptor in workflow_descriptors
+        if descriptor["key"] == "workflow.default_task_runtime"
+    )
+    assert default_runtime["apply_mode"] == "next_task"
+    assert default_runtime["activation_state"] == "active"
+    assert default_runtime["active"] is True
+    assert default_runtime["pending_value"] is None
+    assert default_runtime["affected_process_or_worker"] == "task_creation, workflow_runtime"
+    assert default_runtime["completion_guidance"] == (
+        "New tasks will use this value when they are created."
+    )

@@ -78,6 +78,13 @@ async def test_settings_catalog_endpoint_returns_grouped_descriptors():
     assert descriptor["type"] == "enum"
     assert descriptor["ui"] == "select"
     assert descriptor["source"] in {"config_or_default", "environment"}
+    assert descriptor["apply_mode"] == "next_task"
+    assert descriptor["activation_state"] == "active"
+    assert descriptor["active"] is True
+    assert descriptor["pending_value"] is None
+    assert descriptor["completion_guidance"] == (
+        "New tasks will use this value when they are created."
+    )
     assert descriptor["audit"] == {
         "store_old_value": True,
         "store_new_value": True,
@@ -479,6 +486,8 @@ async def test_settings_audit_endpoint_redacts_without_secret_metadata_permissio
     assert audit.status_code == 200
     item = audit.json()["items"][0]
     assert item["key"] == "integrations.github.token_ref"
+    assert item["apply_mode"] == "next_launch"
+    assert item["affected_systems"] == ["github", "integrations"]
     assert item["new_value"] is None
     assert item["redacted"] is True
     assert "env://GITHUB_TOKEN" not in audit.text
@@ -633,6 +642,13 @@ async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output
     value = response.json()["values"]["integrations.github.token_ref"]
     assert value["source"] == "workspace_override"
     assert value["recent_change"]["reason"] == "select managed secret"
+    assert value["apply_mode"] == "next_launch"
+    assert value["activation_state"] == "active"
+    assert value["active"] is True
+    assert value["completion_guidance"] == (
+        "New launches will use this value the next time they start."
+    )
+    assert value["affected_process_or_worker"] == "github, integrations"
     assert value["diagnostics"][0]["code"] == "unresolved_secret_ref"
     assert value["diagnostics"][0]["details"]["launch_blocker"] is True
     assert "missing-token" not in response.text
@@ -723,6 +739,7 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
     assert active_value["diagnostics"] == []
     assert "active-plaintext" not in active.text
     assert disabled.status_code == 200
+    assert disabled_value["pending_value"] == "db://disabled-github-token"
     assert disabled_value["diagnostics"] == [
         {
             "code": "unresolved_secret_ref",
@@ -740,6 +757,7 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
     ]
     assert "disabled-plaintext" not in disabled.text
     assert missing.status_code == 200
+    assert missing_value["pending_value"] == "db://missing-github-token"
     assert missing_value["diagnostics"] == [
         {
             "code": "unresolved_secret_ref",
@@ -752,6 +770,6 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
                     "ref_scheme": "db",
                     "status": "missing",
                     "launch_blocker": True,
-                },
+            },
         }
     ]

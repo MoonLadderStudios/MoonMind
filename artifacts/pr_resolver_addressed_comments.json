@@ -1,42 +1,32 @@
 [
   {
-    "id": 3156020131,
+    "id": 3156682613,
     "disposition": "addressed",
-    "rationale": "Scoped settings audit reads by workspace_id and subject user_id/default subject, with regression coverage for cross-workspace and cross-user isolation."
+    "rationale": "Activation metadata now defaults clean catalog/effective/diagnostic reads to active and only marks newly committed non-immediate override responses as pending activation."
   },
   {
-    "id": 3156020136,
-    "disposition": "addressed",
-    "rationale": "Recent-change diagnostics now use the same workspace_id and subject scoping through the request-bound SettingsCatalogService context."
-  },
-  {
-    "id": 3156020140,
-    "disposition": "addressed",
-    "rationale": "Stored-redacted null audit values now report stored_redacted in redaction_reasons, with regression coverage for the null-value case."
-  },
-  {
-    "id": 3156020146,
-    "disposition": "addressed",
-    "rationale": "Changed secret-prefix detection from startswith to substring checks for audit redaction and unsafe payload detection, with embedded-prefix regression coverage."
-  },
-  {
-    "id": 4191041570,
+    "id": 4191816834,
     "disposition": "not-applicable",
-    "rationale": "Summary review comment; its actionable findings are tracked by the individual discussion IDs."
+    "rationale": "Automated review summary container with no independent actionable request beyond the inline review comment."
   },
   {
-    "id": 3156040195,
+    "id": 3156699062,
     "disposition": "addressed",
-    "rationale": "Diagnostics now fall back to sessionless catalog diagnostics when DB persistence is unavailable, preserving troubleshooting visibility."
+    "rationale": "Pending activation values now redact sensitive non-reference values while preserving safe SecretRef strings such as db:// and env:// references."
   },
   {
-    "id": 3156040200,
+    "id": 3156699081,
     "disposition": "addressed",
-    "rationale": "Settings audit writes now persist actor_user_id from the authenticated request context, with service and route regression coverage."
+    "rationale": "Registry apply-mode validation errors now include the failing setting key and the specific consistency rule."
   },
   {
-    "id": 4191064809,
+    "id": 3156699085,
+    "disposition": "addressed",
+    "rationale": "Mission Control now renders pending values whenever a setting is inactive and pending_value is present, including explicit null resets displayed as Not set."
+  },
+  {
+    "id": 4191835297,
     "disposition": "not-applicable",
-    "rationale": "Informational automated review wrapper; no separate actionable code concern beyond the linked discussion comments."
+    "rationale": "Automated review summary container; the actionable findings from the summary are tracked by the inline review comment ids."
   }
 ]

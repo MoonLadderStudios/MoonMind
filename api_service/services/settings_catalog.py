@@ -24,6 +24,22 @@ from moonmind.config.settings import AppSettings, settings as app_settings
 
 SettingScope = Literal["user", "workspace", "system", "operator"]
 SettingSection = Literal["providers-secrets", "user-workspace", "operations"]
+SettingApplyMode = Literal[
+    "immediate",
+    "next_request",
+    "next_task",
+    "next_launch",
+    "worker_reload",
+    "process_restart",
+    "manual_operation",
+]
+SettingActivationState = Literal[
+    "active",
+    "pending_next_boundary",
+    "pending_reload",
+    "pending_restart",
+    "pending_manual_operation",
+]
 _DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
 _PERSISTED_SCOPES: set[SettingScope] = {"user", "workspace"}
 _SECRET_PREFIXES = ("ghp_", "github_pat_", "AIza", "AKIA")
@@ -122,6 +138,12 @@ class SettingDescriptor(BaseModel):
     override_value: Any = None
     source: str
     source_explanation: str
+    apply_mode: SettingApplyMode
+    activation_state: SettingActivationState
+    active: bool
+    pending_value: Any = None
+    affected_process_or_worker: str | None = None
+    completion_guidance: str | None = None
     options: list[SettingOption] | None = None
     constraints: SettingConstraints | None = None
     sensitive: bool = False
@@ -151,6 +173,12 @@ class EffectiveSettingValue(BaseModel):
     value: Any = None
     source: str
     source_explanation: str
+    apply_mode: SettingApplyMode
+    activation_state: SettingActivationState
+    active: bool
+    pending_value: Any = None
+    affected_process_or_worker: str | None = None
+    completion_guidance: str | None = None
     value_version: int = 1
     diagnostics: list[SettingDiagnostic] = Field(default_factory=list)
 
@@ -202,6 +230,12 @@ class SettingsDiagnosticRead(BaseModel):
     scope: SettingScope
     source: str
     source_explanation: str
+    apply_mode: SettingApplyMode
+    activation_state: SettingActivationState
+    active: bool
+    pending_value: Any = None
+    affected_process_or_worker: str | None = None
+    completion_guidance: str | None = None
     read_only: bool = False
     read_only_reason: str | None = None
     requires_reload: bool = False
@@ -252,6 +286,7 @@ class SettingRegistryEntry:
     secret_role: str | None = None
     read_only: bool = False
     read_only_reason: str | None = None
+    apply_mode: SettingApplyMode = "immediate"
     requires_reload: bool = False
     requires_worker_restart: bool = False
     requires_process_restart: bool = False
@@ -273,6 +308,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value="codex",
         settings_path=("workflow", "default_task_runtime"),
         env_aliases=("WORKFLOW_DEFAULT_TASK_RUNTIME", "MOONMIND_DEFAULT_TASK_RUNTIME"),
+        apply_mode="next_task",
         options=(
             ("codex", "Codex"),
             ("codex_cli", "Codex CLI"),
@@ -295,6 +331,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value="pr",
         settings_path=("workflow", "default_publish_mode"),
         env_aliases=("WORKFLOW_DEFAULT_PUBLISH_MODE", "MOONMIND_DEFAULT_PUBLISH_MODE"),
+        apply_mode="next_task",
         options=(("none", "None"), ("branch", "Branch"), ("pr", "Pull Request")),
         applies_to=("task_creation", "publishing"),
         order=20,
@@ -315,6 +352,8 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
             "MOONMIND_SKILL_POLICY_MODE",
             "SKILL_POLICY_MODE",
         ),
+        apply_mode="worker_reload",
+        requires_reload=True,
         options=(("permissive", "Permissive"), ("allowlist", "Allowlist")),
         applies_to=("workflow_runtime", "skills"),
         order=30,
@@ -331,6 +370,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value=100,
         settings_path=("workflow", "skills_canary_percent"),
         env_aliases=("WORKFLOW_SKILLS_CANARY_PERCENT",),
+        apply_mode="next_task",
         constraints=SettingConstraints(minimum=0, maximum=100),
         applies_to=("workflow_runtime", "skills"),
         order=40,
@@ -349,6 +389,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         default_value=True,
         settings_path=("workflow", "live_session_enabled_default"),
         env_aliases=("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT",),
+        apply_mode="next_task",
         applies_to=("task_creation", "live_sessions"),
         order=50,
     ),
@@ -363,6 +404,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         scopes=("user", "workspace"),
         default_value=None,
         env_aliases=("MOONMIND_GITHUB_TOKEN_REF",),
+        apply_mode="next_launch",
         sensitive=False,
         secret_role="github_token",
         applies_to=("github", "integrations"),
@@ -387,6 +429,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         scopes=("user", "workspace"),
         default_value=None,
         env_aliases=("MOONMIND_DEFAULT_PROVIDER_PROFILE_REF",),
+        apply_mode="next_launch",
         applies_to=("task_creation", "workflow_runtime", "provider_profiles"),
         order=70,
     ),
@@ -423,6 +466,7 @@ class SettingsCatalogService:
         section: SettingSection | None = None,
         scope: SettingScope | None = None,
     ) -> SettingsCatalogResponse:
+        self._validate_registry()
         categories: dict[str, list[SettingDescriptor]] = {}
         for entry in sorted(self._registry, key=lambda item: item.order):
             if section is not None and entry.section != section:
@@ -450,6 +494,7 @@ class SettingsCatalogService:
         section: SettingSection | None = None,
         scope: SettingScope | None = None,
     ) -> SettingsCatalogResponse:
+        self._validate_registry()
         entries = [
             entry
             for entry in sorted(self._registry, key=lambda item: item.order)
@@ -513,12 +558,14 @@ class SettingsCatalogService:
         if scope not in entry.scopes:
             raise ValueError(scope)
         value, source = self._resolve_value(entry)
+        activation = self._activation_metadata(entry, value)
         return EffectiveSettingValue(
             key=entry.key,
             scope=scope,
             value=value,
             source=source,
             source_explanation=self._source_explanation(entry, source),
+            **activation,
             diagnostics=self._diagnostics(entry, value),
         )
 
@@ -562,6 +609,7 @@ class SettingsCatalogService:
             override_value=None,
             source=source,
             source_explanation=self._source_explanation(entry, source),
+            **self._activation_metadata(entry, value),
             options=[
                 SettingOption(value=value, label=label)
                 for value, label in entry.options
@@ -609,6 +657,7 @@ class SettingsCatalogService:
             value=value,
             source=source,
             source_explanation=self._source_explanation(entry, source),
+            **self._activation_metadata(entry, value),
             value_version=version,
             diagnostics=self._diagnostics_for_override(entry, value, override_present),
         )
@@ -649,6 +698,7 @@ class SettingsCatalogService:
                 value=data[0],
                 source=data[1],
                 source_explanation=self._source_explanation(entry, data[1]),
+                **self._activation_metadata(entry, data[0]),
                 value_version=data[2],
                 diagnostics=self._diagnostics_for_override(entry, data[0], data[3]),
             )
@@ -754,6 +804,11 @@ class SettingsCatalogService:
                 value=data[0],
                 source=data[1],
                 source_explanation=self._source_explanation(entries[key], data[1]),
+                **self._activation_metadata(
+                    entries[key],
+                    data[0],
+                    pending_activation=True,
+                ),
                 value_version=data[2],
                 diagnostics=self._diagnostics_for_override(
                     entries[key], data[0], data[3]
@@ -904,6 +959,7 @@ class SettingsCatalogService:
                 scope=scope,
                 source=data[1],
                 source_explanation=self._source_explanation(entry, data[1]),
+                **self._activation_metadata(entry, data[0]),
                 read_only=entry.read_only,
                 read_only_reason=entry.read_only_reason,
                 requires_reload=entry.requires_reload,
@@ -914,6 +970,71 @@ class SettingsCatalogService:
                 recent_change=recent_changes.get(entry.key),
             )
         return SettingsDiagnosticsResponse(scope=scope, values=values)
+
+    def _validate_registry(self) -> None:
+        for entry in self._registry:
+            if not entry.apply_mode:
+                raise ValueError(f"invalid_apply_mode for setting {entry.key!r}")
+            if entry.apply_mode == "worker_reload" and not entry.requires_reload:
+                raise ValueError(
+                    f"invalid_apply_mode for setting {entry.key!r}: "
+                    "worker_reload requires requires_reload"
+                )
+            if entry.apply_mode == "process_restart" and not (
+                entry.requires_worker_restart or entry.requires_process_restart
+            ):
+                raise ValueError(
+                    f"invalid_apply_mode for setting {entry.key!r}: "
+                    "process_restart requires a restart flag"
+                )
+            if entry.apply_mode not in {"immediate"} and not entry.applies_to:
+                raise ValueError(
+                    f"invalid_apply_mode for setting {entry.key!r}: "
+                    "non-immediate settings require affected systems"
+                )
+
+    def _activation_metadata(
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+        *,
+        pending_activation: bool = False,
+    ) -> dict[str, Any]:
+        pending_state_by_mode: dict[str, SettingActivationState] = {
+            "next_request": "pending_next_boundary",
+            "next_task": "pending_next_boundary",
+            "next_launch": "pending_next_boundary",
+            "worker_reload": "pending_reload",
+            "process_restart": "pending_restart",
+            "manual_operation": "pending_manual_operation",
+        }
+        guidance_by_mode = {
+            "immediate": None,
+            "next_request": "New requests will use this value.",
+            "next_task": "New tasks will use this value when they are created.",
+            "next_launch": "New launches will use this value the next time they start.",
+            "worker_reload": "Reload affected workers to activate this value.",
+            "process_restart": "Restart the affected process to activate this value.",
+            "manual_operation": "Use the related operation control to activate this value.",
+        }
+        activation_state: SettingActivationState = "active"
+        if pending_activation and entry.apply_mode != "immediate":
+            activation_state = pending_state_by_mode[entry.apply_mode]
+        pending_value = None if activation_state == "active" else value
+        if (
+            activation_state != "active"
+            and entry.value_type != "secret_ref"
+            and (entry.sensitive or entry.audit.redact)
+        ):
+            pending_value = "[redacted]"
+        return {
+            "apply_mode": entry.apply_mode,
+            "activation_state": activation_state,
+            "active": activation_state == "active",
+            "pending_value": pending_value,
+            "affected_process_or_worker": ", ".join(entry.applies_to) or None,
+            "completion_guidance": guidance_by_mode[entry.apply_mode],
+        }
 
     def _resolve_value(self, entry: SettingRegistryEntry) -> tuple[Any, str]:
         for alias in entry.env_aliases:
@@ -987,6 +1108,7 @@ class SettingsCatalogService:
             value=value,
             source=source,
             source_explanation=self._source_explanation(entry, source),
+            **self._activation_metadata(entry, value),
             value_version=version,
             diagnostics=self._diagnostics_for_override(entry, value, override_present),
         )
@@ -1465,7 +1587,7 @@ class SettingsCatalogService:
             reason=row.reason,
             request_id=row.request_id,
             validation_outcome="accepted",
-            apply_mode="deferred",
+            apply_mode=entry.apply_mode if entry is not None else None,
             affected_systems=affected_systems,
             created_at=row.created_at,
         )
