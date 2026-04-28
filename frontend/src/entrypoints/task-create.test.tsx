@@ -10216,6 +10216,82 @@ describe("Task Create Entrypoint", () => {
     );
   });
 
+  it("imports Jira images when preset target text is unchanged", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    let attachmentDownloads = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "ENG-202",
+            summary: "Build browser shell",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "Let operators browse Jira stories.",
+            recommendedImports: {
+              presetInstructions:
+                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+              stepInstructions:
+                "Complete Jira issue ENG-202: Build browser shell",
+            },
+            attachments: [
+              {
+                id: "img-1",
+                filename: "wireframe.png",
+                contentType: "image/png",
+                sizeBytes: 10,
+                downloadUrl: "/api/jira/attachments/wireframe.png",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/attachments/wireframe.png") {
+        attachmentDownloads += 1;
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["fake image"], { type: "image/png" }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(
+      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+    );
+
+    const presetInstructions = await screen.findByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(presetInstructions, {
+      target: {
+        value: "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+      },
+    });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issues for preset instructions",
+      }),
+    );
+    fireEvent.change(await screen.findByLabelText("Text import"), {
+      target: { value: "replace" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
+    expect(attachmentDownloads).toBe(1);
+    expect(await screen.findByText("wireframe.png")).toBeTruthy();
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+    );
+  });
+
   it("detaches template step identity and records provenance after Jira step attachment import", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

@@ -3488,6 +3488,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     setSelectedJiraIssueKey(issueKey);
   }
 
+  function resetTemplateStepIdForAttachmentChange(
+    localId: string,
+    attachments: Array<StepAttachmentRef | File>,
+  ) {
+    setSteps((current) =>
+      current.map((step) => {
+        if (
+          step.localId !== localId ||
+          !step.templateStepId ||
+          step.id !== step.templateStepId ||
+          isTemplateBoundStepForAttachments(step, attachments)
+        ) {
+          return step;
+        }
+        return { ...step, id: "" };
+      }),
+    );
+  }
+
   async function importSelectedJiraImages(
     issue: JiraIssueDetail,
     target: JiraImportTarget,
@@ -3589,21 +3608,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             nextObjectiveFiles,
           );
         } else {
-          setSteps((current) =>
-            current.map((step) => {
-              if (
-                step.localId !== target.localId ||
-                !step.templateStepId ||
-                step.id !== step.templateStepId ||
-                isTemplateBoundStepForAttachments(
-                  step,
-                  nextFilesByStep[target.localId] || [],
-                )
-              ) {
-                return step;
-              }
-              return { ...step, id: "" };
-            }),
+          resetTemplateStepIdForAttachmentChange(
+            target.localId,
+            nextFilesByStep[target.localId] || [],
           );
           setSelectedStepAttachmentFiles(nextFilesByStep);
         }
@@ -3627,6 +3634,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (messages.length > 0) {
         setSubmitMessage(messages.join(" "));
       }
+    } catch (error) {
+      const failure =
+        error instanceof Error
+          ? error
+          : new Error("Failed to download Jira images.");
+      setSubmitMessage(failure.message);
+    }
+  }
+
+  async function importSelectedJiraImagesWithReporting(
+    issue: JiraIssueDetail,
+    target: JiraImportTarget,
+    objectiveTextForReapply?: string,
+  ): Promise<void> {
+    try {
+      await importSelectedJiraImages(issue, target, objectiveTextForReapply);
     } catch (error) {
       const failure =
         error instanceof Error
@@ -3665,7 +3688,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         });
         updateStep(importTarget.localId, { id: "" });
       }
-      await importSelectedJiraImages(issue, importTarget);
+      await importSelectedJiraImagesWithReporting(issue, importTarget);
       return;
     }
     if (!selectedJiraImportText.trim()) {
@@ -3677,23 +3700,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         selectedJiraImportText,
         jiraWriteMode,
       );
-      if (nextText.trim() === templateFeatureRequest.trim()) {
-        return;
+      const provenance = createJiraProvenance(
+        issue,
+        selectedJiraBoardId,
+        jiraImportMode,
+        importTarget,
+      );
+      if (nextText.trim() !== templateFeatureRequest.trim()) {
+        setTemplateFeatureRequest(nextText);
+        updatePresetReapplyStateForObjective(
+          nextText,
+          selectedObjectiveAttachmentFiles,
+        );
       }
-      setTemplateFeatureRequest(nextText);
-      setPresetJiraProvenance(
-        createJiraProvenance(
-          issue,
-          selectedJiraBoardId,
-          jiraImportMode,
-          importTarget,
-        ),
-      );
-      updatePresetReapplyStateForObjective(
-        nextText,
-        selectedObjectiveAttachmentFiles,
-      );
-      await importSelectedJiraImages(issue, importTarget, nextText);
+      setPresetJiraProvenance(provenance);
+      await importSelectedJiraImagesWithReporting(issue, importTarget, nextText);
       return;
     }
 
@@ -3727,7 +3748,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const { [importTarget.localId]: _removed, ...rest } = current;
       return rest;
     });
-    await importSelectedJiraImages(issue, importTarget);
+    await importSelectedJiraImagesWithReporting(issue, importTarget);
   }
 
   function updatePresetReapplyStateForObjective(
@@ -3804,19 +3825,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       delete next[targetKey];
       return next;
     });
-    setSteps((current) =>
-      current.map((step) => {
-        if (
-          step.localId !== localId ||
-          !step.templateStepId ||
-          step.id !== step.templateStepId ||
-          isTemplateBoundStepForAttachments(step, mergedFilesForBinding)
-        ) {
-          return step;
-        }
-        return { ...step, id: "" };
-      }),
-    );
+    resetTemplateStepIdForAttachmentChange(localId, mergedFilesForBinding);
     setSelectedStepAttachmentFiles((current) => {
       const mergedFiles = appendDedupedAttachmentFiles(
         current[localId] || [],
