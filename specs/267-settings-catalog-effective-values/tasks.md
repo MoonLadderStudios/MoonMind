@@ -32,7 +32,7 @@
 ## Phase 4: Validation
 
 - [X] T010 Run source traceability validation for `MM-537` and the in-scope DESIGN-REQ IDs across feature artifacts. (FR-010, SC-005)
-- [X] T011 Produce `verification.md` with final MoonSpec verification evidence. (FR-001 through FR-010, SC-001 through SC-005)
+- [X] T011 Run `/moonspec-verify` and produce `verification.md` with final MoonSpec verification evidence. (FR-001 through FR-010, SC-001 through SC-005)
 
 ## Dependencies and Execution Order
 
