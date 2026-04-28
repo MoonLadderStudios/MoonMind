@@ -43,8 +43,16 @@ If this command does not run, does not write `var/pr_resolver/result.json`, or e
 
 ## Terminal Success Contract
 Allowed successful terminal states:
-- `var/pr_resolver/result.json` has `status=merged` and `merge_outcome=merged`.
-- The PR is independently confirmed as already merged after a snapshot/finalize race.
+- `var/pr_resolver/result.json` has `status=merged`, `merge_outcome=merged`, and `mergeAutomationDisposition=merged`.
+- The PR is independently confirmed as already merged after a snapshot/finalize race, with `mergeAutomationDisposition=already_merged`.
+
+## Merge Automation Result Contract
+Every terminal `var/pr_resolver/result.json` MUST include `mergeAutomationDisposition`:
+- `merged`: the resolver merged the PR.
+- `already_merged`: the PR was independently confirmed as already merged.
+- `reenter_gate`: the resolver pushed changes and merge automation must wait for readiness on the new head.
+- `manual_review`: the resolver stopped on a blocker, exhausted attempts, or needs human follow-up.
+- `failed`: the resolver hit a hard execution failure.
 
 Everything else is blocked, failed, or still in-progress. In particular, never finish with `task complete` or a success summary when:
 - the PR remains open,

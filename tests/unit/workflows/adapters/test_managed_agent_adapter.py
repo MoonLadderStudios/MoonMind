@@ -1590,6 +1590,93 @@ async def test_fetch_result_ignores_merged_pr_resolver_artifact(tmp_path: Path):
     assert result.failure_class is None
     assert result.metadata["mergeAutomationDisposition"] == "merged"
 
+async def test_fetch_result_prefers_explicit_pr_resolver_disposition(tmp_path: Path):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "merged",\n'
+            '  "merge_outcome": "merged",\n'
+            '  "mergeAutomationDisposition": "already_merged",\n'
+            '  "reason": "ci_complete"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-explicit-disposition",
+            agent_id="codex_cli",
+            runtime_id="codex_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-explicit-disposition",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-explicit-disposition", pr_resolver_expected=True
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "already_merged"
+
+async def test_fetch_result_fails_when_expected_pr_resolver_artifact_missing(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-missing-artifact",
+            agent_id="codex_cli",
+            runtime_id="codex_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-missing-artifact",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-missing-artifact", pr_resolver_expected=True
+    )
+
+    assert result.failure_class == "user_error"
+    assert "pr-resolver result artifact missing" in (result.summary or "")
+
 async def test_fetch_result_maps_final_state_merged_pr_resolver_artifact_metadata(
     tmp_path: Path,
 ):

@@ -1,5 +1,15 @@
 [
   {
+    "id": 4185976123,
+    "disposition": "addressed",
+    "rationale": "Implemented reenter_gate derivation for remediation next steps and covered it in resolver unit tests."
+  },
+  {
+    "id": 3151677015,
+    "disposition": "addressed",
+    "rationale": "Added the reenter_gate constant, passed next_step through resolver result writers, and mapped run_fix_* next steps to reenter_gate."
+  },
+  {
     "id": 3151717102,
     "disposition": "addressed",
     "rationale": "Replaced the explicit step loop with an any() expression while limiting fallback eligibility to reconstructable step instructions."

@@ -440,6 +440,22 @@ class TestMapAgentRunResult(unittest.TestCase):
         self.assertEqual(result["status"], "FAILED")
         self.assertEqual(result["outputs"]["error"], "execution_error")
 
+    def test_preserves_merge_automation_disposition_metadata(self) -> None:
+        from moonmind.schemas.agent_runtime_models import AgentRunResult
+
+        model = AgentRunResult(
+            summary="PR merged",
+            metadata={
+                "mergeAutomationDisposition": "merged",
+                "headSha": "abc123",
+            },
+        )
+        wf = MoonMindRunWorkflow()
+        result = wf._map_agent_run_result(model)
+        self.assertEqual(result["status"], "COMPLETED")
+        self.assertEqual(result["outputs"]["mergeAutomationDisposition"], "merged")
+        self.assertEqual(result["outputs"]["headSha"], "abc123")
+
 class TestBuildAgentExecutionRequest(unittest.TestCase):
     """Verify the _build_agent_execution_request helper."""
 
