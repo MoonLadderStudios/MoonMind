@@ -1372,59 +1372,11 @@ tr[data-proposal-id].proposal-consuming td {
   color: inherit;
 }
 
-@supports ((background-clip: text) or (-webkit-background-clip: text)) {
-  .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
-  .status-running.is-executing .status-letter-wave,
-  .status-running.is-planning .status-letter-wave {
-    color: rgb(var(--mm-accent-2));
-    background-image:
-      linear-gradient(
-        var(--mm-executing-sweep-angle),
-        transparent 0 36%,
-        var(--mm-executing-letter-halo, rgb(var(--mm-accent-2) / 0.32)) 50%,
-        transparent 64%
-      ),
-      linear-gradient(
-        var(--mm-executing-sweep-angle),
-        currentColor 0 44%,
-        var(--mm-executing-letter-bright, currentColor) 50%,
-        currentColor 56% 100%
-      );
-    background-repeat: no-repeat;
-    background-size:
-      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) var(--mm-executing-sweep-band-height),
-      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-core-width-multiplier)) var(--mm-executing-sweep-band-height);
-    background-position:
-      var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y),
-      calc(var(--mm-executing-sweep-start-x) + var(--mm-executing-sweep-layer-offset-x)) calc(var(--mm-executing-sweep-start-y) + var(--mm-executing-sweep-layer-offset-y));
-    background-clip: text;
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite;
-  }
-
-  .status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
-  .status-running.is-executing .status-letter-wave__glyph,
-  .status-running.is-planning .status-letter-wave__glyph {
-    color: transparent;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .status-running[data-effect="shimmer-sweep"],
   .status-running.is-executing,
   .status-running.is-planning {
     animation: none;
-    background-position:
-      50% 50%,
-      calc(50% + (var(--mm-executing-sweep-layer-offset-x) / 2)) calc(50% + (var(--mm-executing-sweep-layer-offset-y) / 2));
-    background-size: 160% var(--mm-executing-sweep-band-height), 140% var(--mm-executing-sweep-band-height);
-  }
-
-  .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
-  .status-running.is-executing .status-letter-wave,
-  .status-running.is-planning .status-letter-wave {
-    animation: none !important;
     background-position:
       50% 50%,
       calc(50% + (var(--mm-executing-sweep-layer-offset-x) / 2)) calc(50% + (var(--mm-executing-sweep-layer-offset-y) / 2));
