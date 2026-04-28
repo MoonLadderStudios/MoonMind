@@ -579,9 +579,9 @@ Rules:
 
 Rules:
 
-- selecting a Jira issue never mutates the draft automatically
-- text import remains explicit and supports `Replace target text` and `Append to target text`
-- image import remains explicit and supports selecting which supported images to add
+- selecting a Jira issue from the browser imports Jira text into the selected target
+- text import supports `Replace target text` and `Append to target text`
+- selecting a Jira issue also imports supported Jira images into the matching attachment target when image attachments are allowed
 - imported Jira images become structured attachments on the selected target
 - imported Jira images are not injected into instruction text as markdown, HTML, or inline data
 - when importing into a preset-bound step, text and attachment imports both count as manual customization

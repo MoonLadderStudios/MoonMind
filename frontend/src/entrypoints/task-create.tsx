@@ -3589,6 +3589,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             nextObjectiveFiles,
           );
         } else {
+          setSteps((current) =>
+            current.map((step) => {
+              if (
+                step.localId !== target.localId ||
+                !step.templateStepId ||
+                step.id !== step.templateStepId ||
+                isTemplateBoundStepForAttachments(
+                  step,
+                  nextFilesByStep[target.localId] || [],
+                )
+              ) {
+                return step;
+              }
+              return { ...step, id: "" };
+            }),
+          );
           setSelectedStepAttachmentFiles(nextFilesByStep);
         }
       }
@@ -3677,6 +3693,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         nextText,
         selectedObjectiveAttachmentFiles,
       );
+      await importSelectedJiraImages(issue, importTarget, nextText);
       return;
     }
 
@@ -3710,6 +3727,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const { [importTarget.localId]: _removed, ...rest } = current;
       return rest;
     });
+    await importSelectedJiraImages(issue, importTarget);
   }
 
   function updatePresetReapplyStateForObjective(
@@ -6107,23 +6125,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                             }}
                           />
                         </div>
-                        {jiraIntegration?.enabled ? (
-                          <button
-                            type="button"
-                            className="secondary jira-browse-button"
-                            aria-label={`Browse Jira images for Step ${index + 1} attachments`}
-                            title={`Browse Jira images for Step ${index + 1} attachments`}
-                            onClick={() =>
-                              openJiraBrowser({
-                                kind: "step",
-                                localId: step.localId,
-                                attachmentsOnly: true,
-                              })
-                            }
-                          >
-                            Browse Jira images
-                          </button>
-                        ) : null}
                         {attachmentTargetErrors[
                           attachmentTargetKey(step.localId)
                         ] ? (
@@ -6593,22 +6594,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       }}
                     />
                   </label>
-                  {jiraIntegration?.enabled ? (
-                    <button
-                      type="button"
-                      className="secondary jira-browse-button"
-                      aria-label="Browse Jira images for objective attachments"
-                      title="Browse Jira images for objective attachments"
-                      onClick={() =>
-                        openJiraBrowser({
-                          kind: "preset",
-                          attachmentsOnly: true,
-                        })
-                      }
-                    >
-                      Browse Jira images
-                    </button>
-                  ) : null}
                   {attachmentTargetErrors[attachmentTargetKey("objective")] ? (
                     <p className="notice error">
                       {attachmentTargetErrors[attachmentTargetKey("objective")]}
