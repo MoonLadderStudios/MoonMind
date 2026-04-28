@@ -1380,15 +1380,15 @@ tr[data-proposal-id].proposal-consuming td {
     background-image:
       linear-gradient(
         var(--mm-executing-sweep-angle),
-        currentColor 0 36%,
-        var(--mm-executing-letter-bright, currentColor) 50%,
-        currentColor 64% 100%
+        transparent 0 36%,
+        var(--mm-executing-letter-halo, rgb(var(--mm-accent-2) / 0.32)) 50%,
+        transparent 64%
       ),
       linear-gradient(
         var(--mm-executing-sweep-angle),
-        transparent 0 44%,
-        var(--mm-executing-letter-halo, rgb(var(--mm-accent-2) / 0.32)) 50%,
-        transparent 56%
+        currentColor 0 44%,
+        var(--mm-executing-letter-bright, currentColor) 50%,
+        currentColor 56% 100%
       );
     background-repeat: no-repeat;
     background-size:

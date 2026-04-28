@@ -475,6 +475,9 @@ describe('Mission Control shared entry', () => {
       /@supports \(\(background-clip: text\) or \(-webkit-background-clip: text\)\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,[\s\S]*?animation:\s*mm-status-pill-shimmer var\(--mm-executing-sweep-cycle-duration\) linear infinite;/,
     );
     expect(missionControlCss).toMatch(
+      /@supports \(\(background-clip: text\) or \(-webkit-background-clip: text\)\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,[\s\S]*?background-image:\s*linear-gradient\(\s*var\(--mm-executing-sweep-angle\),\s*transparent 0 36%,\s*var\(--mm-executing-letter-halo, rgb\(var\(--mm-accent-2\) \/ 0\.32\)\) 50%,\s*transparent 64%\s*\),\s*linear-gradient\(\s*var\(--mm-executing-sweep-angle\),\s*currentColor 0 44%,\s*var\(--mm-executing-letter-bright, currentColor\) 50%,\s*currentColor 56% 100%\s*\);/,
+    );
+    expect(missionControlCss).toMatch(
       /@supports \(\(background-clip: text\) or \(-webkit-background-clip: text\)\)\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),[\s\S]*?calc\(var\(--mm-executing-sweep-start-x\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-x\)\)\s*calc\(var\(--mm-executing-sweep-start-y\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-y\)\);/,
     );
     expect(missionControlCss).toMatch(
