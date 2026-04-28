@@ -610,7 +610,7 @@ def test_orchestrate_caps_retries_with_attempts_exhausted(
     assert exit_code == 3
     assert result["status"] == "attempts_exhausted"
     assert result["merge_outcome"] == "attempts_exhausted"
-    assert result["mergeAutomationDisposition"] == "manual_review"
+    assert result["mergeAutomationDisposition"] == "reenter_gate"
     assert result["final_reason"] == "actionable_comments"
 
 def test_orchestrate_ci_running_uses_finalize_only_retry_path(
@@ -880,6 +880,22 @@ def test_contract_snapshot_refresh_failed_is_finalize_only_retry(
         merge_not_ready_grace_remaining=1,
     )
     assert action == "finalize_only_retry"
+
+def test_contract_run_fix_next_step_returns_reenter_gate(
+    pr_resolve_contract_module: dict[str, Any],
+) -> None:
+    disposition_for_result = pr_resolve_contract_module[
+        "merge_automation_disposition_for_result"
+    ]
+
+    disposition = disposition_for_result(
+        status="attempts_exhausted",
+        merge_outcome="attempts_exhausted",
+        final_reason="actionable_comments",
+        next_step="run_fix_comments_skill",
+    )
+
+    assert disposition == "reenter_gate"
 
 def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     pr_resolve_finalize_module: dict[str, Any],

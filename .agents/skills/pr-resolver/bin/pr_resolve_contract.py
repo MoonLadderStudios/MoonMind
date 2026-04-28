@@ -36,6 +36,7 @@ EXIT_CODE_FAILED = 4
 
 MERGE_AUTOMATION_DISPOSITION_MERGED = "merged"
 MERGE_AUTOMATION_DISPOSITION_ALREADY_MERGED = "already_merged"
+MERGE_AUTOMATION_DISPOSITION_REENTER_GATE = "reenter_gate"
 MERGE_AUTOMATION_DISPOSITION_MANUAL_REVIEW = "manual_review"
 MERGE_AUTOMATION_DISPOSITION_FAILED = "failed"
 
@@ -106,10 +107,14 @@ def merge_automation_disposition_for_result(
     status: str,
     merge_outcome: str,
     final_reason: str | None,
+    next_step: str | None = None,
 ) -> str:
     normalized_status = normalize_text(status).lower()
     normalized_outcome = normalize_text(merge_outcome).lower()
     normalized_reason = normalize_text(final_reason).lower()
+    normalized_next_step = normalize_text(next_step).lower()
+    if normalized_next_step.startswith("run_fix_"):
+        return MERGE_AUTOMATION_DISPOSITION_REENTER_GATE
     if normalized_status == "merged" and normalized_outcome == "merged":
         if normalized_reason == "already_merged":
             return MERGE_AUTOMATION_DISPOSITION_ALREADY_MERGED

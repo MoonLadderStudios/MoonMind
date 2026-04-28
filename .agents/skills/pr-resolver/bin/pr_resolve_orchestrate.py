@@ -109,6 +109,7 @@ def _build_result(
             status=status,
             merge_outcome=merge_outcome,
             final_reason=final_reason,
+            next_step=next_step,
         ),
         "decision": decision,
         "reason": final_reason,

@@ -1,27 +1,12 @@
 [
   {
-    "id": 3148978246,
+    "id": 4185976123,
     "disposition": "addressed",
-    "rationale": "Restored the Jira Breakdown and Orchestrate parent task publish default to none while keeping repository and publish controls active for child-task inheritance."
+    "rationale": "Implemented reenter_gate derivation for remediation next steps and covered it in resolver unit tests."
   },
   {
-    "id": 3148978254,
+    "id": 3151677015,
     "disposition": "addressed",
-    "rationale": "Made mergeAutomation propagation require a mapping before reading enabled or unpacking the value, with regression coverage for boolean input."
-  },
-  {
-    "id": 4182817543,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary; the concrete referenced findings are tracked by review comments 3148978246 and 3148978254."
-  },
-  {
-    "id": 4182820069,
-    "disposition": "not-applicable",
-    "rationale": "Automated review header and metadata only; no separate actionable feedback was present."
-  },
-  {
-    "id": 3148980366,
-    "disposition": "addressed",
-    "rationale": "Restored non-publishing default behavior for the jira-breakdown-orchestrate parent execution and added focused UI regression coverage."
+    "rationale": "Added the reenter_gate constant, passed next_step through resolver result writers, and mapped run_fix_* next steps to reenter_gate."
   }
 ]
