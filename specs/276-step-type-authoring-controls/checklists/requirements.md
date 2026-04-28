@@ -36,4 +36,4 @@
 
 ## Notes
 
-- MM-556 is preserved in the Input field for downstream traceability.
+- MM-556 is preserved in the Input field and `## Original Preset Brief` section for downstream traceability.
