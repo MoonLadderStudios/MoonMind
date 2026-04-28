@@ -435,6 +435,99 @@ class ManagedSecret(Base):
         onupdate=func.now(),
     )
 
+
+_DEFAULT_SETTINGS_SUBJECT_ID = "00000000-0000-0000-0000-000000000000"
+
+
+class SettingsOverride(Base):
+    """Sparse persisted user/workspace override for one settings key."""
+
+    __tablename__ = "settings_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope",
+            "workspace_id",
+            "user_id",
+            "key",
+            name="uq_settings_overrides_scope_subject_key",
+        ),
+        CheckConstraint(
+            "scope in ('user', 'workspace')",
+            name="ck_settings_overrides_scope",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    workspace_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        nullable=False,
+        default=lambda: UUID(_DEFAULT_SETTINGS_SUBJECT_ID),
+        server_default=text(f"'{_DEFAULT_SETTINGS_SUBJECT_ID}'"),
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        nullable=False,
+        default=lambda: UUID(_DEFAULT_SETTINGS_SUBJECT_ID),
+        server_default=text(f"'{_DEFAULT_SETTINGS_SUBJECT_ID}'"),
+    )
+    key: Mapped[str] = mapped_column(String(255), nullable=False)
+    value_json: Mapped[Any | None] = mapped_column(_json_variant(), nullable=True)
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    value_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    created_by: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    updated_by: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class SettingsAuditEvent(Base):
+    """Durable non-secret settings change audit event."""
+
+    __tablename__ = "settings_audit_events"
+    __table_args__ = (
+        Index("ix_settings_audit_events_key_scope", "key", "scope"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    key: Mapped[str] = mapped_column(String(255), nullable=False)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    workspace_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        nullable=False,
+        default=lambda: UUID(_DEFAULT_SETTINGS_SUBJECT_ID),
+        server_default=text(f"'{_DEFAULT_SETTINGS_SUBJECT_ID}'"),
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        nullable=False,
+        default=lambda: UUID(_DEFAULT_SETTINGS_SUBJECT_ID),
+        server_default=text(f"'{_DEFAULT_SETTINGS_SUBJECT_ID}'"),
+    )
+    actor_user_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    old_value_json: Mapped[Any | None] = mapped_column(_json_variant(), nullable=True)
+    new_value_json: Mapped[Any | None] = mapped_column(_json_variant(), nullable=True)
+    redacted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
 class ApproverRoleListType(TypeDecorator):
     """Persist approver roles as a PostgreSQL ARRAY or JSON elsewhere."""
 

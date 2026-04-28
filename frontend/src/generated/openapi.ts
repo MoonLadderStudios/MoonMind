@@ -999,6 +999,23 @@ export interface paths {
         patch: operations["patch_settings_api_v1_settings__scope__patch"];
         trace?: never;
     };
+    "/api/v1/settings/{scope}/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Reset Setting */
+        delete: operations["reset_setting_api_v1_settings__scope___key__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/proxy/{provider_id}/{path}": {
         parameters: {
             query?: never;
@@ -9002,6 +9019,38 @@ export interface operations {
                 "application/json": components["schemas"]["SettingsPatchRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_setting_api_v1_settings__scope___key__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
