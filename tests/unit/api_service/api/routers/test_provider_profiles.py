@@ -503,6 +503,41 @@ async def test_provider_profile_readiness_reports_managed_secret_status(
 
 
 @pytest.mark.asyncio
+async def test_provider_profile_readiness_reports_invalid_stored_secret_ref(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    profile_id = "invalid_stored_secret_ref_readiness"
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.SECRET_REF,
+                    runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                    secret_refs={"provider_api_key": "not-a-secret-ref"},
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert response.status_code == 200
+    readiness = response.json()["readiness"]
+    assert readiness["status"] == "blocked"
+    checks = {check["id"]: check for check in readiness["checks"]}
+    assert checks["secret_refs"]["status"] == "error"
+    assert "provider_api_key" in checks["secret_refs"]["message"]
+    assert "invalid SecretRef" in checks["secret_refs"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_provider_profile_readiness_redacts_provider_failure_text(
     client_app: AsyncClient,
     _module_db,
