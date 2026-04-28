@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jira Implement"
+  short_description: "Implement work from a Jira issue"
+  default_prompt: "Use $jira-implement to fetch Jira issue KANDY-123, inspect its attachments, implement the work, and report verification."
