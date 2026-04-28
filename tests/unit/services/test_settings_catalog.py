@@ -173,6 +173,48 @@ async def _workspace_override_persists_and_reports_version(settings_session):
 
 
 @pytest.mark.asyncio
+async def test_async_list_and_batch_write_avoid_per_key_override_queries(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.apply_overrides(
+            scope="workspace",
+            changes={
+                "workflow.default_publish_mode": "branch",
+                "skills.canary_percent": 25,
+            },
+            expected_versions={
+                "workflow.default_publish_mode": 1,
+                "skills.canary_percent": 1,
+            },
+        )
+
+        async def fail_per_key_lookup(*_args, **_kwargs):
+            raise AssertionError("per-key override lookup should not be used")
+
+        service._get_override = fail_per_key_lookup  # type: ignore[method-assign]
+
+        listed = await service.effective_values_async(scope="workspace")
+        updated = await service.apply_overrides(
+            scope="workspace",
+            changes={
+                "workflow.default_publish_mode": "none",
+                "skills.canary_percent": 50,
+            },
+            expected_versions={
+                "workflow.default_publish_mode": 1,
+                "skills.canary_percent": 1,
+            },
+        )
+
+    assert listed.values["workflow.default_publish_mode"].value == "branch"
+    assert listed.values["skills.canary_percent"].value == 25
+    assert updated.values["workflow.default_publish_mode"].value == "none"
+    assert updated.values["skills.canary_percent"].value == 50
+
+
+@pytest.mark.asyncio
 async def test_user_override_wins_and_null_override_is_intentional(settings_session_maker):
     async with settings_session_maker() as settings_session:
         await _user_override_wins_and_null_override_is_intentional(settings_session)

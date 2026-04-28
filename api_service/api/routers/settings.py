@@ -50,6 +50,18 @@ def _error_response(status_code: int, error: SettingsError) -> JSONResponse:
     )
 
 
+def _settings_db_error_response(*, key: str | None = None, scope: str) -> JSONResponse:
+    return _error_response(
+        500,
+        settings_error(
+            "settings_db_unavailable",
+            "Settings persistence is unavailable.",
+            key=key,
+            scope=scope,
+        ),
+    )
+
+
 def _invalid_scope_response(scope: str) -> JSONResponse:
     return _error_response(
         400,
@@ -104,15 +116,15 @@ async def get_effective_settings(scope: Annotated[str, Query()] = "workspace"):
     resolved_scope = _coerce_scope(scope)
     if isinstance(resolved_scope, JSONResponse):
         return resolved_scope
+    if not _should_attempt_settings_db():
+        service = SettingsCatalogService()
+        return service.effective_values(scope=resolved_scope)
     try:
-        if not _should_attempt_settings_db():
-            raise SQLAlchemyError("settings DB disabled in local test mode")
         async with db_base.async_session_maker() as session:
             service = SettingsCatalogService(session=session)
             return await service.effective_values_async(scope=resolved_scope)
     except SQLAlchemyError:
-        service = SettingsCatalogService()
-        return service.effective_values(scope=resolved_scope)
+        return _settings_db_error_response(scope=resolved_scope)
 
 
 @router.get("/effective/{key}")
@@ -123,13 +135,7 @@ async def get_effective_setting(
     resolved_scope = _coerce_scope(scope)
     if isinstance(resolved_scope, JSONResponse):
         return resolved_scope
-    try:
-        if not _should_attempt_settings_db():
-            raise SQLAlchemyError("settings DB disabled in local test mode")
-        async with db_base.async_session_maker() as session:
-            service = SettingsCatalogService(session=session)
-            return await service.effective_value_async(key, scope=resolved_scope)
-    except SQLAlchemyError:
+    if not _should_attempt_settings_db():
         try:
             service = SettingsCatalogService()
             return service.effective_value(key, scope=resolved_scope)
@@ -153,6 +159,12 @@ async def get_effective_setting(
                     scope=scope,
                 ),
             )
+    try:
+        async with db_base.async_session_maker() as session:
+            service = SettingsCatalogService(session=session)
+            return await service.effective_value_async(key, scope=resolved_scope)
+    except SQLAlchemyError:
+        return _settings_db_error_response(key=key, scope=resolved_scope)
     except KeyError:
         return _error_response(
             404,

@@ -1,8 +1,10 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from api_service.api.routers import settings as settings_router
 from api_service.db import base as db_base
 from api_service.db.models import Base, ManagedSecret
 from api_service.main import app
@@ -113,6 +115,33 @@ async def test_effective_settings_endpoint_filters_by_scope():
     body = response.json()
     assert body["scope"] == "user"
     assert list(body["values"]) == ["integrations.github.token_ref"]
+
+
+@pytest.mark.asyncio
+async def test_effective_settings_endpoint_surfaces_db_read_failure(monkeypatch):
+    class FailingSessionMaker:
+        def __call__(self):
+            raise SQLAlchemyError("database unavailable")
+
+    monkeypatch.setattr(settings_router, "_should_attempt_settings_db", lambda: True)
+    monkeypatch.setattr(db_base, "async_session_maker", FailingSessionMaker())
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/v1/settings/effective",
+            params={"scope": "workspace"},
+        )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": "settings_db_unavailable",
+        "message": "Settings persistence is unavailable.",
+        "key": None,
+        "scope": "workspace",
+        "details": {},
+    }
 
 
 @pytest.mark.asyncio

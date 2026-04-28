@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import SettingsAuditEvent, SettingsOverride
@@ -400,8 +401,11 @@ class SettingsCatalogService:
             raise KeyError(key)
         if scope not in entry.scopes:
             raise ValueError(scope)
-        value, source, version, override_present = await self._resolve_value_async(
-            entry, scope=scope
+        overrides = await self._get_effective_overrides(scope=scope, keys=[entry.key])
+        value, source, version, override_present = self._resolve_value_from_overrides(
+            entry,
+            scope=scope,
+            overrides=overrides,
         )
         return EffectiveSettingValue(
             key=entry.key,
@@ -418,10 +422,18 @@ class SettingsCatalogService:
         *,
         scope: SettingScope,
     ) -> EffectiveSettingsResponse:
+        entries = [entry for entry in self._registry if scope in entry.scopes]
+        overrides = await self._get_effective_overrides(
+            scope=scope,
+            keys=[entry.key for entry in entries],
+        )
         values = {
-            entry.key: await self.effective_value_async(entry.key, scope=scope)
-            for entry in self._registry
-            if scope in entry.scopes
+            entry.key: self._effective_value_from_overrides(
+                entry,
+                scope=scope,
+                overrides=overrides,
+            )
+            for entry in entries
         }
         return EffectiveSettingsResponse(scope=scope, values=values)
 
@@ -439,8 +451,12 @@ class SettingsCatalogService:
             raise ValueError("invalid_scope")
         expected_versions = expected_versions or {}
         entries: dict[str, SettingRegistryEntry] = {}
-        current_rows: dict[str, SettingsOverride | None] = {}
         validated: dict[str, Any] = {}
+        current_rows = await self._get_overrides(
+            scope=scope,
+            keys=changes.keys(),
+            for_update=True,
+        )
 
         for key, value in changes.items():
             entry = self._entries_by_key.get(key)
@@ -451,18 +467,17 @@ class SettingsCatalogService:
             if entry.read_only:
                 raise PermissionError(entry.read_only_reason or "Setting is read-only.")
             self._validate_override_value(entry, value)
-            row = await self._get_override(scope=scope, key=key)
+            row = current_rows.get((scope, key))
             current_version = row.value_version if row is not None else 1
             expected = expected_versions.get(key)
             if expected is not None and expected != current_version:
                 raise ValueError("version_conflict")
             entries[key] = entry
-            current_rows[key] = row
             validated[key] = value
 
         for key, value in validated.items():
             entry = entries[key]
-            row = current_rows[key]
+            row = current_rows.get((scope, key))
             old_value = row.value_json if row is not None else None
             if row is None:
                 row = SettingsOverride(
@@ -474,6 +489,7 @@ class SettingsCatalogService:
                     value_version=1,
                 )
                 self._session.add(row)
+                current_rows[(scope, key)] = row
             else:
                 row.value_json = value
                 row.value_version += 1
@@ -488,9 +504,21 @@ class SettingsCatalogService:
                 )
             )
 
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            await self._session.rollback()
+            raise ValueError("version_conflict") from exc
         values = {
-            key: await self.effective_value_async(key, scope=scope)
+            key: self._effective_value_from_overrides(
+                entries[key],
+                scope=scope,
+                overrides={
+                    (row_scope, changed_key): row
+                    for (row_scope, changed_key), row in current_rows.items()
+                    if row_scope == scope and changed_key in changes
+                },
+            )
             for key in changes
         }
         return EffectiveSettingsResponse(scope=scope, values=values)
@@ -588,24 +616,133 @@ class SettingsCatalogService:
         value, source = self._resolve_value(entry)
         return value, source, 1, False
 
+    def _effective_value_from_overrides(
+        self,
+        entry: SettingRegistryEntry,
+        *,
+        scope: SettingScope,
+        overrides: dict[tuple[SettingScope, str], SettingsOverride],
+    ) -> EffectiveSettingValue:
+        value, source, version, override_present = self._resolve_value_from_overrides(
+            entry,
+            scope=scope,
+            overrides=overrides,
+        )
+        return EffectiveSettingValue(
+            key=entry.key,
+            scope=scope,
+            value=value,
+            source=source,
+            source_explanation=self._source_explanation(entry, source),
+            value_version=version,
+            diagnostics=[] if override_present else self._diagnostics(entry, value),
+        )
+
+    def _resolve_value_from_overrides(
+        self,
+        entry: SettingRegistryEntry,
+        *,
+        scope: SettingScope,
+        overrides: dict[tuple[SettingScope, str], SettingsOverride],
+    ) -> tuple[Any, str, int, bool]:
+        if scope == "user":
+            user_override = overrides.get(("user", entry.key))
+            if user_override is not None:
+                return (
+                    user_override.value_json,
+                    "user_override",
+                    user_override.value_version,
+                    True,
+                )
+            workspace_override = overrides.get(("workspace", entry.key))
+            if workspace_override is not None:
+                return (
+                    workspace_override.value_json,
+                    "workspace_override",
+                    workspace_override.value_version,
+                    True,
+                )
+        elif scope == "workspace":
+            workspace_override = overrides.get(("workspace", entry.key))
+            if workspace_override is not None:
+                return (
+                    workspace_override.value_json,
+                    "workspace_override",
+                    workspace_override.value_version,
+                    True,
+                )
+        value, source = self._resolve_value(entry)
+        return value, source, 1, False
+
+    async def _get_effective_overrides(
+        self,
+        *,
+        scope: SettingScope,
+        keys: list[str],
+    ) -> dict[tuple[SettingScope, str], SettingsOverride]:
+        if self._session is None or not keys:
+            return {}
+        scopes: tuple[SettingScope, ...]
+        if scope == "user":
+            scopes = ("user", "workspace")
+        elif scope == "workspace":
+            scopes = ("workspace",)
+        else:
+            return {}
+        return await self._get_overrides(scopes=scopes, keys=keys)
+
+    async def _get_overrides(
+        self,
+        *,
+        keys: Iterable[str],
+        scope: SettingScope | None = None,
+        scopes: tuple[SettingScope, ...] | None = None,
+        for_update: bool = False,
+    ) -> dict[tuple[SettingScope, str], SettingsOverride]:
+        if self._session is None:
+            return {}
+        key_list = list(keys)
+        if not key_list:
+            return {}
+        resolved_scopes = scopes or ((scope,) if scope is not None else ())
+        if not resolved_scopes:
+            return {}
+        statement = select(SettingsOverride).where(
+            SettingsOverride.scope.in_(resolved_scopes),
+            SettingsOverride.workspace_id == self._workspace_id,
+            SettingsOverride.key.in_(key_list),
+        )
+        if "user" in resolved_scopes:
+            statement = statement.where(
+                (
+                    (SettingsOverride.scope == "user")
+                    & (SettingsOverride.user_id == self._user_id)
+                )
+                | (
+                    (SettingsOverride.scope != "user")
+                    & (SettingsOverride.user_id == _DEFAULT_SUBJECT_ID)
+                )
+            )
+        else:
+            statement = statement.where(
+                SettingsOverride.user_id == _DEFAULT_SUBJECT_ID
+            )
+        if for_update:
+            statement = statement.with_for_update()
+        result = await self._session.execute(statement)
+        return {(row.scope, row.key): row for row in result.scalars().all()}
+
     async def _get_override(
         self,
         *,
         scope: SettingScope,
         key: str,
     ) -> SettingsOverride | None:
-        if self._session is None:
-            return None
-        user_id = self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID
-        result = await self._session.execute(
-            select(SettingsOverride).where(
-                SettingsOverride.scope == scope,
-                SettingsOverride.workspace_id == self._workspace_id,
-                SettingsOverride.user_id == user_id,
-                SettingsOverride.key == key,
-            )
+        rows = await self._get_overrides(
+            scope=scope,
+            keys=[key],
         )
-        return result.scalar_one_or_none()
+        return rows.get((scope, key))
 
     def _parse_env_value(self, entry: SettingRegistryEntry, raw_value: str) -> Any:
         if entry.value_type == "integer":
