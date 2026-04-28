@@ -40,6 +40,7 @@ SettingActivationState = Literal[
     "pending_restart",
     "pending_manual_operation",
 ]
+SettingMigrationState = Literal["renamed", "deprecated", "removed", "type_changed"]
 _DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
 _PERSISTED_SCOPES: set[SettingScope] = {"user", "workspace"}
 _SECRET_PREFIXES = ("ghp_", "github_pat_", "AIza", "AKIA")
@@ -122,6 +123,23 @@ class SettingDiagnostic(BaseModel):
     message: str
     severity: Literal["info", "warning", "error"] = "info"
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SettingMigrationRule:
+    old_key: str
+    state: SettingMigrationState
+    message: str
+    new_key: str | None = None
+    expected_schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        if not self.old_key:
+            raise ValueError("migration rule old_key is required")
+        if self.state == "renamed" and not self.new_key:
+            raise ValueError("renamed setting migration requires new_key")
+        if self.expected_schema_version < 1:
+            raise ValueError("expected_schema_version must be positive")
 
 
 class SettingDescriptor(BaseModel):
@@ -445,6 +463,7 @@ class SettingsCatalogService:
         settings: AppSettings | None = None,
         env: dict[str, str] | None = None,
         registry: tuple[SettingRegistryEntry, ...] = _REGISTRY,
+        migration_rules: tuple[SettingMigrationRule, ...] = (),
         session: AsyncSession | None = None,
         workspace_id: UUID | None = None,
         user_id: UUID | None = None,
@@ -453,6 +472,17 @@ class SettingsCatalogService:
         self._env = env if env is not None else os.environ
         self._registry = registry
         self._entries_by_key = {entry.key: entry for entry in registry}
+        self._migration_rules = migration_rules
+        self._rules_by_old_key = {rule.old_key: rule for rule in migration_rules}
+        self._rename_rules_by_new_key = {
+            str(rule.new_key): rule
+            for rule in migration_rules
+            if rule.state == "renamed" and rule.new_key is not None
+        }
+        self._type_rules_by_key = {
+            rule.old_key: rule for rule in migration_rules if rule.state == "type_changed"
+        }
+        self._migration_diagnostics_by_key: dict[str, SettingDiagnostic] = {}
         self._redacted_invalid_secret_refs: set[str] = set()
         self._session = session
         self._workspace_id = workspace_id or _DEFAULT_SUBJECT_ID
@@ -570,6 +600,13 @@ class SettingsCatalogService:
         )
 
     def ensure_write_allowed(self, key: str, *, scope: SettingScope) -> None:
+        migration_rule = self._rules_by_old_key.get(key)
+        if migration_rule is not None and migration_rule.state in {
+            "renamed",
+            "deprecated",
+            "removed",
+        }:
+            raise PermissionError(migration_rule.message)
         entry = self._entries_by_key.get(key)
         if entry is None:
             raise KeyError(key)
@@ -728,6 +765,13 @@ class SettingsCatalogService:
         )
 
         for key, value in changes.items():
+            migration_rule = self._rules_by_old_key.get(key)
+            if migration_rule is not None and migration_rule.state in {
+                "renamed",
+                "deprecated",
+                "removed",
+            }:
+                raise PermissionError(migration_rule.message)
             entry = self._entries_by_key.get(key)
             if entry is None:
                 raise KeyError(key)
@@ -969,9 +1013,12 @@ class SettingsCatalogService:
                 diagnostics=diagnostics,
                 recent_change=recent_changes.get(entry.key),
             )
+        if key is None:
+            values.update(await self._deprecated_override_diagnostics(scope=scope))
         return SettingsDiagnosticsResponse(scope=scope, values=values)
 
     def _validate_registry(self) -> None:
+        self._validate_migration_rules()
         for entry in self._registry:
             if not entry.apply_mode:
                 raise ValueError(f"invalid_apply_mode for setting {entry.key!r}")
@@ -992,6 +1039,25 @@ class SettingsCatalogService:
                     f"invalid_apply_mode for setting {entry.key!r}: "
                     "non-immediate settings require affected systems"
                 )
+
+    def _validate_migration_rules(self) -> None:
+        seen: set[str] = set()
+        rename_targets: set[str] = set()
+        for rule in self._migration_rules:
+            if rule.old_key in seen:
+                raise ValueError(f"duplicate migration rule for {rule.old_key!r}")
+            seen.add(rule.old_key)
+            if rule.state == "renamed":
+                if rule.new_key in rename_targets:
+                    raise ValueError(
+                        f"duplicate rename migration target {rule.new_key!r}"
+                    )
+                if rule.new_key is not None:
+                    rename_targets.add(rule.new_key)
+                if rule.new_key not in self._entries_by_key:
+                    raise ValueError(
+                        f"renamed migration target {rule.new_key!r} is not exposed"
+                    )
 
     def _activation_metadata(
         self,
@@ -1119,6 +1185,9 @@ class SettingsCatalogService:
         value: Any,
         override_present: bool,
     ) -> list[SettingDiagnostic]:
+        migration_diagnostic = self._migration_diagnostics_by_key.get(entry.key)
+        if migration_diagnostic is not None:
+            return [migration_diagnostic]
         if (
             override_present
             and entry.key != "workflow.default_provider_profile_ref"
@@ -1126,6 +1195,54 @@ class SettingsCatalogService:
         ):
             return []
         return self._diagnostics(entry, value)
+
+    async def _deprecated_override_diagnostics(
+        self,
+        *,
+        scope: SettingScope,
+    ) -> dict[str, SettingsDiagnosticRead]:
+        deprecated_rules = [
+            rule
+            for rule in self._migration_rules
+            if rule.state in {"deprecated", "removed"}
+        ]
+        if self._session is None or not deprecated_rules:
+            return {}
+        overrides = await self._get_effective_overrides(
+            scope=scope,
+            keys=[rule.old_key for rule in deprecated_rules],
+        )
+        values: dict[str, SettingsDiagnosticRead] = {}
+        for rule in deprecated_rules:
+            for row_scope in (("user", "workspace") if scope == "user" else ("workspace",)):
+                row = overrides.get((row_scope, rule.old_key))
+                if row is None:
+                    continue
+                values[rule.old_key] = SettingsDiagnosticRead(
+                    key=rule.old_key,
+                    scope=scope,
+                    source="deprecated_override",
+                    source_explanation=rule.message,
+                    apply_mode="immediate",
+                    activation_state="active",
+                    active=True,
+                    diagnostics=[
+                        SettingDiagnostic(
+                            code="setting_deprecated_override",
+                            message=rule.message,
+                            severity="warning",
+                            details={
+                                "old_key": rule.old_key,
+                                "state": rule.state,
+                                "value_version": row.value_version,
+                                "schema_version": row.schema_version,
+                            },
+                        )
+                    ],
+                    recent_change=None,
+                )
+                break
+        return values
 
     async def _prime_managed_secret_statuses(self, values: Iterable[Any]) -> None:
         if self._session is None:
@@ -1186,9 +1303,19 @@ class SettingsCatalogService:
         scope: SettingScope,
         overrides: dict[tuple[SettingScope, str], SettingsOverride],
     ) -> tuple[Any, str, int, bool]:
+        self._migration_diagnostics_by_key.pop(entry.key, None)
         if scope == "user":
             user_override = overrides.get(("user", entry.key))
             if user_override is not None:
+                type_migration = self._type_migration_diagnostic(entry, user_override)
+                if type_migration is not None:
+                    self._migration_diagnostics_by_key[entry.key] = type_migration
+                    return (
+                        None,
+                        "type_migration_required",
+                        user_override.value_version,
+                        True,
+                    )
                 return (
                     user_override.value_json,
                     "user_override",
@@ -1197,6 +1324,17 @@ class SettingsCatalogService:
                 )
             workspace_override = overrides.get(("workspace", entry.key))
             if workspace_override is not None:
+                type_migration = self._type_migration_diagnostic(
+                    entry, workspace_override
+                )
+                if type_migration is not None:
+                    self._migration_diagnostics_by_key[entry.key] = type_migration
+                    return (
+                        None,
+                        "type_migration_required",
+                        workspace_override.value_version,
+                        True,
+                    )
                 return (
                     workspace_override.value_json,
                     "workspace_override",
@@ -1206,14 +1344,87 @@ class SettingsCatalogService:
         elif scope == "workspace":
             workspace_override = overrides.get(("workspace", entry.key))
             if workspace_override is not None:
+                type_migration = self._type_migration_diagnostic(
+                    entry, workspace_override
+                )
+                if type_migration is not None:
+                    self._migration_diagnostics_by_key[entry.key] = type_migration
+                    return (
+                        None,
+                        "type_migration_required",
+                        workspace_override.value_version,
+                        True,
+                    )
                 return (
                     workspace_override.value_json,
                     "workspace_override",
                     workspace_override.value_version,
                     True,
                 )
+        migrated = self._resolve_migrated_override(entry, scope=scope, overrides=overrides)
+        if migrated is not None:
+            row_scope, row, rule = migrated
+            source = (
+                "migrated_user_override"
+                if row_scope == "user"
+                else "migrated_workspace_override"
+            )
+            self._migration_diagnostics_by_key[entry.key] = SettingDiagnostic(
+                code="setting_renamed_override",
+                message=rule.message,
+                severity="warning",
+                details={
+                    "old_key": rule.old_key,
+                    "new_key": rule.new_key,
+                    "state": rule.state,
+                },
+            )
+            return row.value_json, source, row.value_version, True
         value, source = self._resolve_value(entry)
         return value, source, 1, False
+
+    def _type_migration_diagnostic(
+        self,
+        entry: SettingRegistryEntry,
+        row: SettingsOverride,
+    ) -> SettingDiagnostic | None:
+        rule = self._type_rules_by_key.get(entry.key)
+        if rule is None or row.schema_version == rule.expected_schema_version:
+            return None
+        return SettingDiagnostic(
+            code="setting_type_migration_required",
+            message=rule.message,
+            severity="error",
+            details={
+                "key": entry.key,
+                "state": rule.state,
+                "schema_version": row.schema_version,
+                "expected_schema_version": rule.expected_schema_version,
+            },
+        )
+
+    def _resolve_migrated_override(
+        self,
+        entry: SettingRegistryEntry,
+        *,
+        scope: SettingScope,
+        overrides: dict[tuple[SettingScope, str], SettingsOverride],
+    ) -> tuple[SettingScope, SettingsOverride, SettingMigrationRule] | None:
+        rule = self._rename_rules_by_new_key.get(entry.key)
+        if rule is None:
+            return None
+        if scope == "user":
+            user_override = overrides.get(("user", rule.old_key))
+            if user_override is not None:
+                return "user", user_override, rule
+            workspace_override = overrides.get(("workspace", rule.old_key))
+            if workspace_override is not None:
+                return "workspace", workspace_override, rule
+        elif scope == "workspace":
+            workspace_override = overrides.get(("workspace", rule.old_key))
+            if workspace_override is not None:
+                return "workspace", workspace_override, rule
+        return None
 
     async def _get_effective_overrides(
         self,
@@ -1230,7 +1441,15 @@ class SettingsCatalogService:
             scopes = ("workspace",)
         else:
             return {}
-        return await self._get_overrides(scopes=scopes, keys=keys)
+        expanded_keys = set(keys)
+        for key in keys:
+            rule = self._rename_rules_by_new_key.get(key)
+            if rule is not None:
+                expanded_keys.add(rule.old_key)
+        for rule in self._migration_rules:
+            if rule.state in {"deprecated", "removed"} and rule.old_key in keys:
+                expanded_keys.add(rule.old_key)
+        return await self._get_overrides(scopes=scopes, keys=expanded_keys)
 
     async def _get_overrides(
         self,
@@ -1321,6 +1540,14 @@ class SettingsCatalogService:
             return "Resolved from a workspace override."
         if source == "user_override":
             return "Resolved from a user override."
+        if source == "migrated_workspace_override":
+            return "Resolved from a workspace override migrated from a renamed setting."
+        if source == "migrated_user_override":
+            return "Resolved from a user override migrated from a renamed setting."
+        if source == "deprecated_override":
+            return "Resolved from a deprecated setting override."
+        if source == "type_migration_required":
+            return "Stored override requires an explicit type migration."
         return f"Resolved from {source}."
 
     def _validate_override_value(self, entry: SettingRegistryEntry, value: Any) -> None:

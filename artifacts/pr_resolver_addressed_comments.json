@@ -1,27 +1,27 @@
 [
   {
-    "id": 3157004917,
-    "disposition": "addressed",
-    "rationale": "Replaced the JSON stringify/parse clone helper with structuredClone in frontend/src/entrypoints/task-create.tsx."
-  },
-  {
-    "id": 3157004931,
-    "disposition": "addressed",
-    "rationale": "Recovered step instructions are now explicitly converted with String(...) before being merged into the draft."
-  },
-  {
-    "id": 4192190809,
+    "id": 4192185054,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary; its two concrete suggestions are tracked and addressed by review comments 3157004917 and 3157004931."
+    "rationale": "Positive Gemini review summary with no requested change."
   },
   {
-    "id": 4192213109,
-    "disposition": "not-applicable",
-    "rationale": "Informational automated review summary with no requested code change."
-  },
-  {
-    "id": 3157023149,
+    "id": 3157002480,
     "disposition": "addressed",
-    "rationale": "Narrowed gap detection to likely degraded template steps, tolerated unavailable source artifacts, and added a regression test for valid instructionless skill steps."
+    "rationale": "Key-scoped diagnostics now skip unrelated deprecated override diagnostics; regression test covers diagnostics(scope, key)."
+  },
+  {
+    "id": 3157002486,
+    "disposition": "addressed",
+    "rationale": "Resolution now clears cached migration diagnostics for the key before fresh override/default resolution; regression test covers reused service instances."
+  },
+  {
+    "id": 4192187854,
+    "disposition": "not-applicable",
+    "rationale": "Codex automated review container comment; actionable child review comments are tracked separately."
+  },
+  {
+    "id": 3157002490,
+    "disposition": "addressed",
+    "rationale": "Migration rule validation now rejects duplicate renamed new_key targets; regression test covers fail-fast behavior."
   }
 ]
