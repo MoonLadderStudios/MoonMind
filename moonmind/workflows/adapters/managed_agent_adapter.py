@@ -139,6 +139,9 @@ def _pr_resolver_final_payload(payload: dict[str, Any]) -> dict[str, Any]:
     merge_outcome = payload.get("mergeOutcome")
     if isinstance(merge_outcome, dict):
         return merge_outcome
+    merge = payload.get("merge")
+    if isinstance(merge, dict):
+        return merge
     return {}
 
 
