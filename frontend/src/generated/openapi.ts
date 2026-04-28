@@ -1074,6 +1074,24 @@ export interface paths {
         patch: operations["proxy_pass_through_patch"];
         trace?: never;
     };
+    "/api/system/worker-pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Worker Pause Snapshot */
+        get: operations["get_worker_pause_snapshot_api_system_worker_pause_get"];
+        put?: never;
+        /** Submit Worker Pause Operation */
+        post: operations["submit_worker_pause_operation_api_system_worker_pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/deployment/update": {
         parameters: {
             query?: never;
@@ -5418,6 +5436,26 @@ export interface components {
             message: string;
         };
         /**
+         * QueueSystemMetadataModel
+         * @description Serialized worker pause metadata shared by claim + heartbeat responses.
+         */
+        QueueSystemMetadataModel: {
+            /** Workerspaused */
+            workersPaused: boolean;
+            /** Mode */
+            mode?: ("drain" | "quiesce") | null;
+            /** Reason */
+            reason?: string | null;
+            /** Version */
+            version: number;
+            /** Requestedbyuserid */
+            requestedByUserId?: string | null;
+            /** Requestedat */
+            requestedAt?: string | null;
+            /** Updatedat */
+            updatedAt?: string | null;
+        };
+        /**
          * RecurringTaskDefinitionListResponse
          * @description List response for recurring definitions.
          */
@@ -6940,6 +6978,90 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * WorkerOperationCommand
+         * @description Typed worker pause/resume command accepted by the system operations API.
+         */
+        WorkerOperationCommand: {
+            /** Action */
+            action: string;
+            /** Mode */
+            mode?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Confirmation */
+            confirmation?: string | null;
+            /**
+             * Forceresume
+             * @default false
+             */
+            forceResume: boolean;
+        };
+        /**
+         * WorkerPauseAuditEventModel
+         * @description Append-only audit entry surfaced by the worker pause API.
+         */
+        WorkerPauseAuditEventModel: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "pause" | "resume";
+            /** Mode */
+            mode?: ("drain" | "quiesce") | null;
+            /** Reason */
+            reason?: string | null;
+            /** Actoruserid */
+            actorUserId?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+        };
+        /**
+         * WorkerPauseAuditListModel
+         * @description Audit wrapper returned by the worker pause API.
+         */
+        WorkerPauseAuditListModel: {
+            /** Latest */
+            latest?: components["schemas"]["WorkerPauseAuditEventModel"][];
+        };
+        /**
+         * WorkerPauseMetricsModel
+         * @description Queued/running counters returned by the worker pause API.
+         */
+        WorkerPauseMetricsModel: {
+            /** Queued */
+            queued: number;
+            /** Running */
+            running: number;
+            /** Stalerunning */
+            staleRunning: number;
+            /** Isdrained */
+            isDrained: boolean;
+            /**
+             * Metricssource
+             * @default legacy
+             */
+            metricsSource: string;
+        };
+        /**
+         * WorkerPauseSnapshotResponse
+         * @description Response envelope for GET/POST /api/system/worker-pause.
+         */
+        WorkerPauseSnapshotResponse: {
+            system: components["schemas"]["QueueSystemMetadataModel"];
+            metrics: components["schemas"]["WorkerPauseMetricsModel"];
+            audit?: components["schemas"]["WorkerPauseAuditListModel"];
+            /** Signalstatus */
+            signalStatus?: string | null;
         };
         /**
          * WorkflowArtifactListResponse
@@ -9308,6 +9430,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_worker_pause_snapshot_api_system_worker_pause_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerPauseSnapshotResponse"];
+                };
+            };
+        };
+    };
+    submit_worker_pause_operation_api_system_worker_pause_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerOperationCommand"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerPauseSnapshotResponse"];
                 };
             };
             /** @description Validation Error */

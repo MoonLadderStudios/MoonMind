@@ -6,8 +6,8 @@ const WorkerSnapshotSchema = z.object({
   system: z
     .object({
       workersPaused: z.boolean().optional(),
-      mode: z.string().optional(),
-      version: z.string().optional(),
+      mode: z.string().nullable().optional(),
+      version: z.number().optional(),
       updatedAt: z.string().optional(),
       reason: z.string().optional(),
     })
@@ -26,7 +26,7 @@ const WorkerSnapshotSchema = z.object({
         .array(
           z.object({
             action: z.string().optional(),
-            mode: z.string().optional(),
+            mode: z.string().nullable().optional(),
             reason: z.string().optional(),
             createdAt: z.string().optional(),
           }),
@@ -257,8 +257,18 @@ export function OperationsSettingsSection({
   const actionMutation = useMutation({
     mutationFn: async (
       payload:
-        | { action: 'pause'; mode: string; reason: string }
-        | { action: 'resume'; reason: string; forceResume?: boolean },
+        | {
+            action: 'pause';
+            mode: string;
+            reason: string;
+            confirmation?: string;
+          }
+        | {
+            action: 'resume';
+            reason: string;
+            forceResume?: boolean;
+            confirmation?: string;
+          },
     ) => {
       if (!workerPauseConfig || !workerPauseConfig.post) {
         throw new Error('Worker pause controls are not configured for this deployment.');
@@ -558,7 +568,23 @@ export function OperationsSettingsSection({
       setNotice({ level: 'error', text: 'Pause mode and reason are required.' });
       return;
     }
-    actionMutation.mutate({ action: 'pause', mode: pauseMode, reason: pauseReason });
+    const confirmation = [
+      'Pause workers?',
+      `Mode: ${pauseMode === 'quiesce' ? 'Quiesce' : 'Drain'}`,
+      `Reason: ${pauseReason}`,
+      pauseMode === 'quiesce'
+        ? 'New claims stop immediately and running workflows receive pause signals.'
+        : 'New work is blocked while running jobs are allowed to finish.',
+    ].join('\n');
+    if (!window.confirm(confirmation)) {
+      return;
+    }
+    actionMutation.mutate({
+      action: 'pause',
+      mode: pauseMode,
+      reason: pauseReason,
+      confirmation: `Pause workers confirmed: ${pauseMode}`,
+    });
   };
 
   const handleResume = (event: React.FormEvent<HTMLFormElement>) => {
@@ -579,7 +605,12 @@ export function OperationsSettingsSection({
       }
       forceResume = true;
     }
-    actionMutation.mutate({ action: 'resume', reason: resumeReason, forceResume });
+    actionMutation.mutate({
+      action: 'resume',
+      reason: resumeReason,
+      forceResume,
+      ...(forceResume ? { confirmation: 'Resume workers confirmed before drain complete' } : {}),
+    });
   };
 
   const system = snapshot?.system ?? {};
@@ -958,7 +989,10 @@ export function OperationsSettingsSection({
       ) : null}
 
       {workerPauseConfig ? (
-      <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
+      <section
+        className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm"
+        aria-label="Worker Operations"
+      >
         {notice ? (
           <div
             className={`mb-4 rounded-2xl border px-4 py-3 text-sm shadow-sm ${

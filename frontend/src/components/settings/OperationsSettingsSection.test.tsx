@@ -6,8 +6,8 @@ import { OperationsSettingsSection } from './OperationsSettingsSection';
 const workerSnapshot = {
   system: {
     workersPaused: false,
-    mode: 'running',
-    version: 'test',
+    mode: null,
+    version: 1,
     updatedAt: '2026-04-26T00:00:00Z',
     reason: 'Normal operation',
   },
@@ -179,6 +179,35 @@ describe('OperationsSettingsSection deployment update card', () => {
       />,
     );
   }
+
+  it('confirms worker pause and submits operation command metadata', async () => {
+    renderOperations();
+
+    const workerCard = await screen.findByRole('region', { name: /worker operations/i });
+    await within(workerCard).findByRole('button', { name: /pause workers/i });
+    const pauseReasonInput = within(workerCard).getAllByLabelText(/^reason$/i)[0];
+    if (!pauseReasonInput) {
+      throw new Error('Expected worker pause reason input to render.');
+    }
+    fireEvent.change(pauseReasonInput, {
+      target: { value: 'Maintenance window' },
+    });
+    fireEvent.click(within(workerCard).getByRole('button', { name: /pause workers/i }));
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Pause workers?'));
+      const workerCall = fetchSpy.mock.calls.find(
+        ([url]) => String(url) === '/api/worker-action',
+      );
+      expect(workerCall).toBeDefined();
+      expect(JSON.parse(String(workerCall?.[1]?.body))).toMatchObject({
+        action: 'pause',
+        mode: 'drain',
+        reason: 'Maintenance window',
+        confirmation: expect.stringContaining('Pause workers confirmed'),
+      });
+    });
+  });
 
   it('renders deployment state inside Operations without top-level deployment navigation', async () => {
     renderOperations();

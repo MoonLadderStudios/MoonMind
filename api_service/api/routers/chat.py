@@ -114,6 +114,12 @@ async def get_rag_context(
                 "RAG is enabled but VectorStoreIndex is not available. Skipping RAG."
             )
         return ""
+    if getattr(llama_settings, "embed_model", None) is None:
+        logger.warning(
+            "RAG is enabled but LlamaIndex embedding settings are unavailable. "
+            "Skipping RAG."
+        )
+        return ""
 
     logger.info(f"RAG enabled. Retrieving context for query: '{user_query[:100]}...'")
     rag_instance = QdrantRAG(
