@@ -122,8 +122,9 @@ def test_settings_catalog_contract_exposes_apply_semantics(tmp_path) -> None:
         if descriptor["key"] == "workflow.default_task_runtime"
     )
     assert default_runtime["apply_mode"] == "next_task"
-    assert default_runtime["activation_state"] == "pending_next_boundary"
-    assert default_runtime["active"] is False
+    assert default_runtime["activation_state"] == "active"
+    assert default_runtime["active"] is True
+    assert default_runtime["pending_value"] is None
     assert default_runtime["affected_process_or_worker"] == "task_creation, workflow_runtime"
     assert default_runtime["completion_guidance"] == (
         "New tasks will use this value when they are created."

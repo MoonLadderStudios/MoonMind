@@ -79,8 +79,9 @@ async def test_settings_catalog_endpoint_returns_grouped_descriptors():
     assert descriptor["ui"] == "select"
     assert descriptor["source"] in {"config_or_default", "environment"}
     assert descriptor["apply_mode"] == "next_task"
-    assert descriptor["activation_state"] == "pending_next_boundary"
-    assert descriptor["active"] is False
+    assert descriptor["activation_state"] == "active"
+    assert descriptor["active"] is True
+    assert descriptor["pending_value"] is None
     assert descriptor["completion_guidance"] == (
         "New tasks will use this value when they are created."
     )
@@ -642,8 +643,8 @@ async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output
     assert value["source"] == "workspace_override"
     assert value["recent_change"]["reason"] == "select managed secret"
     assert value["apply_mode"] == "next_launch"
-    assert value["activation_state"] == "pending_next_boundary"
-    assert value["active"] is False
+    assert value["activation_state"] == "active"
+    assert value["active"] is True
     assert value["completion_guidance"] == (
         "New launches will use this value the next time they start."
     )

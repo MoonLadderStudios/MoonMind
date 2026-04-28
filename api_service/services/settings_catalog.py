@@ -804,7 +804,11 @@ class SettingsCatalogService:
                 value=data[0],
                 source=data[1],
                 source_explanation=self._source_explanation(entries[key], data[1]),
-                **self._activation_metadata(entries[key], data[0]),
+                **self._activation_metadata(
+                    entries[key],
+                    data[0],
+                    pending_activation=True,
+                ),
                 value_version=data[2],
                 diagnostics=self._diagnostics_for_override(
                     entries[key], data[0], data[3]
@@ -981,10 +985,13 @@ class SettingsCatalogService:
                 raise ValueError("invalid_apply_mode")
 
     def _activation_metadata(
-        self, entry: SettingRegistryEntry, value: Any
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+        *,
+        pending_activation: bool = False,
     ) -> dict[str, Any]:
-        state_by_mode: dict[str, SettingActivationState] = {
-            "immediate": "active",
+        pending_state_by_mode: dict[str, SettingActivationState] = {
             "next_request": "pending_next_boundary",
             "next_task": "pending_next_boundary",
             "next_launch": "pending_next_boundary",
@@ -1001,7 +1008,9 @@ class SettingsCatalogService:
             "process_restart": "Restart the affected process to activate this value.",
             "manual_operation": "Use the related operation control to activate this value.",
         }
-        activation_state = state_by_mode[entry.apply_mode]
+        activation_state: SettingActivationState = "active"
+        if pending_activation and entry.apply_mode != "immediate":
+            activation_state = pending_state_by_mode[entry.apply_mode]
         pending_value = None if activation_state == "active" else value
         if entry.value_type == "secret_ref":
             pending_value = None

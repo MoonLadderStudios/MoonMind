@@ -49,8 +49,9 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
     assert default_runtime.constraints is None
     assert default_runtime.source == "config_or_default"
     assert default_runtime.apply_mode == "next_task"
-    assert default_runtime.activation_state == "pending_next_boundary"
-    assert default_runtime.active is False
+    assert default_runtime.activation_state == "active"
+    assert default_runtime.active is True
+    assert default_runtime.pending_value is None
     assert default_runtime.completion_guidance == (
         "New tasks will use this value when they are created."
     )
@@ -197,18 +198,16 @@ def test_activation_metadata_covers_supported_apply_modes():
 
     assert by_key["test.immediate"].activation_state == "active"
     assert by_key["test.immediate"].pending_value is None
-    assert by_key["test.next_request"].activation_state == "pending_next_boundary"
+    assert by_key["test.next_request"].activation_state == "active"
     assert by_key["test.next_task"].completion_guidance == (
         "New tasks will use this value when they are created."
     )
     assert by_key["test.next_launch"].completion_guidance == (
         "New launches will use this value the next time they start."
     )
-    assert by_key["test.worker_reload"].activation_state == "pending_reload"
-    assert by_key["test.process_restart"].activation_state == "pending_restart"
-    assert by_key["test.manual_operation"].activation_state == (
-        "pending_manual_operation"
-    )
+    assert by_key["test.worker_reload"].activation_state == "active"
+    assert by_key["test.process_restart"].activation_state == "active"
+    assert by_key["test.manual_operation"].activation_state == "active"
 
 
 def test_catalog_exposes_provider_profile_reference_without_launch_semantics():
@@ -338,6 +337,9 @@ async def _workspace_override_persists_and_reports_version(settings_session):
     assert effective.value == "branch"
     assert effective.source == "workspace_override"
     assert effective.value_version == 1
+    assert effective.activation_state == "pending_next_boundary"
+    assert effective.active is False
+    assert effective.pending_value == "branch"
 
     updated = await service.apply_overrides(
         scope="workspace",
@@ -346,6 +348,10 @@ async def _workspace_override_persists_and_reports_version(settings_session):
     )
     assert updated.values["workflow.default_publish_mode"].value == "none"
     assert updated.values["workflow.default_publish_mode"].value_version == 2
+    assert (
+        updated.values["workflow.default_publish_mode"].activation_state
+        == "pending_next_boundary"
+    )
 
 
 @pytest.mark.asyncio
@@ -922,8 +928,8 @@ async def test_settings_diagnostics_include_source_restart_and_recent_change(
     assert github.recent_change is not None
     assert github.recent_change.reason == "wire github token"
     assert github.apply_mode == "next_launch"
-    assert github.activation_state == "pending_next_boundary"
-    assert github.active is False
+    assert github.activation_state == "active"
+    assert github.active is True
     assert github.completion_guidance == (
         "New launches will use this value the next time they start."
     )
