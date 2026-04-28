@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 if TYPE_CHECKING:
     pass
@@ -546,6 +546,11 @@ class SecretMetadataResponse(BaseModel):
     details: dict[str, Any]
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+
+    @computed_field(alias="secretRef")
+    @property
+    def secret_ref(self) -> str:
+        return f"db://{self.slug}"
 
 class SecretListResponse(BaseModel):
     """Envelope for list of secret metadata."""

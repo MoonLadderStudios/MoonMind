@@ -14,6 +14,7 @@ from api_service.api.schemas import (
 )
 from api_service.db.models import SecretStatus
 from api_service.services.secrets import SecretsService
+from moonmind.utils.logging import redact_sensitive_payload
 
 logger = structlog.get_logger(__name__)
 
@@ -145,7 +146,6 @@ async def validate_secret(
     slug: str,
     db: AsyncSession = Depends(get_async_session),
     user: Any = Depends(get_current_user()),
-) -> dict[str, bool]:
-    # Check if the secret exists and is active
-    val = await SecretsService.get_secret(db, slug)
-    return {"valid": val is not None}
+) -> dict[str, Any]:
+    result = await SecretsService.validate_secret_ref(db, slug)
+    return redact_sensitive_payload(result)

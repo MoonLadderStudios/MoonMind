@@ -107,6 +107,52 @@ async def test_get_secret(mock_db_session):
     fetched = await SecretsService.get_secret(mock_db_session, slug)
     assert fetched == "plntxt"
 
+
+@pytest.mark.asyncio
+async def test_validate_secret_ref_returns_redacted_active_diagnostic(mock_db_session):
+    slug = "test-secret"
+    existing_secret = ManagedSecret(
+        slug=slug,
+        ciphertext="sk-test-secret-value",
+        status=SecretStatus.ACTIVE,
+    )
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = existing_secret
+
+    async def mock_execute(*args, **kwargs):
+        return mock_result
+
+    mock_db_session.execute.side_effect = mock_execute
+
+    result = await SecretsService.validate_secret_ref(mock_db_session, slug)
+
+    assert result["valid"] is True
+    assert result["status"] == "active"
+    assert result["diagnostics"][0]["code"] == "secret_ref_resolvable"
+    assert "sk-test-secret-value" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_validate_secret_ref_reports_missing_without_plaintext(mock_db_session):
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+
+    async def mock_execute(*args, **kwargs):
+        return mock_result
+
+    mock_db_session.execute.side_effect = mock_execute
+
+    result = await SecretsService.validate_secret_ref(mock_db_session, "missing-secret")
+
+    assert result["valid"] is False
+    assert result["status"] == "missing"
+    assert result["diagnostics"][0] == {
+        "code": "secret_ref_unresolved",
+        "message": "Managed secret is missing.",
+        "severity": "error",
+    }
+
 @pytest.mark.asyncio
 async def test_import_from_env(mock_db_session):
     env_dict = {
