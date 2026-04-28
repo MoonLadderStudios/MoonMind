@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Iterable, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +42,37 @@ _UNSAFE_FIELD_TOKENS = (
     "command_history",
     "operational_history",
     "decrypted",
+)
+
+SETTINGS_PERMISSION_NAMES: frozenset[str] = frozenset(
+    {
+        "settings.catalog.read",
+        "settings.effective.read",
+        "settings.user.write",
+        "settings.workspace.write",
+        "settings.system.read",
+        "settings.system.write",
+        "secrets.metadata.read",
+        "secrets.value.write",
+        "secrets.rotate",
+        "secrets.disable",
+        "secrets.delete",
+        "provider_profiles.read",
+        "provider_profiles.write",
+        "operations.read",
+        "operations.invoke",
+        "settings.audit.read",
+    }
+)
+
+_SECRET_LIKE_SUBSTRINGS = (
+    "token",
+    "secret",
+    "password",
+    "private key",
+    "private_key",
+    "oauth",
+    "credential",
 )
 
 
@@ -134,6 +166,70 @@ class SettingsError(BaseModel):
     key: str | None = None
     scope: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+class SettingsAuditRead(BaseModel):
+    id: UUID
+    event_type: str
+    key: str
+    scope: str
+    actor_user_id: UUID | None = None
+    old_value: Any = None
+    new_value: Any = None
+    redacted: bool = False
+    redaction_reasons: list[str] = Field(default_factory=list)
+    reason: str | None = None
+    request_id: str | None = None
+    validation_outcome: str | None = None
+    apply_mode: str | None = None
+    affected_systems: list[str] = Field(default_factory=list)
+    created_at: datetime | None = None
+
+
+class SettingsAuditResponse(BaseModel):
+    items: list[SettingsAuditRead]
+
+
+class SettingsRecentChange(BaseModel):
+    event_type: str
+    reason: str | None = None
+    redacted: bool = False
+    created_at: datetime | None = None
+
+
+class SettingsDiagnosticRead(BaseModel):
+    key: str
+    scope: SettingScope
+    source: str
+    source_explanation: str
+    read_only: bool = False
+    read_only_reason: str | None = None
+    requires_reload: bool = False
+    requires_worker_restart: bool = False
+    requires_process_restart: bool = False
+    applies_to: list[str] = Field(default_factory=list)
+    diagnostics: list[SettingDiagnostic] = Field(default_factory=list)
+    recent_change: SettingsRecentChange | None = None
+
+
+class SettingsDiagnosticsResponse(BaseModel):
+    scope: SettingScope
+    values: dict[str, SettingsDiagnosticRead]
+
+
+def settings_permissions_for_user(user: Any) -> set[str]:
+    if bool(getattr(user, "is_superuser", False)):
+        return set(SETTINGS_PERMISSION_NAMES)
+    raw_permissions = getattr(user, "settings_permissions", set()) or set()
+    return {
+        str(permission)
+        for permission in raw_permissions
+        if str(permission) in SETTINGS_PERMISSION_NAMES
+    }
+
+
+def has_settings_permission(user: Any, permission: str) -> bool:
+    return permission in settings_permissions_for_user(user)
 
 
 @dataclass(frozen=True)
@@ -340,6 +436,13 @@ class SettingsCatalogService:
             scope=scope,
             categories=categories,
         )
+
+    def _entries_for_scope(self, scope: SettingScope) -> list[SettingRegistryEntry]:
+        return [
+            entry
+            for entry in sorted(self._registry, key=lambda item: item.order)
+            if scope in entry.scopes
+        ]
 
     async def catalog_async(
         self,
@@ -699,6 +802,119 @@ class SettingsCatalogService:
         result = await self._session.execute(select(func.count(SettingsAuditEvent.id)))
         return int(result.scalar_one())
 
+    async def list_audit_events(
+        self,
+        *,
+        permissions: set[str],
+        key: str | None = None,
+        scope: SettingScope | None = None,
+        limit: int = 50,
+    ) -> list[SettingsAuditRead]:
+        if self._session is None:
+            return []
+        bounded_limit = min(max(limit, 1), 200)
+        statement = select(SettingsAuditEvent).order_by(
+            desc(SettingsAuditEvent.created_at)
+        ).limit(bounded_limit)
+        statement = statement.where(SettingsAuditEvent.workspace_id == self._workspace_id)
+        if key:
+            statement = statement.where(SettingsAuditEvent.key == key)
+        if scope:
+            statement = statement.where(SettingsAuditEvent.scope == scope)
+            subject_id = self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID
+            statement = statement.where(SettingsAuditEvent.user_id == subject_id)
+        else:
+            statement = statement.where(
+                SettingsAuditEvent.user_id.in_(
+                    {_DEFAULT_SUBJECT_ID, self._user_id}
+                )
+            )
+        result = await self._session.execute(statement)
+        return [
+            self._audit_read_model(row, permissions=permissions)
+            for row in result.scalars().all()
+        ]
+
+    async def diagnostics(
+        self,
+        *,
+        scope: SettingScope,
+        key: str | None = None,
+    ) -> SettingsDiagnosticsResponse:
+        entries = self._entries_for_scope(scope)
+        if key is not None:
+            if key not in self._entries_by_key:
+                raise KeyError(key)
+            entry = self._entries_by_key[key]
+            if scope not in entry.scopes:
+                raise ValueError("invalid_scope")
+            entries = [entry]
+
+        overrides = await self._get_effective_overrides(
+            scope=scope,
+            keys=[entry.key for entry in entries],
+        )
+        resolved = {
+            entry.key: (
+                entry,
+                self._resolve_value_from_overrides(
+                    entry,
+                    scope=scope,
+                    overrides=overrides,
+                ),
+            )
+            for entry in entries
+        }
+        await self._prime_managed_secret_statuses(data[0] for _entry, data in resolved.values())
+        await self._prime_provider_profile_statuses(
+            data[0]
+            for entry, data in resolved.values()
+            if entry.key == "workflow.default_provider_profile_ref"
+        )
+        recent_changes = await self._recent_changes([entry.key for entry in entries])
+        values = {}
+        for entry, data in resolved.values():
+            diagnostics = list(self._diagnostics_for_override(entry, data[0], data[3]))
+            if entry.read_only:
+                diagnostics.append(
+                    SettingDiagnostic(
+                        code="read_only_setting",
+                        message=entry.read_only_reason or f"{entry.key} is read-only.",
+                        severity="warning",
+                    )
+                )
+            if entry.requires_reload:
+                diagnostics.append(
+                    SettingDiagnostic(
+                        code="requires_reload",
+                        message=f"{entry.key} requires reload after changes.",
+                        severity="info",
+                    )
+                )
+            if entry.requires_worker_restart or entry.requires_process_restart:
+                diagnostics.append(
+                    SettingDiagnostic(
+                        code="requires_restart",
+                        message=f"{entry.key} requires restart after changes.",
+                        severity="info",
+                    )
+                )
+            values[entry.key] = SettingsDiagnosticRead(
+                key=entry.key,
+                scope=scope,
+                source=data[1],
+                source_explanation=self._source_explanation(entry, data[1]),
+                read_only=entry.read_only,
+                read_only_reason=entry.read_only_reason,
+                requires_reload=entry.requires_reload,
+                requires_worker_restart=entry.requires_worker_restart,
+                requires_process_restart=entry.requires_process_restart,
+                applies_to=list(entry.applies_to),
+                diagnostics=diagnostics,
+                recent_change=recent_changes.get(entry.key),
+            )
+        return SettingsDiagnosticsResponse(scope=scope, values=values)
+
     def _resolve_value(self, entry: SettingRegistryEntry) -> tuple[Any, str]:
         for alias in entry.env_aliases:
             if alias in self._env:
@@ -1018,7 +1234,7 @@ class SettingsCatalogService:
 
     def _contains_unsafe_payload(self, value: Any) -> bool:
         if isinstance(value, str):
-            return any(value.startswith(prefix) for prefix in _SECRET_PREFIXES)
+            return any(prefix in value for prefix in _SECRET_PREFIXES)
         if isinstance(value, dict):
             for key, nested in value.items():
                 normalized = str(key).lower()
@@ -1047,8 +1263,21 @@ class SettingsCatalogService:
             scope=scope,
             workspace_id=self._workspace_id,
             user_id=self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID,
-            old_value_json=None if redacted or not entry.audit.store_old_value else old_value,
-            new_value_json=None if redacted or not entry.audit.store_new_value else new_value,
+            actor_user_id=(
+                self._user_id if self._user_id != _DEFAULT_SUBJECT_ID else None
+            ),
+            old_value_json=(
+                None
+                if (redacted and entry.value_type != "secret_ref")
+                or not entry.audit.store_old_value
+                else old_value
+            ),
+            new_value_json=(
+                None
+                if (redacted and entry.value_type != "secret_ref")
+                or not entry.audit.store_new_value
+                else new_value
+            ),
             redacted=redacted,
             reason=reason,
         )
@@ -1145,7 +1374,11 @@ class SettingsCatalogService:
                         "not exist."
                     ),
                     severity="error",
-                    details={"ref_scheme": "db", "status": "missing"},
+                    details={
+                        "ref_scheme": "db",
+                        "status": "missing",
+                        "launch_blocker": True,
+                    },
                 )
             if status != SecretStatus.ACTIVE.value:
                 return SettingDiagnostic(
@@ -1155,7 +1388,11 @@ class SettingsCatalogService:
                         f"{status}."
                     ),
                     severity="error",
-                    details={"ref_scheme": "db", "status": status},
+                    details={
+                        "ref_scheme": "db",
+                        "status": status,
+                        "launch_blocker": True,
+                    },
                 )
         elif "://" not in value:
             return SettingDiagnostic(
@@ -1164,6 +1401,124 @@ class SettingsCatalogService:
                 severity="error",
             )
         return None
+
+    async def _recent_changes(
+        self, keys: list[str]
+    ) -> dict[str, SettingsRecentChange]:
+        if self._session is None or not keys:
+            return {}
+        result = await self._session.execute(
+            select(SettingsAuditEvent)
+            .where(
+                SettingsAuditEvent.workspace_id == self._workspace_id,
+                SettingsAuditEvent.key.in_(keys),
+                SettingsAuditEvent.user_id.in_(
+                    {_DEFAULT_SUBJECT_ID, self._user_id}
+                ),
+            )
+            .order_by(desc(SettingsAuditEvent.created_at))
+        )
+        output: dict[str, SettingsRecentChange] = {}
+        for row in result.scalars().all():
+            if row.key in output:
+                continue
+            output[row.key] = SettingsRecentChange(
+                event_type=row.event_type,
+                reason=row.reason,
+                redacted=row.redacted,
+                created_at=row.created_at,
+            )
+        return output
+
+    def _audit_read_model(
+        self,
+        row: SettingsAuditEvent,
+        *,
+        permissions: set[str],
+    ) -> SettingsAuditRead:
+        entry = self._entries_by_key.get(row.key)
+        affected_systems = list(entry.applies_to) if entry is not None else []
+        old_value, old_reasons = self._visible_audit_value(
+            row.old_value_json,
+            entry=entry,
+            row_redacted=row.redacted,
+            permissions=permissions,
+        )
+        new_value, new_reasons = self._visible_audit_value(
+            row.new_value_json,
+            entry=entry,
+            row_redacted=row.redacted,
+            permissions=permissions,
+        )
+        reasons = sorted(set(old_reasons + new_reasons))
+        redacted = bool(reasons)
+        return SettingsAuditRead(
+            id=row.id,
+            event_type=row.event_type,
+            key=row.key,
+            scope=row.scope,
+            actor_user_id=row.actor_user_id,
+            old_value=old_value,
+            new_value=new_value,
+            redacted=redacted,
+            redaction_reasons=reasons,
+            reason=row.reason,
+            request_id=row.request_id,
+            validation_outcome="accepted",
+            apply_mode="deferred",
+            affected_systems=affected_systems,
+            created_at=row.created_at,
+        )
+
+    def _visible_audit_value(
+        self,
+        value: Any,
+        *,
+        entry: SettingRegistryEntry | None,
+        row_redacted: bool,
+        permissions: set[str],
+    ) -> tuple[Any, list[str]]:
+        reasons: list[str] = []
+        if value is None:
+            secret_ref_metadata_visible = (
+                entry is not None
+                and entry.value_type == "secret_ref"
+                and "secrets.metadata.read" in permissions
+            )
+            if row_redacted and not secret_ref_metadata_visible:
+                reasons.append("stored_redacted")
+            return None, reasons
+        if entry is not None and entry.audit.redact:
+            if (
+                entry.value_type == "secret_ref"
+                and "secrets.metadata.read" in permissions
+                and isinstance(value, str)
+            ):
+                return value, reasons
+            reasons.append("descriptor_policy")
+        if self._contains_secret_like_value(value):
+            return None, sorted(set(reasons + ["secret_like_value"]))
+        if row_redacted and not reasons:
+            reasons.append("stored_redacted")
+        if reasons:
+            return None, reasons
+        return value, reasons
+
+    def _contains_secret_like_value(self, value: Any) -> bool:
+        if isinstance(value, str):
+            normalized = value.lower()
+            return any(prefix in value for prefix in _SECRET_PREFIXES) or any(
+                marker in normalized for marker in _SECRET_LIKE_SUBSTRINGS
+            )
+        if isinstance(value, dict):
+            return any(
+                self._contains_secret_like_value(key)
+                or self._contains_secret_like_value(nested)
+                for key, nested in value.items()
+            )
+        if isinstance(value, list):
+            return any(self._contains_secret_like_value(item) for item in value)
+        return False
 
 
 def settings_error(
