@@ -3,6 +3,7 @@ import { QueryClient, useMutation } from '@tanstack/react-query';
 
 interface SecretMetadata {
   slug: string;
+  secretRef?: string;
   status: string;
   details: Record<string, unknown>;
   createdAt: string;
@@ -160,6 +161,15 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
     return <span className="badge badge-error">{status}</span>;
   };
 
+  const copySecretRef = async (secretRef: string) => {
+    try {
+      await navigator.clipboard.writeText(secretRef);
+      onNotice({ level: 'ok', text: 'SecretRef copied.' });
+    } catch {
+      onNotice({ level: 'error', text: 'Failed to copy SecretRef.' });
+    }
+  };
+
   return (
     <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
       <div className="border-b border-slate-200 dark:border-slate-800 pb-4">
@@ -180,6 +190,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-800">
                   <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Secret slug</th>
+                  <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">SecretRef</th>
                   <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Status</th>
                   <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Updated</th>
                   <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Actions</th>
@@ -188,7 +199,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {secrets.length === 0 ? (
                   <tr>
-                    <td className="px-2 py-6 text-slate-500 dark:text-slate-400 italic" colSpan={4}>
+                    <td className="px-2 py-6 text-slate-500 dark:text-slate-400 italic" colSpan={5}>
                       No secrets currently stored.
                     </td>
                   </tr>
@@ -198,6 +209,11 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
                       <td className="px-2 py-4 font-mono font-bold text-slate-900 dark:text-white">
                         {secret.slug}
                       </td>
+                      <td className="px-2 py-4">
+                        <code className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-800 dark:bg-slate-900 dark:text-slate-100">
+                          {secret.secretRef ?? `db://${secret.slug}`}
+                        </code>
+                      </td>
                       <td className="px-2 py-4">{renderStatus(secret.status)}</td>
                       <td className="px-2 py-4 text-xs text-slate-500 dark:text-slate-400">
                         {secret.updatedAt
@@ -206,6 +222,14 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
                       </td>
                       <td className="px-2 py-4">
                         <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => copySecretRef(secret.secretRef ?? `db://${secret.slug}`)}
+                            className="btn btn-sm btn-outline"
+                            aria-label={`Copy SecretRef for ${secret.slug}`}
+                          >
+                            Copy
+                          </button>
                           <button
                             type="button"
                             onClick={() => {

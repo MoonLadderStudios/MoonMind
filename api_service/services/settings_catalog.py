@@ -12,7 +12,12 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db.models import SettingsAuditEvent, SettingsOverride
+from api_service.db.models import (
+    ManagedSecret,
+    SecretStatus,
+    SettingsAuditEvent,
+    SettingsOverride,
+)
 from moonmind.config.settings import AppSettings, settings as app_settings
 
 SettingScope = Literal["user", "workspace", "system", "operator"]
@@ -295,6 +300,7 @@ class SettingsCatalogService:
         self._session = session
         self._workspace_id = workspace_id or _DEFAULT_SUBJECT_ID
         self._user_id = user_id or _DEFAULT_SUBJECT_ID
+        self._managed_secret_status_by_slug: dict[str, str | None] = {}
 
     def catalog(
         self,
@@ -331,6 +337,15 @@ class SettingsCatalogService:
         overrides = await self._get_effective_overrides(
             scope=scope,
             keys=[entry.key for entry in entries],
+        )
+        await self._prime_managed_secret_statuses(
+            self._resolve_value_from_overrides(
+                entry,
+                scope=scope,
+                overrides=overrides,
+            )[0]
+            for entry in entries
+            if scope is not None
         )
         categories: dict[str, list[SettingDescriptor]] = {}
         for entry in entries:
@@ -433,7 +448,7 @@ class SettingsCatalogService:
             order=entry.order,
             audit=entry.audit,
             value_version=version,
-            diagnostics=[] if override_present else self._diagnostics(entry, value),
+            diagnostics=self._diagnostics_for_override(entry, value, override_present),
         )
 
     async def effective_value_async(
@@ -453,6 +468,7 @@ class SettingsCatalogService:
             scope=scope,
             overrides=overrides,
         )
+        await self._prime_managed_secret_statuses([value])
         return EffectiveSettingValue(
             key=entry.key,
             scope=scope,
@@ -460,7 +476,7 @@ class SettingsCatalogService:
             source=source,
             source_explanation=self._source_explanation(entry, source),
             value_version=version,
-            diagnostics=[] if override_present else self._diagnostics(entry, value),
+            diagnostics=self._diagnostics_for_override(entry, value, override_present),
         )
 
     async def effective_values_async(
@@ -473,13 +489,31 @@ class SettingsCatalogService:
             scope=scope,
             keys=[entry.key for entry in entries],
         )
-        values = {
-            entry.key: self._effective_value_from_overrides(
+        resolved = {
+            entry.key: (
                 entry,
-                scope=scope,
-                overrides=overrides,
+                self._resolve_value_from_overrides(
+                    entry,
+                    scope=scope,
+                    overrides=overrides,
+                ),
             )
             for entry in entries
+        }
+        await self._prime_managed_secret_statuses(
+            data[0] for _entry, data in resolved.values()
+        )
+        values = {
+            key: EffectiveSettingValue(
+                key=entry.key,
+                scope=scope,
+                value=data[0],
+                source=data[1],
+                source_explanation=self._source_explanation(entry, data[1]),
+                value_version=data[2],
+                diagnostics=self._diagnostics_for_override(entry, data[0], data[3]),
+            )
+            for key, (entry, data) in resolved.items()
         }
         return EffectiveSettingsResponse(scope=scope, values=values)
 
@@ -555,17 +589,33 @@ class SettingsCatalogService:
         except IntegrityError as exc:
             await self._session.rollback()
             raise ValueError("version_conflict") from exc
-        values = {
-            key: self._effective_value_from_overrides(
+        changed_overrides = {
+            (row_scope, changed_key): row
+            for (row_scope, changed_key), row in current_rows.items()
+            if row_scope == scope and changed_key in changes
+        }
+        resolved = {
+            key: self._resolve_value_from_overrides(
                 entries[key],
                 scope=scope,
-                overrides={
-                    (row_scope, changed_key): row
-                    for (row_scope, changed_key), row in current_rows.items()
-                    if row_scope == scope and changed_key in changes
-                },
+                overrides=changed_overrides,
             )
             for key in changes
+        }
+        await self._prime_managed_secret_statuses(data[0] for data in resolved.values())
+        values = {
+            key: EffectiveSettingValue(
+                key=entries[key].key,
+                scope=scope,
+                value=data[0],
+                source=data[1],
+                source_explanation=self._source_explanation(entries[key], data[1]),
+                value_version=data[2],
+                diagnostics=self._diagnostics_for_override(
+                    entries[key], data[0], data[3]
+                ),
+            )
+            for key, data in resolved.items()
         }
         return EffectiveSettingsResponse(scope=scope, values=values)
 
@@ -681,8 +731,45 @@ class SettingsCatalogService:
             source=source,
             source_explanation=self._source_explanation(entry, source),
             value_version=version,
-            diagnostics=[] if override_present else self._diagnostics(entry, value),
+            diagnostics=self._diagnostics_for_override(entry, value, override_present),
         )
+
+    def _diagnostics_for_override(
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+        override_present: bool,
+    ) -> list[SettingDiagnostic]:
+        if override_present and (entry.value_type != "secret_ref" or value is None):
+            return []
+        return self._diagnostics(entry, value)
+
+    async def _prime_managed_secret_statuses(self, values: Iterable[Any]) -> None:
+        if self._session is None:
+            return
+        slugs = {
+            value.removeprefix("db://")
+            for value in values
+            if isinstance(value, str) and value.startswith("db://")
+        }
+        missing = [
+            slug for slug in slugs if slug not in self._managed_secret_status_by_slug
+        ]
+        if not missing:
+            return
+        result = await self._session.execute(
+            select(ManagedSecret.slug, ManagedSecret.status).where(
+                ManagedSecret.slug.in_(missing)
+            )
+        )
+
+        statuses_from_db = {
+            slug: status.value if isinstance(status, SecretStatus) else str(status)
+            for slug, status in result.all()
+        }
+
+        for slug in missing:
+            self._managed_secret_status_by_slug[slug] = statuses_from_db.get(slug)
 
     def _resolve_value_from_overrides(
         self,
@@ -941,6 +1028,31 @@ class SettingsCatalogService:
                     ),
                     severity="error",
                     details={"ref_scheme": "env"},
+                )
+        elif value.startswith("db://"):
+            slug = value.removeprefix("db://")
+            if slug not in self._managed_secret_status_by_slug:
+                return None
+            status = self._managed_secret_status_by_slug.get(slug)
+            if status is None:
+                return SettingDiagnostic(
+                    code="unresolved_secret_ref",
+                    message=(
+                        f"{entry.key} references a managed secret that does "
+                        "not exist."
+                    ),
+                    severity="error",
+                    details={"ref_scheme": "db", "status": "missing"},
+                )
+            if status != SecretStatus.ACTIVE.value:
+                return SettingDiagnostic(
+                    code="unresolved_secret_ref",
+                    message=(
+                        f"{entry.key} references a managed secret that is "
+                        f"{status}."
+                    ),
+                    severity="error",
+                    details={"ref_scheme": "db", "status": status},
                 )
         elif "://" not in value:
             return SettingDiagnostic(

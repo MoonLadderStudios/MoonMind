@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.api.routers import settings as settings_router
 from api_service.db import base as db_base
-from api_service.db.models import Base, ManagedSecret
+from api_service.db.models import Base, ManagedSecret, SecretStatus
 from api_service.main import app
 
 
@@ -382,3 +382,89 @@ async def test_secret_ref_reference_allowed_but_raw_secret_rejected(settings_api
     assert rejected.status_code == 400
     assert rejected.json()["error"] == "invalid_setting_value"
     assert "ghp_raw_plaintext" not in rejected.text
+
+
+@pytest.mark.asyncio
+async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(settings_api_db):
+    async with settings_api_db() as session:
+        session.add(
+            ManagedSecret(
+                slug="active-github-token",
+                ciphertext="active-plaintext",
+                status=SecretStatus.ACTIVE,
+                details={},
+            )
+        )
+        session.add(
+            ManagedSecret(
+                slug="disabled-github-token",
+                ciphertext="disabled-plaintext",
+                status=SecretStatus.DISABLED,
+                details={},
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        active = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {
+                    "integrations.github.token_ref": "db://active-github-token"
+                },
+                "expected_versions": {"integrations.github.token_ref": 1},
+            },
+        )
+        disabled = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {
+                    "integrations.github.token_ref": "db://disabled-github-token"
+                },
+                "expected_versions": {"integrations.github.token_ref": 1},
+            },
+        )
+        missing = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {
+                    "integrations.github.token_ref": "db://missing-github-token"
+                },
+                "expected_versions": {"integrations.github.token_ref": 2},
+            },
+        )
+
+    active_value = active.json()["values"]["integrations.github.token_ref"]
+    disabled_value = disabled.json()["values"]["integrations.github.token_ref"]
+    missing_value = missing.json()["values"]["integrations.github.token_ref"]
+
+    assert active.status_code == 200
+    assert active_value["diagnostics"] == []
+    assert "active-plaintext" not in active.text
+    assert disabled.status_code == 200
+    assert disabled_value["diagnostics"] == [
+        {
+            "code": "unresolved_secret_ref",
+            "message": (
+                "integrations.github.token_ref references a managed secret "
+                "that is disabled."
+            ),
+            "severity": "error",
+            "details": {"ref_scheme": "db", "status": "disabled"},
+        }
+    ]
+    assert "disabled-plaintext" not in disabled.text
+    assert missing.status_code == 200
+    assert missing_value["diagnostics"] == [
+        {
+            "code": "unresolved_secret_ref",
+            "message": (
+                "integrations.github.token_ref references a managed secret "
+                "that does not exist."
+            ),
+            "severity": "error",
+            "details": {"ref_scheme": "db", "status": "missing"},
+        }
+    ]
