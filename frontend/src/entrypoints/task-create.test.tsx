@@ -425,6 +425,7 @@ describe("Task Create Entrypoint", () => {
   beforeEach(() => {
     window.history.pushState({}, "Task Create", "/tasks/new");
     window.sessionStorage.clear();
+    window.localStorage.clear();
     vi.mocked(navigateTo).mockReset();
     consoleInfoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     executionResponseOverride = null;
@@ -2214,6 +2215,7 @@ describe("Task Create Entrypoint", () => {
     fetchSpy.mockRestore();
     consoleInfoSpy.mockRestore();
     window.sessionStorage.clear();
+    window.localStorage.clear();
   });
 
   it("resolves task submit mode with rerun taking precedence over edit", () => {
@@ -4267,6 +4269,54 @@ describe("Task Create Entrypoint", () => {
       target: { value: "Custom/Repo" },
     });
     expect((repositoryInput as HTMLInputElement).value).toBe("Custom/Repo");
+  });
+
+  it("remembers the last selected repository option when it is still available", async () => {
+    const { unmount } = renderWithClient(
+      <TaskCreatePage payload={withRepositoryOptions()} />,
+    );
+
+    const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
+    fireEvent.change(repositoryInput, {
+      target: { value: "Octo/Repo" },
+    });
+    expect(window.localStorage.getItem("moonmind.task-create.last-repository-option"))
+      .toBe("Octo/Repo");
+
+    unmount();
+    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+
+    expect((await screen.findByLabelText(/GitHub Repo/) as HTMLInputElement).value)
+      .toBe("Octo/Repo");
+  });
+
+  it("clears the remembered repository option for custom repository entries", async () => {
+    window.localStorage.setItem(
+      "moonmind.task-create.last-repository-option",
+      "Octo/Repo",
+    );
+
+    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+
+    const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
+    fireEvent.change(repositoryInput, {
+      target: { value: "Custom/Repo" },
+    });
+
+    expect(window.localStorage.getItem("moonmind.task-create.last-repository-option"))
+      .toBeNull();
+  });
+
+  it("ignores remembered repository values that are not current options", async () => {
+    window.localStorage.setItem(
+      "moonmind.task-create.last-repository-option",
+      "Missing/Repo",
+    );
+
+    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+
+    expect((await screen.findByLabelText(/GitHub Repo/) as HTMLInputElement).value)
+      .toBe("MoonLadderStudios/MoonMind");
   });
 
   it("submits a selected repository option without changing unrelated draft fields", async () => {

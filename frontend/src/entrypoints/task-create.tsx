@@ -32,6 +32,8 @@ const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
   [JIRA_ORCHESTRATE_PRESET_SLUG]: new Set(["sourcedesignpath", "constraints"]),
 };
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
+const LAST_REPOSITORY_OPTION_PREFERENCE_KEY =
+  "moonmind.task-create.last-repository-option";
 const JIRA_LAST_PROJECT_SESSION_KEY =
   "moonmind.task-create.jira.last-project-key";
 const JIRA_LAST_BOARD_SESSION_KEY =
@@ -71,6 +73,27 @@ function writeProposeTasksPreference(value: boolean): void {
   }
 }
 
+function readLocalPreference(key: string): string {
+  try {
+    return String(window.localStorage.getItem(key) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function writeLocalPreference(key: string, value: string): void {
+  try {
+    const normalized = value.trim();
+    if (normalized) {
+      window.localStorage.setItem(key, normalized);
+    } else {
+      window.localStorage.removeItem(key);
+    }
+  } catch {
+    // Keep browser preferences best-effort.
+  }
+}
+
 function readSessionPreference(key: string): string {
   try {
     return String(window.sessionStorage.getItem(key) || "").trim();
@@ -90,6 +113,53 @@ function writeSessionPreference(key: string, value: string): void {
   } catch {
     // Keep Jira browser preferences best-effort and local to this session.
   }
+}
+
+type RepositoryOption = {
+  value: string;
+  label: string;
+};
+
+function normalizeRepositoryOptions(
+  items:
+    | Array<{
+        value?: string | null;
+        label?: string | null;
+      }>
+    | undefined,
+): RepositoryOption[] {
+  const seen = new Set<string>();
+  return (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      value: String(item?.value || "").trim(),
+      label: String(item?.label || item?.value || "").trim(),
+    }))
+    .filter((item) => {
+      if (!item.value) {
+        return false;
+      }
+      const key = item.value.toLowerCase();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+}
+
+function repositoryOptionValue(
+  repositoryOptions: RepositoryOption[],
+  value: string,
+): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    return "";
+  }
+  return (
+    repositoryOptions.find(
+      (item) => item.value.toLowerCase() === normalized.toLowerCase(),
+    )?.value || ""
+  );
 }
 
 type TemplateScope = "global" | "personal";
@@ -2327,6 +2397,20 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const defaultRepository = String(
     dashboardConfig.system?.defaultRepository || "",
   );
+  const repositoryOptions = useMemo(
+    () =>
+      normalizeRepositoryOptions(
+        dashboardConfig.system?.repositoryOptions?.items,
+      ),
+    [dashboardConfig.system?.repositoryOptions?.items],
+  );
+  const initialRepository = useMemo(() => {
+    const rememberedRepository = repositoryOptionValue(
+      repositoryOptions,
+      readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY),
+    );
+    return rememberedRepository || defaultRepository;
+  }, [defaultRepository, repositoryOptions]);
   const defaultPublishMode = String(
     dashboardConfig.system?.defaultPublishMode || "pr",
   );
@@ -2359,7 +2443,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         "",
     ),
   );
-  const [repository, setRepository] = useState(defaultRepository);
+  const [repository, setRepository] = useState(initialRepository);
   const [providerProfile, setProviderProfile] = useState("");
   const [branch, setBranch] = useState("");
   const [branchTouched, setBranchTouched] = useState(false);
@@ -4020,27 +4104,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     ],
   );
 
-  const repositoryOptions = useMemo(() => {
-    const items = dashboardConfig.system?.repositoryOptions?.items;
-    const seen = new Set<string>();
-    return (Array.isArray(items) ? items : [])
-      .map((item) => ({
-        value: String(item?.value || "").trim(),
-        label: String(item?.label || item?.value || "").trim(),
-      }))
-      .filter((item) => {
-        if (!item.value) {
-          return false;
-        }
-        const key = item.value.toLowerCase();
-        if (seen.has(key)) {
-          return false;
-        }
-        seen.add(key);
-        return true;
-      });
-  }, [dashboardConfig.system?.repositoryOptions?.items]);
-
   const branchLookupEndpoint = normalizeMoonMindApiPath(
     dashboardConfig.sources?.github?.branches,
   );
@@ -4116,6 +4179,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     return "";
   })();
+  const handleRepositoryChange = (value: string) => {
+    setRepository(value);
+    const selectedOption = repositoryOptionValue(repositoryOptions, value);
+    writeLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY, selectedOption);
+  };
 
   const presetStatusText = useMemo(() => {
     if (presetReapplyNeeded) {
@@ -7105,7 +7173,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 list={REPOSITORY_OPTIONS_DATALIST_ID}
                 value={repository}
                 placeholder="owner/repo"
-                onChange={(event) => setRepository(event.target.value)}
+                onChange={(event) =>
+                  handleRepositoryChange(event.target.value)
+                }
               />
             </div>
             <div
