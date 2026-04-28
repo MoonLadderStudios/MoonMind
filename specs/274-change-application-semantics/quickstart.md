@@ -38,7 +38,7 @@ Use the full hermetic integration suite before final verification when implement
 ./tools/test_unit.sh
 ```
 
-Run the full unit suite before `/speckit.verify` or final handoff.
+Run the full unit suite before `/moonspec-verify` or final handoff.
 
 ## Manual Story Check
 
