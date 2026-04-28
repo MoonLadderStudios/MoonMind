@@ -86,6 +86,8 @@ Result should include:
 * Resolved PR identity
 * Decision summary (actions taken)
 * Merge outcome (merged / skipped / blocked + reason)
+* `mergeAutomationDisposition` for merge automation consumers:
+  `merged`, `already_merged`, `reenter_gate`, `manual_review`, or `failed`
 
 ---
 

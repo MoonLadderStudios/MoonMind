@@ -1,47 +1,12 @@
 [
   {
-    "id": 3151707547,
+    "id": 4185976123,
     "disposition": "addressed",
-    "rationale": "Environment overrides for integer and boolean settings are parsed to their declared value types with regression coverage."
+    "rationale": "Implemented reenter_gate derivation for remediation next steps and covered it in resolver unit tests."
   },
   {
-    "id": 3151707552,
+    "id": 3151677015,
     "disposition": "addressed",
-    "rationale": "Invalid bare secret_ref environment values are redacted from effective payloads and reported through diagnostics."
-  },
-  {
-    "id": 4186007696,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary with no separate actionable request beyond the inline findings."
-  },
-  {
-    "id": 3151707553,
-    "disposition": "addressed",
-    "rationale": "Settings routes now validate scope values inside the router and return the structured settings error contract for malformed scopes."
-  },
-  {
-    "id": 3151714500,
-    "disposition": "addressed",
-    "rationale": "Duplicate type-consistency feedback covered by typed environment parsing tests."
-  },
-  {
-    "id": 4186015730,
-    "disposition": "not-applicable",
-    "rationale": "Broad review summary; its actionable items are covered by the inline comments."
-  },
-  {
-    "id": 3151714511,
-    "disposition": "addressed",
-    "rationale": "PATCH now preserves no-op handling for empty changes and returns a write-unavailable settings error if validation ever reaches writable settings before persistence exists."
-  },
-  {
-    "id": 3151679728,
-    "disposition": "addressed",
-    "rationale": "Replaced the Jira-specific hidden input set and conditional with a preset-to-hidden-input map used by isVisiblePresetInput."
-  },
-  {
-    "id": 4185978924,
-    "disposition": "addressed",
-    "rationale": "Summary review feedback requested the same generic hidden-input mapping, which is now implemented."
+    "rationale": "Added the reenter_gate constant, passed next_step through resolver result writers, and mapped run_fix_* next steps to reenter_gate."
   }
 ]

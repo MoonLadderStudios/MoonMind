@@ -21,6 +21,11 @@
       "type": "string",
       "enum": ["merged", "auto_merge_enabled", "skipped", "blocked", "failed", "attempts_exhausted"]
     },
+    "mergeAutomationDisposition": {
+      "type": "string",
+      "enum": ["merged", "already_merged", "reenter_gate", "manual_review", "failed"],
+      "description": "Terminal disposition consumed by MoonMind.MergeAutomation."
+    },
     "reason": {
       "type": ["string", "null"],
       "description": "Blocking or failure reason when applicable."
@@ -61,5 +66,5 @@
       }
     }
   },
-  "required": ["decision", "merge_outcome"]
+  "required": ["decision", "merge_outcome", "mergeAutomationDisposition"]
 }
