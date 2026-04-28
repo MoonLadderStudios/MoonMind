@@ -118,17 +118,31 @@ class SystemOperationsService:
         actor_user_id: UUID | str | None,
     ) -> WorkerPauseSnapshotResponse:
         normalized = self._validate_command(command)
+        actor_uuid = self._uuid_or_none(actor_user_id)
+        idempotency_key = self._idempotency_key(normalized, actor_uuid)
+        existing_audit = await self._audit_event_by_idempotency_key(idempotency_key)
+        if existing_audit is not None:
+            payload = (
+                existing_audit.new_value_json
+                if isinstance(existing_audit.new_value_json, dict)
+                else {}
+            )
+            return await self.snapshot(
+                signal_status=str(payload.get("signalStatus") or "succeeded")
+            )
+
         signal_status = await self._invoke_subsystem(normalized)
-        state = await self._persist_state(normalized, actor_user_id=actor_user_id)
+        state = await self._persist_state(normalized, actor_user_id=actor_uuid)
         await self._persist_audit(
             normalized,
-            actor_user_id=actor_user_id,
+            actor_user_id=actor_uuid,
             status="succeeded",
             signal_status=signal_status,
             state=state,
+            idempotency_key=idempotency_key,
         )
         await self._session.commit()
-        return await self.snapshot(signal_status="succeeded")
+        return await self.snapshot(signal_status=signal_status)
 
     def _validate_command(self, command: WorkerOperationCommand) -> WorkerOperationCommand:
         action = str(command.action or "").strip().lower()
@@ -177,11 +191,18 @@ class SystemOperationsService:
 
     async def _invoke_subsystem(self, command: WorkerOperationCommand) -> str:
         try:
-            if command.action == "pause" and command.mode == "quiesce":
+            if command.action == "pause":
+                if command.mode == "drain":
+                    return "succeeded"
                 sender = getattr(self._temporal_service, "send_quiesce_pause_signal", None)
-                if callable(sender):
-                    count = await sender()
-                    return f"succeeded:{count}"
+                if not callable(sender):
+                    raise SystemOperationUnavailableError(
+                        "worker_operation_unavailable",
+                        "Quiesce pause signal handler is not available.",
+                    )
+                count = await sender()
+                return f"succeeded:{count}"
+
             if command.action == "resume":
                 sender = getattr(
                     self._temporal_service,
@@ -192,9 +213,15 @@ class SystemOperationsService:
                     "send_quiesce_resume_signal",
                     None,
                 )
-                if callable(sender):
-                    count = await sender()
-                    return f"succeeded:{count}"
+                if not callable(sender):
+                    raise SystemOperationUnavailableError(
+                        "worker_operation_unavailable",
+                        "Resume signal handler is not available.",
+                    )
+                count = await sender()
+                return f"succeeded:{count}"
+        except SystemOperationUnavailableError:
+            raise
         except Exception as exc:  # pragma: no cover - defensive sanitization
             raise SystemOperationUnavailableError(
                 "worker_operation_unavailable",
@@ -254,6 +281,7 @@ class SystemOperationsService:
         status: str,
         signal_status: str,
         state: _QueueSystemMetadata,
+        idempotency_key: str,
     ) -> None:
         actor_uuid = self._uuid_or_none(actor_user_id)
         self._session.add(
@@ -272,12 +300,26 @@ class SystemOperationsService:
                     "status": status,
                     "signalStatus": signal_status,
                     "requestedState": "paused" if state.workers_paused else "running",
-                    "idempotencyKey": self._idempotency_key(command, actor_uuid),
+                    "idempotencyKey": idempotency_key,
                 },
                 redacted=False,
                 reason=command.reason,
             )
         )
+
+    async def _audit_event_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> SettingsAuditEvent | None:
+        result = await self._session.execute(
+            select(SettingsAuditEvent)
+            .where(SettingsAuditEvent.key == _WORKER_AUDIT_KEY)
+            .order_by(desc(SettingsAuditEvent.created_at))
+        )
+        for row in result.scalars():
+            payload = row.new_value_json if isinstance(row.new_value_json, dict) else {}
+            if payload.get("idempotencyKey") == idempotency_key:
+                return row
+        return None
 
     async def _load_state(self) -> _QueueSystemMetadata:
         row = await self._state_row()

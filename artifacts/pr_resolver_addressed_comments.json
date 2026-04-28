@@ -1,22 +1,37 @@
 [
   {
-    "id": 3153651677,
+    "id": 3154317821,
     "disposition": "addressed",
-    "rationale": "SecretRef parsing for managed-secret status lookup now catches only SecretReferenceError and carries parse failures into readiness diagnostics instead of silently dropping them."
+    "rationale": "Replaced the FastAPI dependency override lambda with the FakeTemporalService callable directly."
   },
   {
-    "id": 3153651681,
-    "disposition": "addressed",
-    "rationale": "Provider readiness synthesis was split into focused helper checks, and SecretRefs are parsed once per row then reused for status lookup and readiness reporting."
+    "id": 4189016793,
+    "disposition": "not-applicable",
+    "rationale": "Review summary only; actionable child comments were classified separately."
   },
   {
-    "id": 3153651684,
+    "id": 3154318717,
     "disposition": "addressed",
-    "rationale": "Readiness SecretRef parsing now uses the shared parser result populated from parse_secret_ref with SecretReferenceError-specific handling."
+    "rationale": "Quiesce pause and resume now raise SystemOperationUnavailableError when required Temporal signal handlers are missing."
   },
   {
-    "id": 4188225634,
+    "id": 3154318732,
     "disposition": "addressed",
-    "rationale": "Summary review concerns are covered by the SecretRef exception handling cleanup, readiness helper refactor, and invalid stored SecretRef regression test."
+    "rationale": "Repeated submissions with the same computed idempotency key now reuse the existing audit event and skip subsystem invocation, state updates, and new audit inserts."
+  },
+  {
+    "id": 3155564685,
+    "disposition": "addressed",
+    "rationale": "Updated the Settings worker snapshot parser and test fixture to accept nullable mode and numeric version from the API response."
+  },
+  {
+    "id": 3155564695,
+    "disposition": "addressed",
+    "rationale": "POST responses now return the actual computed signalStatus value such as succeeded:<count>."
+  },
+  {
+    "id": 4190497594,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary only; actionable child comments were classified separately."
   }
 ]

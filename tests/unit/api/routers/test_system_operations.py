@@ -117,8 +117,10 @@ def test_post_pause_and_resume_return_snapshots_and_call_subsystem(
     assert pause.status_code == 200
     assert pause.json()["system"]["workersPaused"] is True
     assert pause.json()["system"]["mode"] == "quiesce"
+    assert pause.json()["signalStatus"] == "succeeded:1"
     assert resume.status_code == 200
     assert resume.json()["system"]["workersPaused"] is False
+    assert resume.json()["signalStatus"] == "succeeded:1"
     assert temporal.pause_calls == 1
     assert temporal.resume_calls == 1
 

@@ -49,7 +49,7 @@ def test_worker_pause_route_matches_settings_runtime_contract(tmp_path) -> None:
             yield session
 
     app.dependency_overrides[get_async_session] = _session_dep
-    app.dependency_overrides[_get_temporal_execution_service] = lambda: FakeTemporalService()
+    app.dependency_overrides[_get_temporal_execution_service] = FakeTemporalService
     for route in app.routes:
         dependant = getattr(route, "dependant", None)
         if dependant is None:

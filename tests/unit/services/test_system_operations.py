@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import Base, SettingsAuditEvent
 from api_service.services.system_operations import (
+    SystemOperationUnavailableError,
     SystemOperationValidationError,
     SystemOperationsService,
     WorkerOperationCommand,
@@ -139,6 +140,77 @@ async def test_quiesce_and_resume_delegate_to_temporal_signal_methods(
 
     assert temporal.pause_calls == 1
     assert temporal.resume_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_submit_returns_actual_subsystem_signal_status(
+    system_operations_session_maker,
+) -> None:
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session, temporal_service=FakeTemporalService())
+
+        snapshot = await service.submit(
+            WorkerOperationCommand(
+                action="pause",
+                mode="quiesce",
+                reason="Stop claims",
+                confirmation="Pause workers confirmed",
+            ),
+            actor_user_id=uuid4(),
+        )
+
+    assert snapshot.signal_status == "succeeded:3"
+
+
+@pytest.mark.asyncio
+async def test_quiesce_and_resume_fail_fast_when_signal_handler_is_missing(
+    system_operations_session_maker,
+) -> None:
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session, temporal_service=object())
+
+        with pytest.raises(SystemOperationUnavailableError, match="Quiesce pause"):
+            await service.submit(
+                WorkerOperationCommand(
+                    action="pause",
+                    mode="quiesce",
+                    reason="Stop claims",
+                    confirmation="Pause workers confirmed",
+                ),
+                actor_user_id=uuid4(),
+            )
+
+        with pytest.raises(SystemOperationUnavailableError, match="Resume signal"):
+            await service.submit(
+                WorkerOperationCommand(action="resume", reason="Done"),
+                actor_user_id=uuid4(),
+            )
+
+
+@pytest.mark.asyncio
+async def test_duplicate_idempotency_key_reuses_existing_operation_without_side_effects(
+    system_operations_session_maker,
+) -> None:
+    actor_id = uuid4()
+    temporal = FakeTemporalService()
+    async with system_operations_session_maker() as session:
+        service = SystemOperationsService(session, temporal_service=temporal)
+        command = WorkerOperationCommand(
+            action="pause",
+            mode="quiesce",
+            reason="Stop claims",
+            confirmation="Pause workers confirmed",
+        )
+
+        first = await service.submit(command, actor_user_id=actor_id)
+        second = await service.submit(command, actor_user_id=actor_id)
+        result = await session.execute(select(SettingsAuditEvent))
+        audit_events = result.scalars().all()
+
+    assert first.signal_status == "succeeded:3"
+    assert second.signal_status == "succeeded:3"
+    assert temporal.pause_calls == 1
+    assert len(audit_events) == 1
 
 
 @pytest.mark.asyncio

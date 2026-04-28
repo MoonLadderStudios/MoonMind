@@ -6,8 +6,8 @@ const WorkerSnapshotSchema = z.object({
   system: z
     .object({
       workersPaused: z.boolean().optional(),
-      mode: z.string().optional(),
-      version: z.string().optional(),
+      mode: z.string().nullable().optional(),
+      version: z.number().optional(),
       updatedAt: z.string().optional(),
       reason: z.string().optional(),
     })
@@ -26,7 +26,7 @@ const WorkerSnapshotSchema = z.object({
         .array(
           z.object({
             action: z.string().optional(),
-            mode: z.string().optional(),
+            mode: z.string().nullable().optional(),
             reason: z.string().optional(),
             createdAt: z.string().optional(),
           }),

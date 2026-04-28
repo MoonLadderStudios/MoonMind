@@ -6,8 +6,8 @@ import { OperationsSettingsSection } from './OperationsSettingsSection';
 const workerSnapshot = {
   system: {
     workersPaused: false,
-    mode: 'running',
-    version: 'test',
+    mode: null,
+    version: 1,
     updatedAt: '2026-04-26T00:00:00Z',
     reason: 'Normal operation',
   },
