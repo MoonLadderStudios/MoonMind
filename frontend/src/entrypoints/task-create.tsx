@@ -28,6 +28,10 @@ const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
 const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
+const JIRA_ORCHESTRATE_HIDDEN_INPUT_KEYS = new Set([
+  "sourcedesignpath",
+  "constraints",
+]);
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
 const JIRA_LAST_PROJECT_SESSION_KEY =
   "moonmind.task-create.jira.last-project-key";
@@ -1537,6 +1541,24 @@ function isJiraProjectInputKey(rawKey: string): boolean {
 function isRepositoryInputKey(rawKey: string): boolean {
   const normalizedKey = normalizeTemplateInputKey(rawKey);
   return normalizedKey === "repository" || normalizedKey === "repo";
+}
+
+function isVisiblePresetInput(
+  presetSlug: string | undefined,
+  definition: TaskTemplateInputDefinition,
+): boolean {
+  if (isFeatureRequestInputKey(definition.name)) {
+    return false;
+  }
+  if (
+    presetSlug === JIRA_ORCHESTRATE_PRESET_SLUG &&
+    JIRA_ORCHESTRATE_HIDDEN_INPUT_KEYS.has(
+      normalizeTemplateInputKey(definition.name),
+    )
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function resolveObjectiveInstructions(
@@ -3152,8 +3174,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     },
   });
   const selectedPresetInputs = selectedPresetDetailQuery.data?.inputs || [];
-  const visiblePresetInputs = selectedPresetInputs.filter(
-    (definition) => !isFeatureRequestInputKey(definition.name),
+  const visiblePresetInputs = selectedPresetInputs.filter((definition) =>
+    isVisiblePresetInput(selectedPreset?.slug, definition),
   );
   const presetJiraProjectInput = visiblePresetInputs.find((definition) =>
     isJiraProjectInputKey(definition.name),
