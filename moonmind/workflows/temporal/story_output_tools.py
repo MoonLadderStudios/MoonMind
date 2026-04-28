@@ -345,7 +345,6 @@ def _downstream_task_payload(
     source_brief_ref = _string(
         traceability.get("sourceBriefRef") or traceability.get("source_brief_ref")
     )
-    orchestration_mode = "runtime"
     instructions = (
         f"Run Jira Orchestrate for {issue_key}.\n\n"
         f"Source story: {story_id or summary}.\n"
@@ -380,7 +379,6 @@ def _downstream_task_payload(
         "instructions": instructions,
         "inputs": {
             "jira_issue_key": issue_key,
-            "orchestration_mode": orchestration_mode,
             "source_design_path": "",
             "constraints": (
                 f"Preserve source issue {source_issue_key} traceability."

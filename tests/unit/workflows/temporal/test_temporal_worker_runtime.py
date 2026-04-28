@@ -584,7 +584,6 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
                         "instructions": "Use the existing Jira Orchestrate workflow.",
                         "inputs": {
                             "jira_issue_key": "MM-501",
-                            "orchestration_mode": "runtime",
                             "source_design_path": "",
                             "constraints": "Preserve source issue MM-404 traceability.",
                         },

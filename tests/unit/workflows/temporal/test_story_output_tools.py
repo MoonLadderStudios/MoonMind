@@ -973,7 +973,7 @@ async def test_create_jira_orchestrate_tasks_uses_previous_step_mappings_and_own
     assert creator.requests[0]["owner_id"] == "user-123"
     assert creator.requests[0]["owner_type"] == "user"
     task = creator.requests[0]["initial_parameters"]["task"]
-    assert task["inputs"]["orchestration_mode"] == "runtime"
+    assert "orchestration_mode" not in task["inputs"]
     assert task["inputs"]["constraints"] == "Preserve source issue MM-404 traceability."
     assert "Source Jira issue: MM-404." in task["instructions"]
 

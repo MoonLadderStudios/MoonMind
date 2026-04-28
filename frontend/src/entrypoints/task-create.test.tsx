@@ -5600,7 +5600,7 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
-  it("hides legacy Orchestration Mode, Source Design Path, and Constraints inputs for the Jira Orchestrate preset", async () => {
+  it("hides internal Source Design Path and Constraints inputs for the Jira Orchestrate preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -5637,14 +5637,6 @@ describe("Task Create Entrypoint", () => {
                 label: "Jira Issue Key",
                 type: "text",
                 required: true,
-              },
-              {
-                name: "orchestration_mode",
-                label: "Orchestration Mode",
-                type: "enum",
-                required: true,
-                default: "runtime",
-                options: ["runtime", "docs"],
               },
               {
                 name: "source_design_path",

@@ -1,27 +1,22 @@
 [
   {
-    "id": 4192185054,
+    "id": 3157340014,
     "disposition": "not-applicable",
-    "rationale": "Positive Gemini review summary with no requested change."
+    "rationale": "Verified api_service/data/task_step_templates/jira-orchestrate.yaml has no remaining structural orchestrationMode field or template reference to inputs.orchestration_mode; there is no field in this file to hardcode."
   },
   {
-    "id": 3157002480,
+    "id": 3157340019,
     "disposition": "addressed",
-    "rationale": "Key-scoped diagnostics now skip unrelated deprecated override diagnostics; regression test covers diagnostics(scope, key)."
+    "rationale": "Removed the redundant orchestrationmode entry from HIDDEN_PRESET_INPUT_KEYS after the Jira Orchestrate template input was deleted."
   },
   {
-    "id": 3157002486,
+    "id": 3157340024,
     "disposition": "addressed",
-    "rationale": "Resolution now clears cached migration diagnostics for the key before fresh override/default resolution; regression test covers reused service instances."
+    "rationale": "Removed orchestration_mode from downstream Jira Orchestrate task inputs and updated workflow boundary tests to assert the undeclared input is not emitted."
   },
   {
-    "id": 4192187854,
-    "disposition": "not-applicable",
-    "rationale": "Codex automated review container comment; actionable child review comments are tracked separately."
-  },
-  {
-    "id": 3157002490,
+    "id": 4192580292,
     "disposition": "addressed",
-    "rationale": "Migration rule validation now rejects duplicate renamed new_key targets; regression test covers fail-fast behavior."
+    "rationale": "Addressed the actionable UI and workflow payload findings; verified the structural YAML concern does not apply to the current Jira Orchestrate template."
   }
 ]
