@@ -29,12 +29,14 @@ If trusted Jira content is not available, attempt a bounded MoonMind MCP fetch:
 
 ```bash
 test -n "$MOONMIND_URL"
-curl -fsS "$MOONMIND_URL/mcp/tools"
+curl -fsS -H "$MOONMIND_AUTH_HEADER" "$MOONMIND_URL/mcp/tools"
 curl -fsS -X POST "$MOONMIND_URL/mcp/tools/call" \
   -H 'content-type: application/json' \
+  -H "$MOONMIND_AUTH_HEADER" \
   --data '{"tool":"jira.verify_connection","arguments":{}}'
 curl -fsS -X POST "$MOONMIND_URL/mcp/tools/call" \
   -H 'content-type: application/json' \
+  -H "$MOONMIND_AUTH_HEADER" \
   --data '{"tool":"jira.get_issue","arguments":{"issueKey":"ENG-123"}}'
 ```
 
@@ -83,6 +85,7 @@ moonmind rag search \
 
 4. Implement the change.
    - Keep edits scoped to the Jira requirements and current repository patterns.
+   - Forbid bare heredocs in shell commands, such as `<< 'EOF' > file.md`; use `cat << 'EOF' > file.md` or the write file tool instead to prevent parsing errors and artifact gaps.
    - Add or update tests before or alongside production changes when behavior changes.
    - Preserve compatibility-sensitive workflow/activity contracts unless the issue explicitly calls for a versioned cutover.
    - Do not introduce compatibility aliases or hidden fallback semantics for internal contracts in this pre-release repo.

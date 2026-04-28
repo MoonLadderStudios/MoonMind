@@ -1,32 +1,17 @@
 [
   {
-    "id": 3152319940,
+    "id": 3152532335,
     "disposition": "addressed",
-    "rationale": "Replaced JSON.stringify comparison with order-stable recursive equality that handles arrays, objects, symbols, undefined values, and circular references without throwing."
+    "rationale": "Updated the MoonMind MCP curl examples to include the existing runtime auth header for tool listing and tool calls."
   },
   {
-    "id": 3152319945,
+    "id": 3152532352,
     "disposition": "addressed",
-    "rationale": "Moved the shared field Tailwind classes into SETTING_FIELD_CLASS_NAMES and settingFieldClassName for a reusable, readable control style helper."
+    "rationale": "Added the repository heredoc guardrail to the jira-implement implementation workflow."
   },
   {
-    "id": 4186702059,
-    "disposition": "not-applicable",
-    "rationale": "Summary review body only; its two concrete feedback items are tracked and addressed by comments 3152319940 and 3152319945."
-  },
-  {
-    "id": 3152323513,
+    "id": 4186942060,
     "disposition": "addressed",
-    "rationale": "Made the settings catalog route load persisted overrides through SettingsCatalogService.catalog_async so descriptors expose override-aware effective values and value_version."
-  },
-  {
-    "id": 3152323519,
-    "disposition": "addressed",
-    "rationale": "Gated Reset visibility to overrides at the active selected scope and added frontend coverage for inherited workspace overrides in user scope."
-  },
-  {
-    "id": 4186705950,
-    "disposition": "not-applicable",
-    "rationale": "Automated review wrapper text only; its concrete stale-position comments are tracked separately and addressed where they still apply."
+    "rationale": "Summary review covered the two actionable comments, both of which were addressed in the skill documentation."
   }
 ]
