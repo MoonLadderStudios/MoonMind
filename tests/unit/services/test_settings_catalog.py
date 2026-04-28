@@ -419,6 +419,118 @@ async def test_rename_migration_preserves_old_workspace_override(settings_sessio
     }
 
 
+def test_duplicate_rename_migration_targets_are_rejected():
+    entry_type = SettingsCatalogService(env={})._registry[0].__class__
+    registry = (
+        entry_type(
+            key="test.new_runtime",
+            title="New Runtime",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="default-runtime",
+            order=1,
+            apply_mode="next_task",
+            applies_to=("task_creation",),
+        ),
+    )
+    rules = (
+        SettingMigrationRule(
+            old_key="test.old_runtime_a",
+            new_key="test.new_runtime",
+            state="renamed",
+            message="test.old_runtime_a was renamed.",
+        ),
+        SettingMigrationRule(
+            old_key="test.old_runtime_b",
+            new_key="test.new_runtime",
+            state="renamed",
+            message="test.old_runtime_b was renamed.",
+        ),
+    )
+    service = SettingsCatalogService(env={}, registry=registry, migration_rules=rules)
+
+    with pytest.raises(ValueError, match="duplicate rename migration target"):
+        service.catalog(scope="workspace")
+
+
+@pytest.mark.asyncio
+async def test_migration_diagnostic_is_cleared_after_direct_override_resolution(
+    settings_session_maker,
+):
+    entry_type = SettingsCatalogService(env={})._registry[0].__class__
+    registry = (
+        entry_type(
+            key="test.new_runtime",
+            title="New Runtime",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="default-runtime",
+            order=1,
+            apply_mode="next_task",
+            applies_to=("task_creation",),
+        ),
+    )
+    rules = (
+        SettingMigrationRule(
+            old_key="test.old_runtime",
+            new_key="test.new_runtime",
+            state="renamed",
+            message="test.old_runtime was renamed to test.new_runtime.",
+        ),
+    )
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsOverride(
+                scope="workspace",
+                workspace_id=UUID("00000000-0000-0000-0000-000000000000"),
+                user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                key="test.old_runtime",
+                value_json="migrated-runtime",
+                value_version=1,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(
+            env={},
+            registry=registry,
+            migration_rules=rules,
+            session=settings_session,
+        )
+        migrated = await service.effective_value_async(
+            "test.new_runtime", scope="workspace"
+        )
+        assert [diagnostic.code for diagnostic in migrated.diagnostics] == [
+            "setting_renamed_override"
+        ]
+
+        settings_session.add(
+            SettingsOverride(
+                scope="workspace",
+                workspace_id=UUID("00000000-0000-0000-0000-000000000000"),
+                user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                key="test.new_runtime",
+                value_json="direct-runtime",
+                value_version=2,
+            )
+        )
+        await settings_session.commit()
+
+        direct = await service.effective_value_async(
+            "test.new_runtime", scope="workspace"
+        )
+
+    assert direct.value == "direct-runtime"
+    assert direct.source == "workspace_override"
+    assert direct.diagnostics == []
+
+
 @pytest.mark.asyncio
 async def test_deprecated_override_diagnostics_do_not_expose_raw_value(
     settings_session_maker,
@@ -461,6 +573,59 @@ async def test_deprecated_override_diagnostics_do_not_expose_raw_value(
         "schema_version": 1,
     }
     assert "ghp_should_never_leak" not in deprecated.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_key_scoped_diagnostics_exclude_unrelated_deprecated_overrides(
+    settings_session_maker,
+):
+    entry_type = SettingsCatalogService(env={})._registry[0].__class__
+    registry = (
+        entry_type(
+            key="test.active_runtime",
+            title="Active Runtime",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="default-runtime",
+            order=1,
+            apply_mode="next_task",
+            applies_to=("task_creation",),
+        ),
+    )
+    rules = (
+        SettingMigrationRule(
+            old_key="test.removed_token",
+            state="removed",
+            message="test.removed_token was removed and requires migration.",
+        ),
+    )
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsOverride(
+                scope="workspace",
+                workspace_id=UUID("00000000-0000-0000-0000-000000000000"),
+                user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                key="test.removed_token",
+                value_json="ghp_should_never_leak",
+                value_version=2,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(
+            env={},
+            registry=registry,
+            migration_rules=rules,
+            session=settings_session,
+        )
+        diagnostics = await service.diagnostics(
+            scope="workspace", key="test.active_runtime"
+        )
+
+    assert list(diagnostics.values) == ["test.active_runtime"]
 
 
 @pytest.mark.asyncio

@@ -1013,7 +1013,8 @@ class SettingsCatalogService:
                 diagnostics=diagnostics,
                 recent_change=recent_changes.get(entry.key),
             )
-        values.update(await self._deprecated_override_diagnostics(scope=scope))
+        if key is None:
+            values.update(await self._deprecated_override_diagnostics(scope=scope))
         return SettingsDiagnosticsResponse(scope=scope, values=values)
 
     def _validate_registry(self) -> None:
@@ -1041,14 +1042,22 @@ class SettingsCatalogService:
 
     def _validate_migration_rules(self) -> None:
         seen: set[str] = set()
+        rename_targets: set[str] = set()
         for rule in self._migration_rules:
             if rule.old_key in seen:
                 raise ValueError(f"duplicate migration rule for {rule.old_key!r}")
             seen.add(rule.old_key)
-            if rule.state == "renamed" and rule.new_key not in self._entries_by_key:
-                raise ValueError(
-                    f"renamed migration target {rule.new_key!r} is not exposed"
-                )
+            if rule.state == "renamed":
+                if rule.new_key in rename_targets:
+                    raise ValueError(
+                        f"duplicate rename migration target {rule.new_key!r}"
+                    )
+                if rule.new_key is not None:
+                    rename_targets.add(rule.new_key)
+                if rule.new_key not in self._entries_by_key:
+                    raise ValueError(
+                        f"renamed migration target {rule.new_key!r} is not exposed"
+                    )
 
     def _activation_metadata(
         self,
@@ -1294,6 +1303,7 @@ class SettingsCatalogService:
         scope: SettingScope,
         overrides: dict[tuple[SettingScope, str], SettingsOverride],
     ) -> tuple[Any, str, int, bool]:
+        self._migration_diagnostics_by_key.pop(entry.key, None)
         if scope == "user":
             user_override = overrides.get(("user", entry.key))
             if user_override is not None:

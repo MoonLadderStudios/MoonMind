@@ -1,32 +1,27 @@
 [
   {
-    "id": 3156682613,
-    "disposition": "addressed",
-    "rationale": "Activation metadata now defaults clean catalog/effective/diagnostic reads to active and only marks newly committed non-immediate override responses as pending activation."
-  },
-  {
-    "id": 4191816834,
+    "id": 4192185054,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary container with no independent actionable request beyond the inline review comment."
+    "rationale": "Positive Gemini review summary with no requested change."
   },
   {
-    "id": 3156699062,
+    "id": 3157002480,
     "disposition": "addressed",
-    "rationale": "Pending activation values now redact sensitive non-reference values while preserving safe SecretRef strings such as db:// and env:// references."
+    "rationale": "Key-scoped diagnostics now skip unrelated deprecated override diagnostics; regression test covers diagnostics(scope, key)."
   },
   {
-    "id": 3156699081,
+    "id": 3157002486,
     "disposition": "addressed",
-    "rationale": "Registry apply-mode validation errors now include the failing setting key and the specific consistency rule."
+    "rationale": "Resolution now clears cached migration diagnostics for the key before fresh override/default resolution; regression test covers reused service instances."
   },
   {
-    "id": 3156699085,
-    "disposition": "addressed",
-    "rationale": "Mission Control now renders pending values whenever a setting is inactive and pending_value is present, including explicit null resets displayed as Not set."
-  },
-  {
-    "id": 4191835297,
+    "id": 4192187854,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary container; the actionable findings from the summary are tracked by the inline review comment ids."
+    "rationale": "Codex automated review container comment; actionable child review comments are tracked separately."
+  },
+  {
+    "id": 3157002490,
+    "disposition": "addressed",
+    "rationale": "Migration rule validation now rejects duplicate renamed new_key targets; regression test covers fail-fast behavior."
   }
 ]
