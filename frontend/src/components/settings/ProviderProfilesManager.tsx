@@ -7,6 +7,7 @@ export interface ProviderProfile {
   provider_id: string;
   provider_label?: string | null;
   default_model?: string | null;
+  model_overrides?: Record<string, string> | null;
   credential_source: string;
   runtime_materialization_mode: string;
   volume_ref?: string | null;
@@ -22,6 +23,21 @@ export interface ProviderProfile {
   priority?: number | null;
   clear_env_keys?: string[] | null;
   account_label?: string | null;
+  readiness?: ProviderProfileReadiness | null;
+}
+
+interface ProviderReadinessCheck {
+  id: string;
+  label: string;
+  status: 'pass' | 'warning' | 'error';
+  message: string;
+}
+
+interface ProviderProfileReadiness {
+  status: 'ready' | 'warning' | 'blocked';
+  launch_ready: boolean;
+  summary: string;
+  checks: ProviderReadinessCheck[];
 }
 
 interface Notice {
@@ -216,12 +232,22 @@ export function parseClearEnvKeys(text: string): string[] | null {
   return keys.length > 0 ? keys : null;
 }
 
-function summarizeSecretRefs(secretRefs: Record<string, string>): string {
-  const entries = Object.entries(secretRefs);
-  if (entries.length === 0) {
-    return 'No secret refs';
+function readinessLabel(status: ProviderProfileReadiness['status']): string {
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function readinessClass(status: ProviderProfileReadiness['status']): string {
+  if (status === 'ready') {
+    return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400';
   }
-  return entries.map(([key, value]) => `${key}: ${value}`).join(', ');
+  if (status === 'warning') {
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300';
+  }
+  return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300';
+}
+
+function visibleReadinessChecks(readiness?: ProviderProfileReadiness | null): ProviderReadinessCheck[] {
+  return (readiness?.checks ?? []).filter((check) => check.status !== 'pass');
 }
 
 type ProviderAuthActionLabel =
@@ -1187,6 +1213,11 @@ export function ProviderProfilesManager({
                           : 'No model (runtime default)'}
                       </div>
                     )}
+                    {profile.model_overrides && Object.keys(profile.model_overrides).length > 0 ? (
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        Overrides: {Object.keys(profile.model_overrides).join(', ')}
+                      </div>
+                    ) : null}
                   </td>
                   <td
                     className="px-3 py-4 text-slate-700 dark:text-slate-300"
@@ -1206,6 +1237,16 @@ export function ProviderProfilesManager({
                     {profile.provider_label ? (
                       <div className="text-xs text-slate-500 dark:text-slate-400">{profile.provider_label}</div>
                     ) : null}
+                    {profile.tags && profile.tags.length > 0 ? (
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        Tags: {profile.tags.join(', ')}
+                      </div>
+                    ) : null}
+                    {profile.priority != null ? (
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        Priority: {profile.priority}
+                      </div>
+                    ) : null}
                   </td>
                   <td
                     className="px-3 py-4 text-slate-700 dark:text-slate-300"
@@ -1217,14 +1258,44 @@ export function ProviderProfilesManager({
                     <div className="text-xs text-slate-500 dark:text-slate-400">
                       {profile.runtime_materialization_mode}
                     </div>
+                    {profile.volume_ref ? (
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        OAuth volume: {profile.volume_ref}
+                      </div>
+                    ) : null}
+                    {profile.volume_mount_path ? (
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        Mount: {profile.volume_mount_path}
+                      </div>
+                    ) : null}
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      Concurrency: {profile.max_parallel_runs}
+                    </div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      Cooldown: {profile.cooldown_after_429_seconds}s
+                    </div>
                   </td>
                   <td
-                    className="px-3 py-4 font-mono text-xs text-slate-600 dark:text-slate-400"
+                    className="px-3 py-4 text-xs text-slate-600 dark:text-slate-400"
                     data-label="Secret refs"
                     headers="provider-profile-header-secret-refs"
                     role="cell"
                   >
-                    {summarizeSecretRefs(profile.secret_refs)}
+                    <div className="font-medium text-slate-700 dark:text-slate-300">
+                      Role-aware SecretRefs
+                    </div>
+                    {Object.entries(profile.secret_refs ?? {}).length === 0 ? (
+                      <div>No secret refs</div>
+                    ) : (
+                      <dl className="space-y-1">
+                        {Object.entries(profile.secret_refs ?? {}).map(([role, ref]) => (
+                          <div key={role}>
+                            <dt className="font-mono font-semibold">{role}</dt>
+                            <dd className="font-mono">{ref}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    )}
                   </td>
                   <td
                     className="px-3 py-4"
@@ -1241,6 +1312,30 @@ export function ProviderProfilesManager({
                     >
                       {profile.enabled ? 'Enabled' : 'Disabled'}
                     </span>
+                    {profile.readiness ? (
+                      <div className="mt-2 space-y-1">
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${readinessClass(profile.readiness.status)}`}
+                        >
+                          Readiness: {readinessLabel(profile.readiness.status)}
+                        </span>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">
+                          {profile.readiness.summary}
+                        </div>
+                        {visibleReadinessChecks(profile.readiness).map((check) => (
+                          <div
+                            key={check.id}
+                            className={
+                              check.status === 'error'
+                                ? 'text-xs text-rose-600 dark:text-rose-400'
+                                : 'text-xs text-amber-700 dark:text-amber-300'
+                            }
+                          >
+                            {check.label}: {redactClaudeSecretText(check.message)}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                     {oauthSession ? (
                       <div className="mt-2 text-xs font-medium text-slate-600 dark:text-slate-400">
                         OAuth: {oauthStatusLabel(oauthSession.status)}

@@ -5238,6 +5238,17 @@ export interface components {
              */
             max_lease_duration_seconds: number;
         };
+        /** ProviderProfileReadiness */
+        ProviderProfileReadiness: {
+            /** Status */
+            status: string;
+            /** Launch Ready */
+            launch_ready: boolean;
+            /** Summary */
+            summary: string;
+            /** Checks */
+            checks: components["schemas"]["ProviderReadinessCheck"][];
+        };
         /** ProviderProfileResponse */
         ProviderProfileResponse: {
             /** Profile Id */
@@ -5305,6 +5316,7 @@ export interface components {
             is_default: boolean;
             /** Max Lease Duration Seconds */
             max_lease_duration_seconds: number;
+            readiness: components["schemas"]["ProviderProfileReadiness"];
             /** Created At */
             created_at: string | null;
             /** Updated At */
@@ -5393,6 +5405,17 @@ export interface components {
             is_default?: boolean | null;
             /** Max Lease Duration Seconds */
             max_lease_duration_seconds?: number | null;
+        };
+        /** ProviderReadinessCheck */
+        ProviderReadinessCheck: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Status */
+            status: string;
+            /** Message */
+            message: string;
         };
         /**
          * RecurringTaskDefinitionListResponse

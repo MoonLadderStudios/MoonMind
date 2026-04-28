@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Optional
 
@@ -24,18 +25,32 @@ from api_service.db.models import (
     SecretStatus,
     User,
 )
+from moonmind.auth.secret_refs import (
+    ParsedSecretRef,
+    SecretBackend,
+    SecretReferenceError,
+    parse_secret_ref,
+)
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
-from moonmind.utils.logging import redact_profile_file_templates, redact_sensitive_payload
+from moonmind.utils.logging import (
+    redact_profile_file_templates,
+    redact_sensitive_payload,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
 _claude_manual_validation_client: httpx.AsyncClient | None = None
 
+
+@dataclass(frozen=True, slots=True)
+class _SecretRefParseResult:
+    parsed: ParsedSecretRef | None = None
+    error: str | None = None
+
 def validate_secret_refs_helper(value: dict[str, str] | None) -> dict[str, str] | None:
     if not value:
         return value
-    from moonmind.auth.secret_refs import parse_secret_ref, SecretReferenceError
     for k, v in value.items():
         if not v:
             continue
@@ -185,10 +200,23 @@ class ProviderProfileResponse(BaseModel):
     enabled: bool
     is_default: bool
     max_lease_duration_seconds: int
+    readiness: "ProviderProfileReadiness"
     created_at: Optional[str]
     updated_at: Optional[str]
 
     model_config = {"from_attributes": True}
+
+class ProviderReadinessCheck(BaseModel):
+    id: str
+    label: str
+    status: str = Field(..., pattern="^(pass|warning|error)$")
+    message: str
+
+class ProviderProfileReadiness(BaseModel):
+    status: str = Field(..., pattern="^(ready|warning|blocked)$")
+    launch_ready: bool
+    summary: str
+    checks: list[ProviderReadinessCheck]
 
 class ClaudeManualAuthCommitRequest(BaseModel):
     token: str = Field(..., min_length=1, max_length=8192)
@@ -242,7 +270,21 @@ async def list_profiles(
 
     result = await session.execute(stmt)
     rows = result.scalars().all()
-    return [_row_to_dict(r) for r in rows if _can_view_profile(r, current_user)]
+    visible_rows = [r for r in rows if _can_view_profile(r, current_user)]
+    secret_ref_results = _secret_ref_results_for_rows(visible_rows)
+    secret_statuses = await _managed_secret_statuses_for_rows(
+        session,
+        visible_rows,
+        secret_ref_results=secret_ref_results,
+    )
+    return [
+        _row_to_dict(
+            r,
+            managed_secret_statuses=secret_statuses,
+            secret_ref_results=secret_ref_results.get(r.profile_id),
+        )
+        for r in visible_rows
+    ]
 
 @router.get("/{profile_id}", response_model=ProviderProfileResponse)
 async def get_profile(
@@ -258,7 +300,17 @@ async def get_profile(
             status_code=403,
             detail="Not authorized to view this provider profile.",
         )
-    return _row_to_dict(row)
+    secret_ref_results = _secret_ref_results_for_rows([row])
+    secret_statuses = await _managed_secret_statuses_for_rows(
+        session,
+        [row],
+        secret_ref_results=secret_ref_results,
+    )
+    return _row_to_dict(
+        row,
+        managed_secret_statuses=secret_statuses,
+        secret_ref_results=secret_ref_results.get(row.profile_id),
+    )
 
 @router.post("", response_model=ProviderProfileResponse, status_code=201)
 async def create_profile(
@@ -311,7 +363,17 @@ async def create_profile(
 
     await sync_provider_profile_manager(session=session, runtime_id=body.runtime_id)
 
-    return _row_to_dict(profile)
+    secret_ref_results = _secret_ref_results_for_rows([profile])
+    secret_statuses = await _managed_secret_statuses_for_rows(
+        session,
+        [profile],
+        secret_ref_results=secret_ref_results,
+    )
+    return _row_to_dict(
+        profile,
+        managed_secret_statuses=secret_statuses,
+        secret_ref_results=secret_ref_results.get(profile.profile_id),
+    )
 
 @router.patch("/{profile_id}", response_model=ProviderProfileResponse)
 async def update_profile(
@@ -349,7 +411,17 @@ async def update_profile(
     await session.commit()
     await session.refresh(profile)
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
-    return _row_to_dict(profile)
+    secret_ref_results = _secret_ref_results_for_rows([profile])
+    secret_statuses = await _managed_secret_statuses_for_rows(
+        session,
+        [profile],
+        secret_ref_results=secret_ref_results,
+    )
+    return _row_to_dict(
+        profile,
+        managed_secret_statuses=secret_statuses,
+        secret_ref_results=secret_ref_results.get(profile.profile_id),
+    )
 
 @router.post(
     "/{profile_id}/manual-auth/commit",
@@ -737,7 +809,302 @@ def _get_claude_manual_validation_client() -> httpx.AsyncClient:
         _claude_manual_validation_client = httpx.AsyncClient(timeout=10.0)
     return _claude_manual_validation_client
 
-def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
+async def _managed_secret_statuses_for_rows(
+    session: AsyncSession,
+    rows: list[ManagedAgentProviderProfile],
+    *,
+    secret_ref_results: dict[str, dict[str, _SecretRefParseResult]] | None = None,
+) -> dict[str, str]:
+    secret_ref_results = secret_ref_results or _secret_ref_results_for_rows(rows)
+    slugs: set[str] = set()
+    for row in rows:
+        for result in secret_ref_results.get(row.profile_id, {}).values():
+            if result.parsed and result.parsed.backend == SecretBackend.DB_ENCRYPTED:
+                slugs.add(result.parsed.locator)
+    if not slugs:
+        return {}
+
+    result = await session.execute(
+        select(ManagedSecret).where(ManagedSecret.slug.in_(slugs))
+    )
+    return {secret.slug: secret.status.value for secret in result.scalars().all()}
+
+
+def _secret_ref_results_for_rows(
+    rows: list[ManagedAgentProviderProfile],
+) -> dict[str, dict[str, _SecretRefParseResult]]:
+    results: dict[str, dict[str, _SecretRefParseResult]] = {}
+    for row in rows:
+        row_results: dict[str, _SecretRefParseResult] = {}
+        for role, ref in (row.secret_refs or {}).items():
+            try:
+                row_results[str(role)] = _SecretRefParseResult(
+                    parsed=parse_secret_ref(str(ref))
+                )
+            except SecretReferenceError as exc:
+                row_results[str(role)] = _SecretRefParseResult(error=str(exc))
+        results[row.profile_id] = row_results
+    return results
+
+
+def _readiness_check(
+    check_id: str,
+    label: str,
+    status: str,
+    message: str,
+) -> dict[str, str]:
+    return {
+        "id": check_id,
+        "label": label,
+        "status": status,
+        "message": redact_sensitive_payload(message),
+    }
+
+
+def _provider_profile_readiness(
+    row: ManagedAgentProviderProfile,
+    *,
+    managed_secret_statuses: dict[str, str] | None = None,
+    secret_ref_results: dict[str, _SecretRefParseResult] | None = None,
+) -> dict[str, Any]:
+    managed_secret_statuses = managed_secret_statuses or {}
+    secret_ref_results = secret_ref_results or _secret_ref_results_for_rows([row]).get(
+        row.profile_id,
+        {},
+    )
+
+    credential_source = row.credential_source.value if row.credential_source else None
+    materialization_mode = (
+        row.runtime_materialization_mode.value
+        if row.runtime_materialization_mode
+        else None
+    )
+
+    checks = [
+        _required_fields_check(row),
+        _enabled_check(row),
+        _secret_refs_check(
+            row,
+            credential_source=credential_source,
+            managed_secret_statuses=managed_secret_statuses,
+            secret_ref_results=secret_ref_results,
+        ),
+        _oauth_volume_check(
+            row,
+            credential_source=credential_source,
+            materialization_mode=materialization_mode,
+        ),
+        _concurrency_check(row),
+        _cooldown_check(row),
+        _provider_validation_check(row),
+    ]
+
+    if any(check["status"] == "error" for check in checks):
+        status = "blocked"
+        launch_ready = False
+        summary = "Provider profile has launch blockers."
+    elif any(check["status"] == "warning" for check in checks):
+        status = "warning"
+        launch_ready = True
+        summary = "Provider profile is usable with readiness warnings."
+    else:
+        status = "ready"
+        launch_ready = True
+        summary = "Provider profile is ready for launch."
+
+    return {
+        "status": status,
+        "launch_ready": launch_ready,
+        "summary": summary,
+        "checks": checks,
+    }
+
+
+def _required_fields_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    missing_required = [
+        field_name
+        for field_name, value in {
+            "profile_id": row.profile_id,
+            "runtime_id": row.runtime_id,
+            "provider_id": row.provider_id,
+            "credential_source": row.credential_source,
+            "runtime_materialization_mode": row.runtime_materialization_mode,
+        }.items()
+        if value in {None, ""}
+    ]
+    return _readiness_check(
+        "required_fields",
+        "Required fields",
+        "error" if missing_required else "pass",
+        (
+            "Missing required fields: " + ", ".join(missing_required)
+            if missing_required
+            else "Required provider profile fields are present."
+        ),
+    )
+
+
+def _enabled_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    return _readiness_check(
+        "enabled",
+        "Enabled state",
+        "pass" if row.enabled else "error",
+        "Profile is enabled." if row.enabled else "Profile is disabled.",
+    )
+
+
+def _secret_refs_check(
+    row: ManagedAgentProviderProfile,
+    *,
+    credential_source: str | None,
+    managed_secret_statuses: dict[str, str],
+    secret_ref_results: dict[str, _SecretRefParseResult],
+) -> dict[str, str]:
+    if credential_source != "secret_ref":
+        return _readiness_check(
+            "secret_refs",
+            "SecretRef bindings",
+            "pass",
+            "SecretRef bindings are not required for this credential source.",
+        )
+    if not row.secret_refs:
+        return _readiness_check(
+            "secret_refs",
+            "SecretRef bindings",
+            "error",
+            "credential_source secret_ref requires at least one SecretRef binding.",
+        )
+
+    problems: list[str] = []
+    for role, result in secret_ref_results.items():
+        if result.error:
+            problems.append(f"{role}: invalid SecretRef ({result.error})")
+            continue
+        if not result.parsed or result.parsed.backend != SecretBackend.DB_ENCRYPTED:
+            continue
+        status = managed_secret_statuses.get(result.parsed.locator)
+        if status is None:
+            problems.append(
+                f"{role}: managed secret db://{result.parsed.locator} was not found"
+            )
+        elif status != SecretStatus.ACTIVE.value:
+            problems.append(
+                f"{role}: managed secret db://{result.parsed.locator} is {status}"
+            )
+
+    return _readiness_check(
+        "secret_refs",
+        "SecretRef bindings",
+        "error" if problems else "pass",
+        (
+            "; ".join(problems)
+            if problems
+            else "SecretRef bindings are syntactically valid."
+        ),
+    )
+
+
+def _oauth_volume_check(
+    row: ManagedAgentProviderProfile,
+    *,
+    credential_source: str | None,
+    materialization_mode: str | None,
+) -> dict[str, str]:
+    oauth_required = (
+        credential_source == "oauth_volume" or materialization_mode == "oauth_home"
+    )
+    if not oauth_required:
+        return _readiness_check(
+            "oauth_volume",
+            "OAuth volume",
+            "pass",
+            "OAuth volume metadata is not required for this credential source.",
+        )
+
+    missing_oauth = [
+        field_name
+        for field_name, value in {
+            "volume_ref": row.volume_ref,
+            "volume_mount_path": row.volume_mount_path,
+        }.items()
+        if not value
+    ]
+    return _readiness_check(
+        "oauth_volume",
+        "OAuth volume",
+        "error" if missing_oauth else "pass",
+        (
+            "Missing OAuth volume metadata: " + ", ".join(missing_oauth)
+            if missing_oauth
+            else "OAuth volume metadata is present."
+        ),
+    )
+
+
+def _concurrency_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    has_capacity = bool(row.max_parallel_runs and row.max_parallel_runs > 0)
+    return _readiness_check(
+        "concurrency",
+        "Concurrency",
+        "pass" if has_capacity else "error",
+        (
+            f"Profile allows {row.max_parallel_runs} parallel run(s)."
+            if has_capacity
+            else "Profile has no available configured concurrency."
+        ),
+    )
+
+
+def _cooldown_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    return _readiness_check(
+        "cooldown",
+        "Cooldown",
+        "pass" if row.cooldown_after_429_seconds >= 0 else "error",
+        f"Cooldown after provider rate limit is {row.cooldown_after_429_seconds}s.",
+    )
+
+
+def _provider_validation_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    provider_readiness = (
+        row.command_behavior.get("auth_readiness")
+        if isinstance(row.command_behavior, dict)
+        else None
+    )
+    if not isinstance(provider_readiness, dict):
+        return _readiness_check(
+            "provider_validation",
+            "Provider validation",
+            "warning",
+            "No provider-specific validation metadata is available.",
+        )
+
+    launch_ready = provider_readiness.get("launch_ready")
+    if launch_ready is None:
+        launch_ready = provider_readiness.get("launchReady")
+    failure_reason = provider_readiness.get("failure_reason") or provider_readiness.get(
+        "failureReason"
+    )
+    return _readiness_check(
+        "provider_validation",
+        "Provider validation",
+        "pass" if launch_ready is not False else "error",
+        (
+            "Provider validation reports launch ready."
+            if launch_ready is not False
+            else (
+                "Provider validation blocks launch: "
+                f"{failure_reason or 'unknown reason'}"
+            )
+        ),
+    )
+
+
+def _row_to_dict(
+    row: ManagedAgentProviderProfile,
+    *,
+    managed_secret_statuses: dict[str, str] | None = None,
+    secret_ref_results: dict[str, _SecretRefParseResult] | None = None,
+) -> dict[str, Any]:
     payload = {
         "profile_id": row.profile_id,
         "runtime_id": row.runtime_id,
@@ -766,6 +1133,11 @@ def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
         "enabled": row.enabled,
         "is_default": row.is_default,
         "max_lease_duration_seconds": row.max_lease_duration_seconds,
+        "readiness": _provider_profile_readiness(
+            row,
+            managed_secret_statuses=managed_secret_statuses,
+            secret_ref_results=secret_ref_results,
+        ),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }

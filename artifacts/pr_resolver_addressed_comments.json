@@ -1,17 +1,22 @@
 [
   {
-    "id": 3152532335,
+    "id": 3153651677,
     "disposition": "addressed",
-    "rationale": "Updated the MoonMind MCP curl examples to include the existing runtime auth header for tool listing and tool calls."
+    "rationale": "SecretRef parsing for managed-secret status lookup now catches only SecretReferenceError and carries parse failures into readiness diagnostics instead of silently dropping them."
   },
   {
-    "id": 3152532352,
+    "id": 3153651681,
     "disposition": "addressed",
-    "rationale": "Added the repository heredoc guardrail to the jira-implement implementation workflow."
+    "rationale": "Provider readiness synthesis was split into focused helper checks, and SecretRefs are parsed once per row then reused for status lookup and readiness reporting."
   },
   {
-    "id": 4186942060,
+    "id": 3153651684,
     "disposition": "addressed",
-    "rationale": "Summary review covered the two actionable comments, both of which were addressed in the skill documentation."
+    "rationale": "Readiness SecretRef parsing now uses the shared parser result populated from parse_secret_ref with SecretReferenceError-specific handling."
+  },
+  {
+    "id": 4188225634,
+    "disposition": "addressed",
+    "rationale": "Summary review concerns are covered by the SecretRef exception handling cleanup, readiness helper refactor, and invalid stored SecretRef regression test."
   }
 ]
