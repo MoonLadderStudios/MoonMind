@@ -643,6 +643,128 @@ function nonEmptyRecordValue(value: unknown): Record<string, unknown> | undefine
   return Object.keys(record).length > 0 ? record : undefined;
 }
 
+function cloneJsonRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return structuredClone(value) as Record<string, unknown>;
+}
+
+function artifactInputTaskRecord(
+  artifactInput: Record<string, unknown>,
+): Record<string, unknown> {
+  const snapshotDraft = recordValue(artifactInput.draft);
+  const source =
+    Object.keys(snapshotDraft).length > 0 ? snapshotDraft : artifactInput;
+  return recordValue(source.task);
+}
+
+function artifactInputHasStepInstructionGaps(
+  artifactInput: Record<string, unknown>,
+): boolean {
+  const task = artifactInputTaskRecord(artifactInput);
+  const steps = task.steps;
+  if (!Array.isArray(steps)) {
+    return false;
+  }
+  const appliedStepIds = new Set<string>();
+  const appliedTemplates = Array.isArray(task.appliedStepTemplates)
+    ? task.appliedStepTemplates
+    : [];
+  appliedTemplates.forEach((template) => {
+    const templateRecord = recordValue(template);
+    const stepIds = Array.isArray(templateRecord.stepIds)
+      ? templateRecord.stepIds
+      : [];
+    stepIds.forEach((stepId) => {
+      const normalized = String(stepId || "").trim();
+      if (normalized) {
+        appliedStepIds.add(normalized);
+      }
+    });
+  });
+  let sawInstruction = false;
+  return steps.some((step) => {
+    const stepRecord = recordValue(step);
+    const stepId = String(stepRecord.id || "").trim();
+    if (String(stepRecord.instructions || "").trim()) {
+      sawInstruction = true;
+      return false;
+    }
+    if (!sawInstruction || !stepId || !appliedStepIds.has(stepId)) {
+      return false;
+    }
+    return (
+      stepId.startsWith("tpl:") &&
+      (Boolean(recordValue(stepRecord.tool).name) ||
+        Boolean(recordValue(stepRecord.skill).id) ||
+        Boolean(recordValue(stepRecord.skill).name))
+    );
+  });
+}
+
+function mergeMissingTaskInstructionsFromArtifact(
+  artifactInput: Record<string, unknown>,
+  sourceArtifactInput: Record<string, unknown>,
+): Record<string, unknown> {
+  const sourceTask = artifactInputTaskRecord(sourceArtifactInput);
+  const sourceSteps = Array.isArray(sourceTask.steps) ? sourceTask.steps : [];
+  if (sourceSteps.length === 0) {
+    return artifactInput;
+  }
+
+  const merged = cloneJsonRecord(artifactInput);
+  const mergedDraft = recordValue(merged.draft);
+  const mergedSource =
+    Object.keys(mergedDraft).length > 0 ? mergedDraft : merged;
+  const mergedTask = recordValue(mergedSource.task);
+  const mergedSteps = Array.isArray(mergedTask.steps) ? mergedTask.steps : [];
+  if (mergedSteps.length === 0) {
+    return artifactInput;
+  }
+
+  let changed = false;
+  const sourceStepsById = new Map<string, Record<string, unknown>>();
+  sourceSteps.forEach((step) => {
+    const stepRecord = recordValue(step);
+    const stepId = String(stepRecord.id || "").trim();
+    if (stepId) {
+      sourceStepsById.set(stepId, stepRecord);
+    }
+  });
+
+  const sourceTaskInstructions = String(sourceTask.instructions || "").trim();
+  if (
+    sourceTaskInstructions &&
+    !String(mergedTask.instructions || "").trim()
+  ) {
+    mergedTask.instructions = sourceTask.instructions;
+    changed = true;
+  }
+
+  mergedTask.steps = mergedSteps.map((step, index) => {
+    const stepRecord = recordValue(step);
+    if (Object.keys(stepRecord).length === 0) {
+      return step;
+    }
+    if (String(stepRecord.instructions || "").trim()) {
+      return step;
+    }
+    const stepId = String(stepRecord.id || "").trim();
+    const sourceStep = stepId
+      ? sourceStepsById.get(stepId)
+      : recordValue(sourceSteps[index]);
+    const sourceInstructions = String(sourceStep?.instructions || "").trim();
+    if (!sourceInstructions) {
+      return step;
+    }
+    changed = true;
+    return {
+      ...stepRecord,
+      instructions: String(sourceStep?.instructions),
+    };
+  });
+  mergedSource.task = mergedTask;
+  return changed ? merged : artifactInput;
+}
+
 function mergeRecordValues(
   base: Record<string, unknown>,
   overlay: Record<string, unknown>,
@@ -2592,6 +2714,26 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               snapshotArtifactRef,
             ),
           );
+          if (
+            inputArtifactRef &&
+            artifactInputHasStepInstructionGaps(artifactInput)
+          ) {
+            try {
+              const sourceArtifactInput = recordValue(
+                await readTemporalInputArtifact(
+                  artifactDownloadEndpoint,
+                  inputArtifactRef,
+                ),
+              );
+              artifactInput = mergeMissingTaskInstructionsFromArtifact(
+                artifactInput,
+                sourceArtifactInput,
+              );
+            } catch {
+              // The authoritative snapshot remains usable if the older source
+              // input artifact has expired or is no longer accessible.
+            }
+          }
         } else if (inputArtifactRef && !hasInlineTaskInstructions(inlineTask)) {
           artifactInput = recordValue(
             await readTemporalInputArtifact(

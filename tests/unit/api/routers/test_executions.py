@@ -2265,6 +2265,79 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
     session.commit.assert_awaited_once()
     session.refresh.assert_awaited_once_with(record)
 
+
+def test_task_submission_snapshot_uses_input_artifact_for_stripped_step_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    record = _build_execution_record(has_task_input_snapshot=False)
+    service.create_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=False)
+    session = AsyncMock()
+    app.dependency_overrides[get_async_session] = lambda: session
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "temporal_task_editing_enabled", True
+    )
+
+    captured: dict[str, object] = {}
+
+    async def _persist_snapshot(**kwargs) -> str:
+        captured.update(kwargs)
+        target_record = kwargs["record"]
+        target_record.memo = {
+            **dict(target_record.memo or {}),
+            "task_input_snapshot_ref": "art_snapshot_hydrated_create",
+            "task_input_snapshot_version": 1,
+            "task_input_snapshot_source_kind": "create",
+        }
+        return "art_snapshot_hydrated_create"
+
+    persist_mock = AsyncMock(side_effect=_persist_snapshot)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._persist_original_task_input_snapshot_from_parameters",
+        persist_mock,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex_cli",
+                    "inputArtifactRef": "art-full-input",
+                    "task": {
+                        "instructions": "Top level stays inline.",
+                        "runtime": {"mode": "codex_cli"},
+                        "steps": [
+                            {
+                                "id": "step-1",
+                                "instructions": "Top level stays inline.",
+                            },
+                            {"id": "step-2", "title": "Stripped later step"},
+                        ],
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    persist_mock.assert_awaited_once()
+    assert captured["parameters"]["task"]["steps"][1] == {
+        "id": "step-2",
+        "title": "Stripped later step",
+    }
+    assert captured["input_artifact_ref"] == "art-full-input"
+    assert captured["source_kind"] == "create"
+    session.commit.assert_awaited_once()
+
+
 def test_create_execution_enforces_idempotency(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

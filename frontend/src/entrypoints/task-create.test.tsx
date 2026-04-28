@@ -1143,6 +1143,38 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Avalid-skill-rerun?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:valid-skill-rerun",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              repository: "MoonLadderStudios/MoonMind",
+              inputArtifactRef: "expired-valid-input",
+              taskInputSnapshot: {
+                available: true,
+                artifactRef: "valid-skill-snapshot",
+                snapshotVersion: 1,
+                sourceKind: "create",
+                reconstructionMode: "authoritative",
+                disabledReasons: {},
+                fallbackEvidenceRefs: [],
+              },
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: { mode: "codex_cli" },
+                },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Aunsupported?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -1935,6 +1967,76 @@ describe("Task Create Entrypoint", () => {
                   },
                 },
               }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/complex-input/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                repository: "MoonLadderStudios/Tactics",
+                task: {
+                  steps: [
+                    {
+                      id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                      instructions: "Break down the Grid UI overlay plan.",
+                    },
+                    {
+                      id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                      instructions: "Create Jira stories from recovered input.",
+                    },
+                    {
+                      id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                      instructions:
+                        "Create dependent orchestrate tasks from recovered input.",
+                    },
+                  ],
+                },
+              }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/valid-skill-snapshot/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                snapshotVersion: 1,
+                source: { kind: "create" },
+                draft: {
+                  repository: "MoonLadderStudios/MoonMind",
+                  targetRuntime: "codex_cli",
+                  taskShape: "multi_step",
+                  task: {
+                    instructions: "Run the setup step first.",
+                    runtime: { mode: "codex_cli" },
+                    steps: [
+                      {
+                        id: "setup",
+                        title: "Setup",
+                        instructions: "Run the setup step first.",
+                      },
+                      {
+                        id: "skill-only-step",
+                        title: "Run skill without free-text instructions",
+                        tool: {
+                          type: "skill",
+                          name: "moonspec-verify",
+                          version: "1.0",
+                        },
+                        skill: { id: "moonspec-verify" },
+                      },
+                    ],
+                  },
+                },
+              }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/expired-valid-input/download") {
+          return Promise.resolve({
+            ok: false,
+            status: 404,
+            statusText: "Not Found",
+            text: async () => "",
           } as Response);
         }
         if (url === "/api/artifacts/missing-input/download") {
@@ -3291,6 +3393,11 @@ describe("Task Create Entrypoint", () => {
         ),
       ).toBeTruthy();
       expect(
+        fetchSpy.mock.calls.some(
+          ([url]) => String(url) === "/api/artifacts/complex-input/download",
+        ),
+      ).toBeTruthy();
+      expect(
         (screen.getAllByLabelText("Instructions")[0] as HTMLTextAreaElement)
           .value,
       ).toBe("Break down the Grid UI overlay plan.");
@@ -3344,6 +3451,7 @@ describe("Task Create Entrypoint", () => {
             }),
             expect.objectContaining({
               id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+              instructions: "Create Jira stories from recovered input.",
               storyOutput: {
                 mode: "jira",
                 fallback: "fail",
@@ -3356,6 +3464,8 @@ describe("Task Create Entrypoint", () => {
             }),
             expect.objectContaining({
               id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+              instructions:
+                "Create dependent orchestrate tasks from recovered input.",
               jiraOrchestration: {
                 task: {
                   repository: "MoonLadderStudios/MoonMind",
@@ -3373,6 +3483,39 @@ describe("Task Create Entrypoint", () => {
         },
       },
     });
+  });
+
+  it("does not require source artifacts for valid instructionless skill steps", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Avalid-skill-rerun",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getAllByLabelText("Instructions")[0] as HTMLTextAreaElement)
+          .value,
+      ).toBe("Run the setup step first.");
+    });
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url]) => String(url) === "/api/artifacts/valid-skill-snapshot/download",
+      ),
+    ).toBe(true);
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url]) => String(url) === "/api/artifacts/expired-valid-input/download",
+      ),
+    ).toBe(false);
+    expect(
+      screen.queryByText(
+        "Task instructions could not be loaded from the input artifact.",
+      ),
+    ).toBeNull();
   });
 
   it("shows backend stale-state failures without redirecting from rerun mode", async () => {
