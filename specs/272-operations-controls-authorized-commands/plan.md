@@ -5,31 +5,31 @@
 
 ## Summary
 
-Implement MM-542 by completing the Settings -> Operations worker-pause command path as an authorized, auditable operation. The existing UI already renders worker pause/resume controls and deployment operation controls, and deployment operations already provide a typed command pattern. The missing runtime gap is the configured `/api/system/worker-pause` backend route and its operation service semantics. The plan adds a typed system operation router/service for worker pause and resume, persists compact non-secret operation state and audit events using existing settings tables, enforces backend authorization, invokes Temporal quiesce/resume signals where appropriate, and strengthens UI/API tests before implementation.
+Implement MM-542 by completing the Settings -> Operations worker-pause command path as an authorized, auditable operation. The existing UI already rendered worker pause/resume controls and deployment operation controls, and deployment operations already provided a typed command pattern. The runtime gap was the configured `/api/system/worker-pause` backend route and its operation service semantics. The plan adds a typed system operation router/service for worker pause and resume, persists compact non-secret operation state and audit events using existing settings tables, enforces backend authorization, invokes Temporal quiesce/resume signals where appropriate, and verifies the path with explicit unit and integration tests.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | partial | `OperationsSettingsSection.tsx` renders Operations, worker controls, and deployment controls; `/api/system/worker-pause` is referenced but no route exists | add backend worker-pause operation route/service and preserve UI | unit + integration |
-| FR-002 | partial | UI shows worker state, metrics, mode, reason, updated time, recent actions; lacks actor, pending/failure detail from backend route | extend response contract and UI assertions for authorization/last actor/failure/pending where available | unit UI + API |
-| FR-003 | partial | UI validates pause/resume reason and confirms resume when not drained; deployment update/rollback confirmations exist | add explicit confirmation requirement to backend command payload for pause/quiesce and resume force cases | unit API + UI |
-| FR-004 | missing | no worker-pause backend command object or persisted audit event for configured route | add command submission model, idempotency key, status, audit fields, and result metadata | unit API |
-| FR-005 | partial | deployment operation route enforces admin authorization; worker-pause route is absent | add backend authorization to worker-pause route | unit API |
-| FR-006 | missing | no route exists to reject unauthorized worker-pause invocation | add rejection tests and implementation with no side effect | unit API |
-| FR-007 | partial | `TemporalExecutionService` has quiesce/resume signal methods; UI is presentation-only; route missing | route command through system operation service and Temporal signal methods | unit API + integration_ci |
-| FR-008 | missing | no worker operation route result statuses exist | add `pending/succeeded/failed/unauthorized/conflicted/unavailable`-compatible status field and error mapping | unit API |
-| FR-009 | partial | `SettingsAuditEvent` exists and deployment recent actions sanitize raw command logs | persist non-secret worker operation audit in settings audit events and return sanitized latest actions | unit API |
-| FR-010 | implemented_unverified | `spec.md` preserves MM-542 brief | preserve key in plan/tasks/verification and final output | traceability check |
-| SC-001 | partial | UI can render some worker state from mocked API | add real API contract and UI assertions for available metadata | unit UI + API |
-| SC-002 | partial | reason is required client-side; confirmation only for unsafe resume | add backend confirmation enforcement for disruptive command classes | unit API + UI |
-| SC-003 | missing | no worker-pause backend authorization tests | add unauthorized direct submission test | unit API |
-| SC-004 | missing | no worker-pause operation audit route exists | add audit persistence/response tests | unit API |
-| SC-005 | partial | deployment uses operation service; worker-pause should use Temporal service signals | add service boundary assertions | unit API + integration_ci |
-| SC-006 | implemented_unverified | traceability exists in spec | preserve across generated artifacts | traceability check |
-| DESIGN-REQ-002 | partial | source ownership is documented; UI is only presentation, but route absent | implement route as command facade over Temporal operation service | unit + integration |
-| DESIGN-REQ-013 | partial | deployment operation command metadata exists; worker controls lack backend command metadata | add worker operation metadata and audit response | unit API + UI |
-| DESIGN-REQ-014 | partial | source Pause Workers flow has schemas but no route | implement permission, confirmation, subsystem invocation, status, audit, resume action | unit API + integration |
+| FR-001 | implemented_verified | `api_service/api/routers/system_operations.py`, `api_service/services/system_operations.py`, `frontend/src/components/settings/OperationsSettingsSection.tsx`, `tests/integration/temporal/test_system_operations_api.py` | complete; preserve route/service and UI command surface | unit + integration |
+| FR-002 | implemented_verified | service snapshot returns system, metrics, audit, and signal status; UI test covers worker operation metadata | complete; maintain response/UI assertions | unit UI + API |
+| FR-003 | implemented_verified | service validation requires confirmation for disruptive pause/resume commands; UI submits confirmation metadata | complete; maintain validation and UI tests | unit API + UI |
+| FR-004 | implemented_verified | `WorkerOperationCommand` and audit persistence in `api_service/services/system_operations.py`; API/service tests cover command metadata | complete; preserve idempotency, status, audit, and result metadata | unit API |
+| FR-005 | implemented_verified | POST route enforces admin authorization when auth is enabled; API test covers non-admin rejection | complete; keep backend authorization authoritative | unit API |
+| FR-006 | implemented_verified | API test proves non-admin POST is rejected without subsystem invocation | complete; maintain no-side-effect rejection test | unit API |
+| FR-007 | implemented_verified | system operations service delegates quiesce/resume to Temporal service methods and keeps Settings presentation-only | complete; maintain service boundary assertions | unit API + integration_ci |
+| FR-008 | implemented_verified | route/service return normalized signal and error statuses with sanitized validation/unavailable responses | complete; maintain result/error mapping tests | unit API |
+| FR-009 | implemented_verified | `SettingsAuditEvent` stores non-secret worker operation metadata and latest audit projection is sanitized | complete; maintain audit sanitization tests | unit API |
+| FR-010 | implemented_verified | `spec.md`, `plan.md`, `tasks.md`, verification evidence, and traceability checks preserve `MM-542` | complete; keep traceability checks in final verification | traceability check |
+| SC-001 | implemented_verified | integration and UI/API tests cover Settings worker operation state and metadata from the real route contract | complete; maintain unit UI + API evidence | unit UI + API |
+| SC-002 | implemented_verified | backend confirmation enforcement and UI confirmation submission are covered by tests | complete; maintain confirmation tests | unit API + UI |
+| SC-003 | implemented_verified | `tests/unit/api/routers/test_system_operations.py` covers unauthorized direct submission rejection | complete; maintain authorization regression test | unit API |
+| SC-004 | implemented_verified | service/API tests cover audit persistence and latest action response | complete; maintain audit persistence tests | unit API |
+| SC-005 | implemented_verified | service/API tests cover Temporal signal delegation; integration test covers configured route shape | complete; maintain subsystem boundary tests | unit API + integration_ci |
+| SC-006 | implemented_verified | traceability check covers `MM-542`, DESIGN-REQ-002, DESIGN-REQ-013, and DESIGN-REQ-014 across artifacts | complete; keep final traceability check | traceability check |
+| DESIGN-REQ-002 | implemented_verified | worker operation route is a command facade over Temporal operation service and Settings remains a presentation surface | complete; preserve subsystem ownership boundary | unit + integration |
+| DESIGN-REQ-013 | implemented_verified | UI/API/service tests cover state, confirmation, command metadata, result status, and sanitized audit feedback | complete; maintain metadata/audit tests | unit API + UI |
+| DESIGN-REQ-014 | implemented_verified | route implements permission, confirmation, subsystem invocation, status recording, audit event, and resume action | complete; maintain authorization and integration tests | unit API + integration |
 
 ## Technical Context
 
