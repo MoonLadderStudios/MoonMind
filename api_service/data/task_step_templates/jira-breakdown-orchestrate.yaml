@@ -42,14 +42,6 @@ inputs:
     options:
       - linear_blocker_chain
       - none
-  - name: orchestration_mode
-    label: Orchestration Mode
-    type: enum
-    required: true
-    default: runtime
-    options:
-      - runtime
-      - docs
   - name: publish_mode
     label: Publish Mode
     type: enum
@@ -117,7 +109,7 @@ steps:
           mode: "pr"
           mergeAutomation:
             enabled: "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
-        orchestrationMode: "{{ inputs.orchestration_mode }}"
+        orchestrationMode: "runtime"
       traceability:
         sourceIssueKey: "{{ inputs.source_issue_key }}"
     skill:

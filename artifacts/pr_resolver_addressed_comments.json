@@ -1,17 +1,22 @@
 [
   {
-    "id": 4192598542,
+    "id": 3157340014,
     "disposition": "not-applicable",
-    "rationale": "Summary review comment only; the two concrete inline comments were classified separately."
+    "rationale": "Verified api_service/data/task_step_templates/jira-orchestrate.yaml has no remaining structural orchestrationMode field or template reference to inputs.orchestration_mode; there is no field in this file to hardcode."
   },
   {
-    "id": 3157353680,
+    "id": 3157340019,
     "disposition": "addressed",
-    "rationale": "Simplified the Claude display-label reconciliation branch by using a single legacy-label predicate and direct mapping lookup."
+    "rationale": "Removed the redundant orchestrationmode entry from HIDDEN_PRESET_INPUT_KEYS after the Jira Orchestrate template input was deleted."
   },
   {
-    "id": 3157353686,
+    "id": 3157340024,
     "disposition": "addressed",
-    "rationale": "Moved the Claude legacy model alias constant out of the import/logging block and next to related provider-profile constants."
+    "rationale": "Removed orchestration_mode from downstream Jira Orchestrate task inputs and updated workflow boundary tests to assert the undeclared input is not emitted."
+  },
+  {
+    "id": 4192580292,
+    "disposition": "addressed",
+    "rationale": "Addressed the actionable UI and workflow payload findings; verified the structural YAML concern does not apply to the current Jira Orchestrate template."
   }
 ]

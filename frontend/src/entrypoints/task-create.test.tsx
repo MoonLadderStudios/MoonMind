@@ -1883,7 +1883,6 @@ describe("Task Create Entrypoint", () => {
                           jira_issue_type: "Story",
                           jira_dependency_mode: "linear_blocker_chain",
                           repository: "MoonLadderStudios/MoonMind",
-                          orchestration_mode: "runtime",
                           runtime_mode: "codex_cli",
                           publish_mode: "pr",
                           source_issue_key: "",
@@ -3427,7 +3426,6 @@ describe("Task Create Entrypoint", () => {
               slug: "jira-breakdown-orchestrate",
               inputs: expect.objectContaining({
                 jira_dependency_mode: "linear_blocker_chain",
-                orchestration_mode: "runtime",
                 publish_mode: "pr",
               }),
               stepIds: [
@@ -5602,7 +5600,7 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
-  it("hides Source Design Path and Constraints inputs for the Jira Orchestrate preset", async () => {
+  it("hides internal Source Design Path and Constraints inputs for the Jira Orchestrate preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -5641,14 +5639,6 @@ describe("Task Create Entrypoint", () => {
                 required: true,
               },
               {
-                name: "orchestration_mode",
-                label: "Orchestration Mode",
-                type: "enum",
-                required: true,
-                default: "runtime",
-                options: ["runtime", "docs"],
-              },
-              {
                 name: "source_design_path",
                 label: "Source Design Path",
                 type: "text",
@@ -5681,9 +5671,7 @@ describe("Task Create Entrypoint", () => {
     expect(
       await within(presetSection).findByLabelText("Jira Issue Key"),
     ).not.toBeNull();
-    expect(
-      within(presetSection).getByLabelText("Orchestration Mode"),
-    ).not.toBeNull();
+    expect(within(presetSection).queryByLabelText("Orchestration Mode")).toBeNull();
     expect(within(presetSection).queryByLabelText("Source Design Path")).toBeNull();
     expect(within(presetSection).queryByLabelText("Constraints")).toBeNull();
   });

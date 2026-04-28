@@ -1088,6 +1088,9 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 scope_ref=None,
                 version="1.0.0",
             )
+            assert "orchestration_mode" not in {
+                item["name"] for item in template["inputs"]
+            }
             project_input = next(
                 item
                 for item in template["inputs"]
@@ -1105,7 +1108,6 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                     "jira_project_key": "TOOL",
                     "jira_issue_type": "Story",
                     "jira_dependency_mode": "linear_blocker_chain",
-                    "orchestration_mode": "runtime",
                     "publish_mode": "pr",
                     "source_issue_key": "GAME-404",
                 },
@@ -1218,7 +1220,6 @@ async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
                     "jira_project_key": "PLAT",
                     "jira_issue_type": "Story",
                     "jira_dependency_mode": "linear_blocker_chain",
-                    "orchestration_mode": "runtime",
                     "publish_mode": "pr",
                     "source_issue_key": "PLAT-404",
                 },
@@ -1306,6 +1307,15 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert template.latest_version.annotations["jiraWorkflow"] == (
                 "implementation-to-code-review"
             )
+            template_payload = await service.get_template(
+                slug="jira-orchestrate",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+            )
+            assert "orchestration_mode" not in {
+                item["name"] for item in template_payload["inputs"]
+            }
             assert [step["skill"]["id"] for step in template.latest_version.steps] == [
                 "jira-issue-updater",
                 "auto",
@@ -1331,7 +1341,6 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 version="1.0.0",
                 inputs={
                     "jira_issue_key": "MM-328",
-                    "orchestration_mode": "runtime",
                     "source_design_path": "",
                     "constraints": "Keep the scope narrow.",
                 },
@@ -1425,7 +1434,6 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
                     "jira_issue_type": "Story",
                     "jira_board_id": "84",
                     "jira_dependency_mode": "linear_blocker_chain",
-                    "orchestration_mode": "runtime",
                     "publish_mode": "pr_with_merge_automation",
                     "source_issue_key": "MM-404",
                 },

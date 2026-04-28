@@ -29,7 +29,10 @@ const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
 const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
-  [JIRA_ORCHESTRATE_PRESET_SLUG]: new Set(["sourcedesignpath", "constraints"]),
+  [JIRA_ORCHESTRATE_PRESET_SLUG]: new Set([
+    "sourcedesignpath",
+    "constraints",
+  ]),
 };
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
 const LAST_REPOSITORY_OPTION_PREFERENCE_KEY =
