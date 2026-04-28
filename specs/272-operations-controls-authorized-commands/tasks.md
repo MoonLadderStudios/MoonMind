@@ -8,7 +8,7 @@
 
 **Integration Test Command**: `./tools/test_integration.sh`
 
-**Source Traceability**: `MM-542`; FR-001 through FR-010; SC-001 through SC-006; DESIGN-REQ-002, DESIGN-REQ-013, DESIGN-REQ-014.
+**Source Traceability**: `MM-542`; FR-001 through FR-010; SC-001 through SC-006; DESIGN-REQ-002, DESIGN-REQ-013, DESIGN-REQ-014. The refreshed `plan.md` marks each row `implemented_verified`; this task list preserves the completed red-first implementation evidence and final validation work.
 
 ## Phase 1: Setup
 
@@ -70,7 +70,7 @@
 - [X] T023 Add FastAPI router `api_service/api/routers/system_operations.py` for GET/POST `/api/system/worker-pause` with backend authorization and sanitized errors covering FR-005, FR-006, FR-008, DESIGN-REQ-014.
 - [X] T024 Register the system operations router in `api_service/main.py` covering FR-001.
 - [X] T025 Update `frontend/src/components/settings/OperationsSettingsSection.tsx` to send confirmation metadata, render available actor/audit metadata, and preserve deployment operation controls covering FR-002, FR-003, FR-009.
-- [X] T026 Update `api_service/api/schemas.py` only if shared worker-pause response schemas need additional optional fields while preserving existing aliases covering FR-002 and FR-008.
+- [X] T026 Confirm no shared `api_service/api/schemas.py` update is required because the worker-pause response contract is satisfied by the system operations service/router payload covering FR-002 and FR-008.
 
 ### Story Validation
 
@@ -100,4 +100,4 @@
 
 ## Implementation Strategy
 
-Complete the missing backend worker-pause command route using the existing deployment operations router/service pattern and existing `SettingsAuditEvent` persistence. Keep Settings as a command presentation surface, delegate quiesce/resume semantics to Temporal service methods, and preserve MM-542 traceability through final verification.
+Preserve the completed backend worker-pause command route using the existing deployment operations router/service pattern and existing `SettingsAuditEvent` persistence. Keep Settings as a command presentation surface, delegate quiesce/resume semantics to Temporal service methods, and preserve MM-542 traceability through final verification.
