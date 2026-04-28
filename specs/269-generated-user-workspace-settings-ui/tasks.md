@@ -44,7 +44,7 @@
 
 - [X] T016 Run `npm run ui:test -- frontend/src/components/settings/GeneratedSettingsSection.test.tsx` and record the result.
 - [X] T017 Run `./tools/test_unit.sh tests/unit/api_service/api/routers/test_settings_api.py tests/unit/services/test_settings_catalog.py --ui-args frontend/src/components/settings/GeneratedSettingsSection.test.tsx` and record the result.
-- [X] T018 Run `/speckit.verify` equivalent with `moonspec-verify` and preserve MM-539, source mappings, and test evidence in final verification.
+- [X] T018 Run final `/moonspec-verify` work and preserve MM-539, source mappings, and test evidence in final verification.
 
 ## Dependencies and Execution Order
 
