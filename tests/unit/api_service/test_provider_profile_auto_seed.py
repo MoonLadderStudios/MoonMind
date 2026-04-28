@@ -215,6 +215,31 @@ async def test_auto_seed_reconcile_does_not_overwrite_user_default_model(_module
         assert profile.default_model == "gpt-user-custom"
 
 @pytest.mark.asyncio
+async def test_auto_seed_reconciles_claude_display_default_model(
+    _module_db, monkeypatch
+):
+    """Known stale Claude display labels should be rewritten to CLI model IDs."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "claude_anthropic")
+        assert profile is not None
+        profile.default_model = "Sonnet 4.6"
+        await session.commit()
+
+    seeded = await _auto_seed_provider_profiles()
+    assert seeded == []
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "claude_anthropic")
+        assert profile is not None
+        assert profile.default_model == "claude-sonnet-4-6"
+
+@pytest.mark.asyncio
 async def test_auto_seed_reconciles_legacy_codex_default_provider(
     _module_db, monkeypatch
 ):
