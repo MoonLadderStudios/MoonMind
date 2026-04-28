@@ -1937,6 +1937,32 @@ describe("Task Create Entrypoint", () => {
               }),
           } as Response);
         }
+        if (url === "/api/artifacts/complex-input/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                repository: "MoonLadderStudios/Tactics",
+                task: {
+                  steps: [
+                    {
+                      id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                      instructions: "Break down the Grid UI overlay plan.",
+                    },
+                    {
+                      id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                      instructions: "Create Jira stories from recovered input.",
+                    },
+                    {
+                      id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                      instructions:
+                        "Create dependent orchestrate tasks from recovered input.",
+                    },
+                  ],
+                },
+              }),
+          } as Response);
+        }
         if (url === "/api/artifacts/missing-input/download") {
           return Promise.resolve({
             ok: false,
@@ -3291,6 +3317,11 @@ describe("Task Create Entrypoint", () => {
         ),
       ).toBeTruthy();
       expect(
+        fetchSpy.mock.calls.some(
+          ([url]) => String(url) === "/api/artifacts/complex-input/download",
+        ),
+      ).toBeTruthy();
+      expect(
         (screen.getAllByLabelText("Instructions")[0] as HTMLTextAreaElement)
           .value,
       ).toBe("Break down the Grid UI overlay plan.");
@@ -3344,6 +3375,7 @@ describe("Task Create Entrypoint", () => {
             }),
             expect.objectContaining({
               id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+              instructions: "Create Jira stories from recovered input.",
               storyOutput: {
                 mode: "jira",
                 fallback: "fail",
@@ -3356,6 +3388,8 @@ describe("Task Create Entrypoint", () => {
             }),
             expect.objectContaining({
               id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+              instructions:
+                "Create dependent orchestrate tasks from recovered input.",
               jiraOrchestration: {
                 task: {
                   repository: "MoonLadderStudios/MoonMind",
