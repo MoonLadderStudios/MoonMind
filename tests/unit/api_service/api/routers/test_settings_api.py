@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -38,12 +39,13 @@ def settings_api_db(tmp_path):
 
 @pytest.fixture
 def settings_user_override():
-    def _apply(*, permissions=(), is_superuser=False):
+    def _apply(*, permissions=(), is_superuser=False, user_id=None, workspace_id=None):
         user = SimpleNamespace(
-            id=None,
+            id=user_id,
             email="settings-user@example.com",
             is_superuser=is_superuser,
             settings_permissions=set(permissions),
+            workspace_id=workspace_id,
         )
         app.dependency_overrides[SETTINGS_USER_DEP] = lambda: user
         return user
@@ -515,6 +517,94 @@ async def test_settings_audit_endpoint_exposes_secret_ref_with_metadata_permissi
 
 
 @pytest.mark.asyncio
+async def test_settings_audit_endpoint_scopes_rows_to_current_workspace_and_user(
+    settings_api_db,
+    settings_user_override,
+):
+    workspace_id = uuid4()
+    user_id = uuid4()
+    settings_user_override(
+        permissions={
+            "settings.user.write",
+            "settings.workspace.write",
+            "settings.audit.read",
+        },
+        user_id=user_id,
+        workspace_id=workspace_id,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.default_publish_mode": "branch"},
+                "expected_versions": {"workflow.default_publish_mode": 1},
+            },
+        )
+        await client.patch(
+            "/api/v1/settings/user",
+            json={
+                "changes": {"workflow.default_provider_profile_ref": "codex-default"},
+                "expected_versions": {"workflow.default_provider_profile_ref": 1},
+            },
+        )
+
+    other_workspace = uuid4()
+    other_user = uuid4()
+    settings_user_override(
+        permissions={
+            "settings.user.write",
+            "settings.workspace.write",
+            "settings.audit.read",
+        },
+        user_id=other_user,
+        workspace_id=other_workspace,
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.default_publish_mode": "none"},
+                "expected_versions": {"workflow.default_publish_mode": 1},
+            },
+        )
+        await client.patch(
+            "/api/v1/settings/user",
+            json={
+                "changes": {"workflow.default_provider_profile_ref": "other-profile"},
+                "expected_versions": {"workflow.default_provider_profile_ref": 1},
+            },
+        )
+
+    settings_user_override(
+        permissions={"settings.audit.read"},
+        user_id=user_id,
+        workspace_id=workspace_id,
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        audit = await client.get("/api/v1/settings/audit")
+        user_audit = await client.get(
+            "/api/v1/settings/audit",
+            params={"scope": "user"},
+        )
+
+    assert audit.status_code == 200
+    values = {item["new_value"] for item in audit.json()["items"]}
+    assert values == {"branch", "codex-default"}
+    assert user_audit.status_code == 200
+    user_items = user_audit.json()["items"]
+    assert len(user_items) == 1
+    assert user_items[0]["new_value"] == "codex-default"
+    assert user_items[0]["actor_user_id"] == str(user_id)
+
+
+@pytest.mark.asyncio
 async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output(
     settings_api_db,
     settings_user_override,
@@ -546,6 +636,31 @@ async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output
     assert value["diagnostics"][0]["code"] == "unresolved_secret_ref"
     assert value["diagnostics"][0]["details"]["launch_blocker"] is True
     assert "missing-token" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_settings_diagnostics_endpoint_falls_back_without_db(monkeypatch):
+    class FailingSessionMaker:
+        def __call__(self):
+            raise SQLAlchemyError("database unavailable")
+
+    monkeypatch.setattr(settings_router, "_should_attempt_settings_db", lambda: True)
+    monkeypatch.setattr(db_base, "async_session_maker", FailingSessionMaker())
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/v1/settings/diagnostics",
+            params={"scope": "workspace", "key": "workflow.default_publish_mode"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["values"]["workflow.default_publish_mode"]["source"] in {
+        "config_or_default",
+        "environment",
+    }
 
 
 @pytest.mark.asyncio

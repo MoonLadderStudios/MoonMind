@@ -1,6 +1,7 @@
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from uuid import UUID, uuid4
 
 from api_service.db.models import (
     Base,
@@ -484,6 +485,75 @@ async def test_audit_entries_redact_secret_ref_without_metadata_permission(
 
 
 @pytest.mark.asyncio
+async def test_audit_entries_are_scoped_to_workspace_and_subject(
+    settings_session_maker,
+):
+    workspace_id = uuid4()
+    other_workspace_id = uuid4()
+    user_id = uuid4()
+    other_user_id = uuid4()
+    async with settings_session_maker() as settings_session:
+        settings_session.add_all(
+            [
+                SettingsAuditEvent(
+                    event_type="settings.override.updated",
+                    key="workflow.default_publish_mode",
+                    scope="workspace",
+                    workspace_id=workspace_id,
+                    user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                    new_value_json="branch",
+                    redacted=False,
+                ),
+                SettingsAuditEvent(
+                    event_type="settings.override.updated",
+                    key="workflow.default_task_runtime",
+                    scope="user",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    new_value_json="codex",
+                    redacted=False,
+                ),
+                SettingsAuditEvent(
+                    event_type="settings.override.updated",
+                    key="workflow.default_publish_mode",
+                    scope="workspace",
+                    workspace_id=other_workspace_id,
+                    user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                    new_value_json="none",
+                    redacted=False,
+                ),
+                SettingsAuditEvent(
+                    event_type="settings.override.updated",
+                    key="workflow.default_task_runtime",
+                    scope="user",
+                    workspace_id=workspace_id,
+                    user_id=other_user_id,
+                    new_value_json="codex_cli",
+                    redacted=False,
+                ),
+            ]
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            workspace_id=workspace_id,
+            user_id=user_id,
+        )
+        all_entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+        user_entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+            scope="user",
+        )
+
+    assert {entry.new_value for entry in all_entries} == {"branch", "codex"}
+    assert [entry.new_value for entry in user_entries] == ["codex"]
+
+
+@pytest.mark.asyncio
 async def test_audit_entries_expose_secret_ref_metadata_with_permission(
     settings_session_maker,
 ):
@@ -501,6 +571,28 @@ async def test_audit_entries_expose_secret_ref_metadata_with_permission(
 
     assert entries[0].new_value == "env://GITHUB_TOKEN"
     assert entries[0].redacted is False
+
+
+@pytest.mark.asyncio
+async def test_audit_entries_persist_actor_identity(settings_session_maker):
+    user_id = uuid4()
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            user_id=user_id,
+        )
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"workflow.default_publish_mode": "branch"},
+            expected_versions={"workflow.default_publish_mode": 1},
+        )
+
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+    assert entries[0].actor_user_id == user_id
 
 
 @pytest.mark.asyncio
@@ -533,6 +625,56 @@ async def test_audit_redactor_blocks_secret_like_values_even_without_descriptor(
 
 
 @pytest.mark.asyncio
+async def test_audit_redactor_blocks_embedded_secret_prefixes(settings_session_maker):
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsAuditEvent(
+                event_type="settings.override.updated",
+                key="workflow.default_publish_mode",
+                scope="workspace",
+                old_value_json="branch",
+                new_value_json="prefix-ghp_embedded_suffix",
+                redacted=False,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(env={}, session=settings_session)
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+    assert entries[0].new_value is None
+    assert "secret_like_value" in entries[0].redaction_reasons
+    assert "prefix-ghp_embedded_suffix" not in entries[0].model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_audit_redactor_reports_stored_redacted_null_values(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsAuditEvent(
+                event_type="settings.override.updated",
+                key="workflow.default_publish_mode",
+                scope="workspace",
+                new_value_json=None,
+                redacted=True,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(env={}, session=settings_session)
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+    assert entries[0].redacted is True
+    assert "stored_redacted" in entries[0].redaction_reasons
+
+
+@pytest.mark.asyncio
 async def test_settings_diagnostics_include_source_restart_and_recent_change(
     settings_session_maker,
 ):
@@ -554,6 +696,39 @@ async def test_settings_diagnostics_include_source_restart_and_recent_change(
     assert github.diagnostics[0].code == "unresolved_secret_ref"
     assert github.diagnostics[0].details["launch_blocker"] is True
     assert "missing-token" not in github.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_settings_diagnostics_recent_change_is_scoped_to_workspace_and_subject(
+    settings_session_maker,
+):
+    workspace_id = uuid4()
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsAuditEvent(
+                event_type="settings.override.updated",
+                key="workflow.default_publish_mode",
+                scope="workspace",
+                workspace_id=uuid4(),
+                new_value_json="branch",
+                reason="other workspace",
+                redacted=False,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            workspace_id=workspace_id,
+        )
+        diagnostics = await service.diagnostics(
+            scope="workspace",
+            key="workflow.default_publish_mode",
+        )
+
+    setting = diagnostics.values["workflow.default_publish_mode"]
+    assert setting.recent_change is None
 
 
 def test_invalid_secret_ref_diagnostic_does_not_fallback_to_sensitive_source(monkeypatch):

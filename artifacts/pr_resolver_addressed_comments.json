@@ -1,37 +1,42 @@
 [
   {
-    "id": 3154317821,
+    "id": 3156020131,
     "disposition": "addressed",
-    "rationale": "Replaced the FastAPI dependency override lambda with the FakeTemporalService callable directly."
+    "rationale": "Scoped settings audit reads by workspace_id and subject user_id/default subject, with regression coverage for cross-workspace and cross-user isolation."
   },
   {
-    "id": 4189016793,
+    "id": 3156020136,
+    "disposition": "addressed",
+    "rationale": "Recent-change diagnostics now use the same workspace_id and subject scoping through the request-bound SettingsCatalogService context."
+  },
+  {
+    "id": 3156020140,
+    "disposition": "addressed",
+    "rationale": "Stored-redacted null audit values now report stored_redacted in redaction_reasons, with regression coverage for the null-value case."
+  },
+  {
+    "id": 3156020146,
+    "disposition": "addressed",
+    "rationale": "Changed secret-prefix detection from startswith to substring checks for audit redaction and unsafe payload detection, with embedded-prefix regression coverage."
+  },
+  {
+    "id": 4191041570,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; actionable child comments were classified separately."
+    "rationale": "Summary review comment; its actionable findings are tracked by the individual discussion IDs."
   },
   {
-    "id": 3154318717,
+    "id": 3156040195,
     "disposition": "addressed",
-    "rationale": "Quiesce pause and resume now raise SystemOperationUnavailableError when required Temporal signal handlers are missing."
+    "rationale": "Diagnostics now fall back to sessionless catalog diagnostics when DB persistence is unavailable, preserving troubleshooting visibility."
   },
   {
-    "id": 3154318732,
+    "id": 3156040200,
     "disposition": "addressed",
-    "rationale": "Repeated submissions with the same computed idempotency key now reuse the existing audit event and skip subsystem invocation, state updates, and new audit inserts."
+    "rationale": "Settings audit writes now persist actor_user_id from the authenticated request context, with service and route regression coverage."
   },
   {
-    "id": 3155564685,
-    "disposition": "addressed",
-    "rationale": "Updated the Settings worker snapshot parser and test fixture to accept nullable mode and numeric version from the API response."
-  },
-  {
-    "id": 3155564695,
-    "disposition": "addressed",
-    "rationale": "POST responses now return the actual computed signalStatus value such as succeeded:<count>."
-  },
-  {
-    "id": 4190497594,
+    "id": 4191064809,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary only; actionable child comments were classified separately."
+    "rationale": "Informational automated review wrapper; no separate actionable code concern beyond the linked discussion comments."
   }
 ]

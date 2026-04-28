@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Any, get_args
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
@@ -63,6 +64,28 @@ def _require_permission(user: Any, permission: str) -> JSONResponse | None:
     if has_settings_permission(user, permission):
         return None
     return _permission_denied_response(permission)
+
+
+def _uuid_attr(value: Any) -> UUID | None:
+    if isinstance(value, UUID):
+        return value
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _service_context_kwargs(user: Any) -> dict[str, UUID]:
+    kwargs: dict[str, UUID] = {}
+    workspace_id = _uuid_attr(getattr(user, "workspace_id", None))
+    user_id = _uuid_attr(getattr(user, "id", None))
+    if workspace_id is not None:
+        kwargs["workspace_id"] = workspace_id
+    if user_id is not None:
+        kwargs["user_id"] = user_id
+    return kwargs
 
 
 def _write_permission_for_scope(scope: SettingScope) -> str | None:
@@ -146,7 +169,9 @@ async def get_settings_catalog(
     if resolved_scope is not None and _should_attempt_settings_db():
         try:
             async with db_base.async_session_maker() as session:
-                service = SettingsCatalogService(session=session)
+                service = SettingsCatalogService(
+                    session=session, **_service_context_kwargs(user)
+                )
                 return await service.catalog_async(
                     section=resolved_section,
                     scope=resolved_scope,
@@ -173,7 +198,9 @@ async def get_effective_settings(
         return service.effective_values(scope=resolved_scope)
     try:
         async with db_base.async_session_maker() as session:
-            service = SettingsCatalogService(session=session)
+            service = SettingsCatalogService(
+                session=session, **_service_context_kwargs(user)
+            )
             return await service.effective_values_async(scope=resolved_scope)
     except SQLAlchemyError:
         return _settings_db_error_response(scope=resolved_scope)
@@ -217,7 +244,9 @@ async def get_effective_setting(
             )
     try:
         async with db_base.async_session_maker() as session:
-            service = SettingsCatalogService(session=session)
+            service = SettingsCatalogService(
+                session=session, **_service_context_kwargs(user)
+            )
             return await service.effective_value_async(key, scope=resolved_scope)
     except SQLAlchemyError:
         return _settings_db_error_response(key=key, scope=resolved_scope)
@@ -255,12 +284,60 @@ async def get_settings_diagnostics(
     resolved_scope = _coerce_scope(scope)
     if isinstance(resolved_scope, JSONResponse):
         return resolved_scope
+    if not _should_attempt_settings_db():
+        try:
+            service = SettingsCatalogService()
+            return await service.diagnostics(scope=resolved_scope, key=key)
+        except KeyError:
+            return _error_response(
+                404,
+                settings_error(
+                    "unknown_setting",
+                    f"Unknown setting: {key}.",
+                    key=key,
+                    scope=scope,
+                ),
+            )
+        except ValueError:
+            return _error_response(
+                400,
+                settings_error(
+                    "invalid_scope",
+                    f"Setting {key} is not available at scope {scope}.",
+                    key=key,
+                    scope=scope,
+                ),
+            )
     try:
         async with db_base.async_session_maker() as session:
-            service = SettingsCatalogService(session=session)
+            service = SettingsCatalogService(
+                session=session, **_service_context_kwargs(user)
+            )
             return await service.diagnostics(scope=resolved_scope, key=key)
     except SQLAlchemyError:
-        return _settings_db_error_response(key=key, scope=resolved_scope)
+        try:
+            service = SettingsCatalogService()
+            return await service.diagnostics(scope=resolved_scope, key=key)
+        except KeyError:
+            return _error_response(
+                404,
+                settings_error(
+                    "unknown_setting",
+                    f"Unknown setting: {key}.",
+                    key=key,
+                    scope=scope,
+                ),
+            )
+        except ValueError:
+            return _error_response(
+                400,
+                settings_error(
+                    "invalid_scope",
+                    f"Setting {key} is not available at scope {scope}.",
+                    key=key,
+                    scope=scope,
+                ),
+            )
     except KeyError:
         return _error_response(
             404,
@@ -301,7 +378,9 @@ async def get_settings_audit(
         resolved_scope = coerced_scope
     try:
         async with db_base.async_session_maker() as session:
-            service = SettingsCatalogService(session=session)
+            service = SettingsCatalogService(
+                session=session, **_service_context_kwargs(user)
+            )
             return SettingsAuditResponse(
                 items=await service.list_audit_events(
                     permissions=settings_permissions_for_user(user),
@@ -381,7 +460,9 @@ async def patch_settings(
             )
     try:
         async with db_base.async_session_maker() as session:
-            write_service = SettingsCatalogService(session=session)
+            write_service = SettingsCatalogService(
+                session=session, **_service_context_kwargs(user)
+            )
             return await write_service.apply_overrides(
                 scope=resolved_scope,
                 changes=payload.changes,
@@ -476,7 +557,9 @@ async def reset_setting(
         )
     try:
         async with db_base.async_session_maker() as session:
-            write_service = SettingsCatalogService(session=session)
+            write_service = SettingsCatalogService(
+                session=session, **_service_context_kwargs(user)
+            )
             return await write_service.reset_override(key, scope=resolved_scope)
     except ValueError:
         return _error_response(

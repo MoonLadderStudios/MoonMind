@@ -816,10 +816,19 @@ class SettingsCatalogService:
         statement = select(SettingsAuditEvent).order_by(
             desc(SettingsAuditEvent.created_at)
         ).limit(bounded_limit)
+        statement = statement.where(SettingsAuditEvent.workspace_id == self._workspace_id)
         if key:
             statement = statement.where(SettingsAuditEvent.key == key)
         if scope:
             statement = statement.where(SettingsAuditEvent.scope == scope)
+            subject_id = self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID
+            statement = statement.where(SettingsAuditEvent.user_id == subject_id)
+        else:
+            statement = statement.where(
+                SettingsAuditEvent.user_id.in_(
+                    {_DEFAULT_SUBJECT_ID, self._user_id}
+                )
+            )
         result = await self._session.execute(statement)
         return [
             self._audit_read_model(row, permissions=permissions)
@@ -1225,7 +1234,7 @@ class SettingsCatalogService:
 
     def _contains_unsafe_payload(self, value: Any) -> bool:
         if isinstance(value, str):
-            return any(value.startswith(prefix) for prefix in _SECRET_PREFIXES)
+            return any(prefix in value for prefix in _SECRET_PREFIXES)
         if isinstance(value, dict):
             for key, nested in value.items():
                 normalized = str(key).lower()
@@ -1254,6 +1263,9 @@ class SettingsCatalogService:
             scope=scope,
             workspace_id=self._workspace_id,
             user_id=self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID,
+            actor_user_id=(
+                self._user_id if self._user_id != _DEFAULT_SUBJECT_ID else None
+            ),
             old_value_json=(
                 None
                 if (redacted and entry.value_type != "secret_ref")
@@ -1397,7 +1409,13 @@ class SettingsCatalogService:
             return {}
         result = await self._session.execute(
             select(SettingsAuditEvent)
-            .where(SettingsAuditEvent.key.in_(keys))
+            .where(
+                SettingsAuditEvent.workspace_id == self._workspace_id,
+                SettingsAuditEvent.key.in_(keys),
+                SettingsAuditEvent.user_id.in_(
+                    {_DEFAULT_SUBJECT_ID, self._user_id}
+                ),
+            )
             .order_by(desc(SettingsAuditEvent.created_at))
         )
         output: dict[str, SettingsRecentChange] = {}
@@ -1462,6 +1480,13 @@ class SettingsCatalogService:
     ) -> tuple[Any, list[str]]:
         reasons: list[str] = []
         if value is None:
+            secret_ref_metadata_visible = (
+                entry is not None
+                and entry.value_type == "secret_ref"
+                and "secrets.metadata.read" in permissions
+            )
+            if row_redacted and not secret_ref_metadata_visible:
+                reasons.append("stored_redacted")
             return None, reasons
         if entry is not None and entry.audit.redact:
             if (
@@ -1482,7 +1507,7 @@ class SettingsCatalogService:
     def _contains_secret_like_value(self, value: Any) -> bool:
         if isinstance(value, str):
             normalized = value.lower()
-            return any(value.startswith(prefix) for prefix in _SECRET_PREFIXES) or any(
+            return any(prefix in value for prefix in _SECRET_PREFIXES) or any(
                 marker in normalized for marker in _SECRET_LIKE_SUBSTRINGS
             )
         if isinstance(value, dict):
