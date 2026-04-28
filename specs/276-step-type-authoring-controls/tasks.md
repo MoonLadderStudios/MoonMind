@@ -13,7 +13,7 @@
 
 - Unit tests: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`
 - Integration tests: `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -73,7 +73,7 @@
 - [X] T013 Add Tool-specific configuration area in `frontend/src/entrypoints/task-create.tsx` (FR-002)
 - [X] T014 Move preset-use controls into the Preset Step Type area in `frontend/src/entrypoints/task-create.tsx` (FR-002, FR-004)
 - [X] T015 Update Mission Control styles for Step Type controls in `frontend/src/styles/mission-control.css` (FR-001, FR-002)
-- [X] T016 Run `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` and fix failures until the story tests pass
+- [X] T016 Story validation: Run `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` and fix failures until the story tests pass
 
 **Checkpoint**: The story is functional, covered by focused frontend tests, and testable independently
 
@@ -84,7 +84,7 @@
 **Purpose**: Validate without adding hidden scope.
 
 - [X] T017 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`
-- [X] T018 Run `/speckit.verify` equivalent by checking spec, plan, tasks, changed code, and test evidence against MM-556
+- [X] T018 Run `/moonspec-verify` equivalent by checking spec, plan, tasks, changed code, and test evidence against MM-556
 
 ---
 
