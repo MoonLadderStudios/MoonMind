@@ -1399,6 +1399,54 @@ async def test_fetch_result_completed_returns_typed_model(tmp_path: Path) -> Non
     assert isinstance(result, AgentRunResult), f"Expected AgentRunResult, got {type(result)}"
     assert result.failure_class is None
 
+async def test_fetch_result_adds_managed_session_assistant_text_to_metadata(
+    tmp_path: Path,
+) -> None:
+    store = _make_store(tmp_path)
+    store.save(
+        ManagedRunRecord(
+            runId="fr-session-report",
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="completed",
+            startedAt=datetime.now(tz=UTC),
+            sessionId="sess:fr-session-report:codex_cli",
+            sessionEpoch=1,
+            containerId="ctr-session-report",
+            threadId="thread-session-report",
+        )
+    )
+    controller = AsyncMock()
+    controller.fetch_session_summary = AsyncMock(
+        return_value=CodexManagedSessionSummary(
+            sessionState={
+                "sessionId": "sess:fr-session-report:codex_cli",
+                "sessionEpoch": 1,
+                "containerId": "ctr-session-report",
+                "threadId": "thread-session-report",
+            },
+            metadata={
+                "lastAssistantText": (
+                    "# Implementation check\n\n"
+                    "The requested Docker Compose update behavior is partially implemented."
+                )
+            },
+        )
+    )
+
+    activities = TemporalAgentRuntimeActivities(
+        run_store=store,
+        session_controller=controller,
+    )
+    result = await activities.agent_runtime_fetch_result(
+        {"run_id": "fr-session-report", "agent_id": "codex_cli"}
+    )
+
+    assert result.summary == "Completed with status completed"
+    assert result.metadata["lastAssistantText"].startswith("# Implementation check")
+    assert result.metadata["operator_summary"].startswith("# Implementation check")
+    controller.fetch_session_summary.assert_awaited_once()
+
 async def test_fetch_result_failed_returns_typed_model(tmp_path: Path) -> None:
     """T5.2 — failed run returns typed AgentRunResult with correct failure_class."""
     store = _make_store(tmp_path)
