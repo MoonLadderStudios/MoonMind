@@ -13,7 +13,7 @@
 
 - Unit tests: `./tools/test_unit.sh tests/unit/services/test_settings_catalog.py tests/unit/api_service/api/routers/test_settings_api.py --ui-args frontend/src/components/settings/GeneratedSettingsSection.test.tsx`
 - Integration tests: `./tools/test_integration.sh`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -90,7 +90,7 @@
 - [ ] T026 Update `frontend/src/components/settings/GeneratedSettingsSection.tsx` types and rendering for apply mode, affected systems, activation state, pending value, and completion guidance (FR-006, FR-008, SC-004)
 - [ ] T027 Update `frontend/src/components/settings/GeneratedSettingsSection.tsx` broken-reference diagnostic presentation to keep restored references clear and secret-safe (FR-010, FR-011, SC-005)
 - [ ] T028 Refresh `frontend/src/generated/openapi.ts` if backend schema changes require it, or document why generated OpenAPI is unaffected in `specs/274-change-application-semantics/quickstart.md` (contracts/settings-application-semantics.md)
-- [ ] T029 Run `./tools/test_unit.sh tests/unit/services/test_settings_catalog.py tests/unit/api_service/api/routers/test_settings_api.py --ui-args frontend/src/components/settings/GeneratedSettingsSection.test.tsx` and fix failures until focused unit/UI coverage passes
+- [ ] T029 Validate the story with `./tools/test_unit.sh tests/unit/services/test_settings_catalog.py tests/unit/api_service/api/routers/test_settings_api.py --ui-args frontend/src/components/settings/GeneratedSettingsSection.test.tsx` and fix failures until focused unit/UI coverage passes
 - [ ] T030 Run the targeted hermetic integration coverage from T018 or `./tools/test_integration.sh` if the integration path requires the full suite, and fix story-scoped failures
 
 **Checkpoint**: The story is functional, covered by unit/API/UI/integration tests, and independently testable.
@@ -106,7 +106,7 @@
 - [ ] T033 [P] Add UI edge-case coverage for long activation guidance and diagnostic text fitting without overlap in `frontend/src/components/settings/GeneratedSettingsSection.test.tsx` (SC-004, UI contract)
 - [ ] T034 Run full unit verification with `./tools/test_unit.sh`
 - [ ] T035 Run hermetic integration verification with `./tools/test_integration.sh` when Docker is available; if unavailable, record the exact environment blocker in verification notes
-- [ ] T036 Run `/speckit.verify` for `specs/274-change-application-semantics/spec.md` and address any `ADDITIONAL_WORK_NEEDED` findings before final handoff
+- [ ] T036 Run `/moonspec-verify` for `specs/274-change-application-semantics/spec.md` and address any `ADDITIONAL_WORK_NEEDED` findings before final handoff
 
 ---
 
@@ -146,7 +146,7 @@
 5. Implement the settings service model and validation changes.
 6. Expose the contract through settings API routes and Mission Control UI.
 7. Run focused unit/UI/API tests, then integration and full unit verification.
-8. Finish with `/speckit.verify` against the original MM-544-preserving spec.
+8. Finish with `/moonspec-verify` against the original MM-544-preserving spec.
 
 ## Notes
 
