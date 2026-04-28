@@ -3560,14 +3560,14 @@ async def _create_execution_from_task_request(
         attachment_refs=attachment_index,
     )
 
-    snapshot_ref = await _persist_original_task_input_snapshot(
+    snapshot_ref = await _persist_original_task_input_snapshot_from_parameters(
         session=session,
         record=record,
         user=user,
-        payload=payload,
-        task_payload=task_payload,
+        parameters=initial_parameters,
         attachment_refs=attachment_index,
         source_kind="create",
+        input_artifact_ref=input_artifact_ref,
     )
     if snapshot_ref:
         await session.commit()

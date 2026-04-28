@@ -477,6 +477,8 @@ function selectDraftSteps(
   taskSteps: TemporalSubmissionDraft['steps'],
   artifactTaskSteps: TemporalSubmissionDraft['steps'],
 ): TemporalSubmissionDraft['steps'] {
+  const instructionCount = (steps: TemporalSubmissionDraft['steps']) =>
+    steps.filter((step) => stringValue(step.instructions)).length;
   const artifactHasAttachments = artifactTaskSteps.some(
     (step) =>
       (step.inputAttachments || []).length > 0 ||
@@ -491,6 +493,9 @@ function selectDraftSteps(
     return artifactTaskSteps;
   }
   if (artifactTaskSteps.length > taskSteps.length) {
+    return artifactTaskSteps;
+  }
+  if (instructionCount(artifactTaskSteps) > instructionCount(taskSteps)) {
     return artifactTaskSteps;
   }
   return taskSteps.length > 0 ? taskSteps : artifactTaskSteps;
