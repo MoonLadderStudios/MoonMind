@@ -1,4 +1,24 @@
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from api_service.db.models import Base, ManagedSecret
 from api_service.services.settings_catalog import SettingsCatalogService
+
+
+@pytest.fixture
+def settings_session_maker(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/settings.db")
+
+    async def _setup():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    asyncio_run = __import__("asyncio").run
+    asyncio_run(_setup())
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    yield session_maker
+    asyncio_run(engine.dispose())
 
 
 def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting():
@@ -114,3 +134,193 @@ def test_null_secret_ref_reports_inherited_null_diagnostic():
 
     assert effective.value is None
     assert effective.diagnostics[0].code == "inherited_null"
+
+
+@pytest.mark.asyncio
+async def test_workspace_override_persists_and_reports_version(settings_session_maker):
+    async with settings_session_maker() as settings_session:
+        await _workspace_override_persists_and_reports_version(settings_session)
+
+
+async def _workspace_override_persists_and_reports_version(settings_session):
+    service = SettingsCatalogService(env={}, session=settings_session)
+
+    inherited = await service.effective_value_async(
+        "workflow.default_publish_mode", scope="workspace"
+    )
+    assert inherited.source == "config_or_default"
+    assert inherited.value_version == 1
+
+    response = await service.apply_overrides(
+        scope="workspace",
+        changes={"workflow.default_publish_mode": "branch"},
+        expected_versions={"workflow.default_publish_mode": 1},
+        reason="Use branch publishing for workspace tasks.",
+    )
+
+    effective = response.values["workflow.default_publish_mode"]
+    assert effective.value == "branch"
+    assert effective.source == "workspace_override"
+    assert effective.value_version == 1
+
+    updated = await service.apply_overrides(
+        scope="workspace",
+        changes={"workflow.default_publish_mode": "none"},
+        expected_versions={"workflow.default_publish_mode": 1},
+    )
+    assert updated.values["workflow.default_publish_mode"].value == "none"
+    assert updated.values["workflow.default_publish_mode"].value_version == 2
+
+
+@pytest.mark.asyncio
+async def test_user_override_wins_and_null_override_is_intentional(settings_session_maker):
+    async with settings_session_maker() as settings_session:
+        await _user_override_wins_and_null_override_is_intentional(settings_session)
+
+
+async def _user_override_wins_and_null_override_is_intentional(settings_session):
+    service = SettingsCatalogService(env={}, session=settings_session)
+
+    await service.apply_overrides(
+        scope="workspace",
+        changes={"integrations.github.token_ref": "env://WORKSPACE_GITHUB_TOKEN"},
+        expected_versions={"integrations.github.token_ref": 1},
+    )
+    inherited_by_user = await service.effective_value_async(
+        "integrations.github.token_ref", scope="user"
+    )
+    assert inherited_by_user.value == "env://WORKSPACE_GITHUB_TOKEN"
+    assert inherited_by_user.source == "workspace_override"
+
+    await service.apply_overrides(
+        scope="user",
+        changes={"integrations.github.token_ref": "env://USER_GITHUB_TOKEN"},
+        expected_versions={"integrations.github.token_ref": 1},
+    )
+    user_effective = await service.effective_value_async(
+        "integrations.github.token_ref", scope="user"
+    )
+    assert user_effective.value == "env://USER_GITHUB_TOKEN"
+    assert user_effective.source == "user_override"
+
+    await service.apply_overrides(
+        scope="user",
+        changes={"integrations.github.token_ref": None},
+        expected_versions={"integrations.github.token_ref": 1},
+    )
+    intentional_null = await service.effective_value_async(
+        "integrations.github.token_ref", scope="user"
+    )
+    assert intentional_null.value is None
+    assert intentional_null.source == "user_override"
+    assert intentional_null.diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_version_conflict_is_atomic(settings_session_maker):
+    async with settings_session_maker() as settings_session:
+        await _version_conflict_is_atomic(settings_session)
+
+
+async def _version_conflict_is_atomic(settings_session):
+    service = SettingsCatalogService(env={}, session=settings_session)
+    await service.apply_overrides(
+        scope="workspace",
+        changes={
+            "workflow.default_publish_mode": "branch",
+            "skills.canary_percent": 25,
+        },
+        expected_versions={
+            "workflow.default_publish_mode": 1,
+            "skills.canary_percent": 1,
+        },
+    )
+
+    with pytest.raises(ValueError, match="version_conflict"):
+        await service.apply_overrides(
+            scope="workspace",
+            changes={
+                "workflow.default_publish_mode": "none",
+                "skills.canary_percent": 50,
+            },
+            expected_versions={
+                "workflow.default_publish_mode": 99,
+                "skills.canary_percent": 1,
+            },
+        )
+
+    publish_mode = await service.effective_value_async(
+        "workflow.default_publish_mode", scope="workspace"
+    )
+    canary = await service.effective_value_async(
+        "skills.canary_percent", scope="workspace"
+    )
+    assert publish_mode.value == "branch"
+    assert canary.value == 25
+
+
+@pytest.mark.asyncio
+async def test_unsafe_values_rejected_but_secret_refs_are_allowed(settings_session_maker):
+    async with settings_session_maker() as settings_session:
+        await _unsafe_values_rejected_but_secret_refs_are_allowed(settings_session)
+
+
+async def _unsafe_values_rejected_but_secret_refs_are_allowed(settings_session):
+    service = SettingsCatalogService(env={}, session=settings_session)
+
+    with pytest.raises(ValueError, match="invalid_setting_value"):
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"integrations.github.token_ref": "ghp_raw_plaintext"},
+            expected_versions={"integrations.github.token_ref": 1},
+        )
+
+    with pytest.raises(ValueError, match="invalid_setting_value"):
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"workflow.default_publish_mode": {"workflow_payload": {}}},
+            expected_versions={"workflow.default_publish_mode": 1},
+        )
+
+    response = await service.apply_overrides(
+        scope="workspace",
+        changes={"integrations.github.token_ref": "env://GITHUB_TOKEN"},
+        expected_versions={"integrations.github.token_ref": 1},
+    )
+    assert response.values["integrations.github.token_ref"].value == "env://GITHUB_TOKEN"
+
+
+@pytest.mark.asyncio
+async def test_reset_deletes_only_override_and_preserves_secret_and_audit(settings_session_maker):
+    async with settings_session_maker() as settings_session:
+        await _reset_deletes_only_override_and_preserves_secret_and_audit(settings_session)
+
+
+async def _reset_deletes_only_override_and_preserves_secret_and_audit(settings_session):
+    service = SettingsCatalogService(env={}, session=settings_session)
+    settings_session.add(
+        ManagedSecret(
+            slug="github-token",
+            ciphertext="encrypted",
+            details={"label": "GitHub"},
+        )
+    )
+    await settings_session.commit()
+
+    await service.apply_overrides(
+        scope="workspace",
+        changes={"workflow.default_publish_mode": "branch"},
+        expected_versions={"workflow.default_publish_mode": 1},
+        reason="temporary override",
+    )
+
+    reset = await service.reset_override(
+        "workflow.default_publish_mode", scope="workspace", reason="inherit again"
+    )
+
+    assert reset.source == "config_or_default"
+    assert reset.value != "branch"
+    secret_count = len((await settings_session.execute(select(ManagedSecret))).scalars().all())
+    audit_count = await service.audit_event_count()
+    assert secret_count == 1
+    assert audit_count >= 2

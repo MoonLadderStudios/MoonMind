@@ -5,13 +5,36 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.db.models import SettingsAuditEvent, SettingsOverride
 from moonmind.config.settings import AppSettings, settings as app_settings
 
 SettingScope = Literal["user", "workspace", "system", "operator"]
 SettingSection = Literal["providers-secrets", "user-workspace", "operations"]
+_DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
+_PERSISTED_SCOPES: set[SettingScope] = {"user", "workspace"}
+_SECRET_PREFIXES = ("ghp_", "github_pat_", "AIza", "AKIA")
+_UNSAFE_FIELD_TOKENS = (
+    "secret",
+    "token",
+    "password",
+    "api_key",
+    "apikey",
+    "credential",
+    "private_key",
+    "refresh",
+    "oauth",
+    "workflow_payload",
+    "artifact",
+    "command_history",
+    "operational_history",
+    "decrypted",
+)
 
 
 class SettingOption(BaseModel):
@@ -124,10 +147,8 @@ class SettingRegistryEntry:
     constraints: SettingConstraints | None = None
     sensitive: bool = False
     secret_role: str | None = None
-    read_only: bool = True
-    read_only_reason: str | None = (
-        "Scoped override persistence is not enabled for this story."
-    )
+    read_only: bool = False
+    read_only_reason: str | None = None
     requires_reload: bool = False
     requires_worker_restart: bool = False
     requires_process_restart: bool = False
@@ -261,12 +282,18 @@ class SettingsCatalogService:
         settings: AppSettings | None = None,
         env: dict[str, str] | None = None,
         registry: tuple[SettingRegistryEntry, ...] = _REGISTRY,
+        session: AsyncSession | None = None,
+        workspace_id: UUID | None = None,
+        user_id: UUID | None = None,
     ) -> None:
         self._settings = settings or app_settings
         self._env = env if env is not None else os.environ
         self._registry = registry
         self._entries_by_key = {entry.key: entry for entry in registry}
         self._redacted_invalid_secret_refs: set[str] = set()
+        self._session = session
+        self._workspace_id = workspace_id or _DEFAULT_SUBJECT_ID
+        self._user_id = user_id or _DEFAULT_SUBJECT_ID
 
     def catalog(
         self,
@@ -362,6 +389,151 @@ class SettingsCatalogService:
             diagnostics=self._diagnostics(entry, value),
         )
 
+    async def effective_value_async(
+        self,
+        key: str,
+        *,
+        scope: SettingScope,
+    ) -> EffectiveSettingValue:
+        entry = self._entries_by_key.get(key)
+        if entry is None:
+            raise KeyError(key)
+        if scope not in entry.scopes:
+            raise ValueError(scope)
+        value, source, version, override_present = await self._resolve_value_async(
+            entry, scope=scope
+        )
+        return EffectiveSettingValue(
+            key=entry.key,
+            scope=scope,
+            value=value,
+            source=source,
+            source_explanation=self._source_explanation(entry, source),
+            value_version=version,
+            diagnostics=[] if override_present else self._diagnostics(entry, value),
+        )
+
+    async def effective_values_async(
+        self,
+        *,
+        scope: SettingScope,
+    ) -> EffectiveSettingsResponse:
+        values = {
+            entry.key: await self.effective_value_async(entry.key, scope=scope)
+            for entry in self._registry
+            if scope in entry.scopes
+        }
+        return EffectiveSettingsResponse(scope=scope, values=values)
+
+    async def apply_overrides(
+        self,
+        *,
+        scope: SettingScope,
+        changes: dict[str, Any],
+        expected_versions: dict[str, int] | None = None,
+        reason: str | None = None,
+    ) -> EffectiveSettingsResponse:
+        if self._session is None:
+            raise RuntimeError("settings override persistence requires a DB session")
+        if scope not in _PERSISTED_SCOPES:
+            raise ValueError("invalid_scope")
+        expected_versions = expected_versions or {}
+        entries: dict[str, SettingRegistryEntry] = {}
+        current_rows: dict[str, SettingsOverride | None] = {}
+        validated: dict[str, Any] = {}
+
+        for key, value in changes.items():
+            entry = self._entries_by_key.get(key)
+            if entry is None:
+                raise KeyError(key)
+            if scope not in entry.scopes:
+                raise ValueError("invalid_scope")
+            if entry.read_only:
+                raise PermissionError(entry.read_only_reason or "Setting is read-only.")
+            self._validate_override_value(entry, value)
+            row = await self._get_override(scope=scope, key=key)
+            current_version = row.value_version if row is not None else 1
+            expected = expected_versions.get(key)
+            if expected is not None and expected != current_version:
+                raise ValueError("version_conflict")
+            entries[key] = entry
+            current_rows[key] = row
+            validated[key] = value
+
+        for key, value in validated.items():
+            entry = entries[key]
+            row = current_rows[key]
+            old_value = row.value_json if row is not None else None
+            if row is None:
+                row = SettingsOverride(
+                    scope=scope,
+                    workspace_id=self._workspace_id,
+                    user_id=self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID,
+                    key=key,
+                    value_json=value,
+                    value_version=1,
+                )
+                self._session.add(row)
+            else:
+                row.value_json = value
+                row.value_version += 1
+            self._session.add(
+                self._audit_event(
+                    entry,
+                    event_type="settings.override.updated",
+                    scope=scope,
+                    old_value=old_value,
+                    new_value=value,
+                    reason=reason,
+                )
+            )
+
+        await self._session.commit()
+        values = {
+            key: await self.effective_value_async(key, scope=scope)
+            for key in changes
+        }
+        return EffectiveSettingsResponse(scope=scope, values=values)
+
+    async def reset_override(
+        self,
+        key: str,
+        *,
+        scope: SettingScope,
+        reason: str | None = None,
+    ) -> EffectiveSettingValue:
+        if self._session is None:
+            raise RuntimeError("settings override persistence requires a DB session")
+        if scope not in _PERSISTED_SCOPES:
+            raise ValueError("invalid_scope")
+        entry = self._entries_by_key.get(key)
+        if entry is None:
+            raise KeyError(key)
+        if scope not in entry.scopes:
+            raise ValueError("invalid_scope")
+        row = await self._get_override(scope=scope, key=key)
+        if row is not None:
+            old_value = row.value_json
+            await self._session.delete(row)
+            self._session.add(
+                self._audit_event(
+                    entry,
+                    event_type="settings.override.reset",
+                    scope=scope,
+                    old_value=old_value,
+                    new_value=None,
+                    reason=reason,
+                )
+            )
+        await self._session.commit()
+        return await self.effective_value_async(key, scope=scope)
+
+    async def audit_event_count(self) -> int:
+        if self._session is None:
+            return 0
+        result = await self._session.execute(select(func.count(SettingsAuditEvent.id)))
+        return int(result.scalar_one())
+
     def _resolve_value(self, entry: SettingRegistryEntry) -> tuple[Any, str]:
         for alias in entry.env_aliases:
             if alias in self._env:
@@ -375,6 +547,65 @@ class SettingsCatalogService:
             except AttributeError:
                 return None, "missing"
         return entry.default_value, "default"
+
+    async def _resolve_value_async(
+        self,
+        entry: SettingRegistryEntry,
+        *,
+        scope: SettingScope,
+    ) -> tuple[Any, str, int, bool]:
+        if self._session is not None:
+            if scope == "user":
+                user_override = await self._get_override(scope="user", key=entry.key)
+                if user_override is not None:
+                    return (
+                        user_override.value_json,
+                        "user_override",
+                        user_override.value_version,
+                        True,
+                    )
+                workspace_override = await self._get_override(
+                    scope="workspace", key=entry.key
+                )
+                if workspace_override is not None:
+                    return (
+                        workspace_override.value_json,
+                        "workspace_override",
+                        workspace_override.value_version,
+                        True,
+                    )
+            elif scope == "workspace":
+                workspace_override = await self._get_override(
+                    scope="workspace", key=entry.key
+                )
+                if workspace_override is not None:
+                    return (
+                        workspace_override.value_json,
+                        "workspace_override",
+                        workspace_override.value_version,
+                        True,
+                    )
+        value, source = self._resolve_value(entry)
+        return value, source, 1, False
+
+    async def _get_override(
+        self,
+        *,
+        scope: SettingScope,
+        key: str,
+    ) -> SettingsOverride | None:
+        if self._session is None:
+            return None
+        user_id = self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID
+        result = await self._session.execute(
+            select(SettingsOverride).where(
+                SettingsOverride.scope == scope,
+                SettingsOverride.workspace_id == self._workspace_id,
+                SettingsOverride.user_id == user_id,
+                SettingsOverride.key == key,
+            )
+        )
+        return result.scalar_one_or_none()
 
     def _parse_env_value(self, entry: SettingRegistryEntry, raw_value: str) -> Any:
         if entry.value_type == "integer":
@@ -408,7 +639,79 @@ class SettingsCatalogService:
             return "Resolved from the catalog default value."
         if source == "missing":
             return "No configured value or catalog default could be resolved."
+        if source == "workspace_override":
+            return "Resolved from a workspace override."
+        if source == "user_override":
+            return "Resolved from a user override."
         return f"Resolved from {source}."
+
+    def _validate_override_value(self, entry: SettingRegistryEntry, value: Any) -> None:
+        if self._contains_unsafe_payload(value):
+            raise ValueError("invalid_setting_value")
+        if value is None:
+            return
+        if entry.value_type == "enum":
+            allowed = {option for option, _label in entry.options}
+            if not isinstance(value, str) or value not in allowed:
+                raise ValueError("invalid_setting_value")
+        elif entry.value_type == "integer":
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError("invalid_setting_value")
+            if entry.constraints is not None:
+                if entry.constraints.minimum is not None and value < entry.constraints.minimum:
+                    raise ValueError("invalid_setting_value")
+                if entry.constraints.maximum is not None and value > entry.constraints.maximum:
+                    raise ValueError("invalid_setting_value")
+        elif entry.value_type == "boolean":
+            if not isinstance(value, bool):
+                raise ValueError("invalid_setting_value")
+        elif entry.value_type == "secret_ref":
+            if not isinstance(value, str) or "://" not in value:
+                raise ValueError("invalid_setting_value")
+            if any(value.startswith(prefix) for prefix in _SECRET_PREFIXES):
+                raise ValueError("invalid_setting_value")
+        elif entry.value_type == "string":
+            if not isinstance(value, str):
+                raise ValueError("invalid_setting_value")
+        else:
+            raise ValueError("invalid_setting_value")
+
+    def _contains_unsafe_payload(self, value: Any) -> bool:
+        if isinstance(value, str):
+            return any(value.startswith(prefix) for prefix in _SECRET_PREFIXES)
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                normalized = str(key).lower()
+                if any(token in normalized for token in _UNSAFE_FIELD_TOKENS):
+                    return True
+                if self._contains_unsafe_payload(nested):
+                    return True
+        if isinstance(value, list):
+            return any(self._contains_unsafe_payload(item) for item in value)
+        return False
+
+    def _audit_event(
+        self,
+        entry: SettingRegistryEntry,
+        *,
+        event_type: str,
+        scope: SettingScope,
+        old_value: Any,
+        new_value: Any,
+        reason: str | None,
+    ) -> SettingsAuditEvent:
+        redacted = entry.audit.redact
+        return SettingsAuditEvent(
+            event_type=event_type,
+            key=entry.key,
+            scope=scope,
+            workspace_id=self._workspace_id,
+            user_id=self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID,
+            old_value_json=None if redacted or not entry.audit.store_old_value else old_value,
+            new_value_json=None if redacted or not entry.audit.store_new_value else new_value,
+            redacted=redacted,
+            reason=reason,
+        )
 
     def _diagnostics(
         self,
