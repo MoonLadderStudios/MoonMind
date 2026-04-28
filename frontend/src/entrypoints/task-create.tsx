@@ -4182,12 +4182,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const handleRepositoryChange = (value: string) => {
     setRepository(value);
     const selectedOption = repositoryOptionValue(repositoryOptions, value);
-    if (selectedOption) {
-      writeLocalPreference(
-        LAST_REPOSITORY_OPTION_PREFERENCE_KEY,
-        selectedOption,
-      );
-    }
+    writeLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY, selectedOption);
   };
 
   const presetStatusText = useMemo(() => {

@@ -4290,6 +4290,23 @@ describe("Task Create Entrypoint", () => {
       .toBe("Octo/Repo");
   });
 
+  it("clears the remembered repository option for custom repository entries", async () => {
+    window.localStorage.setItem(
+      "moonmind.task-create.last-repository-option",
+      "Octo/Repo",
+    );
+
+    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+
+    const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
+    fireEvent.change(repositoryInput, {
+      target: { value: "Custom/Repo" },
+    });
+
+    expect(window.localStorage.getItem("moonmind.task-create.last-repository-option"))
+      .toBeNull();
+  });
+
   it("ignores remembered repository values that are not current options", async () => {
     window.localStorage.setItem(
       "moonmind.task-create.last-repository-option",
