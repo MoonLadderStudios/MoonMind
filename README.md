@@ -16,19 +16,23 @@ MoonMind is an open-source platform that orchestrates leading AI agents out of t
 1. [Install Docker Desktop](https://docs.docker.com/get-started/get-docker/)
 2. Install git
 3. `git clone https://github.com/MoonLadderStudios/MoonMind.git`
-4. run `docker compose up -d` to start the service
-5. open [http://localhost:8000/tasks](http://localhost:8000/tasks)
-6. add the few secrets you need for your first workload, such as a model-provider API key and GitHub PAT, through Mission Control
-7. submit a task
+4. Run `docker compose up -d` to start the service
+5. Open [http://localhost:8000/tasks](http://localhost:8000/tasks)
+6. In Settings:
+    - Add a GitHub personal access token
+    - Add an API key or click Auth to authenticate a provider profile
+    - Configure any other secrets or setting you want to adjust for your first task
+7. Click Create and submit a task!
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 
-### Authenticate a runtime with OAuth
+### OAuth Workflow
+If you already have a subscription with a model provider:
 
-```bash
-./tools/auth-codex-volume.sh    # Codex CLI (OAuth)
-./tools/auth-gemini-volume.sh   # Gemini CLI (OAuth)
-```
+1. Go to Settings
+2. Click Auth next to the profile
+3. Follow the instructions on the new tab
+4. Go back to Settings and click Finalize
 
 ## Why MoonMind?
 

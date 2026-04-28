@@ -1,6 +1,6 @@
 # Feature Specification: PR Resolver Merge Automation Disposition Contract
 
-**Feature Branch**: `267-pr-resolver-merge-disposition-contract`  
+**Feature Branch**: `268-pr-resolver-merge-disposition-contract`  
 **Created**: 2026-04-28  
 **Status**: Draft  
 **Input**: Repair merge automation false failures when `pr-resolver` completes without a machine-readable merge disposition.
