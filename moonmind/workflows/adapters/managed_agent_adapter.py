@@ -107,6 +107,8 @@ def _pr_resolver_status(payload: dict[str, Any]) -> str:
         payload.get("state"),
         payload.get("merge_outcome"),
         payload.get("outcome"),
+        payload.get("finalOutcome"),
+        payload.get("final_outcome"),
         payload.get("final_state"),
         payload.get("finalState"),
     )
@@ -120,6 +122,8 @@ def _pr_resolver_status(payload: dict[str, Any]) -> str:
             final.get("status"),
             final.get("merge_outcome"),
             final.get("outcome"),
+            final.get("finalOutcome"),
+            final.get("final_outcome"),
             final.get("final_state"),
             final.get("finalState"),
         )
