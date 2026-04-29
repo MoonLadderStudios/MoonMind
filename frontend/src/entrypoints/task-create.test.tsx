@@ -4654,6 +4654,83 @@ describe("Task Create Entrypoint", () => {
     ]);
   });
 
+  it("preserves and validates advanced skill fields after toggling advanced mode off and on", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Run the agentic boundary validation flow." },
+    });
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "moonspec-orchestrate" },
+      },
+    );
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        "Step 1 Skill Args (optional JSON object)",
+      ),
+      {
+        target: { value: '{"mode":"agentic"}' },
+      },
+    );
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
+      {
+        target: { value: "docker, qdrant" },
+      },
+    );
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    expect(
+      within(primaryStep as HTMLElement).queryByLabelText(
+        /Skill Args \(optional JSON object\)/,
+      ),
+    ).toBeNull();
+    expect(
+      within(primaryStep as HTMLElement).queryByLabelText(
+        /Skill Required Capabilities \(optional CSV\)/,
+      ),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    const skillArgsField = within(primaryStep as HTMLElement).getByLabelText(
+      "Step 1 Skill Args (optional JSON object)",
+    ) as HTMLTextAreaElement;
+    const skillCapabilitiesField = within(
+      primaryStep as HTMLElement,
+    ).getByLabelText(
+      /Step 1 Skill Required Capabilities \(optional CSV\)/,
+    ) as HTMLInputElement;
+    expect(skillArgsField.value).toBe('{"mode":"agentic"}');
+    expect(skillCapabilitiesField.value).toBe("docker, qdrant");
+
+    fireEvent.change(skillArgsField, {
+      target: { value: '{"broken":' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'Primary step Skill Args must be valid JSON object text (for example: {"featureKey":"..."}).',
+        ),
+      ).not.toBeNull();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
   it("does not submit hidden advanced step capabilities after toggling advanced mode off", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 

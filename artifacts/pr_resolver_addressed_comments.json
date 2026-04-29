@@ -1,12 +1,17 @@
 [
   {
-    "id": 3159759023,
-    "disposition": "addressed",
-    "rationale": "Added an explicit primary Tool step guard so manual Step 1 Tool submissions without a selected tool stop before payload construction."
+    "id": 4342701970,
+    "disposition": "not-applicable",
+    "rationale": "Qodo free-tier notification is informational and contains no code change request."
   },
   {
-    "id": 4195482687,
+    "id": 4195927979,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Gemini review summary is informational; the actionable inline coverage request is tracked separately."
+  },
+  {
+    "id": 3160127064,
     "disposition": "addressed",
-    "rationale": "Review summary reported the same missing primary Tool ID validation; the direct guard addresses it."
+    "rationale": "Added a create-page regression test covering advanced skill field hide/show persistence and invalid JSON validation after toggling advanced mode off and on."
   }
 ]
