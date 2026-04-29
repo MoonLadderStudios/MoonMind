@@ -1,17 +1,12 @@
 [
   {
-    "id": 3159416583,
+    "id": 3159759023,
     "disposition": "addressed",
-    "rationale": "Added aria-describedby on the Step Type select so screen readers announce the helper text."
+    "rationale": "Added an explicit primary Tool step guard so manual Step 1 Tool submissions without a selected tool stop before payload construction."
   },
   {
-    "id": 3159416593,
+    "id": 4195482687,
     "disposition": "addressed",
-    "rationale": "Added a unique helper-text id matching the Step Type select aria-describedby value."
-  },
-  {
-    "id": 4195075109,
-    "disposition": "addressed",
-    "rationale": "Review summary covered the same Step Type helper-text accessibility issue, which is now implemented and tested."
+    "rationale": "Review summary reported the same missing primary Tool ID validation; the direct guard addresses it."
   }
 ]
