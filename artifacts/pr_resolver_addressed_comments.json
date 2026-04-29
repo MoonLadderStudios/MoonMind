@@ -1,27 +1,22 @@
 [
   {
-    "id": 3158157775,
-    "disposition": "addressed",
-    "rationale": "Skipped normalized self-alternates where the alternate resolves to the repository's own objects directory."
-  },
-  {
-    "id": 3158157779,
-    "disposition": "addressed",
-    "rationale": "Prevented stale replacement fallback from adding .git/objects as its own alternate."
-  },
-  {
-    "id": 3158157781,
-    "disposition": "addressed",
-    "rationale": "Treat duplicate normalized alternates as a changed file state and rewrite unique entries."
-  },
-  {
-    "id": 3158157783,
-    "disposition": "addressed",
-    "rationale": "Moved Git alternates normalization earlier in agent_runtime_fetch_result after the run record is loaded, before later Git-dependent enrichment."
-  },
-  {
-    "id": 4193575174,
+    "id": 4340312586,
     "disposition": "not-applicable",
-    "rationale": "Summary review only; the actionable items are tracked and addressed by the inline review comments."
+    "rationale": "Quota warning from gemini-code-assist; no code feedback to address."
+  },
+  {
+    "id": 4340316442,
+    "disposition": "not-applicable",
+    "rationale": "Duplicate quota warning from gemini-code-assist; no code feedback to address."
+  },
+  {
+    "id": 3158201200,
+    "disposition": "addressed",
+    "rationale": "Preset-generated Tool steps now preserve and submit their executable tool binding after Apply preview, with regression coverage."
+  },
+  {
+    "id": 4193618593,
+    "disposition": "not-applicable",
+    "rationale": "Review summary container for the actionable inline comment; no separate code change requested."
   }
 ]

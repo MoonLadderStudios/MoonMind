@@ -6760,7 +6760,10 @@ describe("Task Create Entrypoint", () => {
 
     expect(instructions.value).toBe("Keep this Step Type instruction.");
     expect(within(step).getByLabelText("Preset")).toBeTruthy();
-    expect(within(step).getByRole("button", { name: "Apply" })).toBeTruthy();
+    expect(within(step).getByRole("button", { name: "Preview" })).toBeTruthy();
+    expect(
+      within(step).getByRole("button", { name: "Apply preview" }),
+    ).toBeTruthy();
     expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
     expect(within(step).queryByLabelText("Tool")).toBeNull();
   });
@@ -6808,6 +6811,315 @@ describe("Task Create Entrypoint", () => {
 
     expect(firstPreset.value).toBe(secondValue);
     expect(secondPreset.value).toBe(secondValue);
+  });
+
+  it("previews step preset generated steps and warnings without mutating the draft", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/task-step-templates/speckit-demo:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:speckit-demo:1.2.3:01",
+                title: "Fetch Jira issue",
+                instructions: "Fetch MM-558.",
+                tool: {
+                  type: "tool",
+                  id: "jira.get_issue",
+                  inputs: { issueKey: "MM-558" },
+                },
+                source: {
+                  kind: "preset-derived",
+                  presetId: "speckit-demo",
+                },
+              },
+              {
+                id: "tpl:speckit-demo:1.2.3:02",
+                title: "Implement issue",
+                instructions: "Implement MM-558.",
+                skill: {
+                  id: "moonspec-orchestrate",
+                  args: { issueKey: "MM-558" },
+                },
+              },
+            ],
+            appliedTemplate: {
+              slug: "speckit-demo",
+              version: "1.2.3",
+            },
+            warnings: ["Auto-filled Feature Name."],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Keep authored placeholder." },
+    });
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "preset" },
+    });
+    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+
+    expect(await within(step).findByText("Preset preview")).toBeTruthy();
+    expect(within(step).getByText("Fetch Jira issue")).toBeTruthy();
+    expect(within(step).getAllByText("Tool").length).toBeGreaterThan(0);
+    expect(within(step).getByText("Implement issue")).toBeTruthy();
+    expect(within(step).getAllByText("Skill").length).toBeGreaterThan(0);
+    expect(within(step).getByText("Auto-filled Feature Name.")).toBeTruthy();
+    expect(screen.getByDisplayValue("Keep authored placeholder.")).toBeTruthy();
+    expect(screen.queryByDisplayValue("Fetch MM-558.")).toBeNull();
+  });
+
+  it("applies a step preset preview by replacing the selected preset step with editable generated steps", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "preset" },
+    });
+    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+    expect(await within(step).findByText("Clarify spec")).toBeTruthy();
+    fireEvent.click(within(step).getByRole("button", { name: "Apply preview" }));
+
+    expect(await screen.findByDisplayValue("Clarify the {{ inputs.feature_name }} scope.")).toBeTruthy();
+    expect(screen.getByDisplayValue("Write a plan for the task builder recovery.")).toBeTruthy();
+    expect(screen.queryByLabelText("Step Preset")).toBeNull();
+
+    const firstGeneratedStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(firstGeneratedStep).getByLabelText("Instructions"), {
+      target: { value: "Edited generated step." },
+    });
+    expect(screen.getByDisplayValue("Edited generated step.")).toBeTruthy();
+  });
+
+  it("submits preset-generated tool steps with their executable tool binding after apply", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/task-step-templates/speckit-demo:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:speckit-demo:1.2.3:01",
+                title: "Fetch Jira issue",
+                instructions: "Fetch MM-558.",
+                tool: {
+                  type: "tool",
+                  id: "jira.get_issue",
+                  inputs: { issueKey: "MM-558" },
+                },
+              },
+              {
+                id: "tpl:speckit-demo:1.2.3:02",
+                title: "Implement issue",
+                instructions: "Implement MM-558.",
+                skill: {
+                  id: "moonspec-orchestrate",
+                  args: { issueKey: "MM-558" },
+                },
+              },
+            ],
+            appliedTemplate: {
+              slug: "speckit-demo",
+              version: "1.2.3",
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "preset" },
+    });
+    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+    expect(await within(step).findByText("Fetch Jira issue")).toBeTruthy();
+    fireEvent.click(within(step).getByRole("button", { name: "Apply preview" }));
+
+    expect(await screen.findByDisplayValue("Fetch MM-558.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const request = latestCreateRequest() as {
+      payload: { task: { steps: Array<Record<string, unknown>> } };
+    };
+    expect(request.payload.task.steps[0]).toEqual({
+      id: "tpl:speckit-demo:1.2.3:01",
+      title: "Fetch Jira issue",
+      instructions: "Fetch MM-558.",
+      tool: {
+        type: "tool",
+        id: "jira.get_issue",
+        inputs: { issueKey: "MM-558" },
+      },
+    });
+    expect(request.payload.task.steps[0]?.["skill"]).toBeUndefined();
+  });
+
+  it("keeps the draft unchanged when step preset preview expansion fails", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/task-step-templates/speckit-demo:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: false,
+          text: async () => "Generated step validation failed.",
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Keep authored preset step." },
+    });
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "preset" },
+    });
+    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+
+    expect(
+      await within(step).findByText(
+        "Failed to preview preset: Generated step validation failed.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByDisplayValue("Keep authored preset step.")).toBeTruthy();
+    expect(screen.queryByDisplayValue("Clarify the {{ inputs.feature_name }} scope.")).toBeNull();
+  });
+
+  it("blocks submission while unresolved preset steps remain", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Do not submit unresolved preset." },
+    });
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "preset" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      await screen.findByText(
+        "Preview and apply Preset steps before submitting.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
+  it("previews and applies a step preset from the step editor without using Task Presets", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const taskPresetsSection = await screen.findByLabelText("Task Presets");
+    expect(within(taskPresetsSection).getByRole("button", { name: "Apply" })).toBeTruthy();
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "preset" },
+    });
+    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+    expect(await within(step).findByText("Clarify spec")).toBeTruthy();
+    fireEvent.click(within(step).getByRole("button", { name: "Apply preview" }));
+
+    expect(await screen.findByDisplayValue("Clarify the {{ inputs.feature_name }} scope.")).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url).startsWith(
+          "/api/task-step-templates/speckit-demo:expand?scope=global",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("preserves hidden Skill fields but blocks Tool submissions without a selected Tool", async () => {
