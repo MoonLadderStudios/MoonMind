@@ -161,8 +161,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         downstream_step = composite_template.latest_version.steps[2]
         assert "trusted Jira story output" in downstream_step["instructions"]
         assert "dependsOn" in downstream_step["instructions"]
-        assert downstream_step["jiraOrchestration"]["task"]["orchestrationMode"] == (
-            "{{ inputs.orchestration_mode }}"
+        assert (
+            downstream_step["jiraOrchestration"]["task"]["orchestrationMode"]
+            == "runtime"
         )
         assert downstream_step["jiraOrchestration"]["task"]["publish"] == {
             "mode": "pr",
