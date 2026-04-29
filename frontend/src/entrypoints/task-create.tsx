@@ -525,12 +525,21 @@ interface StepAttachmentRef {
 
 type StepType = "tool" | "skill" | "preset";
 
+const STEP_TYPE_HELP_TEXT: Record<StepType, string> = {
+  tool: "Tool runs a typed integration or system operation directly.",
+  skill: "Skill asks an agent to perform work using reusable behavior.",
+  preset: "Preset inserts a reusable set of configured steps.",
+};
+
 interface StepState {
   localId: string;
   id: string;
   title: string;
   stepType: StepType;
   instructions: string;
+  toolId: string;
+  toolVersion: string;
+  toolInputs: string;
   skillId: string;
   skillArgs: string;
   skillRequiredCapabilities: string;
@@ -1134,6 +1143,9 @@ function createStepStateEntry(
     title: "",
     stepType: "skill",
     instructions: "",
+    toolId: "",
+    toolVersion: "",
+    toolInputs: "{}",
     skillId: "",
     skillArgs: "",
     skillRequiredCapabilities: "",
@@ -1165,19 +1177,55 @@ function createStepStateEntriesFromTemporalDraft(
     const primarySkill = draft.primarySkill || "";
     const shouldUsePrimarySkill =
       index === 0 &&
+      step.stepType === "skill" &&
       primarySkill !== "" &&
       !hasExplicitSkillSelection(step.skillId);
     const hasJiraOrchestration =
       step.jiraOrchestration &&
       Object.keys(step.jiraOrchestration).length > 0;
+    const toolPayload = step.tool || {};
+    const presetPayload = step.preset || {};
+    const presetKey =
+      step.stepType === "preset"
+        ? String(
+            presetPayload.id ||
+              presetPayload.slug ||
+              presetPayload.name ||
+              "",
+          ).trim()
+        : "";
 
     return createStepStateEntry(index + 1, {
       id: step.id,
       title: step.title,
+      stepType: step.stepType,
       instructions: step.instructions,
-      skillId: shouldUsePrimarySkill ? primarySkill : step.skillId,
-      skillArgs: stringifySkillArgs(step.skillArgs),
+      skillId:
+        step.stepType === "skill"
+          ? shouldUsePrimarySkill
+            ? primarySkill
+            : step.skillId
+          : "",
+      skillArgs:
+        step.stepType === "skill" ? stringifySkillArgs(step.skillArgs) : "",
       skillRequiredCapabilities: step.skillRequiredCapabilities.join(","),
+      toolId:
+        step.stepType === "tool"
+          ? String(toolPayload.id || toolPayload.name || step.skillId || "").trim()
+          : "",
+      toolVersion:
+        step.stepType === "tool"
+          ? String(toolPayload.version || "").trim()
+          : "",
+      toolInputs:
+        step.stepType === "tool"
+          ? JSON.stringify(toolPayload.inputs || step.skillArgs || {}, null, 2)
+          : "{}",
+      presetKey,
+      presetPreview:
+        step.stepType === "preset"
+          ? presetPreviewStateFromDraftPayload(presetKey, presetPayload)
+          : null,
       templateStepId: step.templateStepId,
       templateInstructions: step.templateInstructions,
       inputAttachments: (step.inputAttachments || []).map(
@@ -1218,6 +1266,34 @@ function stepAttachmentRefFromTemporal(
 function hasExplicitSkillSelection(skillId: string): boolean {
   const normalized = skillId.trim().toLowerCase();
   return normalized !== "" && normalized !== "auto";
+}
+
+function presetPreviewStateFromDraftPayload(
+  presetKey: string,
+  presetPayload: Record<string, unknown>,
+): PresetPreviewState | null {
+  const inputs = presetPayload.inputs;
+  if (!inputs || typeof inputs !== "object" || Array.isArray(inputs)) {
+    return null;
+  }
+  const version = String(presetPayload.version || "").trim();
+  return {
+    presetKey,
+    presetTitle: String(
+      presetPayload.title ||
+        presetPayload.name ||
+        presetPayload.slug ||
+        presetPayload.id ||
+        "",
+    ).trim(),
+    version,
+    expandedSteps: [],
+    previewSteps: [],
+    warnings: [],
+    inputs: inputs as Record<string, unknown>,
+    assumptions: [],
+    capabilities: [],
+  };
 }
 
 function isResolverSkill(skillId: string): boolean {
@@ -1288,6 +1364,9 @@ function isEmptyStepStateEntry(step: StepState | null | undefined): boolean {
   return (
     !step.id.trim() &&
     !step.instructions.trim() &&
+    !step.toolId.trim() &&
+    !step.toolVersion.trim() &&
+    (!step.toolInputs.trim() || step.toolInputs.trim() === "{}") &&
     !step.skillId.trim() &&
     !step.skillArgs.trim() &&
     !step.skillRequiredCapabilities.trim() &&
@@ -1357,6 +1436,44 @@ function executableGeneratedToolPayload(
   return step.generatedTool;
 }
 
+function manualToolPayload(
+  step: StepState | null | undefined,
+  inputs: Record<string, unknown>,
+): TaskTemplateStepSkill | null {
+  if (step?.stepType !== "tool") {
+    return null;
+  }
+  const toolId = step.toolId.trim();
+  if (!toolId) {
+    return null;
+  }
+  const toolVersion = step.toolVersion.trim();
+  return {
+    type: "tool",
+    id: toolId,
+    ...(toolVersion ? { version: toolVersion } : {}),
+    inputs,
+  };
+}
+
+function parseToolInputsText(
+  value: string,
+): { ok: true; value: Record<string, unknown> } | { ok: false } {
+  const raw = value.trim();
+  if (!raw) {
+    return { ok: true, value: {} };
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false };
+    }
+    return { ok: true, value: parsed as Record<string, unknown> };
+  } catch {
+    return { ok: false };
+  }
+}
+
 function validatePrimaryStepSubmission(
   primaryStep: StepState | null,
   options: { additionalStepsCount?: number } = {},
@@ -1367,7 +1484,10 @@ function validatePrimaryStepSubmission(
     return { ok: false, error: "Add at least one step before submitting." };
   }
   if (primaryStep.stepType === "tool") {
-    if (executableGeneratedToolPayload(primaryStep)) {
+    if (
+      executableGeneratedToolPayload(primaryStep) ||
+      primaryStep.toolId.trim()
+    ) {
       return {
         ok: true,
         value: {
@@ -5081,7 +5201,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const preview = await expandPresetForDraft({
         preset,
         detail,
-        inputValues: {},
+        inputValues:
+          step.presetPreview?.presetKey === preset.key
+            ? step.presetPreview.inputs
+            : {},
       });
       updateStep(localId, {
         presetPreview: preview,
@@ -5499,6 +5622,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         return;
       }
     }
+    let primaryToolInputs: Record<string, unknown> = {};
+    if (primaryStep?.stepType === "tool" && !executableGeneratedToolPayload(primaryStep)) {
+      if (!primaryStep.toolId.trim()) {
+        setSubmitMessage("Select a Tool before submitting a Tool step.");
+        return;
+      }
+      const parsedToolInputs = parseToolInputsText(primaryStep.toolInputs);
+      if (!parsedToolInputs.ok) {
+        setSubmitMessage("Step 1 Tool Inputs must be valid JSON object text.");
+        return;
+      }
+      primaryToolInputs = parsedToolInputs.value;
+    }
 
     const primaryStepTool = {
       type: "skill",
@@ -5530,6 +5666,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       skillArgsRaw: string;
       skillArgs: Record<string, unknown>;
       skillCaps: string[];
+      toolInputs: Record<string, unknown>;
       hasStepContent: boolean;
     }> = [];
     for (let index = 1; index < steps.length; index += 1) {
@@ -5542,6 +5679,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         return;
       }
       const stepIsSkill = step.stepType === "skill";
+      const stepIsTool = step.stepType === "tool";
       const generatedToolPayload = executableGeneratedToolPayload(step);
       const stepSkillId = stepIsSkill ? step.skillId.trim() : "";
       const stepSkillArgsRaw = stepIsSkill && showAdvancedStepOptions
@@ -5550,16 +5688,38 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const stepSkillCaps = stepIsSkill && showAdvancedStepOptions
         ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
         : [];
+      const hasAuthoredToolInputs =
+        stepIsTool &&
+        Boolean(step.toolInputs.trim()) &&
+        step.toolInputs.trim() !== "{}";
       const stepAttachmentFiles = selectedStepAttachmentFiles[step.localId] || [];
       const hasStepContent =
         Boolean(step.instructions) ||
         stepAttachmentFiles.length > 0 ||
         step.inputAttachments.length > 0 ||
+        (stepIsTool && Boolean(step.toolId.trim())) ||
+        (stepIsTool && Boolean(step.toolVersion.trim())) ||
+        hasAuthoredToolInputs ||
         Boolean(stepSkillId) ||
         Boolean(stepSkillArgsRaw) ||
         stepSkillCaps.length > 0 ||
         Boolean(generatedToolPayload);
       let stepSkillArgs: Record<string, unknown> = {};
+      let stepToolInputs: Record<string, unknown> = {};
+      if (stepIsTool && !generatedToolPayload) {
+        if (hasStepContent && !step.toolId.trim()) {
+          setSubmitMessage(`Select a Tool before submitting Step ${index + 1}.`);
+          return;
+        }
+        const parsedToolInputs = parseToolInputsText(step.toolInputs);
+        if (!parsedToolInputs.ok) {
+          setSubmitMessage(
+            `Step ${index + 1} Tool Inputs must be valid JSON object text.`,
+          );
+          return;
+        }
+        stepToolInputs = parsedToolInputs.value;
+      }
       if (stepSkillArgsRaw) {
         try {
           const parsed = JSON.parse(stepSkillArgsRaw) as unknown;
@@ -5581,6 +5741,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         skillArgsRaw: stepSkillArgsRaw,
         skillArgs: stepSkillArgs,
         skillCaps: stepSkillCaps,
+        toolInputs: stepToolInputs,
         hasStepContent,
       });
     }
@@ -5806,6 +5967,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       skillArgsRaw: stepSkillArgsRaw,
       skillArgs: stepSkillArgs,
       skillCaps: stepSkillCaps,
+      toolInputs: stepToolInputs,
       hasStepContent: hasPreUploadStepContent,
     } of parsedAdditionalStepInputs) {
       const uploadedStepAttachmentsForStep =
@@ -5834,6 +5996,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const generatedToolPayload = executableGeneratedToolPayload(step);
       if (generatedToolPayload) {
         stepPayload.tool = generatedToolPayload;
+      } else if (step.stepType === "tool") {
+        const toolPayload = manualToolPayload(step, stepToolInputs);
+        if (toolPayload) {
+          stepPayload.tool = toolPayload;
+        }
       } else if (stepSkillId || stepSkillArgsRaw || stepSkillCaps.length > 0) {
         stepPayload.tool = {
           type: "skill",
@@ -5861,11 +6028,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       objectiveInstructionsForSubmit !== primaryInstructionsForSubmit;
     const hasTemplateBoundStep = steps.some((step) => Boolean(step.id.trim()));
     const primaryGeneratedToolPayload =
-      executableGeneratedToolPayload(primaryStep);
+      executableGeneratedToolPayload(primaryStep) ||
+      manualToolPayload(primaryStep, primaryToolInputs);
     const includeExplicitSteps =
       additionalSteps.length > 0 ||
       includePrimaryStepForObjectiveOverride ||
       hasTemplateBoundStep ||
+      Boolean(primaryGeneratedToolPayload) ||
       primaryStepAttachmentRefs.length > 0;
 
     const normalizedSteps = includeExplicitSteps
@@ -6673,6 +6842,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <label className="queue-step-type-field">
                     Step Type
                     <select
+                      aria-label="Step Type"
+                      aria-describedby={`queue-step-type-help-${index}`}
                       data-step-field="stepType"
                       data-step-index={String(index)}
                       value={step.stepType}
@@ -6684,6 +6855,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       <option value="skill">Skill</option>
                       <option value="preset">Preset</option>
                     </select>
+                    <span id={`queue-step-type-help-${index}`} className="small">
+                      {STEP_TYPE_HELP_TEXT[step.stepType]}
+                    </span>
                   </label>
 
                   <div className="stack">
@@ -6933,13 +7107,46 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         <input
                           data-step-field="toolId"
                           data-step-index={String(index)}
-                          placeholder="Select a typed operation"
-                          value=""
-                          readOnly
+                          placeholder="jira.get_issue"
+                          value={step.toolId}
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              toolId: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Tool Version (optional)
+                        <input
+                          data-step-field="toolVersion"
+                          data-step-index={String(index)}
+                          placeholder="1.0"
+                          value={step.toolVersion}
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              toolVersion: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Tool Inputs (JSON object)
+                        <textarea
+                          data-step-field="toolInputs"
+                          data-step-index={String(index)}
+                          placeholder='{"issueKey":"MM-563"}'
+                          value={step.toolInputs}
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              toolInputs: event.target.value,
+                            })
+                          }
                         />
                       </label>
                       <p className="small">
-                        Tool steps run a typed integration or system operation.
+                        Tool steps run a typed integration or system operation
+                        with governed JSON inputs.
                       </p>
                     </div>
                   ) : null}
