@@ -5557,6 +5557,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     let primaryToolInputs: Record<string, unknown> = {};
     if (primaryStep?.stepType === "tool" && !executableGeneratedToolPayload(primaryStep)) {
+      if (!primaryStep.toolId.trim()) {
+        setSubmitMessage("Select a Tool before submitting a Tool step.");
+        return;
+      }
       const parsedToolInputs = parseToolInputsText(primaryStep.toolInputs);
       if (!parsedToolInputs.ok) {
         setSubmitMessage("Step 1 Tool Inputs must be valid JSON object text.");
