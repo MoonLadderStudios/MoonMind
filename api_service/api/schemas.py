@@ -365,6 +365,29 @@ class TaskTemplateStepSkillSchema(BaseModel):
     required_capabilities: list[str] = Field(
         default_factory=list, alias="requiredCapabilities"
     )
+    context: dict[str, Any] = Field(default_factory=dict)
+    permissions: dict[str, Any] = Field(default_factory=dict)
+    autonomy: dict[str, Any] = Field(default_factory=dict)
+    runtime: dict[str, Any] = Field(default_factory=dict)
+
+class TaskTemplateStepToolSchema(BaseModel):
+    """Tool payload attached to a template step."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: Optional[str] = None
+    name: Optional[str] = None
+    version: Optional[str] = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    args: dict[str, Any] = Field(default_factory=dict)
+    required_authorization: Any = Field(None, alias="requiredAuthorization")
+    required_capabilities: list[str] = Field(
+        default_factory=list, alias="requiredCapabilities"
+    )
+    side_effect_policy: Any = Field(None, alias="sideEffectPolicy")
+    retry_policy: Any = Field(None, alias="retryPolicy")
+    execution: dict[str, Any] = Field(default_factory=dict)
+    validation: dict[str, Any] = Field(default_factory=dict)
 
 class TaskTemplateStepBlueprintSchema(BaseModel):
     """Template step blueprint definition."""
@@ -372,6 +395,7 @@ class TaskTemplateStepBlueprintSchema(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     kind: Optional[Literal["step", "include"]] = None
+    type: Optional[Literal["tool", "skill"]] = None
     slug: Optional[str] = None
     title: Optional[str] = None
     instructions: Optional[str] = None
@@ -379,6 +403,7 @@ class TaskTemplateStepBlueprintSchema(BaseModel):
     alias: Optional[str] = None
     scope: Optional[Literal["global", "personal"]] = None
     input_mapping: dict[str, Any] = Field(default_factory=dict, alias="inputMapping")
+    tool: Optional[TaskTemplateStepToolSchema] = None
     skill: Optional[TaskTemplateStepSkillSchema] = None
     annotations: dict[str, Any] = Field(default_factory=dict)
 

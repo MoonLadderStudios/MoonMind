@@ -35,6 +35,7 @@ from moonmind.config.settings import settings
 
 _FORBIDDEN_STEP_KEYS = frozenset(
     {
+        "bash",
         "runtime",
         "targetRuntime",
         "target_runtime",
@@ -45,6 +46,10 @@ _FORBIDDEN_STEP_KEYS = frozenset(
         "git",
         "publish",
         "container",
+        "command",
+        "cmd",
+        "script",
+        "shell",
     }
 )
 _SUPPORTED_INPUT_TYPES = frozenset(
@@ -73,6 +78,7 @@ _STEP_RESERVED_KEYS = frozenset(
     {
         "id",
         "kind",
+        "type",
         "title",
         "slug",
         "version",
@@ -81,6 +87,7 @@ _STEP_RESERVED_KEYS = frozenset(
         "inputMapping",
         "input_mapping",
         "instructions",
+        "tool",
         "skill",
         "skills",
         "annotations",
@@ -100,6 +107,22 @@ _INCLUDE_STEP_KEYS = frozenset(
 )
 _STEP_KIND = "step"
 _INCLUDE_KIND = "include"
+_STEP_TYPE_TOOL = "tool"
+_STEP_TYPE_SKILL = "skill"
+_SKILL_METADATA_KEYS = frozenset(
+    {"context", "permissions", "autonomy", "runtime", "allowedTools"}
+)
+_TOOL_METADATA_KEYS = frozenset(
+    {
+        "requiredAuthorization",
+        "requiredCapabilities",
+        "sideEffectPolicy",
+        "retryPolicy",
+        "execution",
+        "validation",
+    }
+)
+_COMMAND_TOOL_MARKERS = ("command", "shell", "bash")
 logger = logging.getLogger(__name__)
 
 class _StatsdEmitter:
@@ -247,6 +270,117 @@ def _extract_step_capabilities(step: dict[str, Any]) -> list[str]:
     if not isinstance(caps, list):
         return []
     return _normalize_capabilities(caps)
+
+def _normalize_step_type(raw_step: Mapping[str, Any], *, index: int) -> str:
+    raw_type = raw_step.get("type")
+    if raw_type is None or str(raw_type).strip() == "":
+        return _STEP_TYPE_SKILL
+    step_type = str(raw_type).strip().lower()
+    if step_type not in {_STEP_TYPE_TOOL, _STEP_TYPE_SKILL}:
+        raise TaskTemplateValidationError(
+            f"Step {index} type must be one of: tool, skill."
+        )
+    return step_type
+
+
+def _has_substantive_tool_metadata(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, Mapping | list | tuple | set):
+        return bool(value)
+    return True
+
+def _normalize_tool_payload(raw_tool: Any, *, index: int) -> dict[str, Any]:
+    if not isinstance(raw_tool, Mapping):
+        raise TaskTemplateValidationError(
+            f"Step {index} Tool step requires a tool payload object."
+        )
+    tool_id = str(raw_tool.get("id") or raw_tool.get("name") or "").strip()
+    if not tool_id:
+        raise TaskTemplateValidationError(
+            f"Step {index} tool.id or tool.name is required."
+        )
+    inputs = raw_tool.get("inputs")
+    args = raw_tool.get("args")
+    if inputs is None or (
+        isinstance(inputs, Mapping) and not inputs and args is not None
+    ):
+        inputs = raw_tool.get("args")
+    if inputs is None:
+        inputs = {}
+    if not isinstance(inputs, Mapping):
+        raise TaskTemplateValidationError(
+            f"Step {index} tool.inputs must be an object when provided."
+        )
+    tool_payload: dict[str, Any] = {"id": tool_id, "inputs": dict(inputs)}
+    version = str(raw_tool.get("version") or "").strip()
+    if version:
+        tool_payload["version"] = version
+    caps = raw_tool.get("requiredCapabilities")
+    if caps is not None:
+        if not isinstance(caps, list):
+            raise TaskTemplateValidationError(
+                f"Step {index} tool.requiredCapabilities must be a list."
+            )
+        normalized_caps = _normalize_capabilities(caps)
+        if normalized_caps:
+            tool_payload["requiredCapabilities"] = normalized_caps
+    for key in _TOOL_METADATA_KEYS - {"requiredCapabilities"}:
+        value = raw_tool.get(key)
+        if value is not None:
+            tool_payload[key] = value
+    if any(marker in tool_id.lower() for marker in _COMMAND_TOOL_MARKERS):
+        has_policy_metadata = any(
+            _has_substantive_tool_metadata(tool_payload.get(key))
+            for key in ("sideEffectPolicy", "validation")
+        )
+        if not tool_payload["inputs"] or not has_policy_metadata:
+            raise TaskTemplateValidationError(
+                f"Step {index} command-like Tool steps require bounded inputs and policy metadata."
+            )
+    return tool_payload
+
+def _normalize_skill_payload(raw_skill: Any, *, index: int) -> dict[str, Any]:
+    if raw_skill is None:
+        return {"id": "auto", "args": {}}
+    if not isinstance(raw_skill, Mapping):
+        raise TaskTemplateValidationError(
+            f"Step {index} skill must be an object when provided."
+        )
+    skill_id = str(raw_skill.get("id") or "auto").strip() or "auto"
+    skill_args = raw_skill.get("args")
+    if skill_args is None:
+        skill_args = {}
+    if not isinstance(skill_args, Mapping):
+        raise TaskTemplateValidationError(
+            f"Step {index} skill.args must be an object when provided."
+        )
+    skill_payload: dict[str, Any] = {"id": skill_id, "args": dict(skill_args)}
+    caps = raw_skill.get("requiredCapabilities")
+    if caps is not None:
+        if not isinstance(caps, list):
+            raise TaskTemplateValidationError(
+                f"Step {index} skill.requiredCapabilities must be a list."
+            )
+        normalized_caps = _normalize_capabilities(caps)
+        if normalized_caps:
+            skill_payload["requiredCapabilities"] = normalized_caps
+    for key in _SKILL_METADATA_KEYS:
+        value = raw_skill.get(key)
+        if value is not None:
+            if not isinstance(value, Mapping) and key in {
+                "context",
+                "permissions",
+                "autonomy",
+                "runtime",
+            }:
+                raise TaskTemplateValidationError(
+                    f"Step {index} skill.{key} must be an object when provided."
+                )
+            skill_payload[key] = dict(value) if isinstance(value, Mapping) else value
+    return skill_payload
 
 def _slugify_from_title(title: str) -> str:
     return _normalize_slug(title)
@@ -938,37 +1072,32 @@ class TaskTemplateCatalogService:
                 raise TaskTemplateValidationError(
                     f"Step {index} requires non-empty instructions."
                 )
-            step_payload: dict[str, Any] = {"instructions": instructions}
+            step_type = _normalize_step_type(raw_step, index=index)
+            step_payload: dict[str, Any] = {
+                "type": step_type,
+                "instructions": instructions,
+            }
             title = str(raw_step.get("title") or "").strip()
             if title:
                 step_payload["title"] = title
             if "slug" in raw_step and str(raw_step.get("slug") or "").strip():
                 step_payload["slug"] = str(raw_step.get("slug")).strip()
-            skill = raw_step.get("skill")
-            if skill is not None:
-                if not isinstance(skill, dict):
+            if step_type == _STEP_TYPE_TOOL:
+                if raw_step.get("skill") is not None:
                     raise TaskTemplateValidationError(
-                        f"Step {index} skill must be an object when provided."
+                        f"Step {index} Tool step must not include a skill payload."
                     )
-                skill_id = str(skill.get("id") or "auto").strip() or "auto"
-                skill_args = skill.get("args")
-                if skill_args is None:
-                    skill_args = {}
-                if not isinstance(skill_args, dict):
+                step_payload["tool"] = _normalize_tool_payload(
+                    raw_step.get("tool"), index=index
+                )
+            else:
+                if raw_step.get("tool") is not None:
                     raise TaskTemplateValidationError(
-                        f"Step {index} skill.args must be an object when provided."
+                        f"Step {index} Skill step must not include a tool payload."
                     )
-                skill_payload = {"id": skill_id, "args": dict(skill_args)}
-                caps = skill.get("requiredCapabilities")
-                if caps is not None:
-                    if not isinstance(caps, list):
-                        raise TaskTemplateValidationError(
-                            f"Step {index} skill.requiredCapabilities must be a list."
-                        )
-                    normalized_caps = _normalize_capabilities(caps)
-                    if normalized_caps:
-                        skill_payload["requiredCapabilities"] = normalized_caps
-                step_payload["skill"] = skill_payload
+                step_payload["skill"] = _normalize_skill_payload(
+                    raw_step.get("skill"), index=index
+                )
             annotations = raw_step.get("annotations")
             if annotations is not None:
                 if not isinstance(annotations, dict):
@@ -1158,6 +1287,7 @@ class TaskTemplateCatalogService:
                     f"Expanded instructions still contain unresolved template "
                     f"placeholders at {_format_include_path(path)}."
                 )
+            step_type = _normalize_step_type(rendered, index=source_index)
             next_index = len(resolved_steps) + 1
             if enforce_limit and next_index > root_max_step_count:
                 raise TaskTemplateValidationError(
@@ -1171,6 +1301,7 @@ class TaskTemplateCatalogService:
                     index=next_index,
                     inputs=root_inputs,
                 ),
+                "type": step_type,
                 "instructions": instructions,
                 "presetProvenance": {
                     "root": {"slug": root_slug, "version": root_version},
@@ -1188,8 +1319,24 @@ class TaskTemplateCatalogService:
             title = str(rendered.get("title") or "").strip()
             if title:
                 step_payload["title"] = title
-            if isinstance(rendered.get("skill"), dict):
-                step_payload["skill"] = rendered["skill"]
+            if step_type == _STEP_TYPE_TOOL:
+                if rendered.get("skill") is not None:
+                    raise TaskTemplateValidationError(
+                        f"Expanded Tool step must not include a skill payload at "
+                        f"{_format_include_path(path)}."
+                    )
+                step_payload["tool"] = _normalize_tool_payload(
+                    rendered.get("tool"), index=source_index
+                )
+            else:
+                if rendered.get("tool") is not None:
+                    raise TaskTemplateValidationError(
+                        f"Expanded Skill step must not include a tool payload at "
+                        f"{_format_include_path(path)}."
+                    )
+                step_payload["skill"] = _normalize_skill_payload(
+                    rendered.get("skill"), index=source_index
+                )
             step_payload.update(
                 {
                     str(key).strip(): value

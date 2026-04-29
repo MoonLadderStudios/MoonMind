@@ -19,14 +19,6 @@ inputs:
     label: Jira Issue Key
     type: text
     required: true
-  - name: orchestration_mode
-    label: Orchestration Mode
-    type: enum
-    required: true
-    default: runtime
-    options:
-      - runtime
-      - docs
   - name: source_design_path
     label: Source Design Path
     type: text
@@ -79,8 +71,7 @@ steps:
       Additional constraints:
       {{ inputs.constraints }}
 
-      Selected mode: {{ inputs.orchestration_mode }}.
-      Default to runtime mode and only use docs mode when explicitly requested.
+      Jira Orchestrate always runs as a runtime implementation workflow.
       If the brief points at an implementation document, treat it as runtime source requirements.
       Source design path (optional): {{ inputs.source_design_path }}.
 
