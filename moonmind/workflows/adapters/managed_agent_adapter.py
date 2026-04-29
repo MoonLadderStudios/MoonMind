@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -83,6 +83,8 @@ _PR_RESOLVER_RESULT_PATH_LIST = ", ".join(
 def _normalize_pr_resolver_text(value: Any) -> str:
     """Return one normalized resolver status candidate."""
 
+    if isinstance(value, Mapping):
+        return ""
     return str(value or "").strip().lower()
 
 
@@ -97,6 +99,13 @@ def _first_terminal_pr_resolver_status(*values: Any) -> str:
         if candidate:
             return candidate
     return ""
+
+
+def _terminal_pr_resolver_status(value: Any) -> str:
+    """Return a status only when the value is a known terminal resolver state."""
+
+    candidate = _normalize_pr_resolver_text(value)
+    return candidate if candidate in _PR_RESOLVER_TERMINAL_STATUSES else ""
 
 
 def _pr_resolver_status(payload: dict[str, Any]) -> str:
@@ -117,7 +126,7 @@ def _pr_resolver_status(payload: dict[str, Any]) -> str:
 
     final = _pr_resolver_final_payload(payload)
     if final:
-        return _first_terminal_pr_resolver_status(
+        final_status = _first_terminal_pr_resolver_status(
             final.get("state"),
             final.get("status"),
             final.get("merge_outcome"),
@@ -127,7 +136,13 @@ def _pr_resolver_status(payload: dict[str, Any]) -> str:
             final.get("final_state"),
             final.get("finalState"),
         )
-    return ""
+        if final_status:
+            return final_status
+        final_action = _terminal_pr_resolver_status(final.get("action"))
+        if final_action:
+            return final_action
+
+    return _terminal_pr_resolver_status(payload.get("action"))
 
 
 def _pr_resolver_final_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -136,6 +151,12 @@ def _pr_resolver_final_payload(payload: dict[str, Any]) -> dict[str, Any]:
     final = payload.get("final")
     if isinstance(final, dict):
         return final
+    final_state = payload.get("final_state")
+    if isinstance(final_state, dict):
+        return final_state
+    final_state = payload.get("finalState")
+    if isinstance(final_state, dict):
+        return final_state
     merge_outcome = payload.get("mergeOutcome")
     if isinstance(merge_outcome, dict):
         return merge_outcome

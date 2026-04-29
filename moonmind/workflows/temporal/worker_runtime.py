@@ -616,6 +616,40 @@ def _selected_step_tool_name(step_entry: Mapping[str, Any]) -> str:
     )
     return str(step_tool.get("name") or step_tool.get("id") or "").strip()
 
+def _canonical_step_fingerprint(step_entry: Mapping[str, Any]) -> str:
+    try:
+        return json.dumps(step_entry, sort_keys=True, separators=(",", ":"))
+    except TypeError:
+        return repr(sorted(step_entry.items(), key=lambda item: str(item[0])))
+
+
+def _dedupe_repeated_step_entries(
+    raw_steps: list[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    deduped: list[Mapping[str, Any]] = []
+    fingerprints_by_id: dict[str, str] = {}
+
+    for step_entry in raw_steps:
+        step_id = str(step_entry.get("id") or "").strip()
+        if not step_id:
+            deduped.append(step_entry)
+            continue
+
+        fingerprint = _canonical_step_fingerprint(step_entry)
+        existing_fingerprint = fingerprints_by_id.get(step_id)
+        if existing_fingerprint is None:
+            fingerprints_by_id[step_id] = fingerprint
+            deduped.append(step_entry)
+            continue
+        if existing_fingerprint == fingerprint:
+            continue
+        raise RuntimeError(
+            f"task step id {step_id!r} is duplicated with different payloads; "
+            "step ids must be unique"
+        )
+
+    return deduped
+
 def _selected_step_type(step_entry: Mapping[str, Any]) -> str:
     return str(step_entry.get("type") or "").strip().lower()
 
@@ -861,6 +895,12 @@ def _build_runtime_planner():
             node_inputs["selectedSkill"] = selected_skill_name
 
         raw_steps = task_payload.get("steps")
+        if (
+            isinstance(raw_steps, list)
+            and len(raw_steps) > 1
+            and all(isinstance(s, Mapping) for s in raw_steps)
+        ):
+            raw_steps = _dedupe_repeated_step_entries(raw_steps)
         publish_uses_git = not _task_uses_only_jira_agent_skill(
             selected_skill_name=selected_skill_name,
             raw_steps=raw_steps,

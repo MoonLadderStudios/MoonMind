@@ -881,6 +881,43 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (
+          url === "/api/executions/mm%3Apreset-step-input-edit?source=temporal"
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:preset-step-input-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  instructions: "Edit a preset step.",
+                  steps: [
+                    {
+                      id: "preset-step",
+                      title: "Preset",
+                      stepType: "preset",
+                      instructions: "Preview the configured preset.",
+                      preset: {
+                        id: "global::::speckit-demo",
+                        slug: "speckit-demo",
+                        version: "1.2.3",
+                        inputs: { feature_name: "MM-566" },
+                      },
+                    },
+                  ],
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Aauto-primary-skill?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -2950,6 +2987,12 @@ describe("Task Create Entrypoint", () => {
         id: "step-primary",
         title: "Primary",
         instructions: "Primary operator objective.",
+        stepType: "skill",
+        skill: {
+          id: "moonspec-orchestrate",
+          args: { mode: "runtime" },
+          requiredCapabilities: ["git"],
+        },
         skillId: "moonspec-orchestrate",
         skillArgs: { mode: "runtime" },
         skillRequiredCapabilities: ["git"],
@@ -2960,6 +3003,11 @@ describe("Task Create Entrypoint", () => {
         id: "step-second",
         title: "Second",
         instructions: "Second step instructions.",
+        stepType: "tool",
+        tool: {
+          name: "pr-resolver",
+          inputs: { merge: false },
+        },
         skillId: "pr-resolver",
         skillArgs: { merge: false },
         skillRequiredCapabilities: [],
@@ -2974,6 +3022,101 @@ describe("Task Create Entrypoint", () => {
           },
         },
       },
+    ]);
+  });
+
+  it("reconstructs explicit Step Type draft payloads for editing", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:step-types",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Edit explicit Step Type payloads.",
+          steps: [
+            {
+              id: "tool-step",
+              title: "Fetch issue",
+              type: "tool",
+              instructions: "Fetch Jira issue.",
+              tool: {
+                id: "jira.get_issue",
+                inputs: { issueKey: "MM-566" },
+              },
+            },
+            {
+              id: "skill-step",
+              title: "Implement",
+              type: "skill",
+              instructions: "Implement the issue.",
+              skill: {
+                id: "moonspec-implement",
+                args: { issueKey: "MM-566" },
+                requiredCapabilities: ["git"],
+              },
+            },
+            {
+              id: "preset-step",
+              title: "Jira flow",
+              type: "preset",
+              instructions: "Configure Jira orchestration.",
+              preset: {
+                id: "jira-orchestrate",
+                version: "2026-04-29",
+                inputs: { issueKey: "MM-566" },
+              },
+            },
+            {
+              id: "legacy-skill",
+              instructions: "Read an old skill-shaped tool.",
+              tool: {
+                type: "skill",
+                id: "legacy-skill",
+                inputs: { mode: "runtime" },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft.steps).toEqual([
+      expect.objectContaining({
+        id: "tool-step",
+        stepType: "tool",
+        tool: {
+          id: "jira.get_issue",
+          inputs: { issueKey: "MM-566" },
+        },
+        skillId: "jira.get_issue",
+        skillArgs: { issueKey: "MM-566" },
+      }),
+      expect.objectContaining({
+        id: "skill-step",
+        stepType: "skill",
+        skill: {
+          id: "moonspec-implement",
+          args: { issueKey: "MM-566" },
+          requiredCapabilities: ["git"],
+        },
+        skillId: "moonspec-implement",
+        skillArgs: { issueKey: "MM-566" },
+        skillRequiredCapabilities: ["git"],
+      }),
+      expect.objectContaining({
+        id: "preset-step",
+        stepType: "preset",
+        preset: {
+          id: "jira-orchestrate",
+          version: "2026-04-29",
+          inputs: { issueKey: "MM-566" },
+        },
+      }),
+      expect.objectContaining({
+        id: "legacy-skill",
+        stepType: "skill",
+        skillId: "legacy-skill",
+        skillArgs: { mode: "runtime" },
+      }),
     ]);
   });
 
@@ -3203,6 +3346,42 @@ describe("Task Create Entrypoint", () => {
       expect(screen.getByText("Step 1 (Primary)")).toBeTruthy();
       expect(screen.getByText("Step 2")).toBeTruthy();
       expect(screen.getByText("Step 3")).toBeTruthy();
+    });
+  });
+
+  it("preserves reconstructed preset inputs when previewing an edit draft", async () => {
+    renderForEdit("mm:preset-step-input-edit");
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    await waitFor(() => {
+      expect(
+        (within(step).getByLabelText("Step Type") as HTMLSelectElement).value,
+      ).toBe("preset");
+      expect(
+        (within(step).getByLabelText("Preset") as HTMLSelectElement).value,
+      ).toBe("global::::speckit-demo");
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url, init]) => {
+          if (
+            !String(url).startsWith(
+              "/api/task-step-templates/speckit-demo:expand?scope=global",
+            )
+          ) {
+            return false;
+          }
+          const body = JSON.parse(String(init?.body || "{}")) as {
+            inputs?: Record<string, unknown>;
+          };
+          return body.inputs?.feature_name === "MM-566";
+        }),
+      ).toBe(true);
     });
   });
 
@@ -4505,6 +4684,81 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
+  it("submits an authored MM-564 Skill step with agentic controls", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Implement MM-564 with the agentic Skill workflow." },
+    });
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "moonspec-orchestrate" },
+      },
+    );
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        "Step 1 Skill Args (optional JSON object)",
+      ),
+      {
+        target: { value: '{"issueKey":"MM-564","mode":"runtime"}' },
+      },
+    );
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
+      {
+        target: { value: "git, jira" },
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const request = latestCreateRequest() as {
+      payload: {
+        task: {
+          tool: Record<string, unknown>;
+          skill: Record<string, unknown>;
+        };
+      };
+    };
+    expect(request.payload.task.tool).toEqual({
+      type: "skill",
+      name: "moonspec-orchestrate",
+      version: "1.0",
+      inputs: {
+        issueKey: "MM-564",
+        mode: "runtime",
+      },
+      requiredCapabilities: ["git", "jira"],
+    });
+    expect(request.payload.task.skill).toEqual({
+      id: "moonspec-orchestrate",
+      args: {
+        issueKey: "MM-564",
+        mode: "runtime",
+      },
+      requiredCapabilities: ["git", "jira"],
+    });
+  });
+
   it("reveals per-step advanced skill options from the bottom toggle", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
@@ -4584,6 +4838,83 @@ describe("Task Create Entrypoint", () => {
       "docker",
       "qdrant",
     ]);
+  });
+
+  it("preserves and validates advanced skill fields after toggling advanced mode off and on", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Run the agentic boundary validation flow." },
+    });
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "moonspec-orchestrate" },
+      },
+    );
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        "Step 1 Skill Args (optional JSON object)",
+      ),
+      {
+        target: { value: '{"mode":"agentic"}' },
+      },
+    );
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
+      {
+        target: { value: "docker, qdrant" },
+      },
+    );
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    expect(
+      within(primaryStep as HTMLElement).queryByLabelText(
+        /Skill Args \(optional JSON object\)/,
+      ),
+    ).toBeNull();
+    expect(
+      within(primaryStep as HTMLElement).queryByLabelText(
+        /Skill Required Capabilities \(optional CSV\)/,
+      ),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    const skillArgsField = within(primaryStep as HTMLElement).getByLabelText(
+      "Step 1 Skill Args (optional JSON object)",
+    ) as HTMLTextAreaElement;
+    const skillCapabilitiesField = within(
+      primaryStep as HTMLElement,
+    ).getByLabelText(
+      /Step 1 Skill Required Capabilities \(optional CSV\)/,
+    ) as HTMLInputElement;
+    expect(skillArgsField.value).toBe('{"mode":"agentic"}');
+    expect(skillCapabilitiesField.value).toBe("docker, qdrant");
+
+    fireEvent.change(skillArgsField, {
+      target: { value: '{"broken":' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'Primary step Skill Args must be valid JSON object text (for example: {"featureKey":"..."}).',
+        ),
+      ).not.toBeNull();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
   });
 
   it("does not submit hidden advanced step capabilities after toggling advanced mode off", async () => {
@@ -6735,6 +7066,45 @@ describe("Task Create Entrypoint", () => {
     ).toBeTruthy();
   });
 
+  it("presents concise Step Type helper copy for Tool Skill and Preset", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+    const step = primaryStep as HTMLElement;
+    const stepType = within(step).getByLabelText("Step Type") as HTMLSelectElement;
+    const helpId = stepType.getAttribute("aria-describedby");
+
+    expect(helpId).toBeTruthy();
+
+    expect(
+      within(step).getByText(
+        "Skill asks an agent to perform work using reusable behavior.",
+      ),
+    ).toBeTruthy();
+    expect(document.getElementById(helpId as string)?.textContent).toBe(
+      "Skill asks an agent to perform work using reusable behavior.",
+    );
+
+    fireEvent.change(stepType, { target: { value: "tool" } });
+    expect(
+      within(step).getByText(
+        "Tool runs a typed integration or system operation directly.",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.change(stepType, { target: { value: "preset" } });
+    expect(
+      within(step).getByText(
+        "Preset inserts a reusable set of configured steps.",
+      ),
+    ).toBeTruthy();
+    expect(within(step).queryByText(/Temporal Activity/)).toBeNull();
+    expect(within(step).queryByText(/Capability/)).toBeNull();
+  });
+
   it("switches Step Type configuration areas while preserving instructions", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
@@ -7186,6 +7556,85 @@ describe("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText("Select a Tool before submitting a Tool step."),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
+  it("submits a manually authored Tool step with governed tool inputs", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Fetch MM-563 through the trusted Jira tool." },
+    });
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "tool" },
+    });
+    fireEvent.change(within(step).getByLabelText("Tool"), {
+      target: { value: "jira.get_issue" },
+    });
+    fireEvent.change(within(step).getByLabelText("Tool Version (optional)"), {
+      target: { value: "1.0" },
+    });
+    fireEvent.change(within(step).getByLabelText("Tool Inputs (JSON object)"), {
+      target: { value: '{"issueKey":"MM-563"}' },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const request = latestCreateRequest() as {
+      payload: { task: { steps: Array<Record<string, unknown>> } };
+    };
+    expect(request.payload.task.steps[0]).toEqual({
+      type: "tool",
+      instructions: "Fetch MM-563 through the trusted Jira tool.",
+      tool: {
+        type: "tool",
+        id: "jira.get_issue",
+        version: "1.0",
+        inputs: { issueKey: "MM-563" },
+      },
+    });
+    expect(request.payload.task.steps[0]?.["skill"]).toBeUndefined();
+    expect(within(step).queryByText(/Script/)).toBeNull();
+  });
+
+  it("blocks manually authored Tool steps with invalid input JSON", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Do not submit invalid tool inputs." },
+    });
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "tool" },
+    });
+    fireEvent.change(within(step).getByLabelText("Tool"), {
+      target: { value: "jira.get_issue" },
+    });
+    fireEvent.change(within(step).getByLabelText("Tool Inputs (JSON object)"), {
+      target: { value: "[" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      await screen.findByText("Step 1 Tool Inputs must be valid JSON object text."),
     ).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
