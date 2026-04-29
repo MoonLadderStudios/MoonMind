@@ -1,22 +1,22 @@
 [
   {
-    "id": 3158058337,
+    "id": 3157549495,
     "disposition": "addressed",
-    "rationale": "Updated tool payload normalization so non-empty tool.args is preserved when schema-provided tool.inputs is an empty object, with unit coverage."
+    "rationale": "Refactored fetch-result enrichment to compute operator_summary once with explicit precedence: collected stdout/result summary first, completed-session assistant text only as fallback."
   },
   {
-    "id": 3158058340,
+    "id": 4192865071,
+    "disposition": "not-applicable",
+    "rationale": "Review summary only; the actionable child comment is tracked separately."
+  },
+  {
+    "id": 3157551082,
     "disposition": "addressed",
-    "rationale": "Command-like tool validation now requires substantive sideEffectPolicy or validation metadata instead of accepting empty default objects, with unit coverage."
+    "rationale": "Gated managed-session lastAssistantText enrichment to completed successful runs and added a failed-run regression test proving stale assistant text is not copied."
   },
   {
-    "id": 4193474718,
+    "id": 4192866795,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary container; actionable inline comments from this review are tracked separately."
-  },
-  {
-    "id": 4193481160,
-    "disposition": "not-applicable",
-    "rationale": "Review body explicitly states there is no feedback to address."
+    "rationale": "Automated review wrapper only; the actionable child comment is tracked separately."
   }
 ]
