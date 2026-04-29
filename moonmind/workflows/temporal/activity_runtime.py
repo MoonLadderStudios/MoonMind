@@ -4519,26 +4519,27 @@ class TemporalAgentRuntimeActivities:
                     )
                 if record.diagnostics_ref:
                     meta.setdefault("diagnosticsRef", record.diagnostics_ref)
-                session_metadata = await self._managed_session_summary_metadata(record)
-                if session_metadata:
-                    for key in (
-                        "lastAssistantText",
-                        "lastAssistantTextTruncated",
-                        "lastAssistantTextOriginalChars",
-                    ):
-                        if key in session_metadata:
-                            meta.setdefault(key, session_metadata[key])
-                    assistant_text = self._assistant_text_from_session_metadata(
-                        session_metadata
-                    )
-                    if assistant_text:
-                        meta.setdefault("operator_summary", assistant_text)
                 operator_summary = await self._collect_operator_summary(
                     record=record,
                     result=result,
                 )
-                if operator_summary:
-                    meta["operator_summary"] = operator_summary
+                assistant_text = None
+                if record.status == "completed" and result.failure_class is None:
+                    session_metadata = await self._managed_session_summary_metadata(record)
+                    if session_metadata:
+                        for key in (
+                            "lastAssistantText",
+                            "lastAssistantTextTruncated",
+                            "lastAssistantTextOriginalChars",
+                        ):
+                            if key in session_metadata:
+                                meta.setdefault(key, session_metadata[key])
+                        assistant_text = self._assistant_text_from_session_metadata(
+                            session_metadata
+                        )
+                final_operator_summary = operator_summary or assistant_text
+                if final_operator_summary:
+                    meta["operator_summary"] = final_operator_summary
 
             # Push the agent's work branch if publish_mode requires it and the
             # agent completed without failure.
@@ -4645,7 +4646,7 @@ class TemporalAgentRuntimeActivities:
             return stdout_summary
 
         summary = self._sanitize_operator_summary(result.summary)
-        if summary and summary != "Completed with status completed":
+        if summary and not is_generic_completion_summary(summary):
             return summary
         return None
 

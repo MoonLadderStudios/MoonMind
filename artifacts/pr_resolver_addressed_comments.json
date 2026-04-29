@@ -1,27 +1,22 @@
 [
   {
-    "id": 4192185054,
+    "id": 3157549495,
+    "disposition": "addressed",
+    "rationale": "Refactored fetch-result enrichment to compute operator_summary once with explicit precedence: collected stdout/result summary first, completed-session assistant text only as fallback."
+  },
+  {
+    "id": 4192865071,
     "disposition": "not-applicable",
-    "rationale": "Positive Gemini review summary with no requested change."
+    "rationale": "Review summary only; the actionable child comment is tracked separately."
   },
   {
-    "id": 3157002480,
+    "id": 3157551082,
     "disposition": "addressed",
-    "rationale": "Key-scoped diagnostics now skip unrelated deprecated override diagnostics; regression test covers diagnostics(scope, key)."
+    "rationale": "Gated managed-session lastAssistantText enrichment to completed successful runs and added a failed-run regression test proving stale assistant text is not copied."
   },
   {
-    "id": 3157002486,
-    "disposition": "addressed",
-    "rationale": "Resolution now clears cached migration diagnostics for the key before fresh override/default resolution; regression test covers reused service instances."
-  },
-  {
-    "id": 4192187854,
+    "id": 4192866795,
     "disposition": "not-applicable",
-    "rationale": "Codex automated review container comment; actionable child review comments are tracked separately."
-  },
-  {
-    "id": 3157002490,
-    "disposition": "addressed",
-    "rationale": "Migration rule validation now rejects duplicate renamed new_key targets; regression test covers fail-fast behavior."
+    "rationale": "Automated review wrapper only; the actionable child comment is tracked separately."
   }
 ]
