@@ -3867,7 +3867,16 @@ class TemporalAgentRuntimeActivities:
             profile=profile,
         )
         try:
-            response = await controller.launch_session(validated)
+            response = await _await_with_activity_heartbeats(
+                controller.launch_session(validated),
+                heartbeat_payload={
+                    "activityType": "agent_runtime.launch_session",
+                    "taskRunId": validated.task_run_id,
+                    "runtimeFamily": validated.runtime_family,
+                    "sessionId": validated.session_id,
+                    "threadId": validated.thread_id,
+                },
+            )
         except Exception as exc:
             from moonmind.utils.logging import redact_sensitive_text
 

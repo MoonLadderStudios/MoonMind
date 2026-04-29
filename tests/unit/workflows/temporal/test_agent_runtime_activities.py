@@ -414,6 +414,67 @@ async def test_launch_session_delegates_to_remote_session_controller() -> None:
     assert result.session_state.container_id == "ctr-1"
     controller.launch_session.assert_awaited_once()
 
+async def test_launch_session_heartbeats_while_waiting_for_remote_session_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from temporalio import activity as temporal_activity
+
+    heartbeats: list[dict[str, Any]] = []
+
+    async def _slow_launch_session(
+        _request: Any,
+    ) -> CodexManagedSessionHandle:
+        await asyncio.sleep(0.03)
+        return CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+        )
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(temporal_activity, "in_activity", lambda: True)
+    monkeypatch.setattr(temporal_activity, "heartbeat", heartbeats.append)
+
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(side_effect=_slow_launch_session)
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_launch_session(
+        {
+            "taskRunId": "task-1",
+            "sessionId": "sess-1",
+            "threadId": "thread-1",
+            "workspacePath": "/work/task/repo",
+            "sessionWorkspacePath": "/work/task/session",
+            "artifactSpoolPath": "/work/task/artifacts",
+            "codexHomePath": "/work/task/codex-home",
+            "imageRef": "moonmind:latest",
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionHandle)
+    assert result.status == "ready"
+    assert heartbeats
+    assert all(
+        heartbeat == {
+            "activityType": "agent_runtime.launch_session",
+            "taskRunId": "task-1",
+            "runtimeFamily": "codex",
+            "sessionId": "sess-1",
+            "threadId": "thread-1",
+        }
+        for heartbeat in heartbeats
+    )
+
 async def test_launch_session_uses_github_descriptor_from_activity_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
