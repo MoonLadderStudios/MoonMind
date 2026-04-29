@@ -2,6 +2,8 @@
 
 ## Valid Direct Task Skill Step
 
+Coverage: FR-001, FR-002, FR-004, FR-005, FR-007, SC-001, DESIGN-REQ-005, DESIGN-REQ-015.
+
 ```json
 {
   "type": "skill",
@@ -28,6 +30,8 @@ Expected behavior:
 
 ## Invalid Skill Args
 
+Coverage: FR-003, SC-002.
+
 ```json
 {
   "type": "skill",
@@ -42,6 +46,8 @@ Expected behavior:
 Expected behavior: rejected before execution because Skill args must be an object.
 
 ## Invalid Mixed Payload
+
+Coverage: FR-006, SC-002, SC-003, DESIGN-REQ-015.
 
 ```json
 {

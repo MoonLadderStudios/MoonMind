@@ -19,6 +19,10 @@ MM-564 is covered as a single-story runtime feature for authoring and validating
 | FR-005 | Task contract and Create-page payload keep agentic Skill work as Skill even when capabilities/internal tool affordances are present. | VERIFIED |
 | FR-006 | `tests/unit/workflows/tasks/test_task_contract.py` rejects non-skill Tool payloads on Skill steps; template service tests reject mixed Skill/Tool payloads. | VERIFIED |
 | FR-007 | Create-page Skill labels/help text distinguish Skill as agent work from deterministic Tool steps. | VERIFIED |
+| SC-001 | The MM-564 Create-page regression verifies submitted `type: skill` plus Skill-specific payload data. | VERIFIED |
+| SC-002 | Existing invalid Skill Args and mixed payload tests verify malformed Skill submissions are rejected before execution. | VERIFIED |
+| SC-003 | `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` passed the full Create-page target, including Tool and Preset authoring coverage. | VERIFIED |
+| SC-004 | This report maps DESIGN-REQ-005 and DESIGN-REQ-015 to spec, tasks, tests, and verification evidence. | VERIFIED |
 | DESIGN-REQ-005 | Skill selector, instructions, args/context, capabilities, and metadata preservation are covered by frontend and service tests. | VERIFIED |
 | DESIGN-REQ-015 | Skill picker/validation and Jira-agentic Skill distinction are represented by the MM-564 regression and existing Tool/Skill contract tests. | VERIFIED |
 

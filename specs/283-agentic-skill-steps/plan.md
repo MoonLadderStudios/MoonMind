@@ -20,7 +20,10 @@ MM-564 requires task authors to configure Skill steps as agentic executable work
 | FR-007 | partial | Step Type help text distinguishes Skill as agent work; Skill panel labels are distinct from Tool fields. | Preserve UI evidence in focused test and quickstart. | frontend integration |
 | DESIGN-REQ-005 | partial | Skill authoring fields and backend Skill payload models exist. | Add MM-564 traceability and focused test. | frontend integration + unit |
 | DESIGN-REQ-015 | partial | Skill picker/validation and Jira agentic distinction exist across Create page, task contract, and template catalog. | Verify with MM-564 evidence. | frontend integration + unit |
-| SC-001..004 | partial | Existing tests cover the mechanics but not MM-564 traceability. | Add focused test, run targeted suites, and write verification. | frontend integration + unit |
+| SC-001 | partial | Existing Skill submission mechanics preserve Skill payloads; MM-564-specific evidence was missing. | Add focused Create-page regression for MM-564 Skill payload preservation. | frontend integration |
+| SC-002 | implemented_unverified | Existing Create-page and task contract validation reject malformed Skill args and mixed payloads. | Verify invalid Skill submissions through focused test evidence. | frontend integration + unit |
+| SC-003 | implemented_unverified | Existing Tool and Preset authoring tests run in the same Create-page target. | Run setup-aware Create-page target to prove no adjacent Step Type regression. | frontend integration |
+| SC-004 | partial | Spec maps DESIGN-REQ-005 and DESIGN-REQ-015; downstream verification evidence was missing. | Preserve design requirement traceability in tasks and verification report. | frontend integration + unit |
 
 ## Technical Context
 
