@@ -519,14 +519,20 @@ interface StepAttachmentRef {
   sizeBytes: number;
 }
 
+type StepType = "tool" | "skill" | "preset";
+
 interface StepState {
   localId: string;
   id: string;
   title: string;
+  stepType: StepType;
   instructions: string;
   skillId: string;
   skillArgs: string;
   skillRequiredCapabilities: string;
+  presetKey: string;
+  presetMessage: string | null;
+  presetReapplyNeeded: boolean;
   templateStepId: string;
   templateInstructions: string;
   inputAttachments: StepAttachmentRef[];
@@ -1100,10 +1106,14 @@ function createStepStateEntry(
     localId: `step-${index}`,
     id: "",
     title: "",
+    stepType: "skill",
     instructions: "",
     skillId: "",
     skillArgs: "",
     skillRequiredCapabilities: "",
+    presetKey: "",
+    presetMessage: null,
+    presetReapplyNeeded: false,
     templateStepId: "",
     templateInstructions: "",
     inputAttachments: [],
@@ -1254,6 +1264,7 @@ function isEmptyStepStateEntry(step: StepState | null | undefined): boolean {
     !step.skillId.trim() &&
     !step.skillArgs.trim() &&
     !step.skillRequiredCapabilities.trim() &&
+    !step.presetKey.trim() &&
     !step.templateStepId.trim() &&
     !step.templateInstructions.trim() &&
     step.inputAttachments.length === 0 &&
@@ -1312,6 +1323,12 @@ function validatePrimaryStepSubmission(
   | { ok: false; error: string } {
   if (!primaryStep) {
     return { ok: false, error: "Add at least one step before submitting." };
+  }
+  if (primaryStep.stepType === "tool") {
+    return {
+      ok: false,
+      error: "Select a Tool before submitting a Tool step.",
+    };
   }
   const instructions = primaryStep.instructions.trim();
   const skillId = primaryStep.skillId.trim();
@@ -4386,6 +4403,33 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     templateOptionsQuery.isLoading,
   ]);
 
+  function stepPresetStatusText(step: StepState): string {
+    if (step.presetReapplyNeeded) {
+      return PRESET_REAPPLY_REQUIRED_MESSAGE;
+    }
+    if (step.presetMessage) {
+      return step.presetMessage;
+    }
+    if (templateOptionsQuery.isLoading) {
+      return "Loading presets...";
+    }
+    if (templateOptionsQuery.isError) {
+      return "Failed to load presets.";
+    }
+    if (templateItems.length === 0) {
+      return "No presets available for your account.";
+    }
+    return "";
+  }
+
+  function updateStepPreset(localId: string, presetKey: string) {
+    updateStep(localId, {
+      presetKey,
+      presetMessage: null,
+      presetReapplyNeeded: false,
+    });
+  }
+
   function updateStep(localId: string, updates: Partial<StepState>) {
     setSteps((current) =>
       current.map((step) => {
@@ -4421,6 +4465,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const { [localId]: _removed, ...rest } = current;
       return rest;
     });
+  }
+
+  function handleStepTypeChange(localId: string, value: string) {
+    const nextType: StepType =
+      value === "tool" || value === "preset" ? value : "skill";
+    updateStep(localId, { stepType: nextType });
   }
 
   function addStep() {
@@ -4474,7 +4524,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     );
   }
 
-  function resolveTemplateInputs(inputs: TaskTemplateInputDefinition[]): {
+  function resolveTemplateInputs(
+    inputs: TaskTemplateInputDefinition[],
+    explicitInputValues: Record<string, unknown> = templateInputValues,
+  ): {
     values: Record<string, unknown>;
     assumptions: string[];
   } {
@@ -4506,7 +4559,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       let valueSource = "";
       const remembered = templateInputMemoryRef.current[name];
       const defaultValue = definition.default;
-      const explicitInputValue = templateInputValues[name];
+      const explicitInputValue = explicitInputValues[name];
 
       if (isFeatureRequestKey && explicitFeatureRequest) {
         value = explicitFeatureRequest;
@@ -4650,6 +4703,144 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }
 
+  async function loadPresetDetail(
+    preset: TemplateOption,
+  ): Promise<TaskTemplateDetail> {
+    const response = await fetch(
+      withQueryParams(
+        interpolatePath(taskTemplateDetailEndpoint, {
+          slug: preset.slug,
+        }),
+        {
+          scope: preset.scope,
+          scopeRef: preset.scopeRef || undefined,
+        },
+      ),
+      { headers: { Accept: "application/json" } },
+    );
+    if (!response.ok) {
+      throw new Error(
+        await responseErrorMessage(response, "Failed to load preset details."),
+      );
+    }
+    return (await response.json()) as TaskTemplateDetail;
+  }
+
+  async function applyPresetToDraft({
+    preset,
+    detail,
+    inputValues,
+    setMessage,
+  }: {
+    preset: TemplateOption;
+    detail: TaskTemplateDetail;
+    inputValues: Record<string, unknown>;
+    setMessage: (message: string) => void;
+  }) {
+    const scopeParams = {
+      scope: preset.scope,
+      scopeRef: preset.scopeRef || undefined,
+    };
+    const { values: inputs, assumptions } = resolveTemplateInputs(
+      detail.inputs || [],
+      inputValues,
+    );
+    const presetRuntime = runtime.trim().toLowerCase();
+    const expandResponse = await fetch(
+      withQueryParams(
+        interpolatePath(taskTemplateExpandEndpoint, {
+          slug: preset.slug,
+        }),
+        scopeParams,
+      ),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          version:
+            detail.version ||
+            detail.latestVersion ||
+            preset.latestVersion ||
+            "1.0.0",
+          inputs,
+          context: {
+            repository: repository.trim() || defaultRepository,
+            repo: repository.trim() || defaultRepository,
+            targetRuntime: presetRuntime,
+          },
+          options: { enforceStepLimit: true },
+        }),
+      },
+    );
+    if (!expandResponse.ok) {
+      throw new Error(
+        await responseErrorMessage(expandResponse, "Failed to apply preset."),
+      );
+    }
+    const expanded = (await expandResponse.json()) as TaskTemplateExpandResponse;
+    const expandedSteps = (expanded.steps || []).map((step, index) =>
+      mapExpandedStepToState(nextStepNumber + index, step),
+    );
+    if (hasAdvancedStepOptionValues(expandedSteps)) {
+      setShowAdvancedStepOptions(true);
+    }
+    const replaceEmptyDefault =
+      steps.length === 1 && isEmptyStepStateEntry(steps[0]);
+
+    setSteps((current) => {
+      if (replaceEmptyDefault) {
+        return expandedSteps.length > 0
+          ? expandedSteps
+          : [createStepStateEntry(nextStepNumber)];
+      }
+      return [...current, ...expandedSteps];
+    });
+    setNextStepNumber((current) => current + Math.max(expandedSteps.length, 1));
+    setAppliedTemplateFeatureRequest(templateFeatureRequest.trim());
+    setAppliedTemplateObjectiveAttachmentSignature(
+      attachmentSignature(selectedObjectiveAttachmentFiles),
+    );
+    if (expandedSteps.length > 0) {
+      const appliedTemplate = expanded.appliedTemplate || {};
+      setAppliedTemplates((current) => [
+        ...current,
+        {
+          slug: String(appliedTemplate.slug || preset.slug),
+          version: String(
+            appliedTemplate.version ||
+              detail.version ||
+              preset.latestVersion ||
+              "1.0.0",
+          ),
+          inputs:
+            appliedTemplate.inputs &&
+            typeof appliedTemplate.inputs === "object"
+              ? appliedTemplate.inputs
+              : inputs,
+          stepIds: Array.isArray(appliedTemplate.stepIds)
+            ? appliedTemplate.stepIds
+            : expandedSteps.map((step) => step.id).filter(Boolean),
+          appliedAt:
+            String(appliedTemplate.appliedAt || "").trim() ||
+            new Date().toISOString(),
+          capabilities: Array.isArray(expanded.capabilities)
+            ? expanded.capabilities
+            : [],
+        },
+      ]);
+    }
+    const autoFillSuffix =
+      assumptions.length > 0
+        ? ` Auto-filled ${assumptions.length} input(s): ${assumptions.join(", ")}.`
+        : "";
+    setMessage(
+      `Applied preset '${preset.title}' (${expandedSteps.length} steps).${autoFillSuffix}`,
+    );
+  }
+
   async function handleApplyPreset() {
     if (isApplyingPreset) return;
     if (!selectedPreset) {
@@ -4670,115 +4861,52 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     setTemplateMessage("Applying preset...");
 
     try {
-      const scopeParams = {
-        scope: selectedPreset.scope,
-        scopeRef: selectedPreset.scopeRef || undefined,
-      };
-      const { values: inputs, assumptions } = resolveTemplateInputs(
-        detail.inputs || [],
-      );
-      const presetRuntime = runtime.trim().toLowerCase();
-      const expandResponse = await fetch(
-        withQueryParams(
-          interpolatePath(taskTemplateExpandEndpoint, {
-            slug: selectedPreset.slug,
-          }),
-          scopeParams,
-        ),
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify({
-            version:
-              detail.version ||
-              detail.latestVersion ||
-              selectedPreset.latestVersion ||
-              "1.0.0",
-            inputs,
-            context: {
-              repository: repository.trim() || defaultRepository,
-              repo: repository.trim() || defaultRepository,
-              targetRuntime: presetRuntime,
-            },
-            options: { enforceStepLimit: true },
-          }),
-        },
-      );
-      if (!expandResponse.ok) {
-        throw new Error(
-          await responseErrorMessage(expandResponse, "Failed to apply preset."),
-        );
-      }
-      const expanded =
-        (await expandResponse.json()) as TaskTemplateExpandResponse;
-      const expandedSteps = (expanded.steps || []).map((step, index) =>
-        mapExpandedStepToState(nextStepNumber + index, step),
-      );
-      if (hasAdvancedStepOptionValues(expandedSteps)) {
-        setShowAdvancedStepOptions(true);
-      }
-      const replaceEmptyDefault =
-        steps.length === 1 && isEmptyStepStateEntry(steps[0]);
-
-      setSteps((current) => {
-        if (replaceEmptyDefault) {
-          return expandedSteps.length > 0
-            ? expandedSteps
-            : [createStepStateEntry(nextStepNumber)];
-        }
-        return [...current, ...expandedSteps];
+      await applyPresetToDraft({
+        preset: selectedPreset,
+        detail,
+        inputValues: templateInputValues,
+        setMessage: setTemplateMessage,
       });
-      setNextStepNumber(
-        (current) => current + Math.max(expandedSteps.length, 1),
-      );
-      setAppliedTemplateFeatureRequest(templateFeatureRequest.trim());
-      setAppliedTemplateObjectiveAttachmentSignature(
-        attachmentSignature(selectedObjectiveAttachmentFiles),
-      );
       setPresetReapplyNeeded(false);
-      if (expandedSteps.length > 0) {
-        const appliedTemplate = expanded.appliedTemplate || {};
-        setAppliedTemplates((current) => [
-          ...current,
-          {
-            slug: String(appliedTemplate.slug || selectedPreset.slug),
-            version: String(
-              appliedTemplate.version ||
-                detail.version ||
-                selectedPreset.latestVersion ||
-                "1.0.0",
-            ),
-            inputs:
-              appliedTemplate.inputs &&
-              typeof appliedTemplate.inputs === "object"
-                ? appliedTemplate.inputs
-                : inputs,
-            stepIds: Array.isArray(appliedTemplate.stepIds)
-              ? appliedTemplate.stepIds
-              : expandedSteps.map((step) => step.id).filter(Boolean),
-            appliedAt:
-              String(appliedTemplate.appliedAt || "").trim() ||
-              new Date().toISOString(),
-            capabilities: Array.isArray(expanded.capabilities)
-              ? expanded.capabilities
-              : [],
-          },
-        ]);
-      }
-      const autoFillSuffix =
-        assumptions.length > 0
-          ? ` Auto-filled ${assumptions.length} input(s): ${assumptions.join(", ")}.`
-          : "";
-      setTemplateMessage(
-        `Applied preset '${selectedPreset.title}' (${expandedSteps.length} steps).${autoFillSuffix}`,
-      );
     } catch (error) {
       const failure =
         error instanceof Error ? error : new Error("Failed to apply preset.");
       setTemplateMessage(`Failed to apply preset: ${failure.message}`);
+    } finally {
+      setIsApplyingPreset(false);
+    }
+  }
+
+  async function handleApplyStepPreset(localId: string) {
+    if (isApplyingPreset) return;
+    const step = steps.find((candidate) => candidate.localId === localId);
+    const preset = templateItems.find((item) => item.key === step?.presetKey);
+    if (!step || !preset) {
+      updateStep(localId, { presetMessage: "Choose a preset first." });
+      return;
+    }
+    setIsApplyingPreset(true);
+    updateStep(localId, {
+      presetMessage: "Applying preset...",
+      presetReapplyNeeded: false,
+    });
+    try {
+      const detail =
+        selectedPreset?.key === preset.key && selectedPresetDetailQuery.data
+          ? selectedPresetDetailQuery.data
+          : await loadPresetDetail(preset);
+      await applyPresetToDraft({
+        preset,
+        detail,
+        inputValues: {},
+        setMessage: (message) => updateStep(localId, { presetMessage: message }),
+      });
+    } catch (error) {
+      const failure =
+        error instanceof Error ? error : new Error("Failed to apply preset.");
+      updateStep(localId, {
+        presetMessage: `Failed to apply preset: ${failure.message}`,
+      });
     } finally {
       setIsApplyingPreset(false);
     }
@@ -5108,7 +5236,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
 
-    const primarySkillId = primaryValidation.value.skillId.trim() || "auto";
+    const primaryStepIsSkill = primaryStep?.stepType === "skill";
+    const primarySkillId = primaryStepIsSkill
+      ? primaryValidation.value.skillId.trim() || "auto"
+      : "auto";
     const effectiveSubmissionSkillId = resolveEffectiveSkillId(
       primarySkillId,
       appliedTemplates,
@@ -5117,10 +5248,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       isResolverSkill(effectiveSubmissionSkillId) && isMergeAutomationPublishMode(publishMode)
         ? "none"
         : normalizedPublishMode;
-    const primarySkillArgsRaw = showAdvancedStepOptions
+    const primarySkillArgsRaw = primaryStepIsSkill && showAdvancedStepOptions
       ? String(primaryStep?.skillArgs || "").trim()
       : "";
-    const taskSkillRequiredCapabilities = showAdvancedStepOptions
+    const taskSkillRequiredCapabilities = primaryStepIsSkill && showAdvancedStepOptions
       ? parseCapabilitiesCsv(String(primaryStep?.skillRequiredCapabilities || ""))
       : [];
 
@@ -5177,11 +5308,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (!step) {
         continue;
       }
-      const stepSkillId = step.skillId.trim();
-      const stepSkillArgsRaw = showAdvancedStepOptions
+      const stepIsSkill = step.stepType === "skill";
+      const stepSkillId = stepIsSkill ? step.skillId.trim() : "";
+      const stepSkillArgsRaw = stepIsSkill && showAdvancedStepOptions
         ? step.skillArgs.trim()
         : "";
-      const stepSkillCaps = showAdvancedStepOptions
+      const stepSkillCaps = stepIsSkill && showAdvancedStepOptions
         ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
         : [];
       const stepAttachmentFiles = selectedStepAttachmentFiles[step.localId] || [];
@@ -6255,6 +6387,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     </div>
                   </div>
 
+                  <label className="queue-step-type-field">
+                    Step Type
+                    <select
+                      data-step-field="stepType"
+                      data-step-index={String(index)}
+                      value={step.stepType}
+                      onChange={(event) =>
+                        handleStepTypeChange(step.localId, event.target.value)
+                      }
+                    >
+                      <option value="tool">Tool</option>
+                      <option value="skill">Skill</option>
+                      <option value="preset">Preset</option>
+                    </select>
+                  </label>
+
                   <div className="stack">
                     <div className="queue-field-heading">
                       <label htmlFor={`queue-step-instructions-${step.localId}`}>
@@ -6495,66 +6643,126 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     ) : null}
                   </div>
 
-                  <label>
-                    Skill (optional)
-                    <input
-                      data-step-field="skillId"
-                      data-step-index={String(index)}
-                      list={SKILL_OPTIONS_DATALIST_ID}
-                      value={step.skillId}
-                      placeholder={
-                        isPrimaryStep
-                          ? "auto (default), moonspec-orchestrate, ..."
-                          : "inherit primary step skill"
-                      }
-                      onChange={(event) =>
-                        updateStep(step.localId, {
-                          skillId: event.target.value,
-                        })
-                      }
-                    />
-                    {isPrimaryStep ? null : (
-                      <span className="small">
-                        Leave skill blank to inherit primary step defaults.
-                      </span>
-                    )}
-                  </label>
-
-                  {showSkillArgsField ? (
-                    <label
-                      className="queue-step-skill-args-field"
-                      data-skill-args-index={String(index)}
-                    >
-                      {`Step ${index + 1} Skill Args (optional JSON object)`}
-                      <textarea
-                        className="queue-step-skill-args"
-                        data-step-field="skillArgs"
-                        data-step-index={String(index)}
-                        placeholder='{"notes":"optional context"}'
-                        value={step.skillArgs}
-                        onChange={(event) =>
-                          updateStep(step.localId, {
-                            skillArgs: event.target.value,
-                          })
-                        }
-                      />
-                    </label>
+                  {step.stepType === "tool" ? (
+                    <div className="stack queue-step-type-panel">
+                      <label>
+                        Tool
+                        <input
+                          data-step-field="toolId"
+                          data-step-index={String(index)}
+                          placeholder="Select a typed operation"
+                          value=""
+                          readOnly
+                        />
+                      </label>
+                      <p className="small">
+                        Tool steps run a typed integration or system operation.
+                      </p>
+                    </div>
                   ) : null}
-                  {showAdvancedStepOptions ? (
-                    <label>
-                      {`Step ${index + 1} Skill Required Capabilities (optional CSV)`}
-                      <input
-                        data-step-field="skillRequiredCapabilities"
-                        data-step-index={String(index)}
-                        value={step.skillRequiredCapabilities}
-                        placeholder="docker,qdrant,unity"
-                        onChange={(event) =>
-                          updateStep(step.localId, {
-                            skillRequiredCapabilities: event.target.value,
-                          })
-                        }
-                      />
-                    </label>
+
+                  {step.stepType === "skill" ? (
+                    <>
+                      <label>
+                        Skill (optional)
+                        <input
+                          data-step-field="skillId"
+                          data-step-index={String(index)}
+                          list={SKILL_OPTIONS_DATALIST_ID}
+                          value={step.skillId}
+                          placeholder={
+                            isPrimaryStep
+                              ? "auto (default), moonspec-orchestrate, ..."
+                              : "inherit primary step skill"
+                          }
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              skillId: event.target.value,
+                            })
+                          }
+                        />
+                        {isPrimaryStep ? null : (
+                          <span className="small">
+                            Leave skill blank to inherit primary step defaults.
+                          </span>
+                        )}
+                      </label>
+
+                      {showSkillArgsField ? (
+                        <label
+                          className="queue-step-skill-args-field"
+                          data-skill-args-index={String(index)}
+                        >
+                          {`Step ${index + 1} Skill Args (optional JSON object)`}
+                          <textarea
+                            className="queue-step-skill-args"
+                            data-step-field="skillArgs"
+                            data-step-index={String(index)}
+                            placeholder='{"notes":"optional context"}'
+                            value={step.skillArgs}
+                            onChange={(event) =>
+                              updateStep(step.localId, {
+                                skillArgs: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                      ) : null}
+                      {showAdvancedStepOptions ? (
+                        <label>
+                          {`Step ${index + 1} Skill Required Capabilities (optional CSV)`}
+                          <input
+                            data-step-field="skillRequiredCapabilities"
+                            data-step-index={String(index)}
+                            value={step.skillRequiredCapabilities}
+                            placeholder="docker,qdrant,unity"
+                            onChange={(event) =>
+                              updateStep(step.localId, {
+                                skillRequiredCapabilities: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                      ) : null}
+                    </>
+                  ) : null}
+
+                  {step.stepType === "preset" ? (
+                    <div
+                      className="stack queue-step-type-panel"
+                      aria-label="Step Preset"
+                    >
+                      <label>
+                        Preset
+                        <select
+                          value={step.presetKey}
+                          onChange={(event) => {
+                            updateStepPreset(step.localId, event.target.value);
+                          }}
+                        >
+                          <option value="">Select preset...</option>
+                          {templateItems.map((item) => (
+                            <option key={item.key} value={item.key}>
+                              {`${item.title} (${scopeLabel(item.scope)})`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        className="secondary"
+                        aria-disabled={isApplyingPreset || !step.presetKey}
+                        aria-busy={isApplyingPreset}
+                        title={applyPresetTooltip}
+                        disabled={isApplyingPreset || !step.presetKey}
+                        onClick={() => handleApplyStepPreset(step.localId)}
+                      >
+                        Apply
+                      </button>
+                      {stepPresetStatusText(step) ? (
+                        <p className="small">{stepPresetStatusText(step)}</p>
+                      ) : null}
+                    </div>
                   ) : null}
                 </section>
               );
@@ -6581,7 +6789,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         {taskTemplateCatalogEnabled ? (
           <section
             className="card stack"
-            data-canonical-create-section="Task Presets"
             aria-label="Task Presets"
           >
             <div className="actions">

@@ -1,22 +1,37 @@
 [
   {
-    "id": 3157340014,
+    "id": 4192954412,
+    "disposition": "addressed",
+    "rationale": "Summary review covered by the concrete fixes for per-step preset state, non-destructive Step Type switching, Tool submission blocking, and spec alignment."
+  },
+  {
+    "id": 3157632598,
+    "disposition": "addressed",
+    "rationale": "Preset selector and status state now live on each StepState, with regression coverage for independent Preset selections across multiple steps."
+  },
+  {
+    "id": 3157632604,
+    "disposition": "addressed",
+    "rationale": "Step Type changes no longer clear hidden Skill fields; submission still filters them when Step Type is not Skill, and tests verify preserved values."
+  },
+  {
+    "id": 3157632608,
+    "disposition": "addressed",
+    "rationale": "Updated SC-004 and assumptions to reflect that step-editor Preset use is canonical while the remaining Task Presets section is temporary management/advanced-input UI."
+  },
+  {
+    "id": 3157641194,
+    "disposition": "addressed",
+    "rationale": "Tool Step Type submissions now fail fast until a typed Tool is selected, preventing accidental default skill execution."
+  },
+  {
+    "id": 3157641196,
+    "disposition": "addressed",
+    "rationale": "Preset selection is scoped per step instead of using the component-level selectedPresetKey, with a regression test covering two Preset steps."
+  },
+  {
+    "id": 4192965003,
     "disposition": "not-applicable",
-    "rationale": "Verified api_service/data/task_step_templates/jira-orchestrate.yaml has no remaining structural orchestrationMode field or template reference to inputs.orchestration_mode; there is no field in this file to hardcode."
-  },
-  {
-    "id": 3157340019,
-    "disposition": "addressed",
-    "rationale": "Removed the redundant orchestrationmode entry from HIDDEN_PRESET_INPUT_KEYS after the Jira Orchestrate template input was deleted."
-  },
-  {
-    "id": 3157340024,
-    "disposition": "addressed",
-    "rationale": "Removed orchestration_mode from downstream Jira Orchestrate task inputs and updated workflow boundary tests to assert the undeclared input is not emitted."
-  },
-  {
-    "id": 4192580292,
-    "disposition": "addressed",
-    "rationale": "Addressed the actionable UI and workflow payload findings; verified the structural YAML concern does not apply to the current Jira Orchestrate template."
+    "rationale": "Informational automated review container with no separate actionable request beyond the individual review comments."
   }
 ]
