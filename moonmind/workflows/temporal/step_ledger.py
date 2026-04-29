@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
-ACTIVE_STEP_STATUSES = ("running", "reviewing", "awaiting_external", "ready")
+ACTIVE_STEP_STATUSES = ("running", "reviewing", "awaiting_external")
 TERMINAL_STEP_STATUSES = {"succeeded", "failed", "skipped", "canceled"}
 READY_DEPENDENCY_STATUSES = {"succeeded", "skipped"}
 _UNSET = object()

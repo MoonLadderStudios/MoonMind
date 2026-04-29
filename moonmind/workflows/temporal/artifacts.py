@@ -2489,6 +2489,38 @@ class TemporalArtifactActivities:
             for workflow_id, item in snapshot.items()
         }
 
+    async def execution_record_terminal_state(
+        self,
+        request: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from api_service.db.base import get_async_session_context
+        from moonmind.schemas.temporal_activity_models import (
+            ExecutionTerminalStateInput,
+        )
+        from moonmind.workflows.temporal.service import TemporalExecutionService
+
+        model = ExecutionTerminalStateInput.model_validate(request or {})
+
+        async with get_async_session_context() as session:
+            service = TemporalExecutionService(session)
+            record = await service.record_terminal_state(
+                workflow_id=model.workflow_id,
+                state=model.state,
+                close_status=model.close_status,
+                summary=model.summary,
+                error_category=model.error_category,
+            )
+
+        return {
+            "workflowId": record.workflow_id,
+            "state": getattr(getattr(record, "state", None), "value", record.state),
+            "closeStatus": getattr(
+                getattr(record, "close_status", None),
+                "value",
+                record.close_status,
+            ),
+        }
+
     async def artifact_list_for_execution(
         self,
         *,

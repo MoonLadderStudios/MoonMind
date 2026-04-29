@@ -160,6 +160,30 @@ class DependencyStatusSnapshotInput(BaseModel):
 
     workflow_ids: list[str] = Field(default_factory=list, alias="workflowIds")
 
+
+class ExecutionTerminalStateInput(BaseModel):
+    """Input parameters for execution.record_terminal_state."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    state: Literal["completed", "failed", "canceled"] = Field(..., alias="state")
+    close_status: Literal[
+        "completed",
+        "failed",
+        "canceled",
+        "terminated",
+        "timed_out",
+    ] | None = Field(None, alias="closeStatus")
+    summary: str | None = Field(None, alias="summary")
+    error_category: Literal[
+        "user_error",
+        "integration_error",
+        "execution_error",
+        "system_error",
+    ] | None = Field(None, alias="errorCategory")
+
+
 class ExternalAgentRunInput(BaseModel):
     """Public input for external provider run status/fetch/cancel activities."""
 

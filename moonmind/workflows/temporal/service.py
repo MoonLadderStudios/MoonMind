@@ -2007,6 +2007,59 @@ class TemporalExecutionService:
         await self._fan_out_dependency_resolution(record)
         return await self._sync_projection_best_effort(record)
 
+    async def record_terminal_state(
+        self,
+        *,
+        workflow_id: str,
+        state: str,
+        close_status: str | None = None,
+        summary: str | None = None,
+        error_category: str | None = None,
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        normalized_state = str(state or "").strip().lower()
+        state_by_value = {item.value: item for item in MoonMindWorkflowState}
+        target_state = state_by_value.get(normalized_state)
+        if target_state not in TERMINAL_STATES:
+            raise TemporalExecutionValidationError(
+                f"Unsupported terminal state '{state}'."
+            )
+
+        normalized_close_status = str(close_status or "").strip().lower()
+        close_status_by_value = {item.value: item for item in TemporalExecutionCloseStatus}
+        target_close_status = close_status_by_value.get(normalized_close_status)
+        if target_close_status is None:
+            target_close_status = {
+                MoonMindWorkflowState.COMPLETED: TemporalExecutionCloseStatus.COMPLETED,
+                MoonMindWorkflowState.FAILED: TemporalExecutionCloseStatus.FAILED,
+                MoonMindWorkflowState.CANCELED: TemporalExecutionCloseStatus.CANCELED,
+            }[target_state]
+
+        record = await self._require_source_execution(workflow_id)
+        if record.state in TERMINAL_STATES and record.state is not target_state:
+            raise TemporalExecutionValidationError(
+                f"Execution already terminal as {record.state.value}."
+            )
+
+        self._set_state(record, target_state, close_status=target_close_status)
+        if summary:
+            if target_state is MoonMindWorkflowState.FAILED:
+                category = str(error_category or "execution_error").strip()
+                if category not in ALLOWED_ERROR_CATEGORIES:
+                    category = "execution_error"
+                self._update_summary(
+                    record,
+                    f"{category}: {summary}",
+                    error_category=category,
+                )
+            else:
+                self._update_summary(record, summary)
+
+        await self._sync_integration_correlation_record(record)
+        await self._session.commit()
+        await self._session.refresh(record)
+        await self._fan_out_dependency_resolution(record)
+        return await self._sync_projection_best_effort(record)
+
     async def mark_execution_planning(
         self,
         *,
