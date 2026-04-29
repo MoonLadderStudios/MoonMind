@@ -77,11 +77,11 @@ Classification: single-story runtime feature request. Existing artifact inspecti
 
 **Acceptance Scenarios**:
 
-1. **Given** a task submission contains a Tool step with `type: "tool"` and a tool sub-payload, **When** the task payload is validated and materialized, **Then** the step remains classified as a Tool step and maps to a typed tool plan node.
-2. **Given** a task submission contains a Skill step with `type: "skill"` and a skill sub-payload, **When** the task payload is validated and materialized, **Then** the step remains classified as a Skill step and maps to an agent-facing skill plan node.
-3. **Given** a task submission contains an unresolved Preset step with `type: "preset"`, **When** executable submission validation runs, **Then** the submission is rejected before runtime materialization.
-4. **Given** preset-expanded executable steps include source provenance metadata, **When** the task payload is validated and materialized, **Then** provenance is preserved for audit and reconstruction but is not required to choose the runtime plan node.
-5. **Given** a submitted step uses Temporal Activity terminology as its Step Type, **When** executable submission validation runs, **Then** the submission is rejected and no Activity Step Type enters the runtime plan.
+1. **SCN-001 - Tool step materialization**: **Given** a task submission contains a Tool step with `type: "tool"` and a tool sub-payload, **When** the task payload is validated and materialized, **Then** the step remains classified as a Tool step and maps to a typed tool plan node.
+2. **SCN-002 - Skill step materialization**: **Given** a task submission contains a Skill step with `type: "skill"` and a skill sub-payload, **When** the task payload is validated and materialized, **Then** the step remains classified as a Skill step and maps to an agent-facing skill plan node.
+3. **SCN-003 - Preset rejection**: **Given** a task submission contains an unresolved Preset step with `type: "preset"`, **When** executable submission validation runs, **Then** the submission is rejected before runtime materialization.
+4. **SCN-004 - Provenance preservation**: **Given** preset-expanded executable steps include source provenance metadata, **When** the task payload is validated and materialized, **Then** provenance is preserved for audit and reconstruction but is not required to choose the runtime plan node.
+5. **SCN-005 - Activity label rejection**: **Given** a submitted step uses Temporal Activity terminology as its Step Type, **When** executable submission validation runs, **Then** the submission is rejected and no Activity Step Type enters the runtime plan.
 
 ### Edge Cases
 

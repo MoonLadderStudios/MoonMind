@@ -35,7 +35,7 @@ Task submissions must preserve explicit Step Type intent for executable Tool and
 **Primary Dependencies**: Pydantic v2, Temporal Python SDK runtime materializer, FastAPI task submission router, React/Vitest test harness  
 **Storage**: No new persistent storage; uses existing task payloads and artifact-backed execution inputs  
 **Unit Testing**: `./tools/test_unit.sh`; focused Python pytest and Vitest commands during iteration
-**Integration Testing**: Hermetic integration not required for this narrow contract story; runtime materialization covered by existing Python unit tests  
+**Integration Testing**: Hermetic `integration_ci` coverage is not required for this narrow payload-contract story; integration-boundary evidence comes from Create-page submitted payload tests plus worker runtime materialization tests  
 **Target Platform**: MoonMind API service, Temporal worker runtime, Mission Control Create page  
 **Project Type**: Web service plus frontend application  
 **Performance Goals**: Validation remains synchronous and bounded to submitted step count; no additional network calls  

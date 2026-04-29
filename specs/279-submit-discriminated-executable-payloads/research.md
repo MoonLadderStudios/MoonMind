@@ -26,7 +26,7 @@ Decision: Preserve `source` and existing `presetProvenance` metadata in step inp
 
 Rationale: The source design treats provenance as audit and reconstruction metadata, not hidden runtime work.
 
-## Decision 5: Focus integration evidence on materializer unit tests
+## Decision 5: Focus integration evidence on deterministic boundary tests
 
 Decision: Use Python unit tests for payload validation and materialization plus Vitest for browser submission payloads. Do not add compose-backed integration tests for this story.
 
