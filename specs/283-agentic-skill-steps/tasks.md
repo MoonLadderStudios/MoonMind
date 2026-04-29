@@ -3,7 +3,7 @@
 **Input**: Design documents from `/specs/283-agentic-skill-steps/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
-**Tests**: Unit tests and integration tests are REQUIRED. This story reuses existing Skill production behavior and adds MM-564-focused regression coverage.
+**Tests**: Unit tests and integration tests are REQUIRED. Red-first coverage is required before production edits; for this story, focused regression tests were added or confirmed against existing production behavior, and no production edit was required after the tests demonstrated the current implementation already satisfied MM-564.
 
 **Source Traceability**: MM-564; FR-001 through FR-007; SC-001 through SC-004; DESIGN-REQ-005 and DESIGN-REQ-015.
 
@@ -47,12 +47,15 @@
 
 **Traceability**: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, SC-001, SC-002, SC-003, SC-004, DESIGN-REQ-005, DESIGN-REQ-015
 
-### Tests
+### Red-First Unit Tests
 
-- [X] T007 [P] Add focused MM-564 Create-page regression in `frontend/src/entrypoints/task-create.test.tsx` for submitted Skill selector, args, capabilities, and Skill classification (FR-001, FR-002, FR-004, FR-007, SC-001).
-- [X] T008 [P] Confirm existing Create-page invalid Skill Args coverage blocks non-object or malformed JSON before submission (FR-003, SC-002).
-- [X] T009 [P] Confirm existing task contract coverage accepts explicit Skill discriminators and rejects non-skill Tool payloads on Skill steps in `tests/unit/workflows/tasks/test_task_contract.py` (FR-005, FR-006, SC-003).
-- [X] T010 [P] Confirm existing task-template service coverage preserves Skill context/permissions/autonomy metadata in `tests/unit/api/test_task_step_templates_service.py` (FR-004, DESIGN-REQ-005).
+- [X] T007 [P] Confirm unit coverage accepts explicit Skill discriminators and rejects non-skill Tool payloads on Skill steps in `tests/unit/workflows/tasks/test_task_contract.py` before considering production contract edits (FR-005, FR-006, SC-003).
+- [X] T008 [P] Confirm unit coverage preserves Skill context/permissions/autonomy metadata in `tests/unit/api/test_task_step_templates_service.py` before considering production template edits (FR-004, DESIGN-REQ-005).
+
+### Red-First Integration Tests
+
+- [X] T009 [P] Add focused MM-564 Create-page regression in `frontend/src/entrypoints/task-create.test.tsx` for submitted Skill selector, args, capabilities, and Skill classification before considering Create-page production edits (FR-001, FR-002, FR-004, FR-007, SC-001).
+- [X] T010 [P] Confirm existing Create-page invalid Skill Args coverage blocks non-object or malformed JSON before submission before considering validation edits (FR-003, SC-002).
 
 ### Implementation
 
@@ -65,4 +68,5 @@
 
 - [X] T013 Run focused backend unit tests: `pytest tests/unit/workflows/tasks/test_task_contract.py tests/unit/api/test_task_step_templates_service.py -q`.
 - [X] T014 Run setup-aware Create-page/full unit verification: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`.
-- [X] T015 Write final verification report in `specs/283-agentic-skill-steps/verification.md`.
+- [X] T015 Story validation: verify MM-564 remains a single-story runtime feature, all FR/SC/DESIGN mappings are covered, and no production change is required beyond MM-564 regression evidence.
+- [X] T016 Run final `/moonspec-verify` work and write final verification report in `specs/283-agentic-skill-steps/verification.md`.
