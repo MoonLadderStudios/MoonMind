@@ -4473,6 +4473,8 @@ class TemporalAgentRuntimeActivities:
             )
             record = self._run_store.load(run_id)
             if record is not None:
+                if record.workspace_path:
+                    self._normalize_workspace_git_alternates(record.workspace_path)
                 result = self._maybe_enrich_gemini_failure_result(
                     result=result,
                     record=record,
@@ -4523,8 +4525,23 @@ class TemporalAgentRuntimeActivities:
                     record=record,
                     result=result,
                 )
-                if operator_summary:
-                    meta["operator_summary"] = operator_summary
+                assistant_text = None
+                if record.status == "completed" and result.failure_class is None:
+                    session_metadata = await self._managed_session_summary_metadata(record)
+                    if session_metadata:
+                        for key in (
+                            "lastAssistantText",
+                            "lastAssistantTextTruncated",
+                            "lastAssistantTextOriginalChars",
+                        ):
+                            if key in session_metadata:
+                                meta.setdefault(key, session_metadata[key])
+                        assistant_text = self._assistant_text_from_session_metadata(
+                            session_metadata
+                        )
+                final_operator_summary = operator_summary or assistant_text
+                if final_operator_summary:
+                    meta["operator_summary"] = final_operator_summary
 
             # Push the agent's work branch if publish_mode requires it and the
             # agent completed without failure.
@@ -4566,6 +4583,60 @@ class TemporalAgentRuntimeActivities:
         finally:
             await self._cleanup_managed_run_publish_support_best_effort(run_id)
 
+    async def _managed_session_summary_metadata(
+        self,
+        record: ManagedRunRecord,
+    ) -> Mapping[str, Any]:
+        if self._session_controller is None:
+            return {}
+        if (
+            not record.session_id
+            or record.session_epoch is None
+            or not record.container_id
+            or not record.thread_id
+        ):
+            return {}
+
+        try:
+            summary = await self._session_controller.fetch_session_summary(
+                FetchCodexManagedSessionSummaryRequest(
+                    sessionId=record.session_id,
+                    sessionEpoch=record.session_epoch,
+                    containerId=record.container_id,
+                    threadId=record.thread_id,
+                )
+            )
+            summary_model = (
+                summary
+                if isinstance(summary, CodexManagedSessionSummary)
+                else CodexManagedSessionSummary.model_validate(summary)
+            )
+            return (
+                summary_model.metadata
+                if isinstance(summary_model.metadata, Mapping)
+                else {}
+            )
+        except Exception:
+            logger.debug(
+                "Failed to fetch managed-session summary metadata for run %s",
+                record.run_id,
+                exc_info=True,
+            )
+            return {}
+
+    def _assistant_text_from_session_metadata(
+        self,
+        metadata: Mapping[str, Any],
+    ) -> str | None:
+        for key in ("assistantText", "lastAssistantText"):
+            value = metadata.get(key)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            summary = self._sanitize_operator_summary(value)
+            if summary and not is_generic_completion_summary(summary):
+                return summary
+        return None
+
     async def _collect_operator_summary(
         self,
         *,
@@ -4577,7 +4648,7 @@ class TemporalAgentRuntimeActivities:
             return stdout_summary
 
         summary = self._sanitize_operator_summary(result.summary)
-        if summary and summary != "Completed with status completed":
+        if summary and not is_generic_completion_summary(summary):
             return summary
         return None
 
@@ -4959,6 +5030,120 @@ class TemporalAgentRuntimeActivities:
         return False
 
     @staticmethod
+    def _git_alternate_candidate(objects_dir: Path, path_text: str) -> Path:
+        alternate_path = Path(path_text)
+        if alternate_path.is_absolute():
+            return alternate_path
+        return objects_dir / alternate_path
+
+    @staticmethod
+    def _workspace_local_alternate_text(
+        *,
+        git_dir: Path,
+        objects_dir: Path,
+        candidate: Path,
+    ) -> str:
+        resolved_git_dir = git_dir.resolve()
+        resolved_candidate = candidate.resolve()
+        if resolved_candidate.is_relative_to(resolved_git_dir):
+            return os.path.relpath(resolved_candidate, objects_dir.resolve())
+        return str(candidate)
+
+    @staticmethod
+    def _normalize_workspace_git_alternates(workspace: str) -> None:
+        """Repair stale agent-written Git alternates before publishing.
+
+        Managed run ids contain ``:`` characters, and Git treats ``:`` as an
+        alternate object path separator. Workspace-local alternates therefore
+        need to be relative paths such as ``../objects_app``.
+        """
+        git_dir = Path(workspace) / ".git"
+        objects_dir = git_dir / "objects"
+        alternates_path = objects_dir / "info" / "alternates"
+        if not git_dir.is_dir() or not alternates_path.is_file():
+            return
+
+        try:
+            raw_lines = alternates_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            logger.warning(
+                "Unable to read Git alternates for workspace %s",
+                workspace,
+                exc_info=True,
+            )
+            return
+
+        normalized_lines: list[str] = []
+        changed = False
+        for raw_line in raw_lines:
+            path_text = raw_line.strip()
+            if not path_text:
+                changed = True
+                continue
+
+            candidate = TemporalAgentRuntimeActivities._git_alternate_candidate(
+                objects_dir,
+                path_text,
+            )
+            if candidate.is_dir():
+                normalized_text = (
+                    TemporalAgentRuntimeActivities._workspace_local_alternate_text(
+                        git_dir=git_dir,
+                        objects_dir=objects_dir,
+                        candidate=candidate,
+                    )
+                )
+                if normalized_text == ".":
+                    changed = True
+                    continue
+                normalized_lines.append(normalized_text)
+                changed = changed or normalized_text != path_text
+                continue
+
+            replacement_name = Path(path_text).name
+            replacement = git_dir / replacement_name
+            if (
+                replacement_name.startswith("objects")
+                and replacement.is_dir()
+                and replacement.resolve() != objects_dir.resolve()
+            ):
+                normalized_lines.append(
+                    TemporalAgentRuntimeActivities._workspace_local_alternate_text(
+                        git_dir=git_dir,
+                        objects_dir=objects_dir,
+                        candidate=replacement,
+                    )
+                )
+                changed = True
+                continue
+
+            logger.warning(
+                "Dropping missing Git alternate for workspace %s: %s",
+                workspace,
+                path_text,
+            )
+            changed = True
+
+        unique_normalized = list(dict.fromkeys(normalized_lines))
+        if not changed and len(unique_normalized) == len(normalized_lines):
+            return
+
+        try:
+            if unique_normalized:
+                alternates_path.write_text(
+                    "\n".join(unique_normalized) + "\n",
+                    encoding="utf-8",
+                )
+            else:
+                alternates_path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning(
+                "Unable to update Git alternates for workspace %s",
+                workspace,
+                exc_info=True,
+            )
+
+    @staticmethod
     def _workspace_command_env(workspace: str) -> dict[str, str]:
         """Build a subprocess env that exposes workspace-local command shims."""
         env = dict(os.environ)
@@ -5232,6 +5417,7 @@ class TemporalAgentRuntimeActivities:
 
         workspace = record.workspace_path
         try:
+            self._normalize_workspace_git_alternates(workspace)
             command_env = self._workspace_command_env(workspace)
             branch_proc = await asyncio.create_subprocess_exec(
                 *self._workspace_git_command(

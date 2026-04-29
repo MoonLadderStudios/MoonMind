@@ -2040,6 +2040,71 @@ async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
             body = path.read_bytes()
             assert body.decode("utf-8") == "# Integration test report\n\nAll tests passed.\n"
 
+async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_report_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(artifact_service=service)
+
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:node-1",
+                    workflow_run_id="child-run-1",
+                ),
+            )
+
+            await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Completed with status completed",
+                    metadata={
+                        "lastAssistantText": (
+                            "# Docker Compose Update System Report\n\n"
+                            "The implementation is missing report handoff coverage."
+                        ),
+                        "moonmind": {
+                            "reportOutput": {
+                                "enabled": True,
+                                "required": True,
+                                "reportType": "agent_run_report",
+                                "executionRef": {
+                                    "namespace": "default",
+                                    "workflow_id": "parent-wf",
+                                    "run_id": "parent-run-1",
+                                },
+                            }
+                        },
+                    },
+                )
+            )
+
+            reports = await service.list_for_execution(
+                namespace="default",
+                workflow_id="parent-wf",
+                run_id="parent-run-1",
+                principal="system:agent_runtime",
+                link_type="report.primary",
+                latest_only=True,
+            )
+
+            assert len(reports) == 1
+            _artifact, path = await service.read_path(
+                artifact_id=reports[0].artifact_id,
+                principal="system:agent_runtime",
+            )
+            rendered = path.read_text(encoding="utf-8")
+            assert rendered.startswith("# Docker Compose Update System Report")
+            assert "missing report handoff coverage" in rendered
+            assert "Completed with status completed" not in rendered
+
 async def test_agent_runtime_publish_artifacts_fails_required_report_on_publish_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -133,6 +133,126 @@ class TestPushWorkspaceBranch:
         result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "skipped"
 
+    def test_normalize_workspace_git_alternates_rewrites_missing_tmp_path_to_relative_sibling(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "mm:run-1" / "repo"
+        alternates_path = workspace / ".git" / "objects" / "info" / "alternates"
+        local_alternate = workspace / ".git" / "objects_app"
+        alternates_path.parent.mkdir(parents=True)
+        local_alternate.mkdir(parents=True)
+        alternates_path.write_text(
+            "/tmp/tacticsrepo/.git/objects_app\n",
+            encoding="utf-8",
+        )
+
+        TemporalAgentRuntimeActivities._normalize_workspace_git_alternates(
+            str(workspace)
+        )
+
+        assert alternates_path.read_text(encoding="utf-8") == "../objects_app\n"
+
+    def test_normalize_workspace_git_alternates_rewrites_workspace_absolute_path_with_colon(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "mm:run-1" / "repo"
+        alternates_path = workspace / ".git" / "objects" / "info" / "alternates"
+        local_alternate = workspace / ".git" / "objects_app"
+        alternates_path.parent.mkdir(parents=True)
+        local_alternate.mkdir(parents=True)
+        alternates_path.write_text(f"{local_alternate}\n", encoding="utf-8")
+
+        TemporalAgentRuntimeActivities._normalize_workspace_git_alternates(
+            str(workspace)
+        )
+
+        assert alternates_path.read_text(encoding="utf-8") == "../objects_app\n"
+
+    def test_normalize_workspace_git_alternates_removes_only_missing_entries(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "run-1" / "repo"
+        alternates_path = workspace / ".git" / "objects" / "info" / "alternates"
+        alternates_path.parent.mkdir(parents=True)
+        alternates_path.write_text(
+            "/tmp/missing-object-store\n",
+            encoding="utf-8",
+        )
+
+        TemporalAgentRuntimeActivities._normalize_workspace_git_alternates(
+            str(workspace)
+        )
+
+        assert not alternates_path.exists()
+
+    def test_normalize_workspace_git_alternates_skips_self_objects_directory(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "run-1" / "repo"
+        objects_dir = workspace / ".git" / "objects"
+        alternates_path = objects_dir / "info" / "alternates"
+        alternates_path.parent.mkdir(parents=True)
+        alternates_path.write_text(f"{objects_dir}\n.\n", encoding="utf-8")
+
+        TemporalAgentRuntimeActivities._normalize_workspace_git_alternates(
+            str(workspace)
+        )
+
+        assert not alternates_path.exists()
+
+    def test_normalize_workspace_git_alternates_deduplicates_entries(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "run-1" / "repo"
+        alternates_path = workspace / ".git" / "objects" / "info" / "alternates"
+        local_alternate = workspace / ".git" / "objects_app"
+        alternates_path.parent.mkdir(parents=True)
+        local_alternate.mkdir(parents=True)
+        alternates_path.write_text(
+            "../objects_app\n../objects_app\n",
+            encoding="utf-8",
+        )
+
+        TemporalAgentRuntimeActivities._normalize_workspace_git_alternates(
+            str(workspace)
+        )
+
+        assert alternates_path.read_text(encoding="utf-8") == "../objects_app\n"
+
+    @pytest.mark.asyncio
+    async def test_push_normalizes_git_alternates_before_branch_detection(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "mm:run-1" / "repo"
+        alternates_path = workspace / ".git" / "objects" / "info" / "alternates"
+        local_alternate = workspace / ".git" / "objects_app"
+        alternates_path.parent.mkdir(parents=True)
+        local_alternate.mkdir(parents=True)
+        alternates_path.write_text(
+            "/tmp/tacticsrepo/.git/objects_app\n",
+            encoding="utf-8",
+        )
+        store = _make_mock_store(workspace_path=str(workspace))
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+
+        async def _mock_exec(*args, **kwargs):
+            assert alternates_path.read_text(encoding="utf-8") == "../objects_app\n"
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(b"main\n", b""))
+            proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "protected_branch"
+
     @pytest.mark.asyncio
     async def test_push_protected_branch_main(self):
         store = _make_mock_store()
@@ -1151,6 +1271,9 @@ class TestFetchResultPushIntegration:
                 activities, "_push_workspace_branch",
             ) as mock_push,
             patch.object(
+                activities, "_normalize_workspace_git_alternates",
+            ) as mock_normalize,
+            patch.object(
                 activities, "_detect_pr_url_from_workspace",
                 return_value=None,
             ),
@@ -1166,6 +1289,7 @@ class TestFetchResultPushIntegration:
             )
 
         mock_push.assert_not_called()
+        mock_normalize.assert_called_once_with("/work/agent_jobs/run-1/repo")
 
     @pytest.mark.asyncio
     async def test_fetch_result_skips_push_on_failure(self):
