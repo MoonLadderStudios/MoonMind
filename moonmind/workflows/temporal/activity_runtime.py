@@ -4525,8 +4525,23 @@ class TemporalAgentRuntimeActivities:
                     record=record,
                     result=result,
                 )
-                if operator_summary:
-                    meta["operator_summary"] = operator_summary
+                assistant_text = None
+                if record.status == "completed" and result.failure_class is None:
+                    session_metadata = await self._managed_session_summary_metadata(record)
+                    if session_metadata:
+                        for key in (
+                            "lastAssistantText",
+                            "lastAssistantTextTruncated",
+                            "lastAssistantTextOriginalChars",
+                        ):
+                            if key in session_metadata:
+                                meta.setdefault(key, session_metadata[key])
+                        assistant_text = self._assistant_text_from_session_metadata(
+                            session_metadata
+                        )
+                final_operator_summary = operator_summary or assistant_text
+                if final_operator_summary:
+                    meta["operator_summary"] = final_operator_summary
 
             # Push the agent's work branch if publish_mode requires it and the
             # agent completed without failure.
@@ -4568,6 +4583,60 @@ class TemporalAgentRuntimeActivities:
         finally:
             await self._cleanup_managed_run_publish_support_best_effort(run_id)
 
+    async def _managed_session_summary_metadata(
+        self,
+        record: ManagedRunRecord,
+    ) -> Mapping[str, Any]:
+        if self._session_controller is None:
+            return {}
+        if (
+            not record.session_id
+            or record.session_epoch is None
+            or not record.container_id
+            or not record.thread_id
+        ):
+            return {}
+
+        try:
+            summary = await self._session_controller.fetch_session_summary(
+                FetchCodexManagedSessionSummaryRequest(
+                    sessionId=record.session_id,
+                    sessionEpoch=record.session_epoch,
+                    containerId=record.container_id,
+                    threadId=record.thread_id,
+                )
+            )
+            summary_model = (
+                summary
+                if isinstance(summary, CodexManagedSessionSummary)
+                else CodexManagedSessionSummary.model_validate(summary)
+            )
+            return (
+                summary_model.metadata
+                if isinstance(summary_model.metadata, Mapping)
+                else {}
+            )
+        except Exception:
+            logger.debug(
+                "Failed to fetch managed-session summary metadata for run %s",
+                record.run_id,
+                exc_info=True,
+            )
+            return {}
+
+    def _assistant_text_from_session_metadata(
+        self,
+        metadata: Mapping[str, Any],
+    ) -> str | None:
+        for key in ("assistantText", "lastAssistantText"):
+            value = metadata.get(key)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            summary = self._sanitize_operator_summary(value)
+            if summary and not is_generic_completion_summary(summary):
+                return summary
+        return None
+
     async def _collect_operator_summary(
         self,
         *,
@@ -4579,7 +4648,7 @@ class TemporalAgentRuntimeActivities:
             return stdout_summary
 
         summary = self._sanitize_operator_summary(result.summary)
-        if summary and summary != "Completed with status completed":
+        if summary and not is_generic_completion_summary(summary):
             return summary
         return None
 
