@@ -4552,7 +4552,14 @@ describe("Task Create Entrypoint", () => {
       );
     });
 
-    const request = latestCreateRequest();
+    const request = latestCreateRequest() as {
+      payload: {
+        task: {
+          tool: Record<string, unknown>;
+          skill: Record<string, unknown>;
+        };
+      };
+    };
     expect(request.payload.task.tool).toEqual({
       type: "skill",
       name: "moonspec-orchestrate",
