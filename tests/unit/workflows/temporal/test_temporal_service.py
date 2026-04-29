@@ -1417,6 +1417,104 @@ async def test_mark_execution_succeeded_fans_out_dependency_resolution_signals(
         assert payload["failureCategory"] is None
 
 @pytest.mark.asyncio
+async def test_record_terminal_state_fans_out_dependency_resolution_signals(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        prerequisite = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Prerequisite",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        dependent = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Dependent",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            idempotency_key=None,
+        )
+
+        mock_client_adapter.signal_workflow.reset_mock()
+        await service.record_terminal_state(
+            workflow_id=prerequisite.workflow_id,
+            state="completed",
+            close_status="completed",
+            summary="Prerequisite completed from workflow terminal path.",
+        )
+
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, prerequisite.workflow_id
+        )
+        assert source is not None
+        assert source.state is MoonMindWorkflowState.COMPLETED
+        assert source.close_status is TemporalExecutionCloseStatus.COMPLETED
+        mock_client_adapter.signal_workflow.assert_awaited_once()
+        assert mock_client_adapter.signal_workflow.await_args.args[0] == (
+            dependent.workflow_id
+        )
+        assert mock_client_adapter.signal_workflow.await_args.args[1] == (
+            "DependencyResolved"
+        )
+        payload = mock_client_adapter.signal_workflow.await_args.args[2]
+        assert payload["prerequisiteWorkflowId"] == prerequisite.workflow_id
+        assert payload["terminalState"] == "completed"
+        assert payload["closeStatus"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_state_preserves_existing_terminal_summary(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Cancelable run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        await service.cancel_execution(
+            workflow_id=created.workflow_id,
+            reason="operator requested cancellation",
+            graceful=True,
+        )
+
+        await service.record_terminal_state(
+            workflow_id=created.workflow_id,
+            state="canceled",
+            close_status="canceled",
+            summary="Execution canceled.",
+        )
+
+        canceled = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert canceled is not None
+        assert canceled.state is MoonMindWorkflowState.CANCELED
+        assert canceled.close_status is TemporalExecutionCloseStatus.CANCELED
+        assert canceled.memo["summary"] == "operator requested cancellation"
+
+
+@pytest.mark.asyncio
 async def test_dependency_status_snapshot_repairs_stale_terminal_prerequisite(
     tmp_path, mock_client_adapter
 ):

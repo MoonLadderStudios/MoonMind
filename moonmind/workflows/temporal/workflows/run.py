@@ -27,6 +27,7 @@ with workflow.unsafe.imports_passed_through():
         ArtifactReadInput,
         ArtifactWriteCompleteInput,
         DependencyStatusSnapshotInput,
+        ExecutionTerminalStateInput,
         PlanGenerateInput,
     )
     from moonmind.workflows.temporal.jules_bundle import (
@@ -177,6 +178,7 @@ NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
+RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
@@ -1417,6 +1419,13 @@ class MoonMindRunWorkflow:
             await self._run_finalizing_stage(
                 parameters=parameters, status="canceled", error=None
             )
+            self._close_status = CLOSE_STATUS_CANCELED
+            self._set_state(STATE_CANCELED, summary="Execution canceled.")
+            await self._record_terminal_state(
+                state=STATE_CANCELED,
+                close_status=CLOSE_STATUS_CANCELED,
+                summary="Execution canceled.",
+            )
             return {"status": "canceled"}
 
         self._set_state(STATE_INITIALIZING, summary="Execution initialized.")
@@ -1428,6 +1437,13 @@ class MoonMindRunWorkflow:
                     await self._run_finalizing_stage(
                         parameters=parameters, status="canceled", error=None
                     )
+                    self._close_status = CLOSE_STATUS_CANCELED
+                    self._set_state(STATE_CANCELED, summary="Execution canceled.")
+                    await self._record_terminal_state(
+                        state=STATE_CANCELED,
+                        close_status=CLOSE_STATUS_CANCELED,
+                        summary="Execution canceled.",
+                    )
                     return {"status": "canceled"}
         except ValueError as exc:
             await self._run_finalizing_stage(
@@ -1435,6 +1451,12 @@ class MoonMindRunWorkflow:
             )
             self._close_status = CLOSE_STATUS_FAILED
             self._set_state(STATE_FAILED, summary=str(exc))
+            await self._record_terminal_state(
+                state=STATE_FAILED,
+                close_status=CLOSE_STATUS_FAILED,
+                summary=str(exc),
+                error_category="execution_error",
+            )
             raise exceptions.ApplicationError(
                 str(exc),
                 non_retryable=True,
@@ -1446,6 +1468,13 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             await self._run_finalizing_stage(
                 parameters=parameters, status="canceled", error=None
+            )
+            self._close_status = CLOSE_STATUS_CANCELED
+            self._set_state(STATE_CANCELED, summary="Execution canceled.")
+            await self._record_terminal_state(
+                state=STATE_CANCELED,
+                close_status=CLOSE_STATUS_CANCELED,
+                summary="Execution canceled.",
             )
             return {"status": "canceled"}
 
@@ -1465,6 +1494,12 @@ class MoonMindRunWorkflow:
             )
             self._close_status = CLOSE_STATUS_FAILED
             self._set_state(STATE_FAILED, summary=str(exc))
+            await self._record_terminal_state(
+                state=STATE_FAILED,
+                close_status=CLOSE_STATUS_FAILED,
+                summary=str(exc),
+                error_category="execution_error",
+            )
             raise exceptions.ApplicationError(
                 str(exc),
                 non_retryable=True,
@@ -1473,11 +1508,26 @@ class MoonMindRunWorkflow:
             await self._run_finalizing_stage(
                 parameters=parameters, status="failed", error=str(exc)
             )
+            self._close_status = CLOSE_STATUS_FAILED
+            self._set_state(STATE_FAILED, summary=str(exc))
+            await self._record_terminal_state(
+                state=STATE_FAILED,
+                close_status=CLOSE_STATUS_FAILED,
+                summary=str(exc),
+                error_category="execution_error",
+            )
             raise
 
         if self._cancel_requested:
             await self._run_finalizing_stage(
                 parameters=parameters, status="canceled", error=None
+            )
+            self._close_status = CLOSE_STATUS_CANCELED
+            self._set_state(STATE_CANCELED, summary="Execution canceled.")
+            await self._record_terminal_state(
+                state=STATE_CANCELED,
+                close_status=CLOSE_STATUS_CANCELED,
+                summary="Execution canceled.",
             )
             return {"status": "canceled"}
 
@@ -1508,6 +1558,12 @@ class MoonMindRunWorkflow:
         if publish_failure:
             self._close_status = CLOSE_STATUS_FAILED
             self._set_state(STATE_FAILED, summary=output_message)
+            await self._record_terminal_state(
+                state=STATE_FAILED,
+                close_status=CLOSE_STATUS_FAILED,
+                summary=output_message,
+                error_category="execution_error",
+            )
             raise exceptions.ApplicationError(
                 output_message,
                 non_retryable=True,
@@ -1515,6 +1571,11 @@ class MoonMindRunWorkflow:
 
         self._close_status = CLOSE_STATUS_COMPLETED
         self._set_state(STATE_COMPLETED, summary=output_message)
+        await self._record_terminal_state(
+            state=STATE_COMPLETED,
+            close_status=CLOSE_STATUS_COMPLETED,
+            summary=output_message,
+        )
 
         output: RunWorkflowOutput = {
             "status": output_status,
@@ -4938,6 +4999,56 @@ class MoonMindRunWorkflow:
             self._summary_ref = resolved_artifact_id
         except Exception as exc:
             self._get_logger().warning(f"Failed to generate finish summary: {exc}")
+
+    async def _record_terminal_state(
+        self,
+        *,
+        state: str,
+        close_status: str,
+        summary: str | None,
+        error_category: str | None = None,
+    ) -> None:
+        if not workflow.patched(RUN_TERMINAL_STATE_ACTIVITY_PATCH):
+            return
+
+        activity_task: asyncio.Task[Any] | None = None
+        try:
+            terminal_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                "execution.record_terminal_state"
+            )
+            activity_task = asyncio.create_task(
+                execute_typed_activity(
+                    "execution.record_terminal_state",
+                    ExecutionTerminalStateInput(
+                        workflowId=workflow.info().workflow_id,
+                        state=state,
+                        closeStatus=close_status,
+                        summary=summary,
+                        errorCategory=error_category,
+                    ),
+                    cancellation_type=ActivityCancellationType.ABANDON,
+                    **self._execute_kwargs_for_route(terminal_route),
+                )
+            )
+            await asyncio.shield(activity_task)
+        except (CancelledError, asyncio.CancelledError):
+            self._get_logger().warning(
+                "Cancellation received while recording terminal execution state; "
+                "waiting for shielded activity to finish."
+            )
+            try:
+                if activity_task is not None:
+                    await activity_task
+            except Exception as exc:
+                self._get_logger().warning(
+                    "Failed to record terminal execution state after cancellation: %s",
+                    exc,
+                )
+            raise
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to record terminal execution state: %s", exc
+            )
 
     def _set_state(self, state: str, summary: Optional[str] = None) -> None:
 

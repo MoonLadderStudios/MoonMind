@@ -8,6 +8,9 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from temporalio import workflow
+from temporalio.workflow import ActivityCancellationType
+from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_TASK_QUEUE
+from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import (
     DEPENDENCY_RECONCILE_INTERVAL,
     DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
@@ -359,6 +362,79 @@ def test_update_inputs_extracts_clarification_message_from_parameters_patch():
     )
 
     assert message == "Use the Workers page copy for now."
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+    captured = {}
+
+    async def fake_execute_typed_activity(activity_type, payload, **kwargs):
+        captured["activity_type"] = activity_type
+        captured["payload"] = payload.model_dump(by_alias=True)
+        captured["kwargs"] = kwargs
+        return {
+            "workflowId": "wf-terminal",
+            "state": "completed",
+            "closeStatus": "completed",
+        }
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-terminal",
+            "run_id": "run-terminal",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    await workflow_instance._record_terminal_state(
+        state="completed",
+        close_status="completed",
+        summary="Workflow completed successfully",
+    )
+
+    assert captured["activity_type"] == "execution.record_terminal_state"
+    assert captured["payload"] == {
+        "workflowId": "wf-terminal",
+        "state": "completed",
+        "closeStatus": "completed",
+        "summary": "Workflow completed successfully",
+        "errorCategory": None,
+    }
+    assert captured["kwargs"]["task_queue"] == ARTIFACTS_TASK_QUEUE
+    assert captured["kwargs"]["cancellation_type"] == ActivityCancellationType.ABANDON
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_state_skips_activity_without_patch(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+
+    async def fake_execute_typed_activity(activity_type, payload, **kwargs):
+        raise AssertionError("terminal state activity should be patch-gated")
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    await workflow_instance._record_terminal_state(
+        state="completed",
+        close_status="completed",
+        summary="Workflow completed successfully",
+    )
+
 
 @pytest.mark.asyncio
 async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):

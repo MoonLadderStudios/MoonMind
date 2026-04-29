@@ -143,6 +143,30 @@ def test_progress_summary_prefers_active_step_title_and_counts_statuses() -> Non
         "updatedAt": updated_at.isoformat(),
     }
 
+def test_progress_summary_does_not_treat_ready_step_as_current() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 6, tzinfo=UTC)
+    progress = build_progress_summary(
+        [
+            {
+                "logicalStepId": "step-1",
+                "status": "ready",
+                "title": "Move Jira issue to In Progress",
+                "updatedAt": updated_at.isoformat(),
+            },
+            {
+                "logicalStepId": "step-2",
+                "status": "pending",
+                "title": "Run implementation",
+                "updatedAt": updated_at.isoformat(),
+            },
+        ],
+        updated_at=updated_at,
+    )
+
+    assert progress["ready"] == 1
+    assert progress["pending"] == 1
+    assert progress["currentStepTitle"] is None
+
 def test_contract_models_accept_representative_rows_and_progress() -> None:
     updated_at = datetime(2026, 4, 7, 12, 10, tzinfo=UTC)
 

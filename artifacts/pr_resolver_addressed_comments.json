@@ -1,32 +1,32 @@
 [
   {
-    "id": 4346742026,
+    "id": 4346976767,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier quota notice; no code feedback to address."
+    "rationale": "Qodo account free-tier notice; no code action required."
   },
   {
-    "id": 3163532745,
-    "disposition": "not-applicable",
-    "rationale": "The suggested simplification no longer applies because skill selection intentionally falls back from metadata to canonical payload contract fields."
-  },
-  {
-    "id": 4199978654,
-    "disposition": "not-applicable",
-    "rationale": "Gemini review summary; its only concrete suggestion is tracked by review comment 3163532745."
-  },
-  {
-    "id": 3163550230,
+    "id": 3163732225,
     "disposition": "addressed",
-    "rationale": "Deferred action parsing until after top-level and nested terminal fields are checked, and added regression coverage for non-terminal action plus nested final status."
+    "rationale": "Shielded the terminal-state activity, used ABANDON cancellation policy, and waits for the shielded activity when cancellation is received."
   },
   {
-    "id": 4199999267,
+    "id": 4200206564,
     "disposition": "not-applicable",
-    "rationale": "Codex review body wrapper; concrete actionable feedback is tracked by review comment 3163550230."
+    "rationale": "Review summary; its actionable shielding feedback is tracked and addressed by review comment 3163732225."
   },
   {
-    "id": 3163616884,
+    "id": 3163747010,
     "disposition": "addressed",
-    "rationale": "Stored the nested final status in final_status before conditional return, so the final action fallback is reachable."
+    "rationale": "Added RUN_TERMINAL_STATE_ACTIVITY_PATCH and skipped the new activity on histories where workflow.patched returns false."
+  },
+  {
+    "id": 3163747015,
+    "disposition": "addressed",
+    "rationale": "Changed record_terminal_state to preserve existing same-state terminal summaries while still fanning out dependency resolution."
+  },
+  {
+    "id": 4200225292,
+    "disposition": "not-applicable",
+    "rationale": "Codex review wrapper comment; no standalone actionable request beyond the inline findings."
   }
 ]

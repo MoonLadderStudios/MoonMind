@@ -1534,8 +1534,15 @@ async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path
             assert "artifact.lifecycle_sweep" in {
                 binding.activity_type for binding in bindings
             }
+            assert "execution.record_terminal_state" in {
+                binding.activity_type for binding in bindings
+            }
             assert any(
                 binding.handler.__name__ == "artifact_lifecycle_sweep"
+                for binding in bindings
+            )
+            assert any(
+                binding.handler.__name__ == "execution_record_terminal_state"
                 for binding in bindings
             )
 

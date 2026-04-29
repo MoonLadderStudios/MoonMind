@@ -419,6 +419,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "artifacts",
         "execution_dependency_status_snapshot",
     ),
+    "execution.record_terminal_state": (
+        "artifacts",
+        "execution_record_terminal_state",
+    ),
     "artifact.list_for_execution": ("artifacts", "artifact_list_for_execution"),
     "artifact.compute_preview": ("artifacts", "artifact_compute_preview"),
     "artifact.link": ("artifacts", "artifact_link"),
