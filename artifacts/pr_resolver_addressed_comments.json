@@ -1,17 +1,32 @@
 [
   {
-    "id": 4340704945,
+    "id": 4346976767,
     "disposition": "not-applicable",
-    "rationale": "Automated quota warning with no requested code change."
+    "rationale": "Qodo account free-tier notice; no code action required."
   },
   {
-    "id": 3158511680,
+    "id": 3163732225,
     "disposition": "addressed",
-    "rationale": "Runtime promotion override now updates top-level targetRuntime alongside task.runtime.mode, with a regression test covering stored payloads that already include targetRuntime."
+    "rationale": "Shielded the terminal-state activity, used ABANDON cancellation policy, and waits for the shielded activity when cancellation is received."
   },
   {
-    "id": 4193967441,
+    "id": 4200206564,
     "disposition": "not-applicable",
-    "rationale": "Codex review wrapper summary; the actionable child review comment is tracked separately."
+    "rationale": "Review summary; its actionable shielding feedback is tracked and addressed by review comment 3163732225."
+  },
+  {
+    "id": 3163747010,
+    "disposition": "addressed",
+    "rationale": "Added RUN_TERMINAL_STATE_ACTIVITY_PATCH and skipped the new activity on histories where workflow.patched returns false."
+  },
+  {
+    "id": 3163747015,
+    "disposition": "addressed",
+    "rationale": "Changed record_terminal_state to preserve existing same-state terminal summaries while still fanning out dependency resolution."
+  },
+  {
+    "id": 4200225292,
+    "disposition": "not-applicable",
+    "rationale": "Codex review wrapper comment; no standalone actionable request beyond the inline findings."
   }
 ]

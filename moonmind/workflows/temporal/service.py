@@ -2039,6 +2039,14 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 f"Execution already terminal as {record.state.value}."
             )
+        if record.state in TERMINAL_STATES:
+            if record.close_status is None:
+                self._set_state(record, target_state, close_status=target_close_status)
+                await self._sync_integration_correlation_record(record)
+                await self._session.commit()
+                await self._session.refresh(record)
+            await self._fan_out_dependency_resolution(record)
+            return await self._sync_projection_best_effort(record)
 
         self._set_state(record, target_state, close_status=target_close_status)
         if summary:

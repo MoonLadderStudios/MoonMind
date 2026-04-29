@@ -178,6 +178,7 @@ NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
+RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
@@ -5007,21 +5008,43 @@ class MoonMindRunWorkflow:
         summary: str | None,
         error_category: str | None = None,
     ) -> None:
+        if not workflow.patched(RUN_TERMINAL_STATE_ACTIVITY_PATCH):
+            return
+
+        activity_task: asyncio.Task[Any] | None = None
         try:
             terminal_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                 "execution.record_terminal_state"
             )
-            await execute_typed_activity(
-                "execution.record_terminal_state",
-                ExecutionTerminalStateInput(
-                    workflowId=workflow.info().workflow_id,
-                    state=state,
-                    closeStatus=close_status,
-                    summary=summary,
-                    errorCategory=error_category,
-                ),
-                **self._execute_kwargs_for_route(terminal_route),
+            activity_task = asyncio.create_task(
+                execute_typed_activity(
+                    "execution.record_terminal_state",
+                    ExecutionTerminalStateInput(
+                        workflowId=workflow.info().workflow_id,
+                        state=state,
+                        closeStatus=close_status,
+                        summary=summary,
+                        errorCategory=error_category,
+                    ),
+                    cancellation_type=ActivityCancellationType.ABANDON,
+                    **self._execute_kwargs_for_route(terminal_route),
+                )
             )
+            await asyncio.shield(activity_task)
+        except (CancelledError, asyncio.CancelledError):
+            self._get_logger().warning(
+                "Cancellation received while recording terminal execution state; "
+                "waiting for shielded activity to finish."
+            )
+            try:
+                if activity_task is not None:
+                    await activity_task
+            except Exception as exc:
+                self._get_logger().warning(
+                    "Failed to record terminal execution state after cancellation: %s",
+                    exc,
+                )
+            raise
         except Exception as exc:
             self._get_logger().warning(
                 "Failed to record terminal execution state: %s", exc

@@ -8,6 +8,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from temporalio import workflow
+from temporalio.workflow import ActivityCancellationType
 from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_TASK_QUEUE
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import (
@@ -389,6 +390,7 @@ async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatc
         },
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
     monkeypatch.setattr(
         run_workflow_module,
         "execute_typed_activity",
@@ -410,6 +412,28 @@ async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatc
         "errorCategory": None,
     }
     assert captured["kwargs"]["task_queue"] == ARTIFACTS_TASK_QUEUE
+    assert captured["kwargs"]["cancellation_type"] == ActivityCancellationType.ABANDON
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_state_skips_activity_without_patch(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+
+    async def fake_execute_typed_activity(activity_type, payload, **kwargs):
+        raise AssertionError("terminal state activity should be patch-gated")
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    await workflow_instance._record_terminal_state(
+        state="completed",
+        close_status="completed",
+        summary="Workflow completed successfully",
+    )
 
 
 @pytest.mark.asyncio
