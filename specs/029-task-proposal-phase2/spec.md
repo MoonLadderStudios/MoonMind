@@ -76,8 +76,8 @@ As a platform owner, I want Slack/webhook alerts whenever new security or tests 
 - **FR-001**: The backend MUST compute and persist a deterministic deduplication key (`dedup_key`) and opaque hash (`dedup_hash`) derived from repository + normalized title for every proposal.
 - **FR-002**: The API MUST expose a `similar` collection per proposal listing up to 10 other open proposals sharing the same dedup key ordered by recency.
 - **FR-003**: The dashboard list and detail views MUST surface the dedup hash and similar proposal links without trusting raw user input.
-- **FR-004**: Reviewers MUST be able to launch an "Edit & Promote" UI affordance that loads the stored task payload, allows edits to instructions, publish settings, priority, attempts, affinity key, and tags, and submits the modified payload to the backend promote endpoint.
-- **FR-005**: Promotion API MUST accept an optional `taskCreateRequestOverride` object (parallel to stored envelope) and validate it using the canonical Task contract before enqueuing.
+- **FR-004**: Reviewers MUST be able to inspect the stored task payload before promotion and apply bounded promotion controls such as runtime mode, priority, max attempts, and note without replacing the reviewed payload.
+- **FR-005**: Promotion API MUST validate the stored reviewed Task payload using the canonical Task contract before enqueuing and MUST NOT accept full task payload replacement during promotion.
 - **FR-006**: The system MUST track reviewer-defined triage priority (`low`, `normal`, `high`, `urgent`) per proposal and display it in API/UI responses.
 - **FR-007**: Reviewers MUST be able to snooze a proposal until a timestamp (`snoozed_until`), during which it is excluded from default `status=open` listings but retrievable via `status=snoozed` or `includeSnoozed=true` filter.
 - **FR-008**: Snoozed proposals MUST automatically revert to `open` status when the snooze timestamp passes, without manual intervention.

@@ -414,16 +414,19 @@ Promotion must follow this algorithm:
 
 1. load the stored proposal
 2. verify the proposal is still `open`
-3. merge `taskCreateRequestOverride` into the stored `taskCreateRequest`
-4. apply shortcut `runtimeMode` only by constructing that override
-5. validate the merged payload against the canonical task contract, including verification of any agent-skill selectors
-6. preserve explicit skill-selection intent from the stored proposal unless the operator intentionally overrides it, ensuring promotion-time overrides do not silently drop or corrupt skill fields
-7. preserve `task.authoredPresets` and per-step `source` provenance from the stored proposal unless the operator intentionally overrides those fields through the merged payload
-8. submit the merged task through the same Temporal-backed create path used by
+3. apply bounded promotion controls such as `priority`, `maxAttempts`, `note`, and `runtimeMode`
+4. validate the stored payload against the canonical task contract, including verification of any agent-skill selectors and executable step types
+5. preserve explicit skill-selection intent from the stored proposal
+6. preserve `task.authoredPresets` and per-step `source` provenance from the stored proposal
+7. submit the reviewed task through the same Temporal-backed create path used by
    `/api/executions`
-9. create a new `MoonMind.Run` through `TemporalExecutionService.create_execution()`
-10. store the promoted workflow or execution identifier on the proposal record
-11. return both the updated proposal and the new execution metadata
+8. create a new `MoonMind.Run` through `TemporalExecutionService.create_execution()`
+9. store the promoted workflow or execution identifier on the proposal record
+10. return both the updated proposal and the new execution metadata
+
+Promotion does not accept a full task payload replacement. If a future proposal
+refresh or preset re-expansion flow is introduced, it must be an explicit
+preview-and-validate action before promotion.
 
 Promotion is therefore a control-plane-to-Temporal bridge, not a proposal-local
 mutation only.

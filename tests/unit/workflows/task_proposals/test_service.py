@@ -444,6 +444,23 @@ async def test_promote_proposal_applies_runtime_override() -> None:
                 "task": {
                     "instructions": "Refactor logic",
                     "runtime": {"mode": "gemini_cli"},
+                    "authoredPresets": [
+                        {
+                            "presetId": "runtime-quality-followup",
+                            "version": "2026-04-17",
+                        }
+                    ],
+                    "steps": [
+                        {
+                            "type": "skill",
+                            "title": "Refactor logic",
+                            "skill": {"id": "code.implementation"},
+                            "source": {
+                                "kind": "preset-derived",
+                                "presetId": "runtime-quality-followup",
+                            },
+                        }
+                    ],
                 }
             }
         },
@@ -451,27 +468,26 @@ async def test_promote_proposal_applies_runtime_override() -> None:
     repo.get_proposal_for_update.return_value = proposal
     service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
 
-    override_request = {
-        "type": "task",
-        "payload": {
-            "repository": "Moon/Repo",
-            "task": {
-                "instructions": "Refactor logic",
-                "runtime": {"mode": "claude"},
-            }
-        }
-    }
-
     updated_proposal, final_request = await service.promote_proposal(
         proposal_id=proposal.id,
         promoted_by_user_id=uuid4(),
-        task_create_request_override=override_request,
+        runtime_mode_override="claude_code",
     )
 
     repo.commit.assert_awaited()
     assert updated_proposal.status is TaskProposalStatus.PROMOTED
     
     assert final_request["payload"]["task"]["runtime"]["mode"] == "claude"
+    assert final_request["payload"]["task"]["authoredPresets"] == [
+        {
+            "presetId": "runtime-quality-followup",
+            "version": "2026-04-17",
+        }
+    ]
+    assert final_request["payload"]["task"]["steps"][0]["source"] == {
+        "kind": "preset-derived",
+        "presetId": "runtime-quality-followup",
+    }
     assert updated_proposal.task_create_request["payload"]["task"]["runtime"]["mode"] == "gemini_cli"
 
 @pytest.mark.asyncio
@@ -539,7 +555,7 @@ async def test_promote_proposal_preserves_preset_provenance() -> None:
     }
 
 @pytest.mark.asyncio
-async def test_promote_proposal_override_normalizes_managed_runtime_ids() -> None:
+async def test_promote_proposal_rejects_unresolved_preset_steps() -> None:
     repo = AsyncMock()
     proposal = SimpleNamespace(
         id=uuid4(),
@@ -553,8 +569,17 @@ async def test_promote_proposal_override_normalizes_managed_runtime_ids() -> Non
             "payload": {
                 "repository": "Moon/Repo",
                 "task": {
-                    "instructions": "Refactor logic",
-                    "runtime": {"mode": "gemini_cli"},
+                    "instructions": "Apply preset later",
+                    "steps": [
+                        {
+                            "type": "preset",
+                            "title": "Runtime quality follow-up",
+                            "preset": {
+                                "id": "runtime-quality-followup",
+                                "inputs": {},
+                            },
+                        }
+                    ],
                 }
             }
         },
@@ -562,74 +587,10 @@ async def test_promote_proposal_override_normalizes_managed_runtime_ids() -> Non
     repo.get_proposal_for_update.return_value = proposal
     service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
 
-    override_request = {
-        "type": "task",
-        "payload": {
-            "repository": "Moon/Repo",
-            "targetRuntime": "codex_cli",
-            "task": {
-                "instructions": "Refactor logic",
-                "runtime": {"mode": "claude_code"},
-            },
-        },
-    }
+    with pytest.raises(TaskProposalValidationError, match="stored task payload is invalid"):
+        await service.promote_proposal(
+            proposal_id=proposal.id,
+            promoted_by_user_id=uuid4(),
+        )
 
-    updated_proposal, final_request = await service.promote_proposal(
-        proposal_id=proposal.id,
-        promoted_by_user_id=uuid4(),
-        task_create_request_override=override_request,
-    )
-
-    repo.commit.assert_awaited()
-    assert updated_proposal.status is TaskProposalStatus.PROMOTED
-    assert final_request["payload"]["targetRuntime"] == "codex"
-    assert final_request["payload"]["task"]["runtime"]["mode"] == "claude"
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("runtime_mode_field", ["targetRuntime", "target_runtime"])
-async def test_promote_proposal_override_normalizes_runtime_mapping_aliases(
-    runtime_mode_field: str,
-) -> None:
-    repo = AsyncMock()
-    proposal = SimpleNamespace(
-        id=uuid4(),
-        status=TaskProposalStatus.OPEN,
-        repository="Moon/Repo",
-        promoted_at=None,
-        promoted_by_user_id=None,
-        decided_by_user_id=None,
-        decision_note=None,
-        task_create_request={
-            "payload": {
-                "repository": "Moon/Repo",
-                "task": {
-                    "instructions": "Refactor logic",
-                    "runtime": {"mode": "gemini_cli"},
-                }
-            }
-        },
-    )
-    repo.get_proposal_for_update.return_value = proposal
-    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
-
-    override_request = {
-        "type": "task",
-        "payload": {
-            "repository": "Moon/Repo",
-            "task": {
-                "instructions": "Refactor logic",
-                "runtime": {runtime_mode_field: "claude_code"},
-            },
-        },
-    }
-
-    updated_proposal, final_request = await service.promote_proposal(
-        proposal_id=proposal.id,
-        promoted_by_user_id=uuid4(),
-        task_create_request_override=override_request,
-    )
-
-    repo.commit.assert_awaited()
-    assert updated_proposal.status is TaskProposalStatus.PROMOTED
-    assert final_request["payload"]["task"]["runtime"]["mode"] == "claude"
-
+    repo.commit.assert_not_awaited()

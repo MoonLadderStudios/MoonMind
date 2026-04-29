@@ -12,10 +12,10 @@
 - **Rationale**: Avoids complex fuzzy matching while still grouping near-duplicates; stable and index-friendly.
 - **Alternatives Considered**: Cosine similarity on embeddings (would add heavy dependencies) and naive title substring search (slow, inconsistent).
 
-## Edit-Before-Promote Flow
-- **Decision**: Extend promote endpoint with optional `taskCreateRequestOverride` payload; UI will open modal pre-populated with stored request allowing edits.
-- **Rationale**: Keeps single endpoint, leverages existing validation path, ensures audit data stays centralized.
-- **Alternatives Considered**: Separate `PUT /api/proposals/{id}` editing route (adds concurrency issues), manual queue job creation page (duplicates logic already in proposals).
+## Reviewed-Payload Promotion Flow
+- **Decision**: Promotion uses the stored reviewed proposal payload and accepts only bounded controls such as runtime mode, priority, max attempts, and note. Full task payload replacement is superseded by MM-560.
+- **Rationale**: Keeps promotion deterministic and prevents reviewed proposals from drifting by replacing flattened steps or re-expanding live preset catalog entries.
+- **Alternatives Considered**: Full edit-before-promote payload override (rejected by MM-560 because it can bypass reviewed content), separate proposal-refresh flow (left to explicit preview-and-validation work).
 
 ## Snooze + Priority Mechanics
 - **Decision**: Add `review_priority` ENUM + `snoozed_until` timestamp persisted on proposals plus optional `snooze_note`. Provide API to snooze/unsnooze and background job to auto-unsnooze.

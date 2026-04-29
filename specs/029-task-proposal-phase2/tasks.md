@@ -36,14 +36,14 @@ Independent Test: Create proposals with similar titles + repo, hit `/api/proposa
 
 ## Phase 4: User Story 2 – Edit Before Promote (Priority: P1)
 
-Goal: Allow reviewers to modify the stored canonical payload before enqueuing while keeping existing one-click promote.
+Goal: Allow reviewers to inspect the stored canonical payload and apply bounded promotion controls before enqueuing while keeping existing one-click promote.
 
-Independent Test: Use dashboard modal to edit instructions/priority, promote, and verify queue job uses overrides + audit note.
+Independent Test: Use dashboard controls to adjust runtime/priority, promote, and verify the queue job uses the stored reviewed payload plus bounded controls.
 
-- [X] T013 [US2] Expand promotion service (`moonmind/workflows/task_proposals/service.py`) to accept `taskCreateRequestOverride` merged with stored envelope plus audit logging.
-- [X] T014 [US2] Update request/response schemas + router handling (`moonmind/schemas/task_proposal_models.py`, `api_service/api/routers/task_proposals.py`) to validate override payload.
-- [X] T015 [US2] Implement dashboard "Edit & Promote" modal with form editing instructions/git/publish/priority/attempts and call promote endpoint with overrides (`api_service/static/task_dashboard/dashboard.js`).
-- [X] T016 [US2] Add backend + UI tests validating override behavior (pytest updates in `tests/unit/api/routers/test_task_proposals.py` and new frontend smoke coverage via lint-friendly JS unit or manual instrumentation comment) plus existing worker tests unaffected.
+- [X] T013 [US2] Expand promotion service (`moonmind/workflows/task_proposals/service.py`) to validate the stored reviewed envelope and apply bounded runtime/priority controls.
+- [X] T014 [US2] Update request/response schemas + router handling (`moonmind/schemas/task_proposal_models.py`, `api_service/api/routers/task_proposals.py`) to reject full task payload replacement.
+- [X] T015 [US2] Keep dashboard promotion controls bounded to reviewed-payload promotion (`frontend/src/entrypoints/proposals.tsx`).
+- [X] T016 [US2] Add backend tests validating reviewed-payload promotion behavior and bounded runtime controls.
 
 ---
 

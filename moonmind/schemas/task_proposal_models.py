@@ -110,7 +110,7 @@ class TaskProposalListResponse(BaseModel):
 class TaskProposalPromoteRequest(BaseModel):
     """Optional overrides supplied during promotion."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     priority: Optional[int] = Field(None, alias="priority")
     max_attempts: Optional[int] = Field(None, alias="maxAttempts")
@@ -119,12 +119,9 @@ class TaskProposalPromoteRequest(BaseModel):
         None,
         alias="runtimeMode",
         description=(
-            "Shortcut to override the agent runtime mode (e.g. gemini_cli, "
-            "jules, codex). Ignored when taskCreateRequestOverride is provided."
+            "Shortcut to override only the agent runtime mode (e.g. gemini_cli, "
+            "jules, codex) while preserving the reviewed proposal payload."
         ),
-    )
-    task_create_request_override: Optional[dict[str, Any]] = Field(
-        None, alias="taskCreateRequestOverride"
     )
 
 class TaskProposalDismissRequest(BaseModel):
