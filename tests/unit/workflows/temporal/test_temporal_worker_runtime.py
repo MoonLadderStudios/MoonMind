@@ -648,6 +648,127 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
         "sourceIssueKey": "MM-404"
     }
 
+
+def test_runtime_planner_dedupes_repeated_identical_preset_steps():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+    breakdown_step = {
+        "id": "tpl:jira-breakdown-orchestrate:1.0.0:01:6bfb1360",
+        "title": "Break down declarative design",
+        "type": "skill",
+        "skill": {"id": "moonspec-breakdown", "requiredCapabilities": ["git"]},
+        "instructions": "Extract MoonSpec stories.",
+    }
+    jira_step = {
+        "id": "tpl:jira-breakdown-orchestrate:1.0.0:02:6bfb1360",
+        "title": "Create Jira stories",
+        "type": "skill",
+        "skill": {"id": "story.create_jira_issues"},
+        "instructions": "Create Jira issues from the generated breakdown.",
+        "storyOutput": {
+            "mode": "jira",
+            "fallback": "fail",
+            "jira": {
+                "projectKey": "MM",
+                "issueTypeName": "Story",
+                "boardId": "15",
+                "dependencyMode": "linear_blocker_chain",
+            },
+        },
+    }
+    orchestrate_step = {
+        "id": "tpl:jira-breakdown-orchestrate:1.0.0:03:6bfb1360",
+        "title": "Create dependent Jira Orchestrate tasks",
+        "type": "skill",
+        "skill": {"id": "story.create_jira_orchestrate_tasks"},
+        "instructions": "Create dependent Jira Orchestrate tasks.",
+        "jiraOrchestration": {
+            "task": {
+                "repository": "MoonLadderStudios/Tactics",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
+                "orchestrationMode": "runtime",
+            },
+            "traceability": {"sourceIssueKey": ""},
+        },
+    }
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "docs\\Steps\\StepTypes.md",
+                "instructions": "docs\\Steps\\StepTypes.md",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+                "steps": [
+                    breakdown_step,
+                    jira_step,
+                    orchestrate_step,
+                    dict(breakdown_step),
+                    dict(jira_step),
+                    dict(orchestrate_step),
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert [node["id"] for node in plan["nodes"]] == [
+        "tpl:jira-breakdown-orchestrate:1.0.0:01:6bfb1360",
+        "tpl:jira-breakdown-orchestrate:1.0.0:02:6bfb1360",
+        "tpl:jira-breakdown-orchestrate:1.0.0:03:6bfb1360",
+    ]
+    assert plan["edges"] == [
+        {
+            "from": "tpl:jira-breakdown-orchestrate:1.0.0:01:6bfb1360",
+            "to": "tpl:jira-breakdown-orchestrate:1.0.0:02:6bfb1360",
+        },
+        {
+            "from": "tpl:jira-breakdown-orchestrate:1.0.0:02:6bfb1360",
+            "to": "tpl:jira-breakdown-orchestrate:1.0.0:03:6bfb1360",
+        },
+    ]
+
+
+def test_runtime_planner_rejects_conflicting_duplicate_step_ids():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    with pytest.raises(RuntimeError, match="duplicated with different payloads"):
+        planner(
+            inputs={
+                "task": {
+                    "title": "Conflicting step ids",
+                    "instructions": "Run conflicting steps.",
+                    "runtime": {"mode": "codex_cli"},
+                    "steps": [
+                        {
+                            "id": "step-1",
+                            "tool": {"type": "skill", "name": "moonspec-breakdown"},
+                            "instructions": "Extract MoonSpec stories.",
+                        },
+                        {
+                            "id": "step-1",
+                            "tool": {
+                                "type": "skill",
+                                "name": "story.create_jira_issues",
+                            },
+                            "instructions": "Create Jira issues.",
+                        },
+                    ],
+                }
+            },
+            parameters={},
+            snapshot=snapshot,
+        )
+
 @pytest.mark.asyncio
 async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path):
     async with _template_db(tmp_path) as session_maker:
