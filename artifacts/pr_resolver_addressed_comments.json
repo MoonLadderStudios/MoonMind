@@ -1,17 +1,27 @@
 [
   {
-    "id": 4340704945,
+    "id": 4346742026,
     "disposition": "not-applicable",
-    "rationale": "Automated quota warning with no requested code change."
+    "rationale": "Qodo free-tier quota notice; no code feedback to address."
   },
   {
-    "id": 3158511680,
+    "id": 3163532745,
+    "disposition": "not-applicable",
+    "rationale": "The suggested simplification no longer applies because skill selection intentionally falls back from metadata to canonical payload contract fields."
+  },
+  {
+    "id": 4199978654,
+    "disposition": "not-applicable",
+    "rationale": "Gemini review summary; its only concrete suggestion is tracked by review comment 3163532745."
+  },
+  {
+    "id": 3163550230,
     "disposition": "addressed",
-    "rationale": "Runtime promotion override now updates top-level targetRuntime alongside task.runtime.mode, with a regression test covering stored payloads that already include targetRuntime."
+    "rationale": "Deferred action parsing until after top-level and nested terminal fields are checked, and added regression coverage for non-terminal action plus nested final status."
   },
   {
-    "id": 4193967441,
+    "id": 4199999267,
     "disposition": "not-applicable",
-    "rationale": "Codex review wrapper summary; the actionable child review comment is tracked separately."
+    "rationale": "Codex review body wrapper; concrete actionable feedback is tracked by review comment 3163550230."
   }
 ]

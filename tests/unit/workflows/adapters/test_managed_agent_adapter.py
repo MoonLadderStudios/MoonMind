@@ -1698,6 +1698,61 @@ async def test_fetch_result_maps_action_merged_pr_resolver_result(
     assert result.failure_class is None
     assert result.metadata["mergeAutomationDisposition"] == "merged"
 
+async def test_fetch_result_prefers_nested_terminal_status_over_action(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    artifacts_path = workspace_path / "artifacts"
+    artifacts_path.mkdir(parents=True)
+    (artifacts_path / "pr_resolver_result.json").write_text(
+        (
+            "{\n"
+            '  "pr": 1672,\n'
+            '  "url": "https://github.com/MoonLadderStudios/Tactics/pull/1672",\n'
+            '  "action": "retry_finalize_after_backoff",\n'
+            '  "final": {\n'
+            '    "finalOutcome": "merged",\n'
+            '    "headSha": "b00f1234"\n'
+            "  }\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-nested-terminal-with-action",
+            agent_id="codex_cli",
+            runtime_id="codex_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-nested-terminal-with-action",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-nested-terminal-with-action",
+        pr_resolver_expected=True,
+    )
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "merged"
+    assert result.metadata["headSha"] == "b00f1234"
+
 async def test_fetch_result_maps_merge_object_pr_resolver_result(
     tmp_path: Path,
 ):

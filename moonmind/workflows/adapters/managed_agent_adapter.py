@@ -99,6 +99,13 @@ def _first_terminal_pr_resolver_status(*values: Any) -> str:
     return ""
 
 
+def _terminal_pr_resolver_status(value: Any) -> str:
+    """Return a status only when the value is a known terminal resolver state."""
+
+    candidate = _normalize_pr_resolver_text(value)
+    return candidate if candidate in _PR_RESOLVER_TERMINAL_STATUSES else ""
+
+
 def _pr_resolver_status(payload: dict[str, Any]) -> str:
     """Return the normalized terminal status from known resolver artifacts."""
 
@@ -107,7 +114,6 @@ def _pr_resolver_status(payload: dict[str, Any]) -> str:
         payload.get("state"),
         payload.get("merge_outcome"),
         payload.get("outcome"),
-        payload.get("action"),
         payload.get("finalOutcome"),
         payload.get("final_outcome"),
         payload.get("final_state"),
@@ -123,13 +129,18 @@ def _pr_resolver_status(payload: dict[str, Any]) -> str:
             final.get("status"),
             final.get("merge_outcome"),
             final.get("outcome"),
-            final.get("action"),
             final.get("finalOutcome"),
             final.get("final_outcome"),
             final.get("final_state"),
             final.get("finalState"),
         )
-    return ""
+        if final_status:
+            return final_status
+        final_action = _terminal_pr_resolver_status(final.get("action"))
+        if final_action:
+            return final_action
+
+    return _terminal_pr_resolver_status(payload.get("action"))
 
 
 def _pr_resolver_final_payload(payload: dict[str, Any]) -> dict[str, Any]:
