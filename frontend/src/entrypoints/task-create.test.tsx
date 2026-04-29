@@ -881,6 +881,43 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (
+          url === "/api/executions/mm%3Apreset-step-input-edit?source=temporal"
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:preset-step-input-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  instructions: "Edit a preset step.",
+                  steps: [
+                    {
+                      id: "preset-step",
+                      title: "Preset",
+                      stepType: "preset",
+                      instructions: "Preview the configured preset.",
+                      preset: {
+                        id: "global::::speckit-demo",
+                        slug: "speckit-demo",
+                        version: "1.2.3",
+                        inputs: { feature_name: "MM-566" },
+                      },
+                    },
+                  ],
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Aauto-primary-skill?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -3309,6 +3346,42 @@ describe("Task Create Entrypoint", () => {
       expect(screen.getByText("Step 1 (Primary)")).toBeTruthy();
       expect(screen.getByText("Step 2")).toBeTruthy();
       expect(screen.getByText("Step 3")).toBeTruthy();
+    });
+  });
+
+  it("preserves reconstructed preset inputs when previewing an edit draft", async () => {
+    renderForEdit("mm:preset-step-input-edit");
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    await waitFor(() => {
+      expect(
+        (within(step).getByLabelText("Step Type") as HTMLSelectElement).value,
+      ).toBe("preset");
+      expect(
+        (within(step).getByLabelText("Preset") as HTMLSelectElement).value,
+      ).toBe("global::::speckit-demo");
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url, init]) => {
+          if (
+            !String(url).startsWith(
+              "/api/task-step-templates/speckit-demo:expand?scope=global",
+            )
+          ) {
+            return false;
+          }
+          const body = JSON.parse(String(init?.body || "{}")) as {
+            inputs?: Record<string, unknown>;
+          };
+          return body.inputs?.feature_name === "MM-566";
+        }),
+      ).toBe(true);
     });
   });
 

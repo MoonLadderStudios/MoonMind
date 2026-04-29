@@ -59,6 +59,38 @@ export type TemporalTaskInputAttachmentRef = {
   sizeBytes: number;
 };
 
+export type TemporalSubmissionDraftStepType = 'tool' | 'skill' | 'preset';
+
+export type TemporalSubmissionDraftToolPayload = {
+  id?: string;
+  name?: string;
+  version?: string;
+  type?: string;
+  kind?: string;
+  inputs?: Record<string, unknown>;
+  args?: Record<string, unknown>;
+  requiredCapabilities?: unknown;
+  [key: string]: unknown;
+};
+
+export type TemporalSubmissionDraftSkillPayload = {
+  id?: string;
+  name?: string;
+  inputs?: Record<string, unknown>;
+  args?: Record<string, unknown>;
+  requiredCapabilities?: unknown;
+  [key: string]: unknown;
+};
+
+export type TemporalSubmissionDraftPresetPayload = {
+  id?: string;
+  slug?: string;
+  name?: string;
+  version?: string;
+  inputs?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
 export type TemporalSubmissionDraft = {
   runtime: string | null;
   providerProfile: string | null;
@@ -77,10 +109,10 @@ export type TemporalSubmissionDraft = {
     id: string;
     title: string;
     instructions: string;
-    stepType: 'tool' | 'skill' | 'preset';
-    tool?: Record<string, unknown>;
-    skill?: Record<string, unknown>;
-    preset?: Record<string, unknown>;
+    stepType: TemporalSubmissionDraftStepType;
+    tool?: TemporalSubmissionDraftToolPayload;
+    skill?: TemporalSubmissionDraftSkillPayload;
+    preset?: TemporalSubmissionDraftPresetPayload;
     skillId: string;
     skillArgs: Record<string, unknown>;
     skillRequiredCapabilities: string[];
@@ -404,9 +436,9 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
   const tool = objectValue(step.tool);
   const skill = objectValue(step.skill);
   const preset = objectValue(step.preset);
-  const rawStepType = stringValue(step.type).toLowerCase();
+  const rawStepType = stringValue(step.stepType, step.type).toLowerCase();
   const legacyToolType = stringValue(tool.type, tool.kind).toLowerCase();
-  const stepType: 'tool' | 'skill' | 'preset' =
+  const stepType: TemporalSubmissionDraftStepType =
     rawStepType === 'tool' || rawStepType === 'skill' || rawStepType === 'preset'
       ? rawStepType
       : Object.keys(preset).length > 0
