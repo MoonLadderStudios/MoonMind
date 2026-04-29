@@ -525,6 +525,12 @@ interface StepAttachmentRef {
 
 type StepType = "tool" | "skill" | "preset";
 
+const STEP_TYPE_HELP_TEXT: Record<StepType, string> = {
+  tool: "Tool runs a typed integration or system operation directly.",
+  skill: "Skill asks an agent to perform work using reusable behavior.",
+  preset: "Preset inserts a reusable set of configured steps.",
+};
+
 interface StepState {
   localId: string;
   id: string;
@@ -6673,6 +6679,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <label className="queue-step-type-field">
                     Step Type
                     <select
+                      aria-label="Step Type"
                       data-step-field="stepType"
                       data-step-index={String(index)}
                       value={step.stepType}
@@ -6684,6 +6691,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       <option value="skill">Skill</option>
                       <option value="preset">Preset</option>
                     </select>
+                    <span className="small">
+                      {STEP_TYPE_HELP_TEXT[step.stepType]}
+                    </span>
                   </label>
 
                   <div className="stack">
