@@ -7000,7 +7000,9 @@ describe("Task Create Entrypoint", () => {
       );
     });
 
-    const request = latestCreateRequest();
+    const request = latestCreateRequest() as {
+      payload: { task: { steps: Array<Record<string, unknown>> } };
+    };
     expect(request.payload.task.steps[0]).toEqual({
       id: "tpl:speckit-demo:1.2.3:01",
       title: "Fetch Jira issue",
@@ -7011,7 +7013,7 @@ describe("Task Create Entrypoint", () => {
         inputs: { issueKey: "MM-558" },
       },
     });
-    expect(request.payload.task.steps[0].skill).toBeUndefined();
+    expect(request.payload.task.steps[0]?.["skill"]).toBeUndefined();
   });
 
   it("keeps the draft unchanged when step preset preview expansion fails", async () => {
