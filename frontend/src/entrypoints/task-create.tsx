@@ -1177,19 +1177,50 @@ function createStepStateEntriesFromTemporalDraft(
     const primarySkill = draft.primarySkill || "";
     const shouldUsePrimarySkill =
       index === 0 &&
+      step.stepType === "skill" &&
       primarySkill !== "" &&
       !hasExplicitSkillSelection(step.skillId);
     const hasJiraOrchestration =
       step.jiraOrchestration &&
       Object.keys(step.jiraOrchestration).length > 0;
+    const toolPayload = step.tool || {};
+    const presetPayload = step.preset || {};
 
     return createStepStateEntry(index + 1, {
       id: step.id,
       title: step.title,
+      stepType: step.stepType,
       instructions: step.instructions,
-      skillId: shouldUsePrimarySkill ? primarySkill : step.skillId,
-      skillArgs: stringifySkillArgs(step.skillArgs),
+      skillId:
+        step.stepType === "skill"
+          ? shouldUsePrimarySkill
+            ? primarySkill
+            : step.skillId
+          : "",
+      skillArgs:
+        step.stepType === "skill" ? stringifySkillArgs(step.skillArgs) : "",
       skillRequiredCapabilities: step.skillRequiredCapabilities.join(","),
+      toolId:
+        step.stepType === "tool"
+          ? String(toolPayload.id || toolPayload.name || step.skillId || "").trim()
+          : "",
+      toolVersion:
+        step.stepType === "tool"
+          ? String(toolPayload.version || "").trim()
+          : "",
+      toolInputs:
+        step.stepType === "tool"
+          ? JSON.stringify(toolPayload.inputs || step.skillArgs || {}, null, 2)
+          : "{}",
+      presetKey:
+        step.stepType === "preset"
+          ? String(
+              presetPayload.id ||
+                presetPayload.slug ||
+                presetPayload.name ||
+                "",
+            ).trim()
+          : "",
       templateStepId: step.templateStepId,
       templateInstructions: step.templateInstructions,
       inputAttachments: (step.inputAttachments || []).map(
