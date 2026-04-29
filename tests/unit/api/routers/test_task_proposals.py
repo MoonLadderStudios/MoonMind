@@ -209,18 +209,11 @@ def test_promote_proposal_uses_first_non_empty_instruction_line_for_title(
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["title"] == "First line with spaces"
 
-def test_promote_proposal_accepts_override_payload(
+def test_promote_proposal_rejects_task_create_request_override(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
     test_client, service, execution_service = client
     proposal = _build_proposal()
-    final_request = {
-        "payload": {
-            "repository": "Moon/Repo",
-            "task": {"instructions": "edit"}
-        }
-    }
-    service.promote_proposal.return_value = (proposal, final_request)
 
     response = test_client.post(
         f"/api/proposals/{proposal.id}/promote",
@@ -237,14 +230,9 @@ def test_promote_proposal_accepts_override_payload(
         },
     )
 
-    assert response.status_code == 200
-    kwargs = service.promote_proposal.await_args.kwargs
-    assert (
-        kwargs["task_create_request_override"]["payload"]["task"]["instructions"]
-        == "edit"
-    )
-    call_kwargs = execution_service.create_execution.await_args.kwargs
-    assert call_kwargs["title"] == "edit"
+    assert response.status_code == 422
+    service.promote_proposal.assert_not_awaited()
+    execution_service.create_execution.assert_not_awaited()
 
 def test_promote_proposal_rejects_invalid_state(
     client: tuple[TestClient, AsyncMock, AsyncMock],
@@ -344,7 +332,7 @@ def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock, AsyncMock
 def test_promote_proposal_with_runtime_mode_shortcut(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
-    """runtimeMode shortcut builds a task_create_request_override for the service."""
+    """runtimeMode shortcut is passed as a bounded promotion control."""
     test_client, service, execution_service = client
     proposal = _build_proposal()
     proposal.task_create_request = {
@@ -368,7 +356,6 @@ def test_promote_proposal_with_runtime_mode_shortcut(
             }
         }
     }
-    service.get_proposal.return_value = proposal
     service.promote_proposal.return_value = (proposal, final_request)
 
     response = test_client.post(
@@ -378,10 +365,7 @@ def test_promote_proposal_with_runtime_mode_shortcut(
 
     assert response.status_code == 200
     kwargs = service.promote_proposal.await_args.kwargs
-    override = kwargs["task_create_request_override"]
-    assert override is not None
-    assert override["payload"]["task"]["runtime"]["mode"] == "gemini_cli"
-    assert override["payload"]["repository"] == "Moon/Repo"
+    assert kwargs["runtime_mode_override"] == "gemini_cli"
     execution_service.create_execution.assert_awaited_once()
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["idempotency_key"] == f"proposal-promote-{proposal.id}"

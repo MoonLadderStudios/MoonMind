@@ -1,22 +1,17 @@
 [
   {
-    "id": 4340312586,
+    "id": 4340704945,
     "disposition": "not-applicable",
-    "rationale": "Quota warning from gemini-code-assist; no code feedback to address."
+    "rationale": "Automated quota warning with no requested code change."
   },
   {
-    "id": 4340316442,
-    "disposition": "not-applicable",
-    "rationale": "Duplicate quota warning from gemini-code-assist; no code feedback to address."
-  },
-  {
-    "id": 3158201200,
+    "id": 3158511680,
     "disposition": "addressed",
-    "rationale": "Preset-generated Tool steps now preserve and submit their executable tool binding after Apply preview, with regression coverage."
+    "rationale": "Runtime promotion override now updates top-level targetRuntime alongside task.runtime.mode, with a regression test covering stored payloads that already include targetRuntime."
   },
   {
-    "id": 4193618593,
+    "id": 4193967441,
     "disposition": "not-applicable",
-    "rationale": "Review summary container for the actionable inline comment; no separate code change requested."
+    "rationale": "Codex review wrapper summary; the actionable child review comment is tracked separately."
   }
 ]

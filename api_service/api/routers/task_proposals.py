@@ -323,14 +323,10 @@ async def promote_proposal(
     user: User = Depends(get_current_user()),
 ) -> TaskProposalPromoteResponse:
     try:
-        # Build the override: explicit taskCreateRequestOverride takes
-        # precedence; runtimeMode is a lightweight shortcut that
-        # constructs one on-the-fly when the full override is absent.
-        if payload.task_create_request_override is not None:
-            override_payload = payload.task_create_request_override
-        elif payload.runtime_mode:
-            runtime_mode = payload.runtime_mode.strip()
-            if not runtime_mode:
+        runtime_mode_override = None
+        if payload.runtime_mode:
+            runtime_mode_override = payload.runtime_mode.strip()
+            if not runtime_mode_override:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={
@@ -338,23 +334,6 @@ async def promote_proposal(
                         "message": "runtimeMode must be a non-empty string",
                     },
                 )
-            # Fetch the stored proposal to extract the repository for
-            # the override envelope that the service expects.
-            stored = await service.get_proposal(proposal_id)
-            stored_request = stored.task_create_request or {}
-            stored_payload = stored_request.get("payload") or {}
-            repo = stored_payload.get("repository", "")
-            override_payload = {
-                "type": "task",
-                "priority": stored_request.get("priority", 0),
-                "maxAttempts": stored_request.get("maxAttempts", 3),
-                "payload": {
-                    "repository": repo,
-                    "task": {"runtime": {"mode": runtime_mode}},
-                },
-            }
-        else:
-            override_payload = None
 
         proposal, final_request = await service.promote_proposal(
             proposal_id=proposal_id,
@@ -362,7 +341,7 @@ async def promote_proposal(
             priority_override=payload.priority,
             max_attempts_override=payload.max_attempts,
             note=payload.note,
-            task_create_request_override=override_payload,
+            runtime_mode_override=runtime_mode_override,
         )
 
         initial_parameters = dict(final_request.get("payload") or {})

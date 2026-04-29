@@ -725,15 +725,15 @@ class TaskProposalService:
         priority_override: int | None = None,
         max_attempts_override: int | None = None,
         note: str | None = None,
-        task_create_request_override: dict[str, Any] | None = None,
+        runtime_mode_override: str | None = None,
     ) -> tuple[TaskProposal, dict[str, Any]]:
         """Validate and finalize a proposal for execution promotion.
 
         Returns the updated TaskProposal and the finalized taskCreateRequest
         envelope (suitable for use as ``initial_parameters``) ready to execute.
-        The returned envelope may differ from the stored proposal record when
-        an override is provided; the stored ``task_create_request`` is not
-        mutated by this method.
+        Runtime mode may be overridden as a bounded promotion control; reviewed
+        task steps, instructions, and provenance are always loaded from the
+        stored proposal payload.
         """
         proposal = await self._repository.get_proposal_for_update(proposal_id)
         if proposal.status is not TaskProposalStatus.OPEN:
@@ -741,14 +741,7 @@ class TaskProposalService:
                 f"proposal status {proposal.status.value} cannot be promoted"
             )
 
-        if task_create_request_override:
-            override_envelope, _ = self._prepare_task_create_request(
-                task_create_request_override,
-                apply_runtime_defaults=True,
-            )
-            request = override_envelope
-        else:
-            request = dict(proposal.task_create_request or {})
+        request = dict(proposal.task_create_request or {})
         payload = dict(request.get("payload") or {})
         try:
             parsed = CanonicalTaskPayload.model_validate(payload)
@@ -757,6 +750,25 @@ class TaskProposalService:
             raise TaskProposalValidationError(
                 f"stored task payload is invalid: {exc}"
             ) from exc
+        if runtime_mode_override is not None:
+            normalized_runtime_mode = self._normalize_proposal_runtime_mode(
+                runtime_mode_override
+            )
+            task_node = payload.get("task")
+            task = dict(task_node) if isinstance(task_node, Mapping) else {}
+            runtime_node = task.get("runtime")
+            runtime = dict(runtime_node) if isinstance(runtime_node, Mapping) else {}
+            runtime["mode"] = normalized_runtime_mode
+            task["runtime"] = runtime
+            payload["task"] = task
+            payload["targetRuntime"] = normalized_runtime_mode
+            try:
+                parsed = CanonicalTaskPayload.model_validate(payload)
+                payload = parsed.model_dump(by_alias=True, exclude_none=True)
+            except ValidationError as exc:
+                raise TaskProposalValidationError(
+                    f"runtimeMode override is invalid: {exc}"
+                ) from exc
         payload = self._enforce_proposal_pr_publish_mode(payload)
         request["payload"] = payload
 

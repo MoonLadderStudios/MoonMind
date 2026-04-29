@@ -6339,13 +6339,9 @@ export interface components {
             note?: string | null;
             /**
              * Runtimemode
-             * @description Shortcut to override the agent runtime mode (e.g. gemini_cli, jules, codex). Ignored when taskCreateRequestOverride is provided.
+             * @description Shortcut to override only the agent runtime mode (e.g. gemini_cli, jules, codex) while preserving the reviewed proposal payload.
              */
             runtimeMode?: string | null;
-            /** Taskcreaterequestoverride */
-            taskCreateRequestOverride?: {
-                [key: string]: unknown;
-            } | null;
         };
         /**
          * TaskProposalPromoteResponse

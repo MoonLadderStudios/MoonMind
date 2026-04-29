@@ -36,8 +36,9 @@ paths:
                   type: integer
                 note:
                   type: string
-                taskCreateRequestOverride:
-                  $ref: '#/components/schemas/CreateJobRequest'
+                runtimeMode:
+                  type: string
+                  description: Bounded runtime override applied to the stored reviewed payload.
       responses:
         '200':
           description: Promotion result with queue job.
