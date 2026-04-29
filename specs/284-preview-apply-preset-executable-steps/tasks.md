@@ -74,8 +74,8 @@
 - [X] T014 Verify existing preset expansion helper flow in `frontend/src/entrypoints/task-create.tsx` previews without mutating the draft and applies the current preview (FR-003, FR-004, FR-006, DESIGN-REQ-017)
 - [X] T015 Verify existing preview rendering in `frontend/src/entrypoints/task-create.tsx` shows generated step titles, Step Types, source/origin text when available, warnings, and errors (FR-005, FR-008, SC-003)
 - [X] T016 Verify existing apply/submission behavior in `frontend/src/entrypoints/task-create.tsx` replaces Preset placeholders with editable executable Tool/Skill steps and blocks unresolved Preset submission (FR-006, FR-007, FR-008, FR-009, DESIGN-REQ-011)
-- [ ] T017 If T012 fails for MM-565 preview/apply behavior, patch `frontend/src/entrypoints/task-create.tsx` and `frontend/src/entrypoints/task-create.test.tsx` only for the failing requirement
-- [ ] T018 If explicit newer-version preview coverage is insufficient, add or update focused tests in `frontend/src/entrypoints/task-create.test.tsx` and patch `frontend/src/entrypoints/task-create.tsx` only if the test exposes a product gap (FR-011, SC-006)
+- [X] T017 Skip contingency patch for MM-565 preview/apply behavior because T012 passed; no changes required in `frontend/src/entrypoints/task-create.tsx` or `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T018 Skip contingency patch for explicit newer-version preview behavior because existing focused evidence was sufficient; no changes required in `frontend/src/entrypoints/task-create.tsx` or `frontend/src/entrypoints/task-create.test.tsx` (FR-011, SC-006)
 
 ### Story Validation
 
@@ -100,7 +100,7 @@
 - Phase 1 and Phase 2 are complete from artifact/code inspection.
 - T005-T010 are complete from existing MM-558 red-first unit test evidence inspection.
 - T011-T012 cover the Create page integration boundary and must pass before contingency implementation is skipped.
-- T013-T016 verify existing implementation; T017-T018 remain contingency implementation tasks only if verification fails.
+- T013-T016 verify existing implementation; T017-T018 record skipped contingency implementation after verification passed.
 - T019 validates the story end-to-end before final verification.
 - T020-T022 are final validation.
 
