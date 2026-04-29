@@ -1,22 +1,32 @@
 [
   {
-    "id": 4346762893,
+    "id": 4346742026,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier limit notice; no implementation feedback to address."
+    "rationale": "Qodo free-tier quota notice; no code feedback to address."
   },
   {
-    "id": 4199997533,
+    "id": 3163532745,
     "disposition": "not-applicable",
-    "rationale": "Gemini review summary explicitly reported no further feedback."
+    "rationale": "The suggested simplification no longer applies because skill selection intentionally falls back from metadata to canonical payload contract fields."
   },
   {
-    "id": 3163560523,
+    "id": 4199978654,
+    "disposition": "not-applicable",
+    "rationale": "Gemini review summary; its only concrete suggestion is tracked by review comment 3163532745."
+  },
+  {
+    "id": 3163550230,
     "disposition": "addressed",
-    "rationale": "Constrained selected-skill snapshot materialization to MoonMind-managed job workspaces under MOONMIND_AGENT_RUNTIME_STORE/<run_id>/repo and added regression coverage for external workspace paths."
+    "rationale": "Deferred action parsing until after top-level and nested terminal fields are checked, and added regression coverage for non-terminal action plus nested final status."
   },
   {
-    "id": 4200010279,
+    "id": 4199999267,
     "disposition": "not-applicable",
-    "rationale": "Codex review summary container; the actionable inline review comment is tracked and addressed separately."
+    "rationale": "Codex review body wrapper; concrete actionable feedback is tracked by review comment 3163550230."
+  },
+  {
+    "id": 3163616884,
+    "disposition": "addressed",
+    "rationale": "Stored the nested final status in final_status before conditional return, so the final action fallback is reachable."
   }
 ]

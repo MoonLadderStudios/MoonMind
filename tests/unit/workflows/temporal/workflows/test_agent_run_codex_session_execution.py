@@ -16,6 +16,7 @@ from moonmind.schemas.agent_runtime_models import (
 from moonmind.schemas.temporal_activity_models import AgentRuntimeFetchResultInput
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from moonmind.workflows.temporal.workflows.merge_gate import build_resolver_run_request
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -79,7 +80,10 @@ async def test_managed_session_request_preserves_explicit_empty_inputs() -> None
     assert request.parameters == {}
     assert request.workspace_spec == {}
 
-async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_head_branch() -> None:
+async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_head_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
     run = MoonMindAgentRun()
     request = _managed_session_request(
         parameters={"publishMode": "pr"},
@@ -91,6 +95,36 @@ async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_he
     assert isinstance(activity_input, AgentRuntimeFetchResultInput)
     assert activity_input.target_branch == "main"
     assert activity_input.head_branch is None
+
+async def test_managed_fetch_result_marks_pr_resolver_from_task_tool_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    resolver_request = build_resolver_run_request(
+        parent_workflow_id="mm:parent",
+        pull_request={
+            "repo": "MoonLadderStudios/Tactics",
+            "number": 1671,
+            "url": "https://github.com/MoonLadderStudios/Tactics/pull/1671",
+            "headSha": "6b4d769fa0054ac6c2ac865787c0f13de6418bed",
+            "baseBranch": "main",
+            "headBranch": "feature/pr-1671",
+        },
+        jira_issue_key=None,
+        merge_method="merge",
+    )
+    parameters = resolver_request["initial_parameters"]
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters=parameters,
+        workspace_spec=parameters["workspaceSpec"],
+    )
+
+    activity_input = run._build_managed_fetch_result_activity_input(request)
+
+    assert isinstance(activity_input, AgentRuntimeFetchResultInput)
+    assert activity_input.pr_resolver_expected is True
+    assert activity_input.head_branch == "feature/pr-1671"
 
 async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     monkeypatch: pytest.MonkeyPatch,
