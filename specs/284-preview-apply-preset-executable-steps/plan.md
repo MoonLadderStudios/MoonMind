@@ -22,8 +22,12 @@ MM-565 requires Preset steps to be selected from the step editor, previewed dete
 | FR-009 | implemented_verified | Create submission blocks unresolved Preset steps. | no code change planned | focused frontend unit/integration |
 | FR-010 | implemented_verified | Tests verify step-editor preset use without Task Presets management apply flow. | no code change planned | focused frontend unit/integration |
 | FR-011 | implemented_unverified | Existing stale-preset/reapply tests cover explicit reapply messaging, but MM-565-specific update preview is not isolated. | verify existing reapply tests and record residual risk if no gap is exposed | focused frontend unit |
-| SC-001..SC-005 | implemented_verified | Focused Create page tests cover preview/apply, errors, executable submission, and management separation. | no code change planned | focused frontend unit/integration |
-| SC-006 | implemented_unverified | Stale reapply messaging exists; version-update-specific preview is adjacent existing behavior. | verify existing coverage and keep residual risk visible | focused frontend unit |
+| SC-001 | implemented_verified | Focused Create page tests cover selecting Step Type `Preset`, configuring a preset, previewing generated steps, and applying expansion. | no code change planned | focused frontend unit/integration |
+| SC-002 | implemented_verified | Focused Create page tests cover failed preset expansion and unresolved Preset submission blocking. | no code change planned | focused frontend unit/integration |
+| SC-003 | implemented_verified | Focused Create page tests assert generated step titles, Step Types, and expansion warnings are visible before apply. | no code change planned | focused frontend unit/integration |
+| SC-004 | implemented_verified | Focused Create page tests verify applied Tool steps submit with executable binding and generated steps remain editable. | no code change planned | focused frontend unit/integration |
+| SC-005 | implemented_verified | Focused Create page tests verify step-editor preset use does not require Task Presets management. | no code change planned | focused frontend unit/integration |
+| SC-006 | implemented_unverified | Existing stale/reapply messaging tests cover explicit reapply/update behavior; version-update-specific preview is adjacent existing behavior. | verify existing coverage and keep residual risk visible | focused frontend unit |
 | DESIGN-REQ-006 | implemented_verified | Preset is an authoring-time state that can preview and apply. | no code change planned | focused frontend unit/integration |
 | DESIGN-REQ-007 | implemented_verified | Preset use lives in the step editor. | no code change planned | focused frontend unit/integration |
 | DESIGN-REQ-010 | implemented_verified | Preview before apply and replacement are implemented. | no code change planned | focused frontend unit/integration |
