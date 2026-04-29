@@ -616,7 +616,18 @@ def _selected_step_tool_name(step_entry: Mapping[str, Any]) -> str:
     )
     return str(step_tool.get("name") or step_tool.get("id") or "").strip()
 
-def _selected_step_tool_type(tool_name: str) -> str:
+def _selected_step_type(step_entry: Mapping[str, Any]) -> str:
+    return str(step_entry.get("type") or "").strip().lower()
+
+def _selected_step_tool_version(step_entry: Mapping[str, Any]) -> str:
+    step_tool = _coerce_mapping(step_entry.get("tool")) or _coerce_mapping(
+        step_entry.get("skill")
+    )
+    return str(step_tool.get("version") or "1.0").strip() or "1.0"
+
+def _selected_step_tool_type(step_entry: Mapping[str, Any], tool_name: str) -> str:
+    if _selected_step_type(step_entry) == "tool":
+        return "skill"
     if tool_name.lower() in _JIRA_STORY_OUTPUT_TOOLS:
         return "skill"
     return "agent_runtime"
@@ -934,9 +945,13 @@ def _build_runtime_planner():
         creates_story_breakdown_artifact = False
 
         # --- Expand task.steps[] or stepCount into multiple plan nodes ---
+        has_explicit_step_types = (
+            isinstance(raw_steps, list)
+            and any(isinstance(s, Mapping) and _selected_step_type(s) for s in raw_steps)
+        )
         has_multi_steps = (
             isinstance(raw_steps, list)
-            and len(raw_steps) > 1
+            and (len(raw_steps) > 1 or has_explicit_step_types)
             and all(isinstance(s, Mapping) for s in raw_steps)
         )
         if has_multi_steps:
@@ -1036,10 +1051,12 @@ def _build_runtime_planner():
                 # Per-step tool/skill override
                 step_tool_name = _selected_step_tool_name(step_entry)
                 step_runtime = runtime_mode
-                tool_type = _selected_step_tool_type(step_tool_name)
+                tool_type = _selected_step_tool_type(step_entry, step_tool_name)
+                tool_version = _selected_step_tool_version(step_entry)
                 effective_step_skill_name = step_tool_name or selected_skill_name
                 if step_tool_name:
-                    step_runtime = step_tool_name
+                    if tool_type == "skill" or not _selected_step_type(step_entry):
+                        step_runtime = step_tool_name
                     step_node_inputs["selectedSkill"] = step_tool_name
                     if _jira_agent_skill_selected(step_tool_name):
                         step_node_inputs["publishMode"] = "none"
@@ -1075,7 +1092,7 @@ def _build_runtime_planner():
                     "tool": {
                         "type": tool_type,
                         "name": step_runtime,
-                        "version": "1.0",
+                        "version": tool_version if tool_type == "skill" else "1.0",
                     },
                     "inputs": step_node_inputs,
                 })
