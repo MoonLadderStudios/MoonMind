@@ -25,5 +25,5 @@
 
 ## Validation
 
-- `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks`: BLOCKED because the current branch `run-jira-orchestrate-for-mm-565-preview-e1224323` does not use the numeric Speckit branch naming convention expected by the script.
+- `SPECIFY_FEATURE=284-preview-apply-preset-executable-steps .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks`: PASS. The script resolves `specs/284-preview-apply-preset-executable-steps` and reports `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `tasks.md` as available.
 - Manual gate check: PASS. Active feature pointer resolves to `specs/284-preview-apply-preset-executable-steps`, required artifacts exist, task coverage maps all FR/SC/DESIGN-REQ IDs, and exactly one story phase is present.

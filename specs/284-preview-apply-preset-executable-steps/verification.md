@@ -3,15 +3,16 @@
 **Feature**: `284-preview-apply-preset-executable-steps`  
 **Jira**: `MM-565`  
 **Date**: 2026-04-29  
-**Verdict**: FULLY_IMPLEMENTED with managed-wrapper test gap  
-**Confidence**: MEDIUM
+**Verdict**: FULLY_IMPLEMENTED
+**Confidence**: HIGH
 
 ## Test Results
 
 | Suite | Command | Result | Notes |
 | --- | --- | --- | --- |
 | Frontend focused | `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` | PASS | 1 file passed, 218 tests passed. jsdom printed expected `HTMLCanvasElement.getContext()` not-implemented warnings, but the suite exited 0. |
-| Managed unit wrapper | `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` | NOT RUN TO COMPLETION | The wrapper started the full Python unit suite before the UI target and was still in unrelated Python tests at about 18%; it was stopped and the direct focused Vitest command was run after `npm ci --no-fund --no-audit`. |
+| Managed unit wrapper | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` | PASS | Completed on 2026-04-29 at 11:16 UTC: 4,221 Python unit tests passed with 1 xpassed and 16 subtests passed, then the targeted frontend suite passed with 1 file and 218 tests. jsdom printed expected `HTMLCanvasElement.getContext()` not-implemented warnings, but the wrapper exited 0. |
+| MoonSpec prerequisites | `SPECIFY_FEATURE=284-preview-apply-preset-executable-steps .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` | PASS | Resolved `specs/284-preview-apply-preset-executable-steps` and found `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `tasks.md`. |
 | Whitespace | `git diff --check` | PASS | No whitespace errors. |
 
 ## Requirement Coverage

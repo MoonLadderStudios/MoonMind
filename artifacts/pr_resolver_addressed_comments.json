@@ -1,17 +1,22 @@
 [
   {
-    "id": 4342701970,
+    "id": 4343068831,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notification is informational and contains no code change request."
+    "rationale": "Qodo free-tier notice is informational and does not identify a code or documentation change for this PR."
   },
   {
-    "id": 4195927979,
-    "disposition": "not-applicable",
-    "rationale": "Top-level Gemini review summary is informational; the actionable inline coverage request is tracked separately."
-  },
-  {
-    "id": 3160127064,
+    "id": 3160438952,
     "disposition": "addressed",
-    "rationale": "Added a create-page regression test covering advanced skill field hide/show persistence and invalid JSON validation after toggling advanced mode off and on."
+    "rationale": "Updated moonspec_align_report.md so validation no longer contradicts the PASS result; it records the passing SPECIFY_FEATURE prerequisite command for the automation branch."
+  },
+  {
+    "id": 3160438958,
+    "disposition": "addressed",
+    "rationale": "Ran the managed unit wrapper to completion and updated verification.md with the passing wrapper evidence."
+  },
+  {
+    "id": 4196289541,
+    "disposition": "addressed",
+    "rationale": "Resolved both review findings by recording passing prerequisite validation and completed managed-wrapper test evidence."
   }
 ]
