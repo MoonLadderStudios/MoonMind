@@ -124,7 +124,7 @@ def _pr_resolver_status(payload: dict[str, Any]) -> str:
 
     final = _pr_resolver_final_payload(payload)
     if final:
-        return _first_terminal_pr_resolver_status(
+        final_status = _first_terminal_pr_resolver_status(
             final.get("state"),
             final.get("status"),
             final.get("merge_outcome"),

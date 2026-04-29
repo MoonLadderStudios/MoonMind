@@ -23,5 +23,10 @@
     "id": 4199999267,
     "disposition": "not-applicable",
     "rationale": "Codex review body wrapper; concrete actionable feedback is tracked by review comment 3163550230."
+  },
+  {
+    "id": 3163616884,
+    "disposition": "addressed",
+    "rationale": "Stored the nested final status in final_status before conditional return, so the final action fallback is reachable."
   }
 ]
