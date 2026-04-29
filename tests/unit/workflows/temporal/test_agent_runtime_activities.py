@@ -2535,6 +2535,76 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_verify_tool_hin
     assert "Verify KANDY-3607 against this branch." in result
     assert "Managed Codex CLI note:" in result
 
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_materializes_selected_skill_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    skill_root = tmp_path / "moonmind_skills"
+    active_skill = skill_root / "pr-resolver"
+    active_skill.mkdir(parents=True)
+    (active_skill / "SKILL.md").write_text(
+        "---\nname: pr-resolver\ndescription: active\n---\nactive resolver body\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.settings.workflow,
+        "skills_cache_root",
+        str(tmp_path / "skill_cache"),
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_local_mirror_root",
+        str(tmp_path / "unused_local"),
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_legacy_mirror_root",
+        str(skill_root),
+    )
+
+    job_root = tmp_path / "job-1"
+    workspace = job_root / "repo"
+    stale_repo_skill = workspace / ".agents" / "skills" / "pr-resolver"
+    stale_repo_skill.mkdir(parents=True)
+    (stale_repo_skill / "SKILL.md").write_text(
+        "stale repo-local resolver body\n",
+        encoding="utf-8",
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "parameters": {
+                    "instructions": "Resolve the PR.",
+                    "publishMode": "none",
+                    "metadata": {
+                        "moonmind": {
+                            "selectedSkill": "pr-resolver",
+                        },
+                    },
+                },
+            },
+            "workspacePath": str(workspace),
+        }
+    )
+
+    assert result.startswith("Active MoonMind skill snapshot:")
+    assert "../skills_active/pr-resolver/SKILL.md" in result
+    assert "Do not use repo-local `.agents/skills/pr-resolver/SKILL.md`" in result
+    assert (job_root / "skills_active" / "pr-resolver" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ).endswith("active resolver body\n")
+    assert (workspace / ".agents" / "skills" / "active").is_symlink()
+    assert not (workspace / "skills_active").exists()
+    assert (
+        stale_repo_skill / "SKILL.md"
+    ).read_text(encoding="utf-8") == "stale repo-local resolver body\n"
+
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_includes_context_artifact_reference(
     monkeypatch: pytest.MonkeyPatch,

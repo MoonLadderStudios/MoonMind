@@ -62,6 +62,14 @@ from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as C
 from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DISABLED_MESSAGE
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
+from moonmind.workflows.skills.materializer import (
+    SkillMaterializationError,
+    materialize_run_skill_workspace,
+)
+from moonmind.workflows.skills.resolver import (
+    SkillResolutionError,
+    resolve_run_skill_selection,
+)
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     build_deployment_update_tool_definition_payload,
@@ -3953,7 +3961,7 @@ class TemporalAgentRuntimeActivities:
         self,
         payload: Mapping[str, Any],
         /,
-    ) -> str:
+    ) -> Any:
         request_raw = payload.get("request")
         if not isinstance(request_raw, Mapping):
             raise TemporalActivityRuntimeError(
@@ -3963,6 +3971,10 @@ class TemporalAgentRuntimeActivities:
         workspace_path_raw = str(
             payload.get("workspace_path") or payload.get("workspacePath") or ""
         ).strip()
+        self._materialize_selected_agent_skill_for_turn(
+            request=request,
+            workspace_path=workspace_path_raw,
+        )
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
             if not workspace_path_raw:
@@ -4010,6 +4022,89 @@ class TemporalAgentRuntimeActivities:
         )
 
     @classmethod
+    def _materialize_selected_agent_skill_for_turn(
+        cls,
+        *,
+        request: AgentExecutionRequest,
+        workspace_path: str,
+    ) -> None:
+        """Materialize the selected active skill for a managed-session turn."""
+
+        params = request.parameters if isinstance(request.parameters, Mapping) else {}
+        selected_skill = selected_agent_skill(params)
+        if not selected_skill or not workspace_path:
+            return
+
+        workspace = Path(workspace_path).expanduser().resolve()
+        run_root = workspace.parent
+        cache_root = cls._managed_session_skill_cache_root(run_root)
+        try:
+            selection = resolve_run_skill_selection(
+                run_id=str(request.idempotency_key or run_root.name),
+                context={"skill_selection": [selected_skill]},
+            )
+            materialize_run_skill_workspace(
+                selection=selection,
+                run_root=run_root,
+                cache_root=cache_root,
+                verify_signatures=settings.workflow.skills_verify_signatures,
+            )
+        except (SkillMaterializationError, SkillResolutionError, OSError) as exc:
+            raise TemporalActivityRuntimeError(
+                f"selected skill materialization failed for '{selected_skill}': {exc}"
+            ) from exc
+
+        cls._ensure_managed_session_skill_shortcuts(
+            workspace=workspace,
+            skills_active_path=run_root / "skills_active",
+        )
+
+    @staticmethod
+    def _managed_session_skill_cache_root(run_root: Path) -> Path:
+        raw_cache_root = Path(settings.workflow.skills_cache_root).expanduser()
+        if raw_cache_root.is_absolute():
+            cache_root = raw_cache_root.resolve()
+        else:
+            cache_root = (run_root.parent / raw_cache_root).resolve()
+        cache_root.mkdir(parents=True, exist_ok=True)
+        return cache_root
+
+    @classmethod
+    def _ensure_managed_session_skill_shortcuts(
+        cls,
+        *,
+        workspace: Path,
+        skills_active_path: Path,
+    ) -> None:
+        """Expose non-invasive repo-local shortcuts to the active skill set."""
+
+        active_link = workspace / ".agents" / "skills" / "active"
+        if active_link.parent.is_symlink():
+            return
+        cls._replace_relative_symlink_if_possible(
+            active_link,
+            target=skills_active_path,
+        )
+
+    @staticmethod
+    def _replace_relative_symlink_if_possible(path: Path, *, target: Path) -> None:
+        if path.exists() or path.is_symlink():
+            if not path.is_symlink():
+                return
+            current = path.resolve(strict=False)
+            if current == target.resolve(strict=False):
+                return
+            try:
+                path.unlink()
+            except OSError:
+                return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.symlink_to(Path(os.path.relpath(target, path.parent)))
+        except OSError:
+            return
+
+    @classmethod
     def _prepare_managed_codex_turn_text(
         cls,
         instructions: str,
@@ -4020,7 +4115,31 @@ class TemporalAgentRuntimeActivities:
             instructions,
             parameters=parameters,
         )
+        prepared = cls._prepend_selected_skill_activation(
+            prepared,
+            parameters=parameters,
+        )
         return append_managed_codex_runtime_note(prepared)
+
+    @staticmethod
+    def _prepend_selected_skill_activation(
+        instructions: str,
+        *,
+        parameters: Mapping[str, Any] | None,
+    ) -> str:
+        selected_skill = selected_agent_skill(parameters)
+        if not selected_skill:
+            return instructions
+        if "Active MoonMind skill snapshot:" in instructions:
+            return instructions
+        block = (
+            "Active MoonMind skill snapshot:\n"
+            f"- Selected skill: {selected_skill}\n"
+            f"- Read `../skills_active/{selected_skill}/SKILL.md` first and follow that active snapshot.\n"
+            f"- If needed, `.agents/skills/active/{selected_skill}/SKILL.md` points to the same active snapshot.\n"
+            f"- Do not use repo-local `.agents/skills/{selected_skill}/SKILL.md` for this managed step; it may be stale source input.\n\n"
+        )
+        return block + instructions
 
     @staticmethod
     def _append_selected_jira_tool_hint(
