@@ -4038,7 +4038,7 @@ class TemporalAgentRuntimeActivities:
 
         params = request.parameters if isinstance(request.parameters, Mapping) else {}
         selected_skill = selected_agent_skill(params)
-        if not selected_skill or not workspace_path:
+        if not selected_skill or selected_skill == "auto" or not workspace_path:
             return False
 
         workspace = Path(workspace_path).expanduser().resolve()
@@ -4159,7 +4159,11 @@ class TemporalAgentRuntimeActivities:
         skill_snapshot_materialized: bool = False,
     ) -> str:
         selected_skill = selected_agent_skill(parameters)
-        if not selected_skill or not skill_snapshot_materialized:
+        if (
+            not selected_skill
+            or selected_skill == "auto"
+            or not skill_snapshot_materialized
+        ):
             return instructions
         if "Active MoonMind skill snapshot:" in instructions:
             return instructions

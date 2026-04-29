@@ -2648,6 +2648,56 @@ async def test_agent_runtime_prepare_turn_instructions_skips_skill_snapshot_for_
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_treats_auto_skill_as_no_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    empty_skill_root = tmp_path / "empty_skills"
+    empty_skill_root.mkdir()
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_local_mirror_root",
+        str(empty_skill_root),
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_legacy_mirror_root",
+        str(empty_skill_root),
+    )
+    managed_root = tmp_path / "agent_jobs"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(managed_root))
+
+    job_root = managed_root / "job-1"
+    workspace = job_root / "repo"
+    workspace.mkdir(parents=True)
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "parameters": {
+                    "instructions": "Use the default runtime behavior.",
+                    "publishMode": "none",
+                    "metadata": {
+                        "moonmind": {
+                            "selectedSkill": "auto",
+                        },
+                    },
+                },
+            },
+            "workspacePath": str(workspace),
+        }
+    )
+
+    assert result.startswith("Use the default runtime behavior.")
+    assert "Active MoonMind skill snapshot:" not in result
+    assert not (job_root / "skills_active").exists()
+    assert not (workspace / ".agents" / "skills" / "active").exists()
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_includes_context_artifact_reference(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
