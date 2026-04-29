@@ -282,6 +282,16 @@ def _normalize_step_type(raw_step: Mapping[str, Any], *, index: int) -> str:
         )
     return step_type
 
+
+def _has_substantive_tool_metadata(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, Mapping | list | tuple | set):
+        return bool(value)
+    return True
+
 def _normalize_tool_payload(raw_tool: Any, *, index: int) -> dict[str, Any]:
     if not isinstance(raw_tool, Mapping):
         raise TaskTemplateValidationError(
@@ -293,7 +303,10 @@ def _normalize_tool_payload(raw_tool: Any, *, index: int) -> dict[str, Any]:
             f"Step {index} tool.id or tool.name is required."
         )
     inputs = raw_tool.get("inputs")
-    if inputs is None:
+    args = raw_tool.get("args")
+    if inputs is None or (
+        isinstance(inputs, Mapping) and not inputs and args is not None
+    ):
         inputs = raw_tool.get("args")
     if inputs is None:
         inputs = {}
@@ -319,9 +332,11 @@ def _normalize_tool_payload(raw_tool: Any, *, index: int) -> dict[str, Any]:
         if value is not None:
             tool_payload[key] = value
     if any(marker in tool_id.lower() for marker in _COMMAND_TOOL_MARKERS):
-        if not tool_payload["inputs"] or not any(
-            key in tool_payload for key in ("sideEffectPolicy", "validation")
-        ):
+        has_policy_metadata = any(
+            _has_substantive_tool_metadata(tool_payload.get(key))
+            for key in ("sideEffectPolicy", "validation")
+        )
+        if not tool_payload["inputs"] or not has_policy_metadata:
             raise TaskTemplateValidationError(
                 f"Step {index} command-like Tool steps require bounded inputs and policy metadata."
             )

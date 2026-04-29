@@ -1954,3 +1954,71 @@ async def test_mm557_rejects_shell_snippets_unless_bounded_typed_tool(tmp_path):
 
     assert created["steps"][0]["tool"]["id"] == "command.run_typed"
     assert created["steps"][0]["tool"]["inputs"] == {"commandId": "unit-tests"}
+
+
+async def test_mm557_tool_args_survive_empty_schema_inputs(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+
+            created = await service.create_template(
+                slug="tool-args-fallback",
+                title="Tool Args Fallback",
+                description="Tool args from API request payload",
+                scope="personal",
+                scope_ref=str(user_id),
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "type": "tool",
+                        "instructions": "Fetch Jira issue.",
+                        "tool": {
+                            "name": "jira.get_issue",
+                            "inputs": {},
+                            "args": {"issueKey": "MM-557"},
+                        },
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+    assert created["steps"][0]["tool"]["inputs"] == {"issueKey": "MM-557"}
+
+
+async def test_mm557_command_tool_rejects_empty_policy_metadata(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+
+            with pytest.raises(
+                TaskTemplateValidationError,
+                match="command-like Tool steps require bounded inputs and policy metadata",
+            ):
+                await service.create_template(
+                    slug="empty-command-policy",
+                    title="Empty Command Policy",
+                    description="Command tool with default schema metadata",
+                    scope="personal",
+                    scope_ref=str(user_id),
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "type": "tool",
+                            "instructions": "Run a bounded test command.",
+                            "tool": {
+                                "name": "command.run_typed",
+                                "inputs": {"commandId": "unit-tests"},
+                                "validation": {},
+                            },
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=user_id,
+                )
