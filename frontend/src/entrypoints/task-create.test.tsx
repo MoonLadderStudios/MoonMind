@@ -6744,12 +6744,18 @@ describe("Task Create Entrypoint", () => {
     expect(primaryStep).not.toBeNull();
     const step = primaryStep as HTMLElement;
     const stepType = within(step).getByLabelText("Step Type") as HTMLSelectElement;
+    const helpId = stepType.getAttribute("aria-describedby");
+
+    expect(helpId).toBeTruthy();
 
     expect(
       within(step).getByText(
         "Skill asks an agent to perform work using reusable behavior.",
       ),
     ).toBeTruthy();
+    expect(document.getElementById(helpId as string)?.textContent).toBe(
+      "Skill asks an agent to perform work using reusable behavior.",
+    );
 
     fireEvent.change(stepType, { target: { value: "tool" } });
     expect(

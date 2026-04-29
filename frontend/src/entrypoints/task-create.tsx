@@ -6680,6 +6680,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     Step Type
                     <select
                       aria-label="Step Type"
+                      aria-describedby={`queue-step-type-help-${index}`}
                       data-step-field="stepType"
                       data-step-index={String(index)}
                       value={step.stepType}
@@ -6691,7 +6692,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       <option value="skill">Skill</option>
                       <option value="preset">Preset</option>
                     </select>
-                    <span className="small">
+                    <span id={`queue-step-type-help-${index}`} className="small">
                       {STEP_TYPE_HELP_TEXT[step.stepType]}
                     </span>
                   </label>

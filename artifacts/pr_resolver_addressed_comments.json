@@ -1,17 +1,17 @@
 [
   {
-    "id": 4340704945,
-    "disposition": "not-applicable",
-    "rationale": "Automated quota warning with no requested code change."
-  },
-  {
-    "id": 3158511680,
+    "id": 3159416583,
     "disposition": "addressed",
-    "rationale": "Runtime promotion override now updates top-level targetRuntime alongside task.runtime.mode, with a regression test covering stored payloads that already include targetRuntime."
+    "rationale": "Added aria-describedby on the Step Type select so screen readers announce the helper text."
   },
   {
-    "id": 4193967441,
-    "disposition": "not-applicable",
-    "rationale": "Codex review wrapper summary; the actionable child review comment is tracked separately."
+    "id": 3159416593,
+    "disposition": "addressed",
+    "rationale": "Added a unique helper-text id matching the Step Type select aria-describedby value."
+  },
+  {
+    "id": 4195075109,
+    "disposition": "addressed",
+    "rationale": "Review summary covered the same Step Type helper-text accessibility issue, which is now implemented and tested."
   }
 ]
