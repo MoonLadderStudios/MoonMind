@@ -4473,6 +4473,8 @@ class TemporalAgentRuntimeActivities:
             )
             record = self._run_store.load(run_id)
             if record is not None:
+                if record.workspace_path:
+                    self._normalize_workspace_git_alternates(record.workspace_path)
                 result = self._maybe_enrich_gemini_failure_result(
                     result=result,
                     record=record,
@@ -5022,13 +5024,20 @@ class TemporalAgentRuntimeActivities:
                         candidate=candidate,
                     )
                 )
+                if normalized_text == ".":
+                    changed = True
+                    continue
                 normalized_lines.append(normalized_text)
                 changed = changed or normalized_text != path_text
                 continue
 
             replacement_name = Path(path_text).name
             replacement = git_dir / replacement_name
-            if replacement_name.startswith("objects") and replacement.is_dir():
+            if (
+                replacement_name.startswith("objects")
+                and replacement.is_dir()
+                and replacement.resolve() != objects_dir.resolve()
+            ):
                 normalized_lines.append(
                     TemporalAgentRuntimeActivities._workspace_local_alternate_text(
                         git_dir=git_dir,
@@ -5046,13 +5055,14 @@ class TemporalAgentRuntimeActivities:
             )
             changed = True
 
-        if not changed:
+        unique_normalized = list(dict.fromkeys(normalized_lines))
+        if not changed and len(unique_normalized) == len(normalized_lines):
             return
 
         try:
-            if normalized_lines:
+            if unique_normalized:
                 alternates_path.write_text(
-                    "\n".join(dict.fromkeys(normalized_lines)) + "\n",
+                    "\n".join(unique_normalized) + "\n",
                     encoding="utf-8",
                 )
             else:

@@ -188,6 +188,42 @@ class TestPushWorkspaceBranch:
 
         assert not alternates_path.exists()
 
+    def test_normalize_workspace_git_alternates_skips_self_objects_directory(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "run-1" / "repo"
+        objects_dir = workspace / ".git" / "objects"
+        alternates_path = objects_dir / "info" / "alternates"
+        alternates_path.parent.mkdir(parents=True)
+        alternates_path.write_text(f"{objects_dir}\n.\n", encoding="utf-8")
+
+        TemporalAgentRuntimeActivities._normalize_workspace_git_alternates(
+            str(workspace)
+        )
+
+        assert not alternates_path.exists()
+
+    def test_normalize_workspace_git_alternates_deduplicates_entries(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "run-1" / "repo"
+        alternates_path = workspace / ".git" / "objects" / "info" / "alternates"
+        local_alternate = workspace / ".git" / "objects_app"
+        alternates_path.parent.mkdir(parents=True)
+        local_alternate.mkdir(parents=True)
+        alternates_path.write_text(
+            "../objects_app\n../objects_app\n",
+            encoding="utf-8",
+        )
+
+        TemporalAgentRuntimeActivities._normalize_workspace_git_alternates(
+            str(workspace)
+        )
+
+        assert alternates_path.read_text(encoding="utf-8") == "../objects_app\n"
+
     @pytest.mark.asyncio
     async def test_push_normalizes_git_alternates_before_branch_detection(
         self,
@@ -1235,6 +1271,9 @@ class TestFetchResultPushIntegration:
                 activities, "_push_workspace_branch",
             ) as mock_push,
             patch.object(
+                activities, "_normalize_workspace_git_alternates",
+            ) as mock_normalize,
+            patch.object(
                 activities, "_detect_pr_url_from_workspace",
                 return_value=None,
             ),
@@ -1250,6 +1289,7 @@ class TestFetchResultPushIntegration:
             )
 
         mock_push.assert_not_called()
+        mock_normalize.assert_called_once_with("/work/agent_jobs/run-1/repo")
 
     @pytest.mark.asyncio
     async def test_fetch_result_skips_push_on_failure(self):

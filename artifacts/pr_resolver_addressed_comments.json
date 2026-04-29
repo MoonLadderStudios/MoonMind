@@ -1,27 +1,27 @@
 [
   {
-    "id": 4192185054,
+    "id": 3158157775,
+    "disposition": "addressed",
+    "rationale": "Skipped normalized self-alternates where the alternate resolves to the repository's own objects directory."
+  },
+  {
+    "id": 3158157779,
+    "disposition": "addressed",
+    "rationale": "Prevented stale replacement fallback from adding .git/objects as its own alternate."
+  },
+  {
+    "id": 3158157781,
+    "disposition": "addressed",
+    "rationale": "Treat duplicate normalized alternates as a changed file state and rewrite unique entries."
+  },
+  {
+    "id": 3158157783,
+    "disposition": "addressed",
+    "rationale": "Moved Git alternates normalization earlier in agent_runtime_fetch_result after the run record is loaded, before later Git-dependent enrichment."
+  },
+  {
+    "id": 4193575174,
     "disposition": "not-applicable",
-    "rationale": "Positive Gemini review summary with no requested change."
-  },
-  {
-    "id": 3157002480,
-    "disposition": "addressed",
-    "rationale": "Key-scoped diagnostics now skip unrelated deprecated override diagnostics; regression test covers diagnostics(scope, key)."
-  },
-  {
-    "id": 3157002486,
-    "disposition": "addressed",
-    "rationale": "Resolution now clears cached migration diagnostics for the key before fresh override/default resolution; regression test covers reused service instances."
-  },
-  {
-    "id": 4192187854,
-    "disposition": "not-applicable",
-    "rationale": "Codex automated review container comment; actionable child review comments are tracked separately."
-  },
-  {
-    "id": 3157002490,
-    "disposition": "addressed",
-    "rationale": "Migration rule validation now rejects duplicate renamed new_key targets; regression test covers fail-fast behavior."
+    "rationale": "Summary review only; the actionable items are tracked and addressed by the inline review comments."
   }
 ]
