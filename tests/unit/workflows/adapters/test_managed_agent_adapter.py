@@ -56,6 +56,8 @@ pytestmark = [pytest.mark.asyncio]
         ({"state": "MERGED"}, "merged"),
         ({"final": {"final_state": "MERGED"}}, "merged"),
         ({"final": {"finalState": "MERGED"}}, "merged"),
+        ({"final_state": {"state": "MERGED"}}, "merged"),
+        ({"finalState": {"state": "MERGED"}}, "merged"),
         ({"finalOutcome": "merged"}, "merged"),
         ({"final_outcome": "merged"}, "merged"),
         ({"mergeOutcome": {"state": "MERGED"}}, "merged"),
@@ -1950,6 +1952,61 @@ async def test_fetch_result_maps_final_state_merged_pr_resolver_artifact_metadat
     assert (
         result.metadata["headSha"]
         == "49061ed20f6b2260ba9564e71f4f896e3f96d3df"
+    )
+
+
+async def test_fetch_result_maps_tactics_final_state_object_pr_resolver_metadata(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    artifacts_path = workspace_path / "artifacts"
+    artifacts_path.mkdir(parents=True)
+    (artifacts_path / "pr_resolver_result.json").write_text(
+        (
+            "{\n"
+            '  "final_state": {\n'
+            '    "state": "MERGED",\n'
+            '    "head_commit": "ac70bf9e3350ea728a1cd1332081160ae25390c3"\n'
+            "  }\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-tactics-final-state",
+            agent_id="codex_cli",
+            runtime_id="codex_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-tactics-final-state",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-tactics-final-state", pr_resolver_expected=True
+    )
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "merged"
+    assert (
+        result.metadata["headSha"]
+        == "ac70bf9e3350ea728a1cd1332081160ae25390c3"
     )
 
 

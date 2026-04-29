@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -83,6 +83,8 @@ _PR_RESOLVER_RESULT_PATH_LIST = ", ".join(
 def _normalize_pr_resolver_text(value: Any) -> str:
     """Return one normalized resolver status candidate."""
 
+    if isinstance(value, Mapping):
+        return ""
     return str(value or "").strip().lower()
 
 
@@ -149,6 +151,12 @@ def _pr_resolver_final_payload(payload: dict[str, Any]) -> dict[str, Any]:
     final = payload.get("final")
     if isinstance(final, dict):
         return final
+    final_state = payload.get("final_state")
+    if isinstance(final_state, dict):
+        return final_state
+    final_state = payload.get("finalState")
+    if isinstance(final_state, dict):
+        return final_state
     merge_outcome = payload.get("mergeOutcome")
     if isinstance(merge_outcome, dict):
         return merge_outcome
