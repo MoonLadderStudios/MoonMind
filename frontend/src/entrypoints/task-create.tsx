@@ -1177,19 +1177,55 @@ function createStepStateEntriesFromTemporalDraft(
     const primarySkill = draft.primarySkill || "";
     const shouldUsePrimarySkill =
       index === 0 &&
+      step.stepType === "skill" &&
       primarySkill !== "" &&
       !hasExplicitSkillSelection(step.skillId);
     const hasJiraOrchestration =
       step.jiraOrchestration &&
       Object.keys(step.jiraOrchestration).length > 0;
+    const toolPayload = step.tool || {};
+    const presetPayload = step.preset || {};
+    const presetKey =
+      step.stepType === "preset"
+        ? String(
+            presetPayload.id ||
+              presetPayload.slug ||
+              presetPayload.name ||
+              "",
+          ).trim()
+        : "";
 
     return createStepStateEntry(index + 1, {
       id: step.id,
       title: step.title,
+      stepType: step.stepType,
       instructions: step.instructions,
-      skillId: shouldUsePrimarySkill ? primarySkill : step.skillId,
-      skillArgs: stringifySkillArgs(step.skillArgs),
+      skillId:
+        step.stepType === "skill"
+          ? shouldUsePrimarySkill
+            ? primarySkill
+            : step.skillId
+          : "",
+      skillArgs:
+        step.stepType === "skill" ? stringifySkillArgs(step.skillArgs) : "",
       skillRequiredCapabilities: step.skillRequiredCapabilities.join(","),
+      toolId:
+        step.stepType === "tool"
+          ? String(toolPayload.id || toolPayload.name || step.skillId || "").trim()
+          : "",
+      toolVersion:
+        step.stepType === "tool"
+          ? String(toolPayload.version || "").trim()
+          : "",
+      toolInputs:
+        step.stepType === "tool"
+          ? JSON.stringify(toolPayload.inputs || step.skillArgs || {}, null, 2)
+          : "{}",
+      presetKey,
+      presetPreview:
+        step.stepType === "preset"
+          ? presetPreviewStateFromDraftPayload(presetKey, presetPayload)
+          : null,
       templateStepId: step.templateStepId,
       templateInstructions: step.templateInstructions,
       inputAttachments: (step.inputAttachments || []).map(
@@ -1230,6 +1266,34 @@ function stepAttachmentRefFromTemporal(
 function hasExplicitSkillSelection(skillId: string): boolean {
   const normalized = skillId.trim().toLowerCase();
   return normalized !== "" && normalized !== "auto";
+}
+
+function presetPreviewStateFromDraftPayload(
+  presetKey: string,
+  presetPayload: Record<string, unknown>,
+): PresetPreviewState | null {
+  const inputs = presetPayload.inputs;
+  if (!inputs || typeof inputs !== "object" || Array.isArray(inputs)) {
+    return null;
+  }
+  const version = String(presetPayload.version || "").trim();
+  return {
+    presetKey,
+    presetTitle: String(
+      presetPayload.title ||
+        presetPayload.name ||
+        presetPayload.slug ||
+        presetPayload.id ||
+        "",
+    ).trim(),
+    version,
+    expandedSteps: [],
+    previewSteps: [],
+    warnings: [],
+    inputs: inputs as Record<string, unknown>,
+    assumptions: [],
+    capabilities: [],
+  };
 }
 
 function isResolverSkill(skillId: string): boolean {
@@ -5137,7 +5201,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const preview = await expandPresetForDraft({
         preset,
         detail,
-        inputValues: {},
+        inputValues:
+          step.presetPreview?.presetKey === preset.key
+            ? step.presetPreview.inputs
+            : {},
       });
       updateStep(localId, {
         presetPreview: preview,

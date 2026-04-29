@@ -881,6 +881,43 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (
+          url === "/api/executions/mm%3Apreset-step-input-edit?source=temporal"
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:preset-step-input-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  instructions: "Edit a preset step.",
+                  steps: [
+                    {
+                      id: "preset-step",
+                      title: "Preset",
+                      stepType: "preset",
+                      instructions: "Preview the configured preset.",
+                      preset: {
+                        id: "global::::speckit-demo",
+                        slug: "speckit-demo",
+                        version: "1.2.3",
+                        inputs: { feature_name: "MM-566" },
+                      },
+                    },
+                  ],
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Aauto-primary-skill?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -2950,6 +2987,12 @@ describe("Task Create Entrypoint", () => {
         id: "step-primary",
         title: "Primary",
         instructions: "Primary operator objective.",
+        stepType: "skill",
+        skill: {
+          id: "moonspec-orchestrate",
+          args: { mode: "runtime" },
+          requiredCapabilities: ["git"],
+        },
         skillId: "moonspec-orchestrate",
         skillArgs: { mode: "runtime" },
         skillRequiredCapabilities: ["git"],
@@ -2960,6 +3003,11 @@ describe("Task Create Entrypoint", () => {
         id: "step-second",
         title: "Second",
         instructions: "Second step instructions.",
+        stepType: "tool",
+        tool: {
+          name: "pr-resolver",
+          inputs: { merge: false },
+        },
         skillId: "pr-resolver",
         skillArgs: { merge: false },
         skillRequiredCapabilities: [],
@@ -2974,6 +3022,101 @@ describe("Task Create Entrypoint", () => {
           },
         },
       },
+    ]);
+  });
+
+  it("reconstructs explicit Step Type draft payloads for editing", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:step-types",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Edit explicit Step Type payloads.",
+          steps: [
+            {
+              id: "tool-step",
+              title: "Fetch issue",
+              type: "tool",
+              instructions: "Fetch Jira issue.",
+              tool: {
+                id: "jira.get_issue",
+                inputs: { issueKey: "MM-566" },
+              },
+            },
+            {
+              id: "skill-step",
+              title: "Implement",
+              type: "skill",
+              instructions: "Implement the issue.",
+              skill: {
+                id: "moonspec-implement",
+                args: { issueKey: "MM-566" },
+                requiredCapabilities: ["git"],
+              },
+            },
+            {
+              id: "preset-step",
+              title: "Jira flow",
+              type: "preset",
+              instructions: "Configure Jira orchestration.",
+              preset: {
+                id: "jira-orchestrate",
+                version: "2026-04-29",
+                inputs: { issueKey: "MM-566" },
+              },
+            },
+            {
+              id: "legacy-skill",
+              instructions: "Read an old skill-shaped tool.",
+              tool: {
+                type: "skill",
+                id: "legacy-skill",
+                inputs: { mode: "runtime" },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft.steps).toEqual([
+      expect.objectContaining({
+        id: "tool-step",
+        stepType: "tool",
+        tool: {
+          id: "jira.get_issue",
+          inputs: { issueKey: "MM-566" },
+        },
+        skillId: "jira.get_issue",
+        skillArgs: { issueKey: "MM-566" },
+      }),
+      expect.objectContaining({
+        id: "skill-step",
+        stepType: "skill",
+        skill: {
+          id: "moonspec-implement",
+          args: { issueKey: "MM-566" },
+          requiredCapabilities: ["git"],
+        },
+        skillId: "moonspec-implement",
+        skillArgs: { issueKey: "MM-566" },
+        skillRequiredCapabilities: ["git"],
+      }),
+      expect.objectContaining({
+        id: "preset-step",
+        stepType: "preset",
+        preset: {
+          id: "jira-orchestrate",
+          version: "2026-04-29",
+          inputs: { issueKey: "MM-566" },
+        },
+      }),
+      expect.objectContaining({
+        id: "legacy-skill",
+        stepType: "skill",
+        skillId: "legacy-skill",
+        skillArgs: { mode: "runtime" },
+      }),
     ]);
   });
 
@@ -3203,6 +3346,42 @@ describe("Task Create Entrypoint", () => {
       expect(screen.getByText("Step 1 (Primary)")).toBeTruthy();
       expect(screen.getByText("Step 2")).toBeTruthy();
       expect(screen.getByText("Step 3")).toBeTruthy();
+    });
+  });
+
+  it("preserves reconstructed preset inputs when previewing an edit draft", async () => {
+    renderForEdit("mm:preset-step-input-edit");
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    await waitFor(() => {
+      expect(
+        (within(step).getByLabelText("Step Type") as HTMLSelectElement).value,
+      ).toBe("preset");
+      expect(
+        (within(step).getByLabelText("Preset") as HTMLSelectElement).value,
+      ).toBe("global::::speckit-demo");
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url, init]) => {
+          if (
+            !String(url).startsWith(
+              "/api/task-step-templates/speckit-demo:expand?scope=global",
+            )
+          ) {
+            return false;
+          }
+          const body = JSON.parse(String(init?.body || "{}")) as {
+            inputs?: Record<string, unknown>;
+          };
+          return body.inputs?.feature_name === "MM-566";
+        }),
+      ).toBe(true);
     });
   });
 

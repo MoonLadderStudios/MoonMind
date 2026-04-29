@@ -1,22 +1,32 @@
 [
   {
-    "id": 4343068831,
+    "id": 4343518614,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice is informational and does not identify a code or documentation change for this PR."
+    "rationale": "Qodo free-tier limit notification is informational and contains no code feedback to address."
   },
   {
-    "id": 3160438952,
+    "id": 3160855192,
     "disposition": "addressed",
-    "rationale": "Updated moonspec_align_report.md so validation no longer contradicts the PASS result; it records the passing SPECIFY_FEATURE prerequisite command for the automation branch."
+    "rationale": "Replaced generic draft step payload records with specific Tool, Skill, and Preset payload interfaces with flexible index signatures."
   },
   {
-    "id": 3160438958,
-    "disposition": "addressed",
-    "rationale": "Ran the managed unit wrapper to completion and updated verification.md with the passing wrapper evidence."
+    "id": 4196785865,
+    "disposition": "not-applicable",
+    "rationale": "Review summary only; its actionable type-safety feedback is tracked by review comment 3160855192."
   },
   {
-    "id": 4196289541,
+    "id": 3160875256,
     "disposition": "addressed",
-    "rationale": "Resolved both review findings by recording passing prerequisite validation and completed managed-wrapper test evidence."
+    "rationale": "Draft reconstruction now reads step.stepType before falling back to legacy step.type."
+  },
+  {
+    "id": 3160875268,
+    "disposition": "addressed",
+    "rationale": "Preset draft hydration now preserves preset inputs in step preview state and reuses them when previewing the preset expansion."
+  },
+  {
+    "id": 4196808307,
+    "disposition": "not-applicable",
+    "rationale": "Codex review body is informational; its actionable findings are tracked by review comments 3160875256 and 3160875268."
   }
 ]

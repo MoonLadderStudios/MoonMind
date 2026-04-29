@@ -59,6 +59,38 @@ export type TemporalTaskInputAttachmentRef = {
   sizeBytes: number;
 };
 
+export type TemporalSubmissionDraftStepType = 'tool' | 'skill' | 'preset';
+
+export type TemporalSubmissionDraftToolPayload = {
+  id?: string;
+  name?: string;
+  version?: string;
+  type?: string;
+  kind?: string;
+  inputs?: Record<string, unknown>;
+  args?: Record<string, unknown>;
+  requiredCapabilities?: unknown;
+  [key: string]: unknown;
+};
+
+export type TemporalSubmissionDraftSkillPayload = {
+  id?: string;
+  name?: string;
+  inputs?: Record<string, unknown>;
+  args?: Record<string, unknown>;
+  requiredCapabilities?: unknown;
+  [key: string]: unknown;
+};
+
+export type TemporalSubmissionDraftPresetPayload = {
+  id?: string;
+  slug?: string;
+  name?: string;
+  version?: string;
+  inputs?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
 export type TemporalSubmissionDraft = {
   runtime: string | null;
   providerProfile: string | null;
@@ -77,6 +109,10 @@ export type TemporalSubmissionDraft = {
     id: string;
     title: string;
     instructions: string;
+    stepType: TemporalSubmissionDraftStepType;
+    tool?: TemporalSubmissionDraftToolPayload;
+    skill?: TemporalSubmissionDraftSkillPayload;
+    preset?: TemporalSubmissionDraftPresetPayload;
     skillId: string;
     skillArgs: Record<string, unknown>;
     skillRequiredCapabilities: string[];
@@ -399,6 +435,17 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
 
   const tool = objectValue(step.tool);
   const skill = objectValue(step.skill);
+  const preset = objectValue(step.preset);
+  const rawStepType = stringValue(step.stepType, step.type).toLowerCase();
+  const legacyToolType = stringValue(tool.type, tool.kind).toLowerCase();
+  const stepType: TemporalSubmissionDraftStepType =
+    rawStepType === 'tool' || rawStepType === 'skill' || rawStepType === 'preset'
+      ? rawStepType
+      : Object.keys(preset).length > 0
+        ? 'preset'
+        : Object.keys(tool).length > 0 && legacyToolType !== 'skill'
+          ? 'tool'
+          : 'skill';
   const instructions = stringValue(step.instructions);
   const id = stringValue(step.id);
   const templateStepId = stringValue(
@@ -423,6 +470,10 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     id,
     title: stringValue(step.title),
     instructions,
+    stepType,
+    ...(Object.keys(tool).length > 0 ? { tool } : {}),
+    ...(Object.keys(skill).length > 0 ? { skill } : {}),
+    ...(Object.keys(preset).length > 0 ? { preset } : {}),
     skillId: stringValue(tool.name, tool.id, skill.id, skill.name),
     skillArgs: firstObjectValue(tool.inputs, tool.args, skill.inputs, skill.args),
     skillRequiredCapabilities: stringArrayValue(
@@ -445,6 +496,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.id ||
     result.title ||
     result.instructions ||
+    result.stepType !== 'skill' ||
     result.skillId ||
     Object.keys(result.skillArgs).length > 0 ||
     result.skillRequiredCapabilities.length > 0 ||
