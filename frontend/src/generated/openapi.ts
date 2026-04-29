@@ -6662,6 +6662,8 @@ export interface components {
         TaskTemplateStepBlueprintSchema: {
             /** Kind */
             kind?: ("step" | "include") | null;
+            /** Type */
+            type?: ("tool" | "skill") | null;
             /** Slug */
             slug?: string | null;
             /** Title */
@@ -6678,6 +6680,7 @@ export interface components {
             inputMapping?: {
                 [key: string]: unknown;
             };
+            tool?: components["schemas"]["TaskTemplateStepToolSchema"] | null;
             skill?: components["schemas"]["TaskTemplateStepSkillSchema"] | null;
             /** Annotations */
             annotations?: {
@@ -6700,6 +6703,58 @@ export interface components {
             };
             /** Requiredcapabilities */
             requiredCapabilities?: string[];
+            /** Context */
+            context?: {
+                [key: string]: unknown;
+            };
+            /** Permissions */
+            permissions?: {
+                [key: string]: unknown;
+            };
+            /** Autonomy */
+            autonomy?: {
+                [key: string]: unknown;
+            };
+            /** Runtime */
+            runtime?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * TaskTemplateStepToolSchema
+         * @description Tool payload attached to a template step.
+         */
+        TaskTemplateStepToolSchema: {
+            /** Id */
+            id?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Version */
+            version?: string | null;
+            /** Inputs */
+            inputs?: {
+                [key: string]: unknown;
+            };
+            /** Args */
+            args?: {
+                [key: string]: unknown;
+            };
+            /** Requiredauthorization */
+            requiredAuthorization?: unknown;
+            /** Requiredcapabilities */
+            requiredCapabilities?: string[];
+            /** Sideeffectpolicy */
+            sideEffectPolicy?: unknown;
+            /** Retrypolicy */
+            retryPolicy?: unknown;
+            /** Execution */
+            execution?: {
+                [key: string]: unknown;
+            };
+            /** Validation */
+            validation?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * TaskTemplateSummarySchema

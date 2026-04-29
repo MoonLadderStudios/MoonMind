@@ -29,7 +29,7 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(token|password|secret)\s*=\s*[^\s]+", re.IGNORECASE),
 )
 _ALLOWED_STEP_KEYS = frozenset(
-    {"slug", "title", "instructions", "skill", "annotations"}
+    {"slug", "title", "type", "instructions", "tool", "skill", "annotations"}
 )
 logger = logging.getLogger(__name__)
 
@@ -101,11 +101,31 @@ class TaskTemplateSaveService:
                 cleaned["title"] = title
             else:
                 cleaned.pop("title", None)
-            skill = cleaned.get("skill")
-            if skill is not None and not isinstance(skill, dict):
+            step_type = str(cleaned.get("type") or "skill").strip().lower()
+            if step_type not in {"tool", "skill"}:
                 raise TaskTemplateValidationError(
-                    f"step {index} skill must be an object"
+                    f"step {index} type must be one of: tool, skill"
                 )
+            cleaned["type"] = step_type
+            tool = cleaned.get("tool")
+            if step_type == "tool":
+                if not isinstance(tool, dict):
+                    raise TaskTemplateValidationError(
+                        f"step {index} tool must be an object"
+                    )
+                cleaned.pop("skill", None)
+            elif tool is not None:
+                raise TaskTemplateValidationError(
+                    f"step {index} skill step must not include tool"
+                )
+            skill = cleaned.get("skill")
+            if step_type == "skill":
+                if skill is not None and not isinstance(skill, dict):
+                    raise TaskTemplateValidationError(
+                        f"step {index} skill must be an object"
+                    )
+            else:
+                cleaned.pop("skill", None)
             sanitized.append(cleaned)
         return sanitized
 

@@ -525,6 +525,10 @@ async def add_request_id(request: Request, call_next):
 
 _CODEX_OPENROUTER_QWEN36_PLUS_MODEL = "qwen/qwen3.6-plus"
 _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL = "qwen/qwen3.6-plus:free"
+_CLAUDE_ANTHROPIC_LEGACY_DISPLAY_MODEL_ALIASES = {
+    "Sonnet 4.6": "claude-sonnet-4-6",
+    "Opus 4.7": "claude-opus-4-7",
+}
 
 def _codex_openrouter_qwen36_plus_file_templates(
     model: str,
@@ -828,13 +832,33 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         profile_id == "codex_openrouter_qwen36_plus"
                         and current_model_text == legacy_openrouter_model
                     )
-                    if desired_default_model is not None and (
-                        not current_model_text or should_reconcile_deprecated_model
+                    is_legacy_claude_display_model = (
+                        profile_id == "claude_anthropic"
+                        and current_model_text
+                        in _CLAUDE_ANTHROPIC_LEGACY_DISPLAY_MODEL_ALIASES
+                    )
+                    reconciled_model = (
+                        _CLAUDE_ANTHROPIC_LEGACY_DISPLAY_MODEL_ALIASES[
+                            current_model_text
+                        ]
+                        if is_legacy_claude_display_model
+                        else desired_default_model
+                    )
+                    should_reconcile_default_model = (
+                        desired_default_model is not None
+                        and (
+                            not current_model_text
+                            or should_reconcile_deprecated_model
+                        )
+                    )
+                    if (
+                        should_reconcile_default_model
+                        or is_legacy_claude_display_model
                     ):
                         stmt = (
                             update(ManagedAgentProviderProfile)
                             .where(ManagedAgentProviderProfile.profile_id == profile_id)
-                            .values(default_model=desired_default_model)
+                            .values(default_model=reconciled_model)
                         )
                         await session.execute(stmt)
                         needs_commit = True
