@@ -122,6 +122,9 @@ MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
 MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-prepare-turn-instructions-activity-v1"
 )
+PR_RESOLVER_PAYLOAD_SKILL_DETECTION_PATCH_ID = (
+    "agent-run-pr-resolver-payload-skill-detection-v1"
+)
 MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID = "agent-run-slot-wait-manager-inspection-v1"
 SLOT_HANDOFF_PATCH_ID = "agent-run-slot-handoff-v1"
 SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
@@ -150,7 +153,11 @@ _DEFAULT_SESSION_IMAGE_REF = os.environ.get(
 )
 _SLOT_HANDOFF_TTL_SECONDS = 10
 
-def _request_selected_skill(request: AgentExecutionRequest) -> str | None:
+def _request_selected_skill(
+    request: AgentExecutionRequest,
+    *,
+    include_payload_contract: bool = True,
+) -> str | None:
     """Return the selected agent skill recorded in request metadata, if present."""
 
     parameters = request.parameters if isinstance(request.parameters, dict) else {}
@@ -163,7 +170,36 @@ def _request_selected_skill(request: AgentExecutionRequest) -> str | None:
         or metadata_map.get("selectedSkill")
         or ""
     ).strip()
-    return selected_skill or None
+    if selected_skill:
+        return selected_skill
+    if not include_payload_contract:
+        return None
+
+    direct_skill = str(
+        parameters.get("targetSkill")
+        or parameters.get("target_skill")
+        or parameters.get("skillId")
+        or parameters.get("skill")
+        or ""
+    ).strip()
+    if direct_skill:
+        return direct_skill
+
+    task_payload = parameters.get("task")
+    task = task_payload if isinstance(task_payload, Mapping) else {}
+    skill_payload = task.get("skill")
+    skill = skill_payload if isinstance(skill_payload, Mapping) else {}
+    skill_id = str(skill.get("id") or skill.get("name") or "").strip()
+    if skill_id:
+        return skill_id
+
+    tool_payload = task.get("tool")
+    tool = tool_payload if isinstance(tool_payload, Mapping) else {}
+    tool_type = str(tool.get("type") or tool.get("kind") or "").strip()
+    if tool_type and tool_type != "skill":
+        return None
+    tool_name = str(tool.get("name") or tool.get("id") or "").strip()
+    return tool_name or None
 
 def _request_step_ledger_context(
     request: AgentExecutionRequest,
@@ -635,7 +671,13 @@ class MoonMindAgentRun:
         if head_branch:
             activity_input["headBranch"] = head_branch
 
-        if _request_selected_skill(request) == "pr-resolver":
+        selected_skill = _request_selected_skill(
+            request,
+            include_payload_contract=workflow.patched(
+                PR_RESOLVER_PAYLOAD_SKILL_DETECTION_PATCH_ID
+            ),
+        )
+        if selected_skill == "pr-resolver":
             activity_input["prResolverExpected"] = True
         return AgentRuntimeFetchResultInput.model_validate(activity_input)
 
@@ -663,7 +705,13 @@ class MoonMindAgentRun:
             return await adapter.fetch_result(
                 self.run_id,
                 pr_resolver_expected=(
-                    _request_selected_skill(request) == "pr-resolver"
+                    _request_selected_skill(
+                        request,
+                        include_payload_contract=workflow.patched(
+                            PR_RESOLVER_PAYLOAD_SKILL_DETECTION_PATCH_ID
+                        ),
+                    )
+                    == "pr-resolver"
                 ),
             )
 
@@ -682,7 +730,13 @@ class MoonMindAgentRun:
         return await adapter.fetch_result(
             self.run_id,
             pr_resolver_expected=(
-                _request_selected_skill(request) == "pr-resolver"
+                _request_selected_skill(
+                    request,
+                    include_payload_contract=workflow.patched(
+                        PR_RESOLVER_PAYLOAD_SKILL_DETECTION_PATCH_ID
+                    ),
+                )
+                == "pr-resolver"
             ),
         )
 
