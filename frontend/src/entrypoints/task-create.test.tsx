@@ -6735,6 +6735,45 @@ describe("Task Create Entrypoint", () => {
     ).toBeTruthy();
   });
 
+  it("presents concise Step Type helper copy for Tool Skill and Preset", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+    const step = primaryStep as HTMLElement;
+    const stepType = within(step).getByLabelText("Step Type") as HTMLSelectElement;
+    const helpId = stepType.getAttribute("aria-describedby");
+
+    expect(helpId).toBeTruthy();
+
+    expect(
+      within(step).getByText(
+        "Skill asks an agent to perform work using reusable behavior.",
+      ),
+    ).toBeTruthy();
+    expect(document.getElementById(helpId as string)?.textContent).toBe(
+      "Skill asks an agent to perform work using reusable behavior.",
+    );
+
+    fireEvent.change(stepType, { target: { value: "tool" } });
+    expect(
+      within(step).getByText(
+        "Tool runs a typed integration or system operation directly.",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.change(stepType, { target: { value: "preset" } });
+    expect(
+      within(step).getByText(
+        "Preset inserts a reusable set of configured steps.",
+      ),
+    ).toBeTruthy();
+    expect(within(step).queryByText(/Temporal Activity/)).toBeNull();
+    expect(within(step).queryByText(/Capability/)).toBeNull();
+  });
+
   it("switches Step Type configuration areas while preserving instructions", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
