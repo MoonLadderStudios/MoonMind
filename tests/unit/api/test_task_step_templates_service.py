@@ -1732,3 +1732,225 @@ async def test_sync_seed_templates_updates_existing_seed(tmp_path):
             assert len(template.latest_version.steps) == 2
             assert template.latest_version.steps[0]["skill"]["id"] == "moonspec-specify"
             assert template.latest_version.annotations["sourceSkill"] == "moonspec-orchestrate"
+
+async def test_mm557_accepts_and_expands_jira_transition_tool_step(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            created = await service.create_template(
+                slug="jira-transition-tool",
+                title="Jira Transition Tool",
+                description="Typed Jira transition",
+                scope="personal",
+                scope_ref=str(user_id),
+                tags=["jira"],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "type": "tool",
+                        "title": "Move Jira issue",
+                        "instructions": "Move MM-557 to In Progress.",
+                        "tool": {
+                            "id": "jira.transition_issue",
+                            "version": "1.0.0",
+                            "inputs": {
+                                "issueKey": "MM-557",
+                                "targetStatus": "In Progress",
+                            },
+                            "requiredAuthorization": "jira",
+                            "requiredCapabilities": ["jira"],
+                            "sideEffectPolicy": "idempotent-by-transition-target",
+                        },
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+            expanded = await service.expand_template(
+                slug="jira-transition-tool",
+                scope="personal",
+                scope_ref=str(user_id),
+                version="1.0.0",
+                inputs={},
+                context={},
+                options=ExpandOptions(should_enforce_step_limit=True),
+                user_id=user_id,
+            )
+
+    step = created["steps"][0]
+    assert step["type"] == "tool"
+    assert step["tool"]["id"] == "jira.transition_issue"
+    assert step["tool"]["inputs"]["issueKey"] == "MM-557"
+    assert step["tool"]["requiredCapabilities"] == ["jira"]
+    assert expanded["steps"][0]["type"] == "tool"
+    assert expanded["steps"][0]["tool"]["id"] == "jira.transition_issue"
+
+async def test_mm557_accepts_explicit_and_legacy_skill_steps(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            created = await service.create_template(
+                slug="jira-skill-steps",
+                title="Jira Skill Steps",
+                description="Agentic Jira steps",
+                scope="personal",
+                scope_ref=str(user_id),
+                tags=["jira"],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "type": "skill",
+                        "title": "Triage Jira issue",
+                        "instructions": "Read MM-557 and decide next action.",
+                        "skill": {
+                            "id": "jira-triage",
+                            "args": {"issueKey": "MM-557"},
+                            "requiredCapabilities": ["jira"],
+                            "context": {"repository": "MoonLadderStudios/MoonMind"},
+                            "permissions": {"jira": "read"},
+                            "autonomy": {"mode": "bounded"},
+                        },
+                    },
+                    {
+                        "title": "Legacy implementation step",
+                        "instructions": "Implement MM-557.",
+                        "skill": {"id": "jira-implement", "args": {"issueKey": "MM-557"}},
+                    },
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+    explicit, legacy = created["steps"]
+    assert explicit["type"] == "skill"
+    assert explicit["skill"]["id"] == "jira-triage"
+    assert explicit["skill"]["context"]["repository"] == "MoonLadderStudios/MoonMind"
+    assert explicit["skill"]["permissions"] == {"jira": "read"}
+    assert explicit["skill"]["autonomy"] == {"mode": "bounded"}
+    assert legacy["type"] == "skill"
+    assert legacy["skill"]["id"] == "jira-implement"
+
+async def test_mm557_rejects_unsupported_or_mixed_step_type_payloads(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+
+            with pytest.raises(TaskTemplateValidationError, match="Step 1 type must be one of: tool, skill"):
+                await service.create_template(
+                    slug="bad-type",
+                    title="Bad Type",
+                    description="Bad type",
+                    scope="global",
+                    scope_ref=None,
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[{"type": "command", "instructions": "Run something"}],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=None,
+                )
+
+            with pytest.raises(TaskTemplateValidationError, match="Step 1 Tool step must not include a skill payload"):
+                await service.create_template(
+                    slug="tool-with-skill",
+                    title="Tool With Skill",
+                    description="Bad tool",
+                    scope="global",
+                    scope_ref=None,
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "type": "tool",
+                            "instructions": "Implement MM-557.",
+                            "skill": {"id": "jira-implement", "args": {"issueKey": "MM-557"}},
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=None,
+                )
+
+            with pytest.raises(TaskTemplateValidationError, match="Step 1 Skill step must not include a tool payload"):
+                await service.create_template(
+                    slug="skill-with-tool",
+                    title="Skill With Tool",
+                    description="Bad skill",
+                    scope="global",
+                    scope_ref=None,
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "type": "skill",
+                            "instructions": "Move MM-557.",
+                            "tool": {
+                                "id": "jira.transition_issue",
+                                "inputs": {"issueKey": "MM-557"},
+                            },
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=None,
+                )
+
+async def test_mm557_rejects_shell_snippets_unless_bounded_typed_tool(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+
+            with pytest.raises(TaskTemplateValidationError, match="forbidden keys: command"):
+                await service.create_template(
+                    slug="shell-snippet",
+                    title="Shell Snippet",
+                    description="Bad shell",
+                    scope="personal",
+                    scope_ref=str(user_id),
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "type": "skill",
+                            "instructions": "Run a shell snippet.",
+                            "command": "bash deploy.sh",
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=user_id,
+                )
+
+            created = await service.create_template(
+                slug="bounded-command-tool",
+                title="Bounded Command Tool",
+                description="Approved typed command",
+                scope="personal",
+                scope_ref=str(user_id),
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "type": "tool",
+                        "instructions": "Run a bounded test command.",
+                        "tool": {
+                            "name": "command.run_typed",
+                            "inputs": {"commandId": "unit-tests"},
+                            "requiredCapabilities": ["command-runner"],
+                            "sideEffectPolicy": "bounded",
+                            "validation": {"schema": "registered"},
+                        },
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+    assert created["steps"][0]["tool"]["id"] == "command.run_typed"
+    assert created["steps"][0]["tool"]["inputs"] == {"commandId": "unit-tests"}
