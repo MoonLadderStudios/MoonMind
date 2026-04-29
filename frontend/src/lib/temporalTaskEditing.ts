@@ -77,6 +77,10 @@ export type TemporalSubmissionDraft = {
     id: string;
     title: string;
     instructions: string;
+    stepType: 'tool' | 'skill' | 'preset';
+    tool?: Record<string, unknown>;
+    skill?: Record<string, unknown>;
+    preset?: Record<string, unknown>;
     skillId: string;
     skillArgs: Record<string, unknown>;
     skillRequiredCapabilities: string[];
@@ -399,6 +403,17 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
 
   const tool = objectValue(step.tool);
   const skill = objectValue(step.skill);
+  const preset = objectValue(step.preset);
+  const rawStepType = stringValue(step.type).toLowerCase();
+  const legacyToolType = stringValue(tool.type, tool.kind).toLowerCase();
+  const stepType: 'tool' | 'skill' | 'preset' =
+    rawStepType === 'tool' || rawStepType === 'skill' || rawStepType === 'preset'
+      ? rawStepType
+      : Object.keys(preset).length > 0
+        ? 'preset'
+        : Object.keys(tool).length > 0 && legacyToolType !== 'skill'
+          ? 'tool'
+          : 'skill';
   const instructions = stringValue(step.instructions);
   const id = stringValue(step.id);
   const templateStepId = stringValue(
@@ -423,6 +438,10 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     id,
     title: stringValue(step.title),
     instructions,
+    stepType,
+    ...(Object.keys(tool).length > 0 ? { tool } : {}),
+    ...(Object.keys(skill).length > 0 ? { skill } : {}),
+    ...(Object.keys(preset).length > 0 ? { preset } : {}),
     skillId: stringValue(tool.name, tool.id, skill.id, skill.name),
     skillArgs: firstObjectValue(tool.inputs, tool.args, skill.inputs, skill.args),
     skillRequiredCapabilities: stringArrayValue(
@@ -445,6 +464,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.id ||
     result.title ||
     result.instructions ||
+    result.stepType !== 'skill' ||
     result.skillId ||
     Object.keys(result.skillArgs).length > 0 ||
     result.skillRequiredCapabilities.length > 0 ||
