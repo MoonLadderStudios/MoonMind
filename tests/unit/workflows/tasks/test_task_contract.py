@@ -187,6 +187,29 @@ def test_task_steps_reject_skill_step_with_non_skill_tool_payload() -> None:
             }
         )
 
+@pytest.mark.parametrize("field", ["command", "cmd", "script", "shell", "bash"])
+def test_task_steps_reject_shell_like_executable_fields(field: str) -> None:
+    with pytest.raises(
+        ValidationError,
+        match="task\\.steps entries may not define task-scoped overrides",
+    ):
+        TaskExecutionSpec.model_validate(
+            {
+                "instructions": "Run explicit steps.",
+                "steps": [
+                    {
+                        "type": "tool",
+                        "instructions": "Run shell-like work.",
+                        "tool": {
+                            "id": "jira.get_issue",
+                            "inputs": {"issueKey": "MM-563"},
+                        },
+                        field: "bash deploy.sh",
+                    }
+                ],
+            }
+        )
+
 def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> None:
     task_skills = TaskExecutionSpec.model_validate(
         {

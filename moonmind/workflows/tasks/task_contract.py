@@ -1048,6 +1048,11 @@ class TaskStepSpec(BaseModel):
             "git",
             "publish",
             "container",
+            "command",
+            "cmd",
+            "script",
+            "shell",
+            "bash",
         }
         blocked = sorted(key for key in payload.keys() if str(key).strip() in forbidden)
         if blocked:

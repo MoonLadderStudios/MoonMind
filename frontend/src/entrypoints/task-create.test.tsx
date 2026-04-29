@@ -7231,6 +7231,85 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
+  it("submits a manually authored Tool step with governed tool inputs", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Fetch MM-563 through the trusted Jira tool." },
+    });
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "tool" },
+    });
+    fireEvent.change(within(step).getByLabelText("Tool"), {
+      target: { value: "jira.get_issue" },
+    });
+    fireEvent.change(within(step).getByLabelText("Tool Version (optional)"), {
+      target: { value: "1.0" },
+    });
+    fireEvent.change(within(step).getByLabelText("Tool Inputs (JSON object)"), {
+      target: { value: '{"issueKey":"MM-563"}' },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const request = latestCreateRequest() as {
+      payload: { task: { steps: Array<Record<string, unknown>> } };
+    };
+    expect(request.payload.task.steps[0]).toEqual({
+      type: "tool",
+      instructions: "Fetch MM-563 through the trusted Jira tool.",
+      tool: {
+        type: "tool",
+        id: "jira.get_issue",
+        version: "1.0",
+        inputs: { issueKey: "MM-563" },
+      },
+    });
+    expect(request.payload.task.steps[0]?.["skill"]).toBeUndefined();
+    expect(within(step).queryByText(/Script/)).toBeNull();
+  });
+
+  it("blocks manually authored Tool steps with invalid input JSON", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Do not submit invalid tool inputs." },
+    });
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "tool" },
+    });
+    fireEvent.change(within(step).getByLabelText("Tool"), {
+      target: { value: "jira.get_issue" },
+    });
+    fireEvent.change(within(step).getByLabelText("Tool Inputs (JSON object)"), {
+      target: { value: "[" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      await screen.findByText("Step 1 Tool Inputs must be valid JSON object text."),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
   it("keeps manual authoring available without optional presets Jira or image upload", async () => {
     renderWithClient(
       <TaskCreatePage payload={withoutOptionalAuthoringIntegrations()} />,
