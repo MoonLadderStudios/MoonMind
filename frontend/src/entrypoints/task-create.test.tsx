@@ -6926,6 +6926,94 @@ describe("Task Create Entrypoint", () => {
     expect(screen.getByDisplayValue("Edited generated step.")).toBeTruthy();
   });
 
+  it("submits preset-generated tool steps with their executable tool binding after apply", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/task-step-templates/speckit-demo:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:speckit-demo:1.2.3:01",
+                title: "Fetch Jira issue",
+                instructions: "Fetch MM-558.",
+                tool: {
+                  type: "tool",
+                  id: "jira.get_issue",
+                  inputs: { issueKey: "MM-558" },
+                },
+              },
+              {
+                id: "tpl:speckit-demo:1.2.3:02",
+                title: "Implement issue",
+                instructions: "Implement MM-558.",
+                skill: {
+                  id: "moonspec-orchestrate",
+                  args: { issueKey: "MM-558" },
+                },
+              },
+            ],
+            appliedTemplate: {
+              slug: "speckit-demo",
+              version: "1.2.3",
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Step Type"), {
+      target: { value: "preset" },
+    });
+    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+    expect(await within(step).findByText("Fetch Jira issue")).toBeTruthy();
+    fireEvent.click(within(step).getByRole("button", { name: "Apply preview" }));
+
+    expect(await screen.findByDisplayValue("Fetch MM-558.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const request = latestCreateRequest();
+    expect(request.payload.task.steps[0]).toEqual({
+      id: "tpl:speckit-demo:1.2.3:01",
+      title: "Fetch Jira issue",
+      instructions: "Fetch MM-558.",
+      tool: {
+        type: "tool",
+        id: "jira.get_issue",
+        inputs: { issueKey: "MM-558" },
+      },
+    });
+    expect(request.payload.task.steps[0].skill).toBeUndefined();
+  });
+
   it("keeps the draft unchanged when step preset preview expansion fails", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

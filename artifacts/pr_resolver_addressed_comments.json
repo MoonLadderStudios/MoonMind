@@ -1,22 +1,22 @@
 [
   {
-    "id": 3158058337,
-    "disposition": "addressed",
-    "rationale": "Updated tool payload normalization so non-empty tool.args is preserved when schema-provided tool.inputs is an empty object, with unit coverage."
-  },
-  {
-    "id": 3158058340,
-    "disposition": "addressed",
-    "rationale": "Command-like tool validation now requires substantive sideEffectPolicy or validation metadata instead of accepting empty default objects, with unit coverage."
-  },
-  {
-    "id": 4193474718,
+    "id": 4340312586,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary container; actionable inline comments from this review are tracked separately."
+    "rationale": "Quota warning from gemini-code-assist; no code feedback to address."
   },
   {
-    "id": 4193481160,
+    "id": 4340316442,
     "disposition": "not-applicable",
-    "rationale": "Review body explicitly states there is no feedback to address."
+    "rationale": "Duplicate quota warning from gemini-code-assist; no code feedback to address."
+  },
+  {
+    "id": 3158201200,
+    "disposition": "addressed",
+    "rationale": "Preset-generated Tool steps now preserve and submit their executable tool binding after Apply preview, with regression coverage."
+  },
+  {
+    "id": 4193618593,
+    "disposition": "not-applicable",
+    "rationale": "Review summary container for the actionable inline comment; no separate code change requested."
   }
 ]

@@ -464,6 +464,7 @@ interface TaskTemplateListResponse {
 interface TaskTemplateStepSkill {
   id?: string;
   name?: string;
+  type?: string;
   args?: Record<string, unknown>;
   inputs?: Record<string, unknown>;
   requiredCapabilities?: string[];
@@ -541,6 +542,8 @@ interface StepState {
   templateInstructions: string;
   inputAttachments: StepAttachmentRef[];
   templateAttachments: StepAttachmentRef[];
+  generatedTool?: TaskTemplateStepSkill;
+  generatedSkill?: TaskTemplateStepSkill;
   storyOutput?: Record<string, unknown>;
   jiraOrchestration?: Record<string, unknown>;
 }
@@ -1339,6 +1342,21 @@ function isTemplateBoundStepForAttachments(
   );
 }
 
+function executableGeneratedToolPayload(
+  step: StepState | null | undefined,
+): TaskTemplateStepSkill | null {
+  if (step?.stepType !== "tool" || !step.generatedTool) {
+    return null;
+  }
+  const toolId = String(
+    step.generatedTool.id || step.generatedTool.name || "",
+  ).trim();
+  if (!toolId) {
+    return null;
+  }
+  return step.generatedTool;
+}
+
 function validatePrimaryStepSubmission(
   primaryStep: StepState | null,
   options: { additionalStepsCount?: number } = {},
@@ -1349,6 +1367,15 @@ function validatePrimaryStepSubmission(
     return { ok: false, error: "Add at least one step before submitting." };
   }
   if (primaryStep.stepType === "tool") {
+    if (executableGeneratedToolPayload(primaryStep)) {
+      return {
+        ok: true,
+        value: {
+          instructions: primaryStep.instructions.trim(),
+          skillId: "",
+        },
+      };
+    }
     return {
       ok: false,
       error: "Select a Tool before submitting a Tool step.",
@@ -1759,6 +1786,8 @@ function mapExpandedStepToState(
     templateStepId: stepId,
     templateInstructions: instructions,
     templateAttachments,
+    ...(step.tool ? { generatedTool: step.tool } : {}),
+    ...(step.skill ? { generatedSkill: step.skill } : {}),
     ...(storyOutput ? { storyOutput } : {}),
     ...(jiraOrchestration ? { jiraOrchestration } : {}),
   });
@@ -5489,6 +5518,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         return;
       }
       const stepIsSkill = step.stepType === "skill";
+      const generatedToolPayload = executableGeneratedToolPayload(step);
       const stepSkillId = stepIsSkill ? step.skillId.trim() : "";
       const stepSkillArgsRaw = stepIsSkill && showAdvancedStepOptions
         ? step.skillArgs.trim()
@@ -5503,7 +5533,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         step.inputAttachments.length > 0 ||
         Boolean(stepSkillId) ||
         Boolean(stepSkillArgsRaw) ||
-        stepSkillCaps.length > 0;
+        stepSkillCaps.length > 0 ||
+        Boolean(generatedToolPayload);
       let stepSkillArgs: Record<string, unknown> = {};
       if (stepSkillArgsRaw) {
         try {
@@ -5776,7 +5807,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (step.title.trim()) {
         stepPayload.title = step.title.trim();
       }
-      if (stepSkillId || stepSkillArgsRaw || stepSkillCaps.length > 0) {
+      const generatedToolPayload = executableGeneratedToolPayload(step);
+      if (generatedToolPayload) {
+        stepPayload.tool = generatedToolPayload;
+      } else if (stepSkillId || stepSkillArgsRaw || stepSkillCaps.length > 0) {
         stepPayload.tool = {
           type: "skill",
           name: stepSkillId || primarySkillId,
@@ -5802,6 +5836,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       Boolean(primaryInstructionsForSubmit) &&
       objectiveInstructionsForSubmit !== primaryInstructionsForSubmit;
     const hasTemplateBoundStep = steps.some((step) => Boolean(step.id.trim()));
+    const primaryGeneratedToolPayload =
+      executableGeneratedToolPayload(primaryStep);
     const includeExplicitSteps =
       additionalSteps.length > 0 ||
       includePrimaryStepForObjectiveOverride ||
@@ -5821,7 +5857,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 : pageMode.mode !== "create"
                   ? { inputAttachments: [] }
                 : {}),
-              ...(primaryStepHasSkillOverride
+              ...(primaryGeneratedToolPayload
+                ? { tool: primaryGeneratedToolPayload }
+                : primaryStepHasSkillOverride
                 ? { tool: primaryStepTool, skill: primaryStepSkill }
                 : {}),
             },
