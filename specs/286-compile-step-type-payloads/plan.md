@@ -35,7 +35,7 @@ MM-567 requires executable Step Type payloads to converge at runtime and proposa
 | SC-003 | implemented_verified | Proposal service focused tests exist. | No new implementation. | unit |
 | SC-004 | implemented_verified | Proposal API preview focused test exists. | No new implementation. | API unit |
 | SC-005 | implemented_verified | `docs/Steps/StepTypes.md` sections 7, 13, and 15 state flat promotion and Activity internality. | No new implementation. | docs check |
-| SC-006 | missing | MM-567 verification artifact not yet written. | Write final verification for this feature. | moonspec verify |
+| SC-006 | implemented_verified | `specs/286-compile-step-type-payloads/verification.md` preserves MM-567 verification evidence. | No new implementation. | final verify |
 
 ## Technical Context
 
