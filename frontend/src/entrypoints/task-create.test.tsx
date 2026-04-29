@@ -7006,6 +7006,7 @@ describe("Task Create Entrypoint", () => {
     expect(request.payload.task.steps[0]).toEqual({
       id: "tpl:speckit-demo:1.2.3:01",
       title: "Fetch Jira issue",
+      type: "tool",
       instructions: "Fetch MM-558.",
       tool: {
         type: "tool",
@@ -8275,6 +8276,7 @@ describe("Task Create Entrypoint", () => {
     expect(request.payload.task.steps).toEqual([
       {
         instructions: "Primary objective",
+        type: "skill",
       },
       {},
     ]);
@@ -8420,6 +8422,7 @@ describe("Task Create Entrypoint", () => {
       {
         id: "tpl:speckit-demo:1.2.3:01",
         title: "Clarify spec",
+        type: "skill",
         instructions: "Clarify the {{ inputs.feature_name }} scope.",
         tool: {
           type: "skill",
@@ -8435,6 +8438,7 @@ describe("Task Create Entrypoint", () => {
       {
         id: "tpl:speckit-demo:1.2.3:02",
         title: "Plan implementation",
+        type: "skill",
         instructions: "Write a plan for the task builder recovery.",
         storyOutput: {
           mode: "jira",

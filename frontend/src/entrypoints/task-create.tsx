@@ -2302,6 +2302,26 @@ function stripOversizedInlineInstructions(
   const fitsInlineLimit = () =>
     utf8ByteLength(JSON.stringify(requestBody)) <=
     INLINE_TASK_INPUT_LIMIT_BYTES;
+  const removeTypeOnlyStep = (step: Record<string, unknown>) => {
+    const nonTypeKeys = Object.entries(step).filter(([key, value]) => {
+      if (key === "type" || value === undefined || value === null) {
+        return false;
+      }
+      if (typeof value === "string") {
+        return value.trim().length > 0;
+      }
+      if (Array.isArray(value)) {
+        return value.length > 0;
+      }
+      if (typeof value === "object") {
+        return Object.keys(value).length > 0;
+      }
+      return true;
+    });
+    if (nonTypeKeys.length === 0) {
+      delete step.type;
+    }
+  };
   if (fitsInlineLimit()) {
     return;
   }
@@ -2316,7 +2336,9 @@ function stripOversizedInlineInstructions(
     ) {
       continue;
     }
-    delete (step as Record<string, unknown>).instructions;
+    const stepRecord = step as Record<string, unknown>;
+    delete stepRecord.instructions;
+    removeTypeOnlyStep(stepRecord);
     if (fitsInlineLimit()) {
       return;
     }
@@ -2339,7 +2361,9 @@ function stripOversizedInlineInstructions(
     ) {
       continue;
     }
-    delete (step as Record<string, unknown>).instructions;
+    const stepRecord = step as Record<string, unknown>;
+    delete stepRecord.instructions;
+    removeTypeOnlyStep(stepRecord);
     if (fitsInlineLimit()) {
       return;
     }
@@ -5890,13 +5914,33 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 sourceStep,
                 effectivePayloadAttachments,
               ));
-          return {
+          const submittedStepType: Exclude<StepType, "preset"> =
+            sourceStep.stepType === "tool" ? "tool" : "skill";
+          const hasPayloadContent = Object.entries(entry.payload).some(
+            ([key, value]) =>
+              !(
+                key === "inputAttachments" &&
+                Array.isArray(value) &&
+                value.length === 0
+              ),
+          );
+          const hasSubmittedStepShape =
+            hasPayloadContent ||
+            Boolean(sourceStep.id.trim()) ||
+            Boolean(sourceStep.title.trim()) ||
+            Boolean(sourceStep.storyOutput) ||
+            Boolean(
+              sourceStep.jiraOrchestration &&
+                Object.keys(sourceStep.jiraOrchestration).length > 0,
+            );
+          const submittedStep = {
             ...(shouldPreserveStepId && sourceStep.id.trim()
               ? { id: sourceStep.id.trim() }
               : {}),
             ...(sourceStep.title.trim()
               ? { title: sourceStep.title.trim() }
               : {}),
+            ...(hasSubmittedStepShape ? { type: submittedStepType } : {}),
             ...(sourceStep.storyOutput
               ? { storyOutput: sourceStep.storyOutput }
               : {}),
@@ -5906,6 +5950,27 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               : {}),
             ...entry.payload,
           };
+          const hasNonTypeContent = Object.entries(submittedStep).some(
+            ([key, value]) => {
+              if (key === "type" || value === undefined || value === null) {
+                return false;
+              }
+              if (typeof value === "string") {
+                return value.trim().length > 0;
+              }
+              if (Array.isArray(value)) {
+                return value.length > 0;
+              }
+              if (typeof value === "object") {
+                return Object.keys(value).length > 0;
+              }
+              return true;
+            },
+          );
+          if (!hasNonTypeContent) {
+            return {};
+          }
+          return submittedStep;
         })
       : [];
 

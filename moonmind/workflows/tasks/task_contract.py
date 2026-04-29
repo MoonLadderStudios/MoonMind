@@ -1000,6 +1000,36 @@ class TaskStepSpec(BaseModel):
         if not isinstance(value, Mapping):
             return value
         payload = dict(value)
+        raw_type = _clean_optional_str(payload.get("type"))
+        if raw_type is not None:
+            step_type = raw_type.lower()
+            if step_type not in {"tool", "skill"}:
+                raise TaskContractError("task.steps[].type must be one of: tool, skill")
+            tool_payload = payload.get("tool")
+            skill_payload = payload.get("skill")
+            if step_type == "tool":
+                if not isinstance(tool_payload, Mapping):
+                    raise TaskContractError("Tool steps require a tool payload")
+                tool_id = _clean_optional_str(
+                    tool_payload.get("id") or tool_payload.get("name")
+                )
+                if not tool_id:
+                    raise TaskContractError("Tool steps require tool.id or tool.name")
+                if skill_payload is not None:
+                    raise TaskContractError(
+                        "Tool steps must not include a skill payload"
+                    )
+            if step_type == "skill":
+                legacy_skill_tool = False
+                if isinstance(tool_payload, Mapping):
+                    tool_type = str(
+                        tool_payload.get("type") or tool_payload.get("kind") or ""
+                    ).strip().lower()
+                    legacy_skill_tool = tool_type in {"", "skill"}
+                    if not legacy_skill_tool:
+                        raise TaskContractError(
+                            "Skill steps must not include a non-skill tool payload"
+                        )
         if "inputAttachments" in payload:
             _validate_input_attachment_payloads(
                 payload.get("inputAttachments"),

@@ -84,6 +84,109 @@ def test_task_step_spec_with_step_skills() -> None:
     assert spec.skills.exclude == ["bad-skill"]
     assert spec.skills.materialization_mode == "none"
 
+def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
+    spec = TaskExecutionSpec.model_validate(
+        {
+            "instructions": "Run explicit steps.",
+            "steps": [
+                {
+                    "id": "fetch-issue",
+                    "type": "tool",
+                    "instructions": "Fetch issue.",
+                    "tool": {
+                        "id": "jira.get_issue",
+                        "version": "1.0.0",
+                        "inputs": {"issueKey": "MM-559"},
+                    },
+                    "source": {
+                        "kind": "preset-derived",
+                        "presetId": "jira-flow",
+                    },
+                },
+                {
+                    "id": "implement",
+                    "type": "skill",
+                    "instructions": "Implement issue.",
+                    "skill": {
+                        "id": "moonspec-implement",
+                        "args": {"issueKey": "MM-559"},
+                    },
+                },
+            ],
+        }
+    )
+
+    dumped_steps = [step.model_dump(by_alias=True) for step in spec.steps]
+    assert dumped_steps[0]["type"] == "tool"
+    assert dumped_steps[0]["tool"]["id"] == "jira.get_issue"
+    assert dumped_steps[0]["source"]["presetId"] == "jira-flow"
+    assert dumped_steps[1]["type"] == "skill"
+    assert dumped_steps[1]["skill"]["id"] == "moonspec-implement"
+
+@pytest.mark.parametrize("step_type", ["preset", "activity", "Activity"])
+def test_task_steps_reject_non_executable_step_types(step_type: str) -> None:
+    with pytest.raises(ValidationError, match="task\\.steps\\[\\]\\.type"):
+        TaskExecutionSpec.model_validate(
+            {
+                "instructions": "Run explicit steps.",
+                "steps": [
+                    {
+                        "type": step_type,
+                        "instructions": "This must not execute.",
+                        "preset": {
+                            "id": "jira.implementation_flow",
+                            "inputs": {"issueKey": "MM-559"},
+                        },
+                    }
+                ],
+            }
+        )
+
+def test_task_steps_reject_conflicting_executable_payloads() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="Tool steps must not include a skill payload",
+    ):
+        TaskExecutionSpec.model_validate(
+            {
+                "instructions": "Run explicit steps.",
+                "steps": [
+                    {
+                        "type": "tool",
+                        "instructions": "Fetch issue.",
+                        "tool": {
+                            "id": "jira.get_issue",
+                            "inputs": {"issueKey": "MM-559"},
+                        },
+                        "skill": {"id": "moonspec-implement", "args": {}},
+                    }
+                ],
+            }
+        )
+
+def test_task_steps_reject_skill_step_with_non_skill_tool_payload() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="Skill steps must not include a non-skill tool payload",
+    ):
+        TaskExecutionSpec.model_validate(
+            {
+                "instructions": "Run explicit steps.",
+                "steps": [
+                    {
+                        "type": "skill",
+                        "instructions": "Implement issue.",
+                        "tool": {
+                            "type": "tool",
+                            "id": "jira.get_issue",
+                            "inputs": {"issueKey": "MM-559"},
+                        },
+                        "skill": {"id": "moonspec-implement", "args": {}},
+                    }
+                ],
+            }
+        )
+
 def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> None:
     task_skills = TaskExecutionSpec.model_validate(
         {

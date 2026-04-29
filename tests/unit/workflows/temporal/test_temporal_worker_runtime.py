@@ -236,6 +236,86 @@ def test_runtime_planner_promotes_profile_id_to_runtime_node():
     assert runtime_node["profileId"] == "codex-provider-profile"
     assert runtime_node["providerProfile"] == "codex-provider-profile"
 
+def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Run explicit tool step.",
+                "runtime": {"mode": "codex_cli"},
+                "steps": [
+                    {
+                        "id": "fetch-issue",
+                        "type": "tool",
+                        "instructions": "Fetch MM-559.",
+                        "tool": {
+                            "id": "jira.get_issue",
+                            "version": "1.0.0",
+                            "inputs": {"issueKey": "MM-559"},
+                        },
+                        "source": {
+                            "kind": "preset-derived",
+                            "presetId": "jira-flow",
+                        },
+                    }
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"][0]["tool"] == {
+        "type": "skill",
+        "name": "jira.get_issue",
+        "version": "1.0.0",
+    }
+    assert plan["nodes"][0]["inputs"]["selectedSkill"] == "jira.get_issue"
+    assert plan["nodes"][0]["inputs"]["type"] == "tool"
+    assert plan["nodes"][0]["inputs"]["source"]["presetId"] == "jira-flow"
+
+def test_runtime_planner_maps_explicit_skill_step_to_agent_runtime_node():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Run explicit skill step.",
+                "runtime": {"mode": "codex_cli"},
+                "steps": [
+                    {
+                        "id": "implement",
+                        "type": "skill",
+                        "instructions": "Implement MM-559.",
+                        "skill": {
+                            "id": "moonspec-implement",
+                            "args": {"issueKey": "MM-559"},
+                        },
+                    }
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"][0]["tool"] == {
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
+    }
+    assert plan["nodes"][0]["inputs"]["selectedSkill"] == "moonspec-implement"
+    assert plan["nodes"][0]["inputs"]["type"] == "skill"
+
 def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
