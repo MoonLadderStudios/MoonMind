@@ -761,6 +761,7 @@ class TaskProposalService:
             runtime["mode"] = normalized_runtime_mode
             task["runtime"] = runtime
             payload["task"] = task
+            payload["targetRuntime"] = normalized_runtime_mode
             try:
                 parsed = CanonicalTaskPayload.model_validate(payload)
                 payload = parsed.model_dump(by_alias=True, exclude_none=True)

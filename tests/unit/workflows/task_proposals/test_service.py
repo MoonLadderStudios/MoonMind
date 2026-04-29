@@ -441,6 +441,7 @@ async def test_promote_proposal_applies_runtime_override() -> None:
         task_create_request={
             "payload": {
                 "repository": "Moon/Repo",
+                "targetRuntime": "gemini_cli",
                 "task": {
                     "instructions": "Refactor logic",
                     "runtime": {"mode": "gemini_cli"},
@@ -476,7 +477,8 @@ async def test_promote_proposal_applies_runtime_override() -> None:
 
     repo.commit.assert_awaited()
     assert updated_proposal.status is TaskProposalStatus.PROMOTED
-    
+
+    assert final_request["payload"]["targetRuntime"] == "claude"
     assert final_request["payload"]["task"]["runtime"]["mode"] == "claude"
     assert final_request["payload"]["task"]["authoredPresets"] == [
         {
@@ -488,7 +490,12 @@ async def test_promote_proposal_applies_runtime_override() -> None:
         "kind": "preset-derived",
         "presetId": "runtime-quality-followup",
     }
-    assert updated_proposal.task_create_request["payload"]["task"]["runtime"]["mode"] == "gemini_cli"
+    assert (
+        updated_proposal.task_create_request["payload"]["task"]["runtime"]["mode"]
+        == "gemini_cli"
+    )
+    assert updated_proposal.task_create_request["payload"]["targetRuntime"] == "gemini_cli"
+
 
 @pytest.mark.asyncio
 async def test_promote_proposal_preserves_preset_provenance() -> None:
