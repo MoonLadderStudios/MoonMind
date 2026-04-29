@@ -170,6 +170,7 @@ async def _run_command(cmd, **kwargs):
     return CmdRes(stdout)
 
 logger = getLogger(__name__)
+_AUTO_SKILL_SENTINEL = "auto"
 _NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = ("MOONMIND_URL",)
 _MANAGED_SESSION_TELEMETRY_KEYS: tuple[str, ...] = (
     "activityType",
@@ -1017,7 +1018,7 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
 
     description = (
         "Execute generic runtime CLI instructions."
-        if name == "auto"
+        if name == _AUTO_SKILL_SENTINEL
         else f"Execute '{name}' via the generic runtime CLI handler."
     )
     # 3600s gives the sandbox worker enough headroom to exhaust the full
@@ -1116,7 +1117,7 @@ def _iter_requested_registry_tools(
     # 'auto' is a placeholder meaning "no explicit skill selected". It should
     # not be included in the registry as a dispatchable skill — when only 'auto'
     # is present, the runtime should be used directly without skill dispatch.
-    if selected and all(name == "auto" for name, _ in selected):
+    if selected and all(name == _AUTO_SKILL_SENTINEL for name, _ in selected):
         selected = []
 
     return tuple(selected)
@@ -4038,7 +4039,11 @@ class TemporalAgentRuntimeActivities:
 
         params = request.parameters if isinstance(request.parameters, Mapping) else {}
         selected_skill = selected_agent_skill(params)
-        if not selected_skill or not workspace_path:
+        if (
+            not selected_skill
+            or selected_skill == _AUTO_SKILL_SENTINEL
+            or not workspace_path
+        ):
             return False
 
         workspace = Path(workspace_path).expanduser().resolve()
@@ -4159,7 +4164,11 @@ class TemporalAgentRuntimeActivities:
         skill_snapshot_materialized: bool = False,
     ) -> str:
         selected_skill = selected_agent_skill(parameters)
-        if not selected_skill or not skill_snapshot_materialized:
+        if (
+            not selected_skill
+            or selected_skill == _AUTO_SKILL_SENTINEL
+            or not skill_snapshot_materialized
+        ):
             return instructions
         if "Active MoonMind skill snapshot:" in instructions:
             return instructions

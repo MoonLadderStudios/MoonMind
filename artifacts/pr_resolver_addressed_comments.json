@@ -1,32 +1,22 @@
 [
   {
-    "id": 4346976767,
+    "id": 4347927664,
     "disposition": "not-applicable",
-    "rationale": "Qodo account free-tier notice; no code action required."
+    "rationale": "Qodo free-tier quota notice is informational and does not request a code change."
   },
   {
-    "id": 3163732225,
+    "id": 3164517105,
     "disposition": "addressed",
-    "rationale": "Shielded the terminal-state activity, used ABANDON cancellation policy, and waits for the shielded activity when cancellation is received."
+    "rationale": "Added _AUTO_SKILL_SENTINEL and used it for the managed-session materialization guard."
   },
   {
-    "id": 4200206564,
-    "disposition": "not-applicable",
-    "rationale": "Review summary; its actionable shielding feedback is tracked and addressed by review comment 3163732225."
-  },
-  {
-    "id": 3163747010,
+    "id": 3164517135,
     "disposition": "addressed",
-    "rationale": "Added RUN_TERMINAL_STATE_ACTIVITY_PATCH and skipped the new activity on histories where workflow.patched returns false."
+    "rationale": "Reused _AUTO_SKILL_SENTINEL for the selected-skill activation guard."
   },
   {
-    "id": 3163747015,
+    "id": 4201130280,
     "disposition": "addressed",
-    "rationale": "Changed record_terminal_state to preserve existing same-state terminal summaries while still fanning out dependency resolution."
-  },
-  {
-    "id": 4200225292,
-    "disposition": "not-applicable",
-    "rationale": "Codex review wrapper comment; no standalone actionable request beyond the inline findings."
+    "rationale": "Summary review requested replacing the magic auto string with a module-level constant, which is now implemented."
   }
 ]
