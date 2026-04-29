@@ -3971,7 +3971,7 @@ class TemporalAgentRuntimeActivities:
         workspace_path_raw = str(
             payload.get("workspace_path") or payload.get("workspacePath") or ""
         ).strip()
-        self._materialize_selected_agent_skill_for_turn(
+        skill_snapshot_materialized = self._materialize_selected_agent_skill_for_turn(
             request=request,
             workspace_path=workspace_path_raw,
         )
@@ -3993,6 +3993,7 @@ class TemporalAgentRuntimeActivities:
                 prepared = self._prepare_managed_codex_turn_text(
                     instruction_ref,
                     parameters=request.parameters,
+                    skill_snapshot_materialized=skill_snapshot_materialized,
                 )
                 if payload.get("includePreparedRequestMetadata"):
                     return {
@@ -4008,6 +4009,7 @@ class TemporalAgentRuntimeActivities:
             prepared = self._prepare_managed_codex_turn_text(
                 instructions,
                 parameters=parameters,
+                skill_snapshot_materialized=skill_snapshot_materialized,
             )
             if payload.get("includePreparedRequestMetadata"):
                 return {
@@ -4027,16 +4029,19 @@ class TemporalAgentRuntimeActivities:
         *,
         request: AgentExecutionRequest,
         workspace_path: str,
-    ) -> None:
+    ) -> bool:
         """Materialize the selected active skill for a managed-session turn."""
 
         params = request.parameters if isinstance(request.parameters, Mapping) else {}
         selected_skill = selected_agent_skill(params)
         if not selected_skill or not workspace_path:
-            return
+            return False
 
         workspace = Path(workspace_path).expanduser().resolve()
-        run_root = workspace.parent
+        run_root = cls._managed_session_run_root_for_workspace(workspace)
+        if run_root is None:
+            return False
+
         cache_root = cls._managed_session_skill_cache_root(run_root)
         try:
             selection = resolve_run_skill_selection(
@@ -4058,6 +4063,25 @@ class TemporalAgentRuntimeActivities:
             workspace=workspace,
             skills_active_path=run_root / "skills_active",
         )
+        return True
+
+    @staticmethod
+    def _managed_session_run_root_for_workspace(workspace: Path) -> Path | None:
+        """Return a run root only for MoonMind-managed job workspaces."""
+
+        store_root = Path(
+            os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
+        ).expanduser().resolve()
+        try:
+            relative = workspace.relative_to(store_root)
+        except ValueError:
+            return None
+        if len(relative.parts) != 2 or relative.parts[1] != "repo":
+            return None
+        run_id = str(relative.parts[0]).strip()
+        if not run_id:
+            return None
+        return store_root / run_id
 
     @staticmethod
     def _managed_session_skill_cache_root(run_root: Path) -> Path:
@@ -4110,6 +4134,7 @@ class TemporalAgentRuntimeActivities:
         instructions: str,
         *,
         parameters: Mapping[str, Any] | None,
+        skill_snapshot_materialized: bool = False,
     ) -> str:
         prepared = cls._append_selected_jira_tool_hint(
             instructions,
@@ -4118,6 +4143,7 @@ class TemporalAgentRuntimeActivities:
         prepared = cls._prepend_selected_skill_activation(
             prepared,
             parameters=parameters,
+            skill_snapshot_materialized=skill_snapshot_materialized,
         )
         return append_managed_codex_runtime_note(prepared)
 
@@ -4126,9 +4152,10 @@ class TemporalAgentRuntimeActivities:
         instructions: str,
         *,
         parameters: Mapping[str, Any] | None,
+        skill_snapshot_materialized: bool = False,
     ) -> str:
         selected_skill = selected_agent_skill(parameters)
-        if not selected_skill:
+        if not selected_skill or not skill_snapshot_materialized:
             return instructions
         if "Active MoonMind skill snapshot:" in instructions:
             return instructions

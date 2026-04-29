@@ -1,32 +1,22 @@
 [
   {
-    "id": 4343518614,
+    "id": 4346762893,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier limit notification is informational and contains no code feedback to address."
+    "rationale": "Qodo free-tier limit notice; no implementation feedback to address."
   },
   {
-    "id": 3160855192,
-    "disposition": "addressed",
-    "rationale": "Replaced generic draft step payload records with specific Tool, Skill, and Preset payload interfaces with flexible index signatures."
-  },
-  {
-    "id": 4196785865,
+    "id": 4199997533,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; its actionable type-safety feedback is tracked by review comment 3160855192."
+    "rationale": "Gemini review summary explicitly reported no further feedback."
   },
   {
-    "id": 3160875256,
+    "id": 3163560523,
     "disposition": "addressed",
-    "rationale": "Draft reconstruction now reads step.stepType before falling back to legacy step.type."
+    "rationale": "Constrained selected-skill snapshot materialization to MoonMind-managed job workspaces under MOONMIND_AGENT_RUNTIME_STORE/<run_id>/repo and added regression coverage for external workspace paths."
   },
   {
-    "id": 3160875268,
-    "disposition": "addressed",
-    "rationale": "Preset draft hydration now preserves preset inputs in step preview state and reuses them when previewing the preset expansion."
-  },
-  {
-    "id": 4196808307,
+    "id": 4200010279,
     "disposition": "not-applicable",
-    "rationale": "Codex review body is informational; its actionable findings are tracked by review comments 3160875256 and 3160875268."
+    "rationale": "Codex review summary container; the actionable inline review comment is tracked and addressed separately."
   }
 ]
