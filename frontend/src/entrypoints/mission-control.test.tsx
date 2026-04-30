@@ -476,20 +476,16 @@ describe('Mission Control shared entry', () => {
       missionControlCss,
       '.status-running[data-effect="shimmer-sweep"] .status-letter-wave, .status-running.is-executing .status-letter-wave, .status-running.is-planning .status-letter-wave',
     ).join('\n');
-    expect(letterWaveBlock).toContain('animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite');
-    expect(letterWaveBlock).toContain('-webkit-text-fill-color: transparent');
-    expect(letterWaveBlock).toContain('background-clip: text');
-    expect(letterWaveBlock).toContain('-webkit-background-clip: text');
+    expect(letterWaveBlock).toContain('color: var(--mm-executing-letter-bright)');
+    expect(letterWaveBlock).toContain('text-shadow: 0 0 10px var(--mm-executing-letter-halo)');
+    expect(letterWaveBlock).not.toContain('animation: mm-status-pill-shimmer');
+    expect(letterWaveBlock).not.toContain('-webkit-text-fill-color: transparent');
+    expect(letterWaveBlock).not.toContain('background-clip: text');
+    expect(letterWaveBlock).not.toContain('-webkit-background-clip: text');
+    expect(letterWaveBlock).not.toContain('white 50%');
     expect(letterWaveBlock).toContain('var(--mm-executing-letter-halo)');
-    expect(letterWaveBlock).toContain('white 50%');
-    expect(letterWaveBlock).toMatch(
-      /background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\),\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-core-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\)/,
-    );
-    expect(letterWaveBlock).toMatch(
-      /background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),\s*calc\(var\(--mm-executing-sweep-start-x\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-x\)\)\s*calc\(var\(--mm-executing-sweep-start-y\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-y\)\)/,
-    );
     expect(missionControlCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,\s*\.status-running\.is-executing \.status-letter-wave,\s*\.status-running\.is-planning \.status-letter-wave[\s\S]*?animation: none;[\s\S]*?-webkit-text-fill-color: currentcolor;[\s\S]*?background-image: none;[\s\S]*?-webkit-background-clip: border-box;[\s\S]*?background-clip: border-box;/,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,\s*\.status-running\.is-executing \.status-letter-wave,\s*\.status-running\.is-planning \.status-letter-wave[\s\S]*?text-shadow: none;/,
     );
 
     const forcedColorsLetterWaveBlock = cssRuleBlockMatching(
