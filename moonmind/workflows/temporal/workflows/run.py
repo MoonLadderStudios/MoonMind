@@ -3928,8 +3928,9 @@ class MoonMindRunWorkflow:
             **self._execute_kwargs_for_route(route),
         )
         if selected_skill:
+            normalized_skill = str(selected_skill).strip().lower()
             resolved_skill_names = self._resolved_skillset_skill_names(resolved)
-            if selected_skill not in resolved_skill_names:
+            if normalized_skill not in resolved_skill_names:
                 raise ValueError(
                     f"selected skill '{selected_skill}' was not resolved into the "
                     "agent skill snapshot"

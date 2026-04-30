@@ -900,11 +900,19 @@ files:
 3. **Symlink projection**: create or update `.agents/skills` only when that path
    is absent, already a MoonMind-owned projection link, or the workspace is an
    explicitly disposable non-publishing clone.
+4. **Transactional preserve-and-link fallback**: when a managed job checkout is
+   disposable but also the source used for publication, the adapter may move an
+   existing repo-authored `.agents/skills` directory into run-scoped preservation
+   storage and link the active backing store in its place only after active
+   materialization has succeeded. This fallback must restore the original tree
+   on projection failure and publication must exclude projection-only changes.
 
 Adapters must not replace a tracked or repo-authored `.agents/skills` directory
 with a symlink in the publishable checkout as the normal projection mechanism.
-That creates git-visible churn and can accidentally publish deletion or symlink
-changes for repo Skill sources.
+Any transient fallback must be treated as runtime state, not user-authored work.
+That means the fallback cannot be installed before active materialization is
+known-good, cannot leave the checkout damaged on failure, and cannot publish
+deletion or symlink changes for repo Skill sources.
 
 ### 14.5 Inline Activation Summary
 
@@ -997,7 +1005,7 @@ publishable workspace.
 | `.agents` is a directory and `.agents/skills` missing | Project active root. | No |
 | `.agents/skills` is a MoonMind-owned symlink to the same backing store | Reuse it. | No |
 | `.agents/skills` is a MoonMind-owned stale symlink | Replace it with the current active projection and record the replacement. | No |
-| `.agents/skills` is a checked-in directory | Prefer runtime namespace projection or isolated execution workspace. Do not rewrite the directory in the publishable checkout. | No, unless no safe projection strategy exists |
+| `.agents/skills` is a checked-in directory | Prefer runtime namespace projection or isolated execution workspace. If unavailable, use transactional preserve-and-link only with restore-on-failure and publication guards. | No, unless no safe projection strategy exists |
 | `.agents` is a file | Fail before runtime launch with actionable diagnostics. | Yes |
 | `.agents/skills` is a file | Fail before runtime launch with actionable diagnostics. | Yes |
 | `.agents/skills` is an external or unknown symlink | Replace only if ownership can be proven; otherwise fail before runtime launch. | Conditional |
@@ -1024,8 +1032,10 @@ Projection must satisfy all of these invariants before the runtime starts:
 1. `.agents/skills` as seen by the agent resolves to the active backing store.
 2. the visible active tree contains only the selected Skills and MoonMind-owned
    metadata.
-3. repo-authored Skill input directories are not rewritten, deleted, or converted
-   to symlinks in the publishable checkout.
+3. repo-authored Skill input directories are not lost, published as deletions,
+   or published as symlinks. Any transient preserve-and-link fallback must keep
+   a run-scoped preserved copy, restore on projection failure, and be excluded
+   from publication as runtime state.
 4. the runtime is not instructed to read an alternate visible path as a silent
    fallback.
 5. the projection decision and any collision remediation are recorded in runtime
@@ -1066,8 +1076,10 @@ The managed-runtime implementation should enforce this plan:
    adapter capabilities. Decide whether to use runtime namespace projection,
    isolated execution workspace, or symlink projection.
 4. **Protect publishable checkouts**: if `.agents/skills` is repo-authored or
-   tracked, do not replace it in the publishable checkout. Use a runtime
-   namespace projection or staging workspace instead.
+   tracked, prefer runtime namespace projection or a staging workspace. If an
+   adapter must use transactional preserve-and-link in a managed job checkout,
+   it must move the source only after active materialization succeeds, restore
+   it on projection failure, and prevent projection churn from being published.
 5. **Fail early when no safe projection exists**: hard collisions must stop
    before runtime launch and report path, object kind, attempted action,
    selected strategy, and remediation guidance.
