@@ -1,5 +1,4 @@
 import json
-import logging
 import shutil
 from pathlib import Path
 from typing import Any
@@ -14,16 +13,20 @@ from moonmind.workflows.skills.workspace_links import (
     ensure_shared_skill_links,
 )
 
-logger = logging.getLogger(__name__)
-
 class AgentSkillMaterializer:
     """Materializes a ResolvedSkillSet into a run-scoped directory."""
 
-    def __init__(self, workspace_root: str, artifact_service: Any | None = None) -> None:
+    def __init__(
+        self,
+        workspace_root: str,
+        artifact_service: Any | None = None,
+        backing_root: str | None = None,
+    ) -> None:
         if not workspace_root:
             raise ValueError("workspace_root must be provided")
         self.workspace_root = Path(workspace_root).resolve()
         self._artifact_service = artifact_service
+        self.backing_root = Path(backing_root).resolve() if backing_root else None
 
     async def materialize(
         self,
@@ -42,7 +45,7 @@ class AgentSkillMaterializer:
             RuntimeMaterializationMode.WORKSPACE_MOUNTED,
             RuntimeMaterializationMode.HYBRID,
         ):
-            active_dir = self.workspace_root / "skills_active"
+            active_dir = self.backing_root or self.workspace_root / "skills_active"
             visible_dir = self.workspace_root / ".agents" / "skills"
             manifest_path = active_dir / "_manifest.json"
 
@@ -55,22 +58,29 @@ class AgentSkillMaterializer:
                 raise RuntimeError(f"Failed to prepare skills_active directory: {ex}") from ex
 
             for skill in resolved_skillset.skills:
-                if skill.content_ref and self._artifact_service:
-                    try:
-                        _artifact, payload = await self._artifact_service.read(
-                            artifact_id=skill.content_ref,
-                            principal="system",
-                            allow_restricted_raw=True,
-                        )
-                        skill_dir = active_dir / skill.skill_name
-                        skill_dir.mkdir(parents=True, exist_ok=True)
-                        (skill_dir / "SKILL.md").write_bytes(payload)
-                    except Exception as ex:
-                        logger.warning(
-                            "Failed to materialize content for skill %s: %s",
-                            skill.skill_name,
-                            ex,
-                        )
+                if not skill.content_ref:
+                    raise RuntimeError(
+                        "resolved skill snapshot cannot be materialized: "
+                        f"skill '{skill.skill_name}' has no content_ref"
+                    )
+                if not self._artifact_service:
+                    raise RuntimeError(
+                        "resolved skill snapshot cannot be materialized: "
+                        "artifact service is required for skill content refs"
+                    )
+                try:
+                    _artifact, payload = await self._artifact_service.read(
+                        artifact_id=skill.content_ref,
+                        principal="system",
+                        allow_restricted_raw=True,
+                    )
+                    skill_dir = active_dir / skill.skill_name
+                    skill_dir.mkdir(parents=True, exist_ok=True)
+                    (skill_dir / "SKILL.md").write_bytes(payload)
+                except Exception as ex:
+                    raise RuntimeError(
+                        f"Failed to materialize content for skill {skill.skill_name}: {ex}"
+                    ) from ex
 
             manifest_content = {
                 "backing_path": str(active_dir),

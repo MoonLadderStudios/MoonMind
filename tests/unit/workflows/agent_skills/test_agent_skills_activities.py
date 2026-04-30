@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -73,6 +74,53 @@ async def test_resolve_skills_activity_passes_repo_and_local_policy():
     assert result.policy_summary["repo_skills_allowed"] is False
     assert result.policy_summary["local_skills_allowed"] is True
 
+async def test_resolve_skills_activity_persists_file_backed_skill_content(
+    tmp_path,
+):
+    skill_dir = tmp_path / "skills" / "pr-resolver"
+    skill_dir.mkdir(parents=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text("# PR Resolver\n\nUse the resolved body.\n", encoding="utf-8")
+
+    artifact_service = _RecordingArtifactService()
+    activities = AgentSkillsActivities(artifact_service=artifact_service)
+    env = ActivityEnvironment()
+    selector = SkillSelector(include=[{"name": "pr-resolver"}])
+
+    with patch(
+        "moonmind.workflows.agent_skills.agent_skills_activities.AgentSkillResolver.resolve"
+    ) as mock_resolve:
+        mock_resolve.return_value = ResolvedSkillSet(
+            snapshot_id="skillset_test_abc123",
+            resolved_at=datetime.now(UTC),
+            skills=[
+                ResolvedSkillEntry(
+                    skill_name="pr-resolver",
+                    version="1.0.0",
+                    provenance=AgentSkillProvenance(
+                        source_kind=AgentSkillSourceKind.BUILT_IN,
+                        source_path=str(skill_dir),
+                    ),
+                )
+            ],
+        )
+
+        result = await env.run(
+            activities.resolve_skills,
+            selector,
+            "run-1",
+            None,
+            False,
+            False,
+        )
+
+    assert result.skills[0].content_ref == "art-1"
+    assert result.skills[0].content_digest.startswith("sha256:")
+    assert result.manifest_ref == "art-2"
+    assert artifact_service.payloads["art-1"] == skill_file.read_bytes()
+    manifest = artifact_service.payloads["art-2"].decode("utf-8")
+    assert '"content_ref": "art-1"' in manifest
+
 async def test_build_prompt_index_activity_returns_bundle():
     activities = AgentSkillsActivities()
     ActivityEnvironment()
@@ -122,7 +170,11 @@ async def test_materialize_activity_returns_materialization():
 async def test_materialize_activity_returns_canonical_agents_skills_metadata(
     tmp_path,
 ):
-    activities = AgentSkillsActivities()
+    activities = AgentSkillsActivities(
+        artifact_service=_RecordingArtifactService(
+            initial_payloads={"artifact-read-file": b"# Read File\n"}
+        )
+    )
     env = ActivityEnvironment()
     snapshot = ResolvedSkillSet(
         snapshot_id="snap-canonical",
@@ -130,6 +182,7 @@ async def test_materialize_activity_returns_canonical_agents_skills_metadata(
         skills=[
             ResolvedSkillEntry(
                 skill_name="read_file",
+                content_ref="artifact-read-file",
                 provenance=AgentSkillProvenance(
                     source_kind=AgentSkillSourceKind.BUILT_IN
                 ),
@@ -150,3 +203,36 @@ async def test_materialize_activity_returns_canonical_agents_skills_metadata(
     assert result.metadata["visiblePath"] == str(visible_path)
     assert result.metadata["manifestPath"] == str(visible_path / "_manifest.json")
     assert result.metadata["activeSkills"] == ["read_file"]
+
+
+class _RecordingArtifactService:
+    def __init__(self, initial_payloads: dict[str, bytes] | None = None) -> None:
+        self.payloads: dict[str, bytes] = dict(initial_payloads or {})
+        self.created: list[dict[str, object]] = []
+
+    async def create(self, **kwargs):
+        artifact_id = f"art-{len(self.created) + 1}"
+        self.created.append(kwargs)
+        return SimpleNamespace(artifact_id=artifact_id), None
+
+    async def write_complete(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        payload: bytes,
+        content_type: str,
+    ):
+        del principal, content_type
+        self.payloads[artifact_id] = payload
+        return SimpleNamespace(artifact_id=artifact_id)
+
+    async def read(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        allow_restricted_raw: bool,
+    ):
+        del principal, allow_restricted_raw
+        return SimpleNamespace(artifact_id=artifact_id), self.payloads[artifact_id]

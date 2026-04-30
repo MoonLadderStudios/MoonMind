@@ -24,6 +24,12 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
     ManagedRunRecord,
 )
+from moonmind.schemas.agent_skill_models import (
+    AgentSkillProvenance,
+    AgentSkillSourceKind,
+    ResolvedSkillEntry,
+    ResolvedSkillSet,
+)
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
@@ -55,6 +61,22 @@ pytestmark = [pytest.mark.asyncio]
 
 def _make_store(tmp_path: Path) -> ManagedRunStore:
     return ManagedRunStore(tmp_path / "run_store")
+
+
+class _StaticArtifactService:
+    def __init__(self, payloads: dict[str, bytes]) -> None:
+        self._payloads = payloads
+
+    async def read(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        allow_restricted_raw: bool,
+    ) -> tuple[SimpleNamespace, bytes]:
+        del principal, allow_restricted_raw
+        return SimpleNamespace(artifact_id=artifact_id), self._payloads[artifact_id]
+
 
 def _save_record(
     store: ManagedRunStore,
@@ -2541,39 +2563,37 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    skill_root = tmp_path / "moonmind_skills"
-    active_skill = skill_root / "pr-resolver"
-    active_skill.mkdir(parents=True)
-    (active_skill / "SKILL.md").write_text(
-        "---\nname: pr-resolver\ndescription: active\n---\nactive resolver body\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        activity_runtime_module.settings.workflow,
-        "skills_cache_root",
-        str(tmp_path / "skill_cache"),
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.workflow.skills_local_mirror_root",
-        str(tmp_path / "unused_local"),
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.workflow.skills_legacy_mirror_root",
-        str(skill_root),
-    )
     managed_root = tmp_path / "agent_jobs"
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(managed_root))
 
     job_root = managed_root / "job-1"
     workspace = job_root / "repo"
-    stale_repo_skill = workspace / ".agents" / "skills" / "pr-resolver"
-    stale_repo_skill.mkdir(parents=True)
-    (stale_repo_skill / "SKILL.md").write_text(
-        "stale repo-local resolver body\n",
-        encoding="utf-8",
+    workspace.mkdir(parents=True)
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-pr-resolver",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="pr-resolver",
+                version="1.0.0",
+                content_ref="art-pr-resolver-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.BUILT_IN
+                ),
+            )
+        ],
+    )
+    artifact_service = _StaticArtifactService(
+        {
+            "art-pr-resolver-snapshot": resolved_skillset.model_dump_json().encode(
+                "utf-8"
+            ),
+            "art-pr-resolver-body": b"---\nname: pr-resolver\ndescription: active\n---\nactive resolver body\n",
+        }
     )
 
-    activities = TemporalAgentRuntimeActivities()
+    activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)
     result = await activities.agent_runtime_prepare_turn_instructions(
         {
             "request": {
@@ -2581,6 +2601,7 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
                 "agentId": "codex",
                 "correlationId": "corr-1",
                 "idempotencyKey": "idem-1",
+                "resolvedSkillsetRef": "art-pr-resolver-snapshot",
                 "parameters": {
                     "instructions": "Resolve the PR.",
                     "publishMode": "none",
@@ -2596,16 +2617,128 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
     )
 
     assert result.startswith("Active MoonMind skill snapshot:")
-    assert "../skills_active/pr-resolver/SKILL.md" in result
-    assert "Do not use repo-local `.agents/skills/pr-resolver/SKILL.md`" in result
-    assert (job_root / "skills_active" / "pr-resolver" / "SKILL.md").read_text(
+    assert ".agents/skills/pr-resolver/SKILL.md" in result
+    assert "resolved active skill projection" in result
+    backing_skill = (
+        job_root
+        / "runtime"
+        / "skills_active"
+        / "skillset-pr-resolver"
+        / "pr-resolver"
+        / "SKILL.md"
+    )
+    assert backing_skill.read_text(encoding="utf-8").endswith("active resolver body\n")
+    visible_skills = workspace / ".agents" / "skills"
+    assert visible_skills.is_symlink()
+    assert (visible_skills / "pr-resolver" / "SKILL.md").read_text(
         encoding="utf-8"
     ).endswith("active resolver body\n")
-    assert (workspace / ".agents" / "skills" / "active").is_symlink()
     assert not (workspace / "skills_active").exists()
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_fails_when_active_projection_collides(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    managed_root = tmp_path / "agent_jobs"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(managed_root))
+    workspace = managed_root / "job-1" / "repo"
+    checked_in_skill = workspace / ".agents" / "skills" / "pr-resolver"
+    checked_in_skill.mkdir(parents=True)
+    (checked_in_skill / "SKILL.md").write_text(
+        "checked-in source input\n",
+        encoding="utf-8",
+    )
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-pr-resolver",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="pr-resolver",
+                version="1.0.0",
+                content_ref="art-pr-resolver-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.BUILT_IN
+                ),
+            )
+        ],
+    )
+    artifact_service = _StaticArtifactService(
+        {
+            "art-pr-resolver-snapshot": resolved_skillset.model_dump_json().encode(
+                "utf-8"
+            ),
+            "art-pr-resolver-body": b"resolved active body\n",
+        }
+    )
+    activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)
+
+    with pytest.raises(TemporalActivityRuntimeError) as exc_info:
+        await activities.agent_runtime_prepare_turn_instructions(
+            {
+                "request": {
+                    "agentKind": "managed",
+                    "agentId": "codex",
+                    "correlationId": "corr-1",
+                    "idempotencyKey": "idem-1",
+                    "resolvedSkillsetRef": "art-pr-resolver-snapshot",
+                    "parameters": {
+                        "instructions": "Resolve the PR.",
+                        "metadata": {
+                            "moonmind": {
+                                "selectedSkill": "pr-resolver",
+                            },
+                        },
+                    },
+                },
+                "workspacePath": str(workspace),
+            }
+        )
+
+    message = str(exc_info.value)
+    assert "skill projection failed before runtime launch" in message
+    assert "object kind: directory" in message
     assert (
-        stale_repo_skill / "SKILL.md"
-    ).read_text(encoding="utf-8") == "stale repo-local resolver body\n"
+        checked_in_skill / "SKILL.md"
+    ).read_text(encoding="utf-8") == "checked-in source input\n"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_requires_skillset_ref_for_selected_skill(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    managed_root = tmp_path / "agent_jobs"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(managed_root))
+    workspace = managed_root / "job-1" / "repo"
+    workspace.mkdir(parents=True)
+
+    activities = TemporalAgentRuntimeActivities()
+
+    with pytest.raises(TemporalActivityRuntimeError) as exc_info:
+        await activities.agent_runtime_prepare_turn_instructions(
+            {
+                "request": {
+                    "agentKind": "managed",
+                    "agentId": "codex",
+                    "correlationId": "corr-1",
+                    "idempotencyKey": "idem-1",
+                    "parameters": {
+                        "instructions": "Resolve the PR.",
+                        "metadata": {
+                            "moonmind": {
+                                "selectedSkill": "pr-resolver",
+                            },
+                        },
+                    },
+                },
+                "workspacePath": str(workspace),
+            }
+        )
+
+    assert "requires request.resolvedSkillsetRef" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -2641,10 +2774,10 @@ async def test_agent_runtime_prepare_turn_instructions_skips_skill_snapshot_for_
     )
 
     assert not result.startswith("Active MoonMind skill snapshot:")
-    assert "../skills_active/pr-resolver/SKILL.md" not in result
-    assert not (workspace.parent / "skills_active").exists()
+    assert ".agents/skills/pr-resolver/SKILL.md" not in result
+    assert not (workspace.parent / "runtime" / "skills_active").exists()
     assert not (workspace / "skills_active").exists()
-    assert not (workspace / ".agents" / "skills" / "active").exists()
+    assert not (workspace / ".agents" / "skills").exists()
 
 
 @pytest.mark.asyncio
@@ -2693,8 +2826,8 @@ async def test_agent_runtime_prepare_turn_instructions_treats_auto_skill_as_no_s
 
     assert result.startswith("Use the default runtime behavior.")
     assert "Active MoonMind skill snapshot:" not in result
-    assert not (job_root / "skills_active").exists()
-    assert not (workspace / ".agents" / "skills" / "active").exists()
+    assert not (job_root / "runtime" / "skills_active").exists()
+    assert not (workspace / ".agents" / "skills").exists()
 
 
 @pytest.mark.asyncio

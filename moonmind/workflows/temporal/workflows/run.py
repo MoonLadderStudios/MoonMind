@@ -36,6 +36,7 @@ with workflow.unsafe.imports_passed_through():
         is_jules_agent_runtime_node,
     )
     from moonmind.workflows.tasks.routing import _coerce_bool
+    from moonmind.workflows.agent_skills.selection import selected_agent_skill
     from moonmind.config.settings import settings
     from moonmind.utils.logging import scrub_github_tokens
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
@@ -3875,12 +3876,34 @@ class MoonMindRunWorkflow:
             task_skills,
             node_skills if node_skills is not None else node_inputs.get("skills"),
         )
-        if effective is None:
+        selected_skill = selected_agent_skill(node_inputs)
+        if selected_skill == "auto":
+            selected_skill = ""
+        if effective is None and not selected_skill:
             return None
 
-        selector = SkillSelector.model_validate(
+        effective_payload = (
             effective.model_dump(mode="json", exclude_none=True)
+            if effective is not None
+            else {}
         )
+        if selected_skill:
+            excluded = set(effective_payload.get("exclude") or [])
+            if selected_skill in excluded:
+                raise ValueError(
+                    f"selected skill '{selected_skill}' cannot also be excluded"
+                )
+            include = list(effective_payload.get("include") or [])
+            included_names = {
+                str(item.get("name") or "").strip().lower()
+                for item in include
+                if isinstance(item, Mapping)
+            }
+            if selected_skill not in included_names:
+                include.append({"name": selected_skill})
+                effective_payload["include"] = include
+
+        selector = SkillSelector.model_validate(effective_payload)
         if not selector.sets and not selector.include and not selector.exclude:
             return None
 

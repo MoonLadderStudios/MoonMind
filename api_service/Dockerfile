@@ -329,6 +329,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY moonmind /app/moonmind/
 COPY api_service /app/api_service/
 COPY config /app/config/
+COPY .agents /app/.agents/
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --disable-pip-version-check --no-deps .
 

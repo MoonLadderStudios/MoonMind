@@ -57,6 +57,19 @@ async def test_resolver_resolves_built_in_skills():
     skill = result.skills[0]
     assert skill.skill_name == "read_file"
     assert skill.provenance.source_kind == AgentSkillSourceKind.BUILT_IN
+
+async def test_built_in_loader_discovers_packaged_agent_skills():
+    loader = BuiltInSkillLoader()
+    context = SkillResolutionContext(snapshot_id="snap-123")
+    selector = SkillSelector(include=[{"name": "moonspec-breakdown"}])
+
+    results = await loader.load_skills(selector, context)
+
+    discovered = {entry.skill_name: entry for entry in results}
+    assert "moonspec-breakdown" in discovered
+    assert discovered["moonspec-breakdown"].content_ref is None
+    assert discovered["moonspec-breakdown"].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
+    assert discovered["moonspec-breakdown"].provenance.source_path
     
 async def test_resolver_resolves_local_skills_when_allowed():
     loader = LocalSkillLoader()
