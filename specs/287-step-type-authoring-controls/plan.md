@@ -33,8 +33,8 @@ MM-568 is a single-story runtime UI feature for Create page step authoring. The 
 **Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 remains present but is not touched for this story
 **Primary Dependencies**: React, TanStack Query, existing Create page entrypoint, Vitest and Testing Library
 **Storage**: No new persistent storage; existing in-memory draft step state only
-**Unit Testing**: `./tools/test_unit.sh --dashboard-only --ui-args entrypoints/task-create-step-type.test.tsx` for focused UI verification; `./tools/test_unit.sh` for full final unit verification when feasible
-**Integration Testing**: Existing Create page component tests exercise the user-facing UI boundary without external services; no compose-backed integration change is required
+**Unit Testing**: `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json` for TypeScript/type validation; `./tools/test_unit.sh` for broader Python unit verification when feasible
+**Integration Testing**: `./tools/test_unit.sh --dashboard-only --ui-args entrypoints/task-create-step-type.test.tsx` for focused rendered Create page behavior; `./tools/test_unit.sh --dashboard-only` for dashboard regression coverage. No compose-backed integration change is required
 **Target Platform**: Mission Control web UI
 **Project Type**: Web application frontend
 **Performance Goals**: Step Type switching remains immediate and local to the edited step

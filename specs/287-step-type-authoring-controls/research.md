@@ -26,8 +26,8 @@ Test implications: Update the Step Type test to assert incompatible Skill fields
 
 ## Verification Strategy
 
-Decision: Use the repo test wrapper for focused Create page Vitest coverage and attempt final unit verification.
-Evidence: Repo instructions state frontend targets should run through `./tools/test_unit.sh --ui-args` when dependencies need preparation.
-Rationale: The change is frontend-only; no API, database, Temporal, or compose boundary changes are involved.
-Alternatives considered: Running raw `npm run ui:test` first failed because `vitest` was not installed in `node_modules`.
-Test implications: Record both the raw command failure and wrapper-based verification in final evidence.
+Decision: Use TypeScript type-checking for unit/type validation, the repo test wrapper for focused rendered Create page coverage, and the dashboard suite for broader UI regression evidence.
+Evidence: `tasks.md` now uses `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`, `./tools/test_unit.sh --dashboard-only --ui-args entrypoints/task-create-step-type.test.tsx`, and `./tools/test_unit.sh --dashboard-only`.
+Rationale: The change is frontend-only; no API, database, Temporal, or compose boundary changes are involved. The executable MM-568 regression lives in `task-create-step-type.test.tsx` because the older large Create page test file remains intentionally wrapped in `describe.skip`.
+Alternatives considered: Targeting `frontend/src/entrypoints/task-create.test.tsx -t "Step Type"` was rejected because that file is skipped as a suite and does not execute the focused regression.
+Test implications: Record type-check, focused dashboard UI, full dashboard, and broader unit verification evidence in final validation.

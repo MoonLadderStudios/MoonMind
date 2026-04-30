@@ -1,18 +1,30 @@
 # Quickstart: Add Step Type Authoring Controls
 
-1. Run the focused Create page Step Type tests through the repo wrapper:
+1. Run TypeScript validation for the Create page state and test harness:
 
    ```bash
-   ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx -t "Step Type"
+   ./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json
    ```
 
-2. Run the full required unit suite before finalizing when time and environment allow:
+2. Run the focused executable Create page Step Type regression through the repo wrapper:
+
+   ```bash
+   ./tools/test_unit.sh --dashboard-only --ui-args entrypoints/task-create-step-type.test.tsx
+   ```
+
+3. Run the dashboard regression suite:
+
+   ```bash
+   ./tools/test_unit.sh --dashboard-only
+   ```
+
+4. Run the broader required unit suite before finalizing when time and environment allow:
 
    ```bash
    ./tools/test_unit.sh
    ```
 
-3. Manual UI smoke path:
+5. Manual UI smoke path:
    - Open the Create page.
    - Confirm each step has one `Step Type` selector.
    - Enter shared instructions and Skill-specific values.
