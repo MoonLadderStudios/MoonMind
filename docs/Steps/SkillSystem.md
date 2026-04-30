@@ -884,6 +884,28 @@ The contract is:
 3. the runtime is not expected to discover Skills anywhere else;
 4. projection must fail before runtime launch if it cannot be installed safely.
 
+#### 14.4.1 Projection Strategy Order
+
+Managed runtime adapters should choose the first projection strategy that preserves
+the publishable repository workspace without changing checked-in Skill source
+files:
+
+1. **Runtime namespace projection**: bind mount or overlay the active backing
+   store at `.agents/skills` inside the launched runtime container, PTY, or
+   process namespace. This is preferred because the runtime sees the canonical
+   path while the repo checkout remains unchanged.
+2. **Isolated execution workspace**: run the agent in a prepared staging
+   workspace where `.agents/skills` can be owned by MoonMind, while publishing
+   code changes back to the canonical checkout through controlled sync rules.
+3. **Symlink projection**: create or update `.agents/skills` only when that path
+   is absent, already a MoonMind-owned projection link, or the workspace is an
+   explicitly disposable non-publishing clone.
+
+Adapters must not replace a tracked or repo-authored `.agents/skills` directory
+with a symlink in the publishable checkout as the normal projection mechanism.
+That creates git-visible churn and can accidentally publish deletion or symlink
+changes for repo Skill sources.
+
 ### 14.5 Inline Activation Summary
 
 Every managed runtime Skill step should include a compact activation block.
@@ -955,9 +977,31 @@ Examples:
 
 - `.agents` exists as a file;
 - `.agents/skills` exists as a file;
-- `.agents/skills` is an unreplaceable directory;
+- `.agents/skills` is a directory that cannot be masked through the runtime
+  namespace, staged outside the publishable checkout, or otherwise projected
+  without mutating repo-authored source files;
 - a stale symlink points to an incompatible backing store;
 - adapter or filesystem restrictions prevent projection.
+
+A checked-in `.agents/skills` directory is not by itself a business-logic
+failure. It is a normal source-input shape. It becomes a projection collision
+only if the selected adapter has no safe way to make the runtime see the active
+snapshot at `.agents/skills` without mutating that checked-in directory in the
+publishable workspace.
+
+#### 14.7.1 Collision Decision Table
+
+| Existing path | Desired handling | Terminal? |
+| --- | --- | --- |
+| `.agents` missing | Create adapter parent and project active root. | No |
+| `.agents` is a directory and `.agents/skills` missing | Project active root. | No |
+| `.agents/skills` is a MoonMind-owned symlink to the same backing store | Reuse it. | No |
+| `.agents/skills` is a MoonMind-owned stale symlink | Replace it with the current active projection and record the replacement. | No |
+| `.agents/skills` is a checked-in directory | Prefer runtime namespace projection or isolated execution workspace. Do not rewrite the directory in the publishable checkout. | No, unless no safe projection strategy exists |
+| `.agents` is a file | Fail before runtime launch with actionable diagnostics. | Yes |
+| `.agents/skills` is a file | Fail before runtime launch with actionable diagnostics. | Yes |
+| `.agents/skills` is an external or unknown symlink | Replace only if ownership can be proven; otherwise fail before runtime launch. | Conditional |
+| Filesystem or adapter cannot mount, overlay, stage, or link safely | Fail before runtime launch with actionable diagnostics. | Yes |
 
 Preferred behavior:
 
@@ -972,6 +1016,20 @@ Projection failures must include:
 - conflicting object kind,
 - attempted projection action,
 - remediation guidance.
+
+#### 14.7.2 Hard Invariants
+
+Projection must satisfy all of these invariants before the runtime starts:
+
+1. `.agents/skills` as seen by the agent resolves to the active backing store.
+2. the visible active tree contains only the selected Skills and MoonMind-owned
+   metadata.
+3. repo-authored Skill input directories are not rewritten, deleted, or converted
+   to symlinks in the publishable checkout.
+4. the runtime is not instructed to read an alternate visible path as a silent
+   fallback.
+5. the projection decision and any collision remediation are recorded in runtime
+   metadata or diagnostics.
 
 ### 14.8 Adapter Responsibilities
 
@@ -992,6 +1050,36 @@ A managed runtime adapter must not:
 2. silently fall back to a different visible path;
 3. treat runtime commands as Skills;
 4. mutate the active bundle as a way of changing policy.
+
+### 14.9 Robust Implementation Plan
+
+The managed-runtime implementation should enforce this plan:
+
+1. **Resolve and snapshot first**: resolution may read repo and local Skill
+   sources according to policy, then writes an immutable `ResolvedSkillSet` or
+   snapshot ref. Runtime projection must consume this snapshot and must not
+   rescan the repo.
+2. **Materialize outside the repo**: write selected Skill bundles and
+   `_manifest.json` under a run-scoped backing store such as
+   `/work/agent_jobs/<job_id>/runtime/skills_active/<snapshot_id>/`.
+3. **Plan projection before launch**: inspect `.agents`, `.agents/skills`, and
+   adapter capabilities. Decide whether to use runtime namespace projection,
+   isolated execution workspace, or symlink projection.
+4. **Protect publishable checkouts**: if `.agents/skills` is repo-authored or
+   tracked, do not replace it in the publishable checkout. Use a runtime
+   namespace projection or staging workspace instead.
+5. **Fail early when no safe projection exists**: hard collisions must stop
+   before runtime launch and report path, object kind, attempted action,
+   selected strategy, and remediation guidance.
+6. **Inject compact instructions**: the instruction payload names active Skills,
+   says full content is under `.agents/skills`, and gives first-read hints
+   without embedding full Skill bodies.
+7. **Verify the actual runtime view**: before submitting the turn, adapter
+   boundary tests and runtime preflight checks should confirm the agent-visible
+   `.agents/skills/_manifest.json` matches the supplied snapshot.
+8. **Publish only task changes**: publication logic must exclude runtime
+   projection artifacts and must not commit changes caused only by Skill
+   projection.
 
 ---
 

@@ -24,12 +24,18 @@ class AgentSkillMaterializer:
         workspace_root: str,
         artifact_service: Any | None = None,
         backing_root: str | None = None,
+        source_preservation_root: str | None = None,
     ) -> None:
         if not workspace_root:
             raise ValueError("workspace_root must be provided")
         self.workspace_root = Path(workspace_root).resolve()
         self._artifact_service = artifact_service
         self.backing_root = Path(backing_root).resolve() if backing_root else None
+        self.source_preservation_root = (
+            Path(source_preservation_root).resolve()
+            if source_preservation_root
+            else None
+        )
 
     async def materialize(
         self,
@@ -52,6 +58,7 @@ class AgentSkillMaterializer:
             visible_dir = self.workspace_root / ".agents" / "skills"
             manifest_path = active_dir / "_manifest.json"
 
+            self._preserve_existing_visible_source_dir(visible_dir)
             self._validate_projection_path(visible_dir)
 
             try:
@@ -154,6 +161,32 @@ class AgentSkillMaterializer:
             result.prompt_index_ref = f"index_{resolved_skillset.snapshot_id}"
             
         return result
+
+    def _preserve_existing_visible_source_dir(self, visible_dir: Path) -> None:
+        if self.source_preservation_root is None:
+            return
+        if not visible_dir.exists() or visible_dir.is_symlink():
+            return
+        if not visible_dir.is_dir():
+            return
+
+        try:
+            self.source_preservation_root.parent.mkdir(parents=True, exist_ok=True)
+            if self.source_preservation_root.exists():
+                self._clear_directory(self.source_preservation_root)
+            else:
+                self.source_preservation_root.mkdir(parents=True)
+            for child in visible_dir.iterdir():
+                target = self.source_preservation_root / child.name
+                if child.is_dir() and not child.is_symlink():
+                    shutil.copytree(child, target, symlinks=True)
+                else:
+                    shutil.copy2(child, target, follow_symlinks=False)
+            shutil.rmtree(visible_dir)
+        except OSError as ex:
+            raise RuntimeError(
+                self._projection_error_message(visible_dir, cause=str(ex))
+            ) from ex
 
     @staticmethod
     def _clear_directory(path: Path) -> None:

@@ -4067,10 +4067,14 @@ class TemporalAgentRuntimeActivities:
                 / "skills_active"
                 / resolved_skillset.snapshot_id
             )
+            skill_source_preservation_root = (
+                run_root / "runtime" / "skill_sources" / "repo_agents_skills"
+            )
             materializer = AgentSkillMaterializer(
                 workspace_root=str(workspace),
                 artifact_service=self._artifact_service,
                 backing_root=str(skills_backing_root),
+                source_preservation_root=str(skill_source_preservation_root),
             )
             await materializer.materialize(
                 resolved_skillset=resolved_skillset,

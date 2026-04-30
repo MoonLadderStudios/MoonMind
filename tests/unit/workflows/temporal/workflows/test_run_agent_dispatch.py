@@ -14,8 +14,21 @@ import pytest
 pytest.importorskip("temporalio")
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-from moonmind.schemas.agent_skill_models import ResolvedSkillSet
+from moonmind.schemas.agent_skill_models import (
+    AgentSkillProvenance,
+    AgentSkillSourceKind,
+    ResolvedSkillEntry,
+    ResolvedSkillSet,
+)
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+
+def _resolved_skill(skill_name: str) -> ResolvedSkillEntry:
+    return ResolvedSkillEntry(
+        skill_name=skill_name,
+        provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN),
+    )
+
 
 class TestAgentKindForId(unittest.TestCase):
     """Verify the _agent_kind_for_id static method."""
@@ -234,7 +247,7 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
             snapshot_id="skillset-wf-step-1",
             resolved_at=datetime.now(UTC),
             manifest_ref="artifact://skillsets/selected-skill",
-            skills=[],
+            skills=[_resolved_skill("moonspec-breakdown")],
         )
 
         with patch(
@@ -261,13 +274,77 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(kwargs["args"][1:], ["owner-1", "/workspace/repo", False, False])
 
+    async def test_agent_node_adds_selected_skill_to_task_level_selector(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-wf-step-1",
+            resolved_at=datetime.now(UTC),
+            manifest_ref="artifact://skillsets/selected-skill",
+            skills=[
+                _resolved_skill("jira-breakdown-orchestrate"),
+                _resolved_skill("moonspec-breakdown"),
+            ],
+        )
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+            new=AsyncMock(return_value=resolved),
+        ) as execute_activity:
+            ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills={"include": [{"name": "jira-breakdown-orchestrate"}]},
+                node_inputs={
+                    "selectedSkill": "moonspec-breakdown",
+                    "workspaceRoot": "/workspace/repo",
+                },
+                node_id="step-1",
+                existing_skillset_ref=None,
+            )
+
+        self.assertEqual(ref, "artifact://skillsets/selected-skill")
+        args, kwargs = execute_activity.call_args
+        self.assertEqual(args, ("agent_skill.resolve",))
+        selector = kwargs["args"][0]
+        self.assertEqual(
+            [(entry.name, entry.version) for entry in selector.include],
+            [("jira-breakdown-orchestrate", None), ("moonspec-breakdown", None)],
+        )
+
+    async def test_agent_node_rejects_unresolved_selected_skill_before_launch(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-wf-step-1",
+            resolved_at=datetime.now(UTC),
+            manifest_ref="artifact://skillsets/selected-skill",
+            skills=[_resolved_skill("jira-breakdown-orchestrate")],
+        )
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+            new=AsyncMock(return_value=resolved),
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "selected skill 'moonspec-breakdown' was not resolved",
+            ):
+                await wf._resolve_agent_node_skillset_ref(
+                    task_skills={"include": [{"name": "jira-breakdown-orchestrate"}]},
+                    node_inputs={
+                        "selectedSkill": "moonspec-breakdown",
+                        "workspaceRoot": "/workspace/repo",
+                    },
+                    node_id="step-1",
+                    existing_skillset_ref=None,
+                )
+
     async def test_agent_node_accepts_mapping_skill_resolution_result(self) -> None:
         wf = MoonMindRunWorkflow()
         wf._owner_id = "owner-1"
         resolved = {
             "snapshotId": "skillset-wf-step-1",
             "manifestRef": "artifact://skillsets/selected-skill",
-            "skills": [],
+            "skills": [{"skillName": "moonspec-breakdown"}],
         }
 
         with patch(
