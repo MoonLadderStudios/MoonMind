@@ -7614,7 +7614,7 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBe(true);
   });
 
-  it("preserves hidden Skill fields but blocks Tool submissions without a selected Tool", async () => {
+  it("visibly discards incompatible Skill fields after changing Step Type", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
@@ -7643,25 +7643,31 @@ describe.skip("Task Create Entrypoint", () => {
     );
     selectStepType(step, "Tool");
     expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
+    expect(
+      within(step).getByText(
+        "Skill configuration discarded after changing Step Type. Shared instructions were preserved.",
+      ),
+    ).toBeTruthy();
+
     selectStepType(step, "Skill");
     expect(
       (within(step).getByLabelText(/Skill \(optional\)/) as HTMLInputElement)
         .value,
-    ).toBe("custom-skill");
+    ).toBe("");
     expect(
       (
         within(step).getByLabelText(
           "Step 1 Skill Args (optional JSON object)",
         ) as HTMLTextAreaElement
       ).value,
-    ).toBe('{"hidden":true}');
+    ).toBe("");
     expect(
       (
         within(step).getByLabelText(
           /Step 1 Skill Required Capabilities \(optional CSV\)/,
         ) as HTMLInputElement
       ).value,
-    ).toBe("docker, qdrant");
+    ).toBe("");
     selectStepType(step, "Tool");
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Run a tool Step Type submission." },
