@@ -555,6 +555,7 @@ interface StepState {
   presetMessage: string | null;
   presetReapplyNeeded: boolean;
   presetPreview: PresetPreviewState | null;
+  stepTypeMessage: string | null;
   templateStepId: string;
   templateInstructions: string;
   inputAttachments: StepAttachmentRef[];
@@ -1163,6 +1164,7 @@ function createStepStateEntry(
     presetMessage: null,
     presetReapplyNeeded: false,
     presetPreview: null,
+    stepTypeMessage: null,
     templateStepId: "",
     templateInstructions: "",
     inputAttachments: [],
@@ -4608,7 +4610,68 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   function handleStepTypeChange(localId: string, value: string) {
     const nextType: StepType =
       value === "tool" || value === "preset" ? value : "skill";
-    updateStep(localId, { stepType: nextType, presetPreview: null });
+    setSteps((current) =>
+      current.map((step) => {
+        if (step.localId !== localId || step.stepType === nextType) {
+          return step;
+        }
+
+        const discardedLabels: string[] = [];
+        const nextStep: StepState = {
+          ...step,
+          stepType: nextType,
+          presetPreview: null,
+          stepTypeMessage: null,
+        };
+
+        if (
+          step.stepType === "skill" &&
+          (step.skillId.trim() ||
+            step.skillArgs.trim() ||
+            step.skillRequiredCapabilities.trim())
+        ) {
+          discardedLabels.push("Skill configuration");
+          nextStep.skillId = "";
+          nextStep.skillArgs = "";
+          nextStep.skillRequiredCapabilities = "";
+        }
+
+        if (
+          step.stepType === "tool" &&
+          (step.toolId.trim() ||
+            step.toolVersion.trim() ||
+            (step.toolInputs.trim() && step.toolInputs.trim() !== "{}"))
+        ) {
+          discardedLabels.push("Tool configuration");
+          nextStep.toolId = "";
+          nextStep.toolVersion = "";
+          nextStep.toolInputs = "{}";
+        }
+
+        if (
+          step.stepType === "preset" &&
+          (step.presetKey ||
+            Object.keys(step.presetInputValues).length > 0 ||
+            step.presetPreview)
+        ) {
+          discardedLabels.push("Preset configuration");
+          nextStep.presetKey = "";
+          nextStep.presetInputValues = {};
+          nextStep.presetDetail = null;
+          nextStep.presetMessage = null;
+          nextStep.presetReapplyNeeded = false;
+          nextStep.presetPreview = null;
+        }
+
+        if (discardedLabels.length > 0) {
+          nextStep.stepTypeMessage = `${discardedLabels.join(
+            ", ",
+          )} discarded after changing Step Type. Shared instructions were preserved.`;
+        }
+
+        return nextStep;
+      }),
+    );
   }
 
   function updateStepPresetInputValue(
@@ -6766,6 +6829,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       ))}
                     </div>
                   </fieldset>
+                  {step.stepTypeMessage ? (
+                    <p className="notice small">{step.stepTypeMessage}</p>
+                  ) : null}
 
                   {step.stepType === "tool" ? (
                     <div className="stack queue-step-type-panel">
