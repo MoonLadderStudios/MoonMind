@@ -6219,6 +6219,121 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
+  it("renders Jira board selectors for step preset inputs", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "jira-breakdown",
+                scope: "global",
+                title: "Jira Breakdown",
+                description: "Create Jira stories from a breakdown.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/task-step-templates/jira-breakdown?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "jira-breakdown",
+            scope: "global",
+            title: "Jira Breakdown",
+            description: "Create Jira stories from a breakdown.",
+            latestVersion: "1.0.0",
+            version: "1.0.0",
+            inputs: [
+              {
+                name: "feature_request",
+                label: "Declarative Design Path or Text",
+                type: "markdown",
+                required: true,
+              },
+              {
+                name: "jira_board_id",
+                label: "Jira Board",
+                type: "jira_board",
+                required: false,
+                default: "42",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith("/api/task-step-templates/jira-breakdown:expand?scope=global")
+      ) {
+        const body = JSON.parse(String(init?.body || "{}"));
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:jira-breakdown:1.0.0:01",
+                title: "Create Jira stories",
+                instructions: `Selected Jira board ID: ${body.inputs.jira_board_id}`,
+              },
+            ],
+            appliedTemplate: {
+              slug: "jira-breakdown",
+              version: "1.0.0",
+              inputs: body.inputs,
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = await within(step).findByLabelText("Preset");
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-breakdown" },
+    });
+
+    const boardSelect = (await within(step).findByLabelText(
+      "Jira Board",
+    )) as HTMLSelectElement;
+    expect(boardSelect.tagName).toBe("SELECT");
+    await waitFor(() => {
+      expect(
+        Array.from(boardSelect.options).some((option) => option.value === "7"),
+      ).toBe(true);
+    });
+    fireEvent.change(boardSelect, { target: { value: "7" } });
+    fireEvent.change(
+      within(step).getByLabelText("Feature Request / Initial Instructions"),
+      { target: { value: "docs/Design.md" } },
+    );
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+
+    await waitFor(() => {
+      const expandCall = fetchSpy.mock.calls.find(([url]) =>
+        String(url).startsWith(
+          "/api/task-step-templates/jira-breakdown:expand?scope=global",
+        ),
+      );
+      expect(expandCall).toBeTruthy();
+      const body = JSON.parse(String(expandCall?.[1]?.body || "{}"));
+      expect(body.inputs.jira_board_id).toBe("7");
+    });
+  });
+
   it("preserves typed preset text spacing and submits unchecked boolean inputs", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -6851,7 +6966,7 @@ describe("Task Create Entrypoint", () => {
 
     const presetsSection = await screen.findByLabelText("Preset Management");
     fireEvent.change(within(presetsSection).getByLabelText("Preset Name"), {
-      target: { value: "Spec Kit Demo" },
+      target: { value: "global::::speckit-demo" },
     });
 
     const deleteButton = within(presetsSection).getByRole("button", {
@@ -6881,8 +6996,17 @@ describe("Task Create Entrypoint", () => {
 
     const presetsSection = await screen.findByLabelText("Preset Management");
     const presetName = within(presetsSection).getByLabelText("Preset Name");
-    fireEvent.input(presetName, {
-      target: { value: "Personal Demo" },
+    await waitFor(() => {
+      expect(
+        Array.from(
+          document.querySelectorAll<HTMLOptionElement>(
+            "#queue-template-name-options option",
+          ),
+        ).some((option) => option.value === "personal::::personal-demo"),
+      ).toBe(true);
+    });
+    fireEvent.change(presetName, {
+      target: { value: "personal::::personal-demo" },
     });
     await waitFor(() => {
       expect(
@@ -6907,6 +7031,106 @@ describe("Task Create Entrypoint", () => {
       "Delete preset 'Personal Demo'? This cannot be undone.",
     );
     expect(await screen.findByText("Deleted preset 'Personal Demo'.")).toBeTruthy();
+
+    confirmSpy.mockRestore();
+  });
+
+  it("resolves Preset Management selections by template key when titles collide", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "shared-global",
+                scope: "global",
+                title: "Shared Demo",
+                description: "Global preset with a duplicate title.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/task-step-templates?scope=personal")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "shared-personal",
+                scope: "personal",
+                title: "Shared Demo",
+                description: "Personal preset with a duplicate title.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        path === "/api/task-step-templates/shared-personal" &&
+        init?.method === "DELETE"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          status: 204,
+          text: async () => "",
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetsSection = await screen.findByLabelText("Preset Management");
+    const presetName = within(presetsSection).getByLabelText("Preset Name");
+    await waitFor(() => {
+      expect(
+        Array.from(
+          document.querySelectorAll<HTMLOptionElement>(
+            "#queue-template-name-options option",
+          ),
+        ).some((option) => option.value === "personal::::shared-personal"),
+      ).toBe(true);
+    });
+    fireEvent.change(presetName, {
+      target: { value: "personal::::shared-personal" },
+    });
+    await waitFor(() => {
+      expect(
+        within(presetsSection)
+          .getByRole("button", { name: "Delete preset" })
+          .getAttribute("title"),
+      ).toBe("Delete the selected preset");
+    });
+
+    fireEvent.click(
+      within(presetsSection).getByRole("button", { name: "Delete preset" }),
+    );
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/task-step-templates/shared-personal?scope=personal",
+        expect.objectContaining({
+          method: "DELETE",
+        }),
+      );
+    });
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url).startsWith("/api/task-step-templates/shared-global") &&
+          init?.method === "DELETE",
+      ),
+    ).toBe(false);
 
     confirmSpy.mockRestore();
   });
@@ -7052,7 +7276,12 @@ describe("Task Create Entrypoint", () => {
       { name: "Step Type" },
     );
     expect(
-      within(stepType).getAllByRole("radio").map((option) => option.nextSibling?.textContent),
+      within(stepType)
+        .getAllByRole("radio")
+        .map(
+          (option) =>
+            (option.nextSibling as HTMLElement | null)?.dataset.label || "",
+        ),
     ).toEqual(["Skill", "Tool", "Preset"]);
     expect(
       (within(stepType).getByLabelText("Step Type Skill") as HTMLInputElement)

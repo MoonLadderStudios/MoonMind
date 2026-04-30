@@ -2598,6 +2598,10 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   border-color: rgb(var(--mm-accent) / 0.62);
 }
 
+.queue-step-type-option-label::before {
+  content: attr(data-label);
+}
+
 .queue-step-instructions-block {
   order: 3;
 }

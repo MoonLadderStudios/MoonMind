@@ -2841,7 +2841,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [templateInputValues, setTemplateInputValues] = useState<
     Record<string, string | boolean>
   >({});
-  const presetManagementInputRef = useRef<HTMLInputElement | null>(null);
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
   const [presetReapplyNeeded, setPresetReapplyNeeded] = useState(false);
   const [appliedTemplateFeatureRequest, setAppliedTemplateFeatureRequest] =
@@ -3336,21 +3335,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     },
   });
 
+  const jiraBoardProjectKey =
+    selectedJiraProjectKey || jiraIntegration?.defaultProjectKey || "";
   const jiraBoardsQuery = useQuery({
     queryKey: [
       "task-create",
       "jira",
       "boards",
       jiraIntegration?.endpoints.boards,
-      selectedJiraProjectKey,
+      jiraBoardProjectKey,
     ],
-    enabled: Boolean(
-      jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraProjectKey,
-    ),
+    enabled: Boolean(jiraIntegration?.enabled && jiraBoardProjectKey),
     queryFn: async (): Promise<JiraBoard[]> => {
       const endpoint = interpolatePath(
         jiraIntegration?.endpoints.boards || "",
-        { projectKey: selectedJiraProjectKey },
+        { projectKey: jiraBoardProjectKey },
       );
       const response = await fetch(endpoint, {
         headers: { Accept: "application/json" },
@@ -3611,20 +3610,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }, [selectedPresetKey, taskTemplateCatalogEnabled, templateItems]);
 
-  const presetManagementLookupName = (
-    presetManagementInputRef.current?.value || presetManagementName
-  ).trim();
-  const selectedPresetByName = presetManagementLookupName
-    ? templateItems.find(
-        (item) =>
-          item.title === presetManagementLookupName ||
-          item.key === presetManagementLookupName,
-      ) ||
-      null
-    : null;
-  const selectedPreset = presetManagementLookupName
-    ? selectedPresetByName
-    : templateItems.find((item) => item.key === selectedPresetKey) || null;
+  const selectedPreset =
+    templateItems.find((item) => item.key === selectedPresetKey) || null;
   const selectedPresetDetailQuery = useQuery({
     queryKey: [
       "task-create",
@@ -4579,15 +4566,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     definition: TaskTemplateInputDefinition,
     value: string | boolean,
   ) {
-    updateStep(localId, {
-      presetInputValues: {
-        ...(steps.find((step) => step.localId === localId)?.presetInputValues ||
-          {}),
-        [definition.name]: value,
-      },
-      presetReapplyNeeded: false,
-      presetPreview: null,
-    });
+    setSteps((current) =>
+      current.map((step) =>
+        step.localId === localId
+          ? {
+              ...step,
+              presetInputValues: {
+                ...step.presetInputValues,
+                [definition.name]: value,
+              },
+              presetReapplyNeeded: false,
+              presetPreview: null,
+            }
+          : step,
+      ),
+    );
   }
 
   function updateStep(localId: string, updates: Partial<StepState>) {
@@ -4636,7 +4629,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   function handlePresetManagementNameChange(nextName: string) {
     setPresetManagementName(nextName);
     const matchingPreset = templateItems.find(
-      (item) => item.title === nextName || item.key === nextName,
+      (item) => item.key === nextName.trim(),
     );
     setSelectedPresetKey(matchingPreset?.key || "");
     setTemplateInputValues({});
@@ -6754,13 +6747,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     <legend>Step Type</legend>
                     <div className="queue-step-type-options">
                       {STEP_TYPE_OPTIONS.map((option) => (
-                        <div
+                        <label
                           key={option.value}
                           className="queue-step-type-option"
                           title={STEP_TYPE_HELP_TEXT[option.value]}
-                          onClick={() =>
-                            handleStepTypeChange(step.localId, option.value)
-                          }
                         >
                           <input
                             type="radio"
@@ -6777,8 +6767,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                               )
                             }
                           />
-                          <span>{option.label}</span>
-                        </div>
+                          <span
+                            aria-hidden="true"
+                            className="queue-step-type-option-label"
+                            data-label={option.label}
+                          />
+                        </label>
                       ))}
                     </div>
                   </fieldset>
@@ -7241,6 +7235,35 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                 </label>
                               );
                             }
+                            if (definition.type === "jira_board") {
+                              return (
+                                <label key={definition.name} htmlFor={inputId}>
+                                  {definition.label}
+                                  <select
+                                    id={inputId}
+                                    value={value}
+                                    disabled={
+                                      jiraBoardsQuery.isLoading ||
+                                      jiraBoardsQuery.isError
+                                    }
+                                    onChange={(event) =>
+                                      updateStepPresetInputValue(
+                                        step.localId,
+                                        definition,
+                                        event.target.value,
+                                      )
+                                    }
+                                  >
+                                    <option value="">Select board...</option>
+                                    {(jiraBoardsQuery.data || []).map((board) => (
+                                      <option key={board.id} value={board.id}>
+                                        {board.name || board.id}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                              );
+                            }
                             return (
                               <label key={definition.name} htmlFor={inputId}>
                                 {definition.label}
@@ -7374,20 +7397,16 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               Preset Name
               <input
                 id="queue-template-select"
-                ref={presetManagementInputRef}
                 list="queue-template-name-options"
                 value={presetManagementName}
                 onChange={(event) =>
                   handlePresetManagementNameChange(event.target.value)
                 }
-                onInput={(event) =>
-                  handlePresetManagementNameChange(event.currentTarget.value)
-                }
                 placeholder="Type a new preset name or choose an existing personal preset"
               />
               <datalist id="queue-template-name-options">
                 {templateItems.map((item) => (
-                  <option key={item.key} value={item.title}>
+                  <option key={item.key} value={item.key}>
                     {`${item.title} (${scopeLabel(item.scope)})`}
                   </option>
                 ))}
