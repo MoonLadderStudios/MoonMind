@@ -1367,41 +1367,16 @@ tr[data-proposal-id].proposal-consuming td {
   white-space: pre;
 }
 
+.status-running[data-effect="shimmer-sweep"] .status-letter-wave,
+.status-running.is-executing .status-letter-wave,
+.status-running.is-planning .status-letter-wave {
+  color: var(--mm-executing-letter-bright);
+  text-shadow: 0 0 10px var(--mm-executing-letter-halo);
+}
+
 .status-letter-wave__glyph {
   display: inline-block;
   color: inherit;
-}
-
-@supports ((background-clip: text) or (-webkit-background-clip: text)) {
-  .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
-  .status-running.is-executing .status-letter-wave,
-  .status-running.is-planning .status-letter-wave {
-    color: var(--mm-executing-letter-bright);
-    -webkit-text-fill-color: transparent;
-    background-image:
-      linear-gradient(
-        var(--mm-executing-sweep-angle),
-        transparent 0 44%,
-        var(--mm-executing-letter-halo) 50%,
-        transparent 56%
-      ),
-      linear-gradient(
-        var(--mm-executing-sweep-angle),
-        currentcolor 0 42%,
-        white 50%,
-        currentcolor 58% 100%
-      );
-    background-repeat: no-repeat;
-    background-size:
-      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) var(--mm-executing-sweep-band-height),
-      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-core-width-multiplier)) var(--mm-executing-sweep-band-height);
-    background-position:
-      var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y),
-      calc(var(--mm-executing-sweep-start-x) + var(--mm-executing-sweep-layer-offset-x)) calc(var(--mm-executing-sweep-start-y) + var(--mm-executing-sweep-layer-offset-y));
-    background-clip: text;
-    -webkit-background-clip: text;
-    animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1420,16 +1395,10 @@ tr[data-proposal-id].proposal-consuming td {
     filter: none !important;
   }
 
-  @supports ((background-clip: text) or (-webkit-background-clip: text)) {
-    .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
-    .status-running.is-executing .status-letter-wave,
-    .status-running.is-planning .status-letter-wave {
-      animation: none;
-      -webkit-text-fill-color: currentcolor;
-      background-image: none;
-      -webkit-background-clip: border-box;
-      background-clip: border-box;
-    }
+  .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
+  .status-running.is-executing .status-letter-wave,
+  .status-running.is-planning .status-letter-wave {
+    text-shadow: none;
   }
 }
 

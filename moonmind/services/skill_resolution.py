@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
     AgentSkillProvenance,
@@ -46,13 +47,39 @@ class SkillLoader(abc.ABC):
         """Return resolved skill entries from this source that match the selector."""
         raise NotImplementedError
 
+
 class BuiltInSkillLoader(SkillLoader):
     """Loads embedded capabilities shipped directly with the system."""
+
+    def __init__(self, skills_root: Path | None = None) -> None:
+        self._skills_root = skills_root
+
+    @property
+    def skills_root(self) -> Path:
+        if self._skills_root is not None:
+            return self._skills_root
+        candidates = [
+            Path("/app/.agents/skills"),
+            Path.cwd() / ".agents" / "skills",
+            Path(settings.workflow.skills_legacy_mirror_root).expanduser(),
+            Path(__file__).resolve().parents[2] / ".agents" / "skills",
+        ]
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            if (resolved / "pr-resolver" / "SKILL.md").exists():
+                return resolved
+        return candidates[0]
 
     async def load_skills(
         self, selector: SkillSelector, context: SkillResolutionContext
     ) -> list[ResolvedSkillEntry]:
-        results = []
+        results = _scan_for_skills(
+            self.skills_root,
+            AgentSkillSourceKind.BUILT_IN,
+            version="1.0.0",
+            skip_names={"local"},
+        )
+        discovered = {entry.skill_name for entry in results}
         for name in [
             "moonmind-doc-writer",
             "moonmind-default-reviewer",
@@ -63,6 +90,8 @@ class BuiltInSkillLoader(SkillLoader):
             "fix-merge-conflicts",
             "auto",
         ]:
+            if name in discovered:
+                continue
             results.append(
                 ResolvedSkillEntry(
                     skill_name=name,
@@ -71,8 +100,9 @@ class BuiltInSkillLoader(SkillLoader):
                         source_kind=AgentSkillSourceKind.BUILT_IN
                     ),
                 )
-            )
+        )
         return results
+
 
 class DeploymentSkillLoader(SkillLoader):
     """Loads authoritative skills administered through the central DB/API."""
@@ -92,10 +122,12 @@ class DeploymentSkillLoader(SkillLoader):
             stmt = select(AgentSkillDefinition).options(
                 selectinload(AgentSkillDefinition.versions)
             )
-            
+
             if selector.include:
-                stmt = stmt.where(AgentSkillDefinition.slug.in_([e.name for e in selector.include]))
-                
+                stmt = stmt.where(
+                    AgentSkillDefinition.slug.in_([e.name for e in selector.include])
+                )
+
             res = await session.execute(stmt)
             defs = res.scalars().all()
 
@@ -118,18 +150,26 @@ class DeploymentSkillLoader(SkillLoader):
 
         return results
 
+
 def _scan_for_skills(
-    skills_dir: Path, source_kind: AgentSkillSourceKind
+    skills_dir: Path,
+    source_kind: AgentSkillSourceKind,
+    *,
+    version: str = "latest",
+    skip_names: set[str] | None = None,
 ) -> list[ResolvedSkillEntry]:
     results = []
     if not skills_dir.is_dir():
         return results
-    for item in skills_dir.iterdir():
+    skip_names = skip_names or set()
+    for item in sorted(skills_dir.iterdir(), key=lambda path: path.name):
+        if item.name in skip_names:
+            continue
         if item.is_dir() and (item / "SKILL.md").exists():
             results.append(
                 ResolvedSkillEntry(
                     skill_name=item.name,
-                    version="latest",
+                    version=version,
                     provenance=AgentSkillProvenance(
                         source_kind=source_kind,
                         source_path=str(item),
@@ -137,6 +177,7 @@ def _scan_for_skills(
                 )
             )
     return results
+
 
 class RepoSkillLoader(SkillLoader):
     """Loads skills from the canonical `.agents/skills` repository path."""

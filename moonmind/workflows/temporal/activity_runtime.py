@@ -62,14 +62,11 @@ from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as C
 from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DISABLED_MESSAGE
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
-from moonmind.workflows.skills.materializer import (
-    SkillMaterializationError,
-    materialize_run_skill_workspace,
+from moonmind.schemas.agent_skill_models import (
+    ResolvedSkillSet,
+    RuntimeMaterializationMode,
 )
-from moonmind.workflows.skills.resolver import (
-    SkillResolutionError,
-    resolve_run_skill_selection,
-)
+from moonmind.services.skill_materialization import AgentSkillMaterializer
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     build_deployment_update_tool_definition_payload,
@@ -264,7 +261,6 @@ _OPERATOR_SUMMARY_TAIL_BYTES = 64 * 1024
 _PUBLISH_GIT_EXCLUDED_PATHS: tuple[str, ...] = (
     "CLAUDE.md",
     "live_streams.spool",
-    ".agents/skills/active",
 )
 _SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
@@ -3976,7 +3972,7 @@ class TemporalAgentRuntimeActivities:
         workspace_path_raw = str(
             payload.get("workspace_path") or payload.get("workspacePath") or ""
         ).strip()
-        skill_snapshot_materialized = self._materialize_selected_agent_skill_for_turn(
+        skill_snapshot_materialized = await self._materialize_selected_agent_skill_for_turn(
             request=request,
             workspace_path=workspace_path_raw,
         )
@@ -4028,14 +4024,13 @@ class TemporalAgentRuntimeActivities:
             "request.instructionRef or request.parameters.instructions is required"
         )
 
-    @classmethod
-    def _materialize_selected_agent_skill_for_turn(
-        cls,
+    async def _materialize_selected_agent_skill_for_turn(
+        self,
         *,
         request: AgentExecutionRequest,
         workspace_path: str,
     ) -> bool:
-        """Materialize the selected active skill for a managed-session turn."""
+        """Materialize the resolved active skill snapshot for a managed-session turn."""
 
         params = request.parameters if isinstance(request.parameters, Mapping) else {}
         selected_skill = selected_agent_skill(params)
@@ -4047,32 +4042,70 @@ class TemporalAgentRuntimeActivities:
             return False
 
         workspace = Path(workspace_path).expanduser().resolve()
-        run_root = cls._managed_session_run_root_for_workspace(workspace)
+        run_root = self._managed_session_run_root_for_workspace(workspace)
         if run_root is None:
             return False
 
-        cache_root = cls._managed_session_skill_cache_root(run_root)
+        skillset_ref = str(request.resolved_skillset_ref or "").strip()
+        if not skillset_ref:
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"selected skill '{selected_skill}' requires request.resolvedSkillsetRef"
+            )
+
         try:
-            selection = resolve_run_skill_selection(
-                run_id=str(request.idempotency_key or run_root.name),
-                context={"skill_selection": [selected_skill]},
+            resolved_skillset = await self._load_resolved_skillset(skillset_ref)
+            resolved_names = {entry.skill_name for entry in resolved_skillset.skills}
+            if selected_skill not in resolved_names:
+                raise TemporalActivityRuntimeError(
+                    "selected skill materialization failed before runtime launch: "
+                    f"selected skill '{selected_skill}' is not present in resolvedSkillsetRef {skillset_ref}"
+                )
+            skills_backing_root = (
+                run_root
+                / "runtime"
+                / "skills_active"
+                / resolved_skillset.snapshot_id
             )
-            materialize_run_skill_workspace(
-                selection=selection,
-                run_root=run_root,
-                cache_root=cache_root,
-                verify_signatures=settings.workflow.skills_verify_signatures,
+            materializer = AgentSkillMaterializer(
+                workspace_root=str(workspace),
+                artifact_service=self._artifact_service,
+                backing_root=str(skills_backing_root),
             )
-        except (SkillMaterializationError, SkillResolutionError, OSError) as exc:
+            await materializer.materialize(
+                resolved_skillset=resolved_skillset,
+                runtime_id=str(request.agent_id or "managed-runtime"),
+                mode=RuntimeMaterializationMode.HYBRID,
+            )
+        except TemporalActivityRuntimeError:
+            raise
+        except (RuntimeError, OSError, ValueError, ValidationError) as exc:
             raise TemporalActivityRuntimeError(
                 f"selected skill materialization failed for '{selected_skill}': {exc}"
             ) from exc
 
-        cls._ensure_managed_session_skill_shortcuts(
-            workspace=workspace,
-            skills_active_path=run_root / "skills_active",
-        )
         return True
+
+    async def _load_resolved_skillset(self, skillset_ref: str) -> ResolvedSkillSet:
+        if self._artifact_service is None:
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                "artifact service is required to read request.resolvedSkillsetRef"
+            )
+        try:
+            _artifact, payload = await self._artifact_service.read(
+                artifact_id=skillset_ref,
+                principal="agent_runtime",
+                allow_restricted_raw=True,
+            )
+            data = json.loads(payload.decode("utf-8"))
+            return ResolvedSkillSet.model_validate(data)
+        except TemporalActivityRuntimeError:
+            raise
+        except (OSError, TypeError, ValueError, ValidationError) as exc:
+            raise TemporalActivityRuntimeError(
+                f"failed to read resolvedSkillsetRef {skillset_ref}: {exc}"
+            ) from exc
 
     @staticmethod
     def _managed_session_run_root_for_workspace(workspace: Path) -> Path | None:
@@ -4091,51 +4124,6 @@ class TemporalAgentRuntimeActivities:
         if not run_id:
             return None
         return store_root / run_id
-
-    @staticmethod
-    def _managed_session_skill_cache_root(run_root: Path) -> Path:
-        raw_cache_root = Path(settings.workflow.skills_cache_root).expanduser()
-        if raw_cache_root.is_absolute():
-            cache_root = raw_cache_root.resolve()
-        else:
-            cache_root = (run_root.parent / raw_cache_root).resolve()
-        cache_root.mkdir(parents=True, exist_ok=True)
-        return cache_root
-
-    @classmethod
-    def _ensure_managed_session_skill_shortcuts(
-        cls,
-        *,
-        workspace: Path,
-        skills_active_path: Path,
-    ) -> None:
-        """Expose non-invasive repo-local shortcuts to the active skill set."""
-
-        active_link = workspace / ".agents" / "skills" / "active"
-        if active_link.parent.is_symlink():
-            return
-        cls._replace_relative_symlink_if_possible(
-            active_link,
-            target=skills_active_path,
-        )
-
-    @staticmethod
-    def _replace_relative_symlink_if_possible(path: Path, *, target: Path) -> None:
-        if path.exists() or path.is_symlink():
-            if not path.is_symlink():
-                return
-            current = path.resolve(strict=False)
-            if current == target.resolve(strict=False):
-                return
-            try:
-                path.unlink()
-            except OSError:
-                return
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.symlink_to(Path(os.path.relpath(target, path.parent)))
-        except OSError:
-            return
 
     @classmethod
     def _prepare_managed_codex_turn_text(
@@ -4175,9 +4163,9 @@ class TemporalAgentRuntimeActivities:
         block = (
             "Active MoonMind skill snapshot:\n"
             f"- Selected skill: {selected_skill}\n"
-            f"- Read `../skills_active/{selected_skill}/SKILL.md` first and follow that active snapshot.\n"
-            f"- If needed, `.agents/skills/active/{selected_skill}/SKILL.md` points to the same active snapshot.\n"
-            f"- Do not use repo-local `.agents/skills/{selected_skill}/SKILL.md` for this managed step; it may be stale source input.\n\n"
+            f"- Read `.agents/skills/{selected_skill}/SKILL.md` first and follow that active snapshot.\n"
+            "- `.agents/skills` is the resolved active skill projection for this managed step.\n"
+            "- Do not discover skills from repo-local or local-only source folders during execution.\n\n"
         )
         return block + instructions
 
@@ -5187,13 +5175,24 @@ class TemporalAgentRuntimeActivities:
         return tuple(dict.fromkeys(paths))
 
     @staticmethod
-    def _should_exclude_publish_path(path_text: str) -> bool:
+    def _should_exclude_publish_path(
+        path_text: str,
+        *,
+        workspace: Path | None = None,
+    ) -> bool:
         """Skip runtime scaffolding paths that should never be published."""
         normalized = str(path_text or "").strip().rstrip("/")
         if not normalized:
             return True
         for excluded in _PUBLISH_GIT_EXCLUDED_PATHS:
             if normalized == excluded or normalized.startswith(f"{excluded}/"):
+                return True
+        if workspace is not None and (
+            normalized == ".agents/skills"
+            or normalized.startswith(".agents/skills/")
+        ):
+            projection = workspace / ".agents" / "skills"
+            if projection.is_symlink():
                 return True
         return False
 
@@ -5448,7 +5447,7 @@ class TemporalAgentRuntimeActivities:
             changed_paths = tuple(
                 path
                 for path in self._parse_git_status_paths(status_stdout)
-                if not self._should_exclude_publish_path(path)
+                if not self._should_exclude_publish_path(path, workspace=workspace)
             )
         except ValueError as exc:
             return {
