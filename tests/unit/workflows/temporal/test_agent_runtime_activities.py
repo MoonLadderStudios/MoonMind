@@ -2830,6 +2830,36 @@ async def test_agent_runtime_prepare_turn_instructions_treats_auto_skill_as_no_s
     assert not (workspace / ".agents" / "skills").exists()
 
 
+async def test_publish_path_filter_excludes_generated_skill_projection_symlink(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    backing = tmp_path / "runtime" / "skills_active"
+    backing.mkdir(parents=True)
+    projection = workspace / ".agents" / "skills"
+    projection.parent.mkdir(parents=True)
+    projection.symlink_to(backing, target_is_directory=True)
+
+    assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
+        ".agents/skills",
+        workspace=workspace,
+    )
+
+
+async def test_publish_path_filter_allows_checked_in_skill_directory(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    skill_file = workspace / ".agents" / "skills" / "pr-resolver" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True)
+    skill_file.write_text("# Repo Skill\n", encoding="utf-8")
+
+    assert not TemporalAgentRuntimeActivities._should_exclude_publish_path(
+        ".agents/skills/pr-resolver/SKILL.md",
+        workspace=workspace,
+    )
+
+
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_includes_context_artifact_reference(
     monkeypatch: pytest.MonkeyPatch,

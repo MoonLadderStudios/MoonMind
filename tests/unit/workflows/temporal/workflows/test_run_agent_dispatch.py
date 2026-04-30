@@ -282,6 +282,37 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
 
         execute_activity.assert_not_called()
 
+    async def test_agent_node_rejects_selected_skill_excluded_by_object_selector(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+
+        class EffectiveSelector:
+            def model_dump(self, **_kwargs):
+                return {"exclude": [{"name": "pr-resolver"}]}
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+            new=AsyncMock(),
+        ) as execute_activity, patch(
+            "moonmind.workflows.temporal.workflows.run.build_effective_task_skill_selectors",
+            return_value=EffectiveSelector(),
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "selected skill 'pr-resolver' cannot also be excluded",
+            ):
+                await wf._resolve_agent_node_skillset_ref(
+                    task_skills=None,
+                    node_inputs={
+                        "skills": {"exclude": [{"name": "pr-resolver"}]},
+                        "selectedSkill": "pr-resolver",
+                    },
+                    node_id="step-1",
+                    existing_skillset_ref=None,
+                )
+
+        execute_activity.assert_not_called()
+
     async def test_agent_node_pinned_resolution_failure_happens_before_launch(self) -> None:
         wf = MoonMindRunWorkflow()
         wf._owner_id = "owner-1"

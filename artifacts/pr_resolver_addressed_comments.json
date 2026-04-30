@@ -1,22 +1,47 @@
 [
   {
-    "id": 4347927664,
+    "id": 4349829261,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier quota notice is informational and does not request a code change."
+    "rationale": "Qodo free-tier notice is informational and does not request a code change."
   },
   {
-    "id": 3164517105,
+    "id": 4202559225,
     "disposition": "addressed",
-    "rationale": "Added _AUTO_SKILL_SENTINEL and used it for the managed-session materialization guard."
+    "rationale": "Review summary concerns were handled through the specific inline comments below."
   },
   {
-    "id": 3164517135,
+    "id": 3165750067,
     "disposition": "addressed",
-    "rationale": "Reused _AUTO_SKILL_SENTINEL for the selected-skill activation guard."
+    "rationale": "Normalized selected-skill exclusions from both string and object-shaped entries before comparison."
   },
   {
-    "id": 4201130280,
+    "id": 3165750070,
     "disposition": "addressed",
-    "rationale": "Summary review requested replacing the magic auto string with a module-level constant, which is now implemented."
+    "rationale": "Built-in skill discovery now checks packaged /app/.agents/skills before local development fallbacks."
+  },
+  {
+    "id": 3165750073,
+    "disposition": "not-applicable",
+    "rationale": "ValidationError is already imported in activity_runtime.py on the current branch."
+  },
+  {
+    "id": 3165750076,
+    "disposition": "addressed",
+    "rationale": "Workflow skill resolution now imports a workflow-safe Mapping alias and uses it for object-shaped selector checks."
+  },
+  {
+    "id": 3165758894,
+    "disposition": "addressed",
+    "rationale": "File-backed skills are now persisted as full tar.gz bundles and materialized with companion files intact."
+  },
+  {
+    "id": 3165758896,
+    "disposition": "addressed",
+    "rationale": "Publish filtering now skips .agents/skills only when it is the generated projection symlink, preserving checked-in skill edits."
+  },
+  {
+    "id": 4202568151,
+    "disposition": "not-applicable",
+    "rationale": "Codex review wrapper comment is informational; its actionable inline comments were classified separately."
   }
 ]

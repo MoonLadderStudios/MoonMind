@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
     AgentSkillProvenance,
@@ -57,7 +58,17 @@ class BuiltInSkillLoader(SkillLoader):
     def skills_root(self) -> Path:
         if self._skills_root is not None:
             return self._skills_root
-        return Path(__file__).resolve().parents[2] / ".agents" / "skills"
+        candidates = [
+            Path("/app/.agents/skills"),
+            Path.cwd() / ".agents" / "skills",
+            Path(settings.workflow.skills_legacy_mirror_root).expanduser(),
+            Path(__file__).resolve().parents[2] / ".agents" / "skills",
+        ]
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            if (resolved / "pr-resolver" / "SKILL.md").exists():
+                return resolved
+        return candidates[0]
 
     async def load_skills(
         self, selector: SkillSelector, context: SkillResolutionContext

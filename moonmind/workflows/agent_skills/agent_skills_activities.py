@@ -1,11 +1,14 @@
 import hashlib
+import io
 import json
+import tarfile
 from pathlib import Path
 from typing import Any
 
 from temporalio import activity
 
 from moonmind.schemas.agent_skill_models import (
+    AgentSkillFormat,
     ResolvedSkillSet,
     SkillSelector,
     RuntimeSkillMaterialization,
@@ -87,12 +90,12 @@ class AgentSkillsActivities:
                 updated_skills.append(skill)
                 continue
 
-            skill_file = Path(skill.provenance.source_path) / "SKILL.md"
+            skill_dir = Path(skill.provenance.source_path)
             try:
-                payload = skill_file.read_bytes()
+                payload = self._build_skill_bundle_payload(skill_dir)
             except OSError as exc:
                 raise RuntimeError(
-                    f"failed to persist selected skill '{skill.skill_name}' from {skill_file}: {exc}"
+                    f"failed to persist selected skill '{skill.skill_name}' from {skill_dir}: {exc}"
                 ) from exc
 
             digest = "sha256:" + hashlib.sha256(payload).hexdigest()
@@ -104,9 +107,10 @@ class AgentSkillsActivities:
             )
             artifact, _ = await self._artifact_service.create(
                 principal="agent_workflow",
-                content_type="text/markdown",
+                content_type="application/gzip",
                 metadata_json={
                     "contentDigest": digest,
+                    "contentFormat": AgentSkillFormat.BUNDLE.value,
                     "producer": "agent_skill.resolve",
                     "skillName": skill.skill_name,
                     "sourceKind": skill.provenance.source_kind.value,
@@ -119,18 +123,34 @@ class AgentSkillsActivities:
                 artifact_id=artifact.artifact_id,
                 principal="agent_workflow",
                 payload=payload,
-                content_type="text/markdown",
+                content_type="application/gzip",
             )
             updated_skills.append(
                 skill.model_copy(
                     update={
                         "content_digest": digest,
                         "content_ref": artifact.artifact_id,
+                        "format": AgentSkillFormat.BUNDLE,
                     }
                 )
             )
 
         return resolved_set.model_copy(update={"skills": updated_skills})
+
+    @staticmethod
+    def _build_skill_bundle_payload(skill_dir: Path) -> bytes:
+        if not skill_dir.is_dir():
+            raise OSError(f"skill source path is not a directory: {skill_dir}")
+        if not (skill_dir / "SKILL.md").is_file():
+            raise OSError(f"skill source path is missing SKILL.md: {skill_dir}")
+
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            for path in sorted(skill_dir.rglob("*")):
+                if path.is_symlink() or not path.is_file():
+                    continue
+                archive.add(path, arcname=str(path.relative_to(skill_dir)))
+        return buffer.getvalue()
 
     async def _persist_resolved_skillset_manifest(
         self,

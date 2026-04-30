@@ -261,7 +261,6 @@ _OPERATOR_SUMMARY_TAIL_BYTES = 64 * 1024
 _PUBLISH_GIT_EXCLUDED_PATHS: tuple[str, ...] = (
     "CLAUDE.md",
     "live_streams.spool",
-    ".agents/skills",
 )
 _SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
@@ -5176,13 +5175,24 @@ class TemporalAgentRuntimeActivities:
         return tuple(dict.fromkeys(paths))
 
     @staticmethod
-    def _should_exclude_publish_path(path_text: str) -> bool:
+    def _should_exclude_publish_path(
+        path_text: str,
+        *,
+        workspace: Path | None = None,
+    ) -> bool:
         """Skip runtime scaffolding paths that should never be published."""
         normalized = str(path_text or "").strip().rstrip("/")
         if not normalized:
             return True
         for excluded in _PUBLISH_GIT_EXCLUDED_PATHS:
             if normalized == excluded or normalized.startswith(f"{excluded}/"):
+                return True
+        if workspace is not None and (
+            normalized == ".agents/skills"
+            or normalized.startswith(".agents/skills/")
+        ):
+            projection = workspace / ".agents" / "skills"
+            if projection.is_symlink():
                 return True
         return False
 
@@ -5437,7 +5447,7 @@ class TemporalAgentRuntimeActivities:
             changed_paths = tuple(
                 path
                 for path in self._parse_git_status_paths(status_stdout)
-                if not self._should_exclude_publish_path(path)
+                if not self._should_exclude_publish_path(path, workspace=workspace)
             )
         except ValueError as exc:
             return {

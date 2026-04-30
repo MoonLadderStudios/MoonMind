@@ -12,6 +12,8 @@ from temporalio.exceptions import CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
+    from collections.abc import Mapping as WorkflowMapping
+
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
     )
@@ -3888,8 +3890,14 @@ class MoonMindRunWorkflow:
             else {}
         )
         if selected_skill:
-            excluded = set(effective_payload.get("exclude") or [])
-            if selected_skill in excluded:
+            excluded_names = {
+                str(item.get("name") or "").strip().lower()
+                if isinstance(item, WorkflowMapping)
+                else str(item or "").strip().lower()
+                for item in (effective_payload.get("exclude") or [])
+            }
+            excluded_names.discard("")
+            if selected_skill in excluded_names:
                 raise ValueError(
                     f"selected skill '{selected_skill}' cannot also be excluded"
                 )
@@ -3897,7 +3905,7 @@ class MoonMindRunWorkflow:
             included_names = {
                 str(item.get("name") or "").strip().lower()
                 for item in include
-                if isinstance(item, Mapping)
+                if isinstance(item, WorkflowMapping)
             }
             if selected_skill not in included_names:
                 include.append({"name": selected_skill})

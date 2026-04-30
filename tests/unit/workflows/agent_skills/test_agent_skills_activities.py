@@ -1,4 +1,6 @@
 from datetime import UTC, datetime
+import io
+import tarfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -81,6 +83,9 @@ async def test_resolve_skills_activity_persists_file_backed_skill_content(
     skill_dir.mkdir(parents=True)
     skill_file = skill_dir / "SKILL.md"
     skill_file.write_text("# PR Resolver\n\nUse the resolved body.\n", encoding="utf-8")
+    helper = skill_dir / "bin" / "resolve.py"
+    helper.parent.mkdir()
+    helper.write_text("print('resolve')\n", encoding="utf-8")
 
     artifact_service = _RecordingArtifactService()
     activities = AgentSkillsActivities(artifact_service=artifact_service)
@@ -116,8 +121,16 @@ async def test_resolve_skills_activity_persists_file_backed_skill_content(
 
     assert result.skills[0].content_ref == "art-1"
     assert result.skills[0].content_digest.startswith("sha256:")
+    assert result.skills[0].format == "bundle"
     assert result.manifest_ref == "art-2"
-    assert artifact_service.payloads["art-1"] == skill_file.read_bytes()
+    with tarfile.open(
+        fileobj=io.BytesIO(artifact_service.payloads["art-1"]),
+        mode="r:gz",
+    ) as archive:
+        assert sorted(member.name for member in archive.getmembers()) == [
+            "SKILL.md",
+            "bin/resolve.py",
+        ]
     manifest = artifact_service.payloads["art-2"].decode("utf-8")
     assert '"content_ref": "art-1"' in manifest
 

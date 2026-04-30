@@ -1,9 +1,12 @@
+import io
 import json
 import shutil
+import tarfile
 from pathlib import Path
 from typing import Any
 
 from moonmind.schemas.agent_skill_models import (
+    AgentSkillFormat,
     ResolvedSkillSet,
     RuntimeMaterializationMode,
     RuntimeSkillMaterialization,
@@ -76,7 +79,10 @@ class AgentSkillMaterializer:
                     )
                     skill_dir = active_dir / skill.skill_name
                     skill_dir.mkdir(parents=True, exist_ok=True)
-                    (skill_dir / "SKILL.md").write_bytes(payload)
+                    if skill.format == AgentSkillFormat.BUNDLE:
+                        self._extract_skill_bundle(payload, skill_dir)
+                    else:
+                        (skill_dir / "SKILL.md").write_bytes(payload)
                 except Exception as ex:
                     raise RuntimeError(
                         f"Failed to materialize content for skill {skill.skill_name}: {ex}"
@@ -156,6 +162,29 @@ class AgentSkillMaterializer:
                 shutil.rmtree(child)
             else:
                 child.unlink()
+
+    @staticmethod
+    def _extract_skill_bundle(payload: bytes, skill_dir: Path) -> None:
+        root = skill_dir.resolve()
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+            for member in archive.getmembers():
+                member_path = Path(member.name)
+                if member_path.is_absolute() or ".." in member_path.parts:
+                    raise RuntimeError(
+                        f"skill bundle contains unsafe path: {member.name}"
+                    )
+                target = (root / member_path).resolve()
+                if target != root and root not in target.parents:
+                    raise RuntimeError(
+                        f"skill bundle extracts outside skill directory: {member.name}"
+                    )
+                if not member.isfile() and not member.isdir():
+                    raise RuntimeError(
+                        f"skill bundle contains unsupported entry: {member.name}"
+                    )
+            archive.extractall(root, filter="data")
+        if not (skill_dir / "SKILL.md").is_file():
+            raise RuntimeError("skill bundle did not contain SKILL.md")
 
     def _validate_projection_path(self, visible_dir: Path) -> None:
         agents_dir = visible_dir.parent
