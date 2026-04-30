@@ -1,10 +1,13 @@
 import json
+import io
+import tarfile
 from datetime import datetime, UTC
 from pathlib import Path
 
 import pytest
 
 from moonmind.schemas.agent_skill_models import (
+    AgentSkillFormat,
     AgentSkillSourceKind,
     AgentSkillProvenance,
     ResolvedSkillEntry,
@@ -122,6 +125,53 @@ async def test_materializer_projects_only_selected_skills(tmp_path: Path):
     assert not (visible_dir / "unselected_skill").exists()
 
 @pytest.mark.asyncio
+async def test_materializer_extracts_skill_bundle_with_companion_files(
+    tmp_path: Path,
+):
+    artifact_service = _StaticArtifactService(
+        {
+            "artifact-bundle": _skill_bundle_payload(
+                {
+                    "SKILL.md": b"# Bundle Skill\n",
+                    "bin/run.py": b"print('run')\n",
+                }
+            )
+        }
+    )
+    materializer = AgentSkillMaterializer(
+        str(tmp_path), artifact_service=artifact_service
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="bundle_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="bundle_skill",
+                version="1.0.0",
+                format=AgentSkillFormat.BUNDLE,
+                content_ref="artifact-bundle",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.BUILT_IN
+                ),
+            )
+        ],
+    )
+
+    await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="test_runtime",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+
+    visible_dir = tmp_path / ".agents" / "skills"
+    assert (visible_dir / "bundle_skill" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "# Bundle Skill\n"
+    assert (visible_dir / "bundle_skill" / "bin" / "run.py").read_text(
+        encoding="utf-8"
+    ) == "print('run')\n"
+
+@pytest.mark.asyncio
 async def test_materializer_rejects_incompatible_agents_skills_path(tmp_path: Path):
     source_dir = tmp_path / ".agents" / "skills"
     source_dir.mkdir(parents=True)
@@ -233,6 +283,15 @@ def _skill(name: str, content_ref: str) -> ResolvedSkillEntry:
         content_ref=content_ref,
         provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.DEPLOYMENT),
     )
+
+def _skill_bundle_payload(files: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, payload in sorted(files.items()):
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+    return buffer.getvalue()
 
 class _StaticArtifactService:
     def __init__(self, payloads: dict[str, bytes]) -> None:

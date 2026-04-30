@@ -121,3 +121,11 @@ def test_runtime_services_receive_temporal_namespace_and_address():
         == "${TEMPORAL_ADDRESS:-temporal-internal:7233}"
     )
     assert namespace_init_env["TEMPORAL_NAMESPACE"] == "${TEMPORAL_NAMESPACE:-default}"
+
+
+def test_runtime_image_includes_agent_skill_sources():
+    dockerfile = (REPO_ROOT / "api_service" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "COPY .agents /app/.agents/" in dockerfile

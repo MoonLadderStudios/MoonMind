@@ -1,10 +1,12 @@
+import io
 import json
-import logging
 import shutil
+import tarfile
 from pathlib import Path
 from typing import Any
 
 from moonmind.schemas.agent_skill_models import (
+    AgentSkillFormat,
     ResolvedSkillSet,
     RuntimeMaterializationMode,
     RuntimeSkillMaterialization,
@@ -14,16 +16,20 @@ from moonmind.workflows.skills.workspace_links import (
     ensure_shared_skill_links,
 )
 
-logger = logging.getLogger(__name__)
-
 class AgentSkillMaterializer:
     """Materializes a ResolvedSkillSet into a run-scoped directory."""
 
-    def __init__(self, workspace_root: str, artifact_service: Any | None = None) -> None:
+    def __init__(
+        self,
+        workspace_root: str,
+        artifact_service: Any | None = None,
+        backing_root: str | None = None,
+    ) -> None:
         if not workspace_root:
             raise ValueError("workspace_root must be provided")
         self.workspace_root = Path(workspace_root).resolve()
         self._artifact_service = artifact_service
+        self.backing_root = Path(backing_root).resolve() if backing_root else None
 
     async def materialize(
         self,
@@ -42,7 +48,7 @@ class AgentSkillMaterializer:
             RuntimeMaterializationMode.WORKSPACE_MOUNTED,
             RuntimeMaterializationMode.HYBRID,
         ):
-            active_dir = self.workspace_root / "skills_active"
+            active_dir = self.backing_root or self.workspace_root / "skills_active"
             visible_dir = self.workspace_root / ".agents" / "skills"
             manifest_path = active_dir / "_manifest.json"
 
@@ -55,22 +61,32 @@ class AgentSkillMaterializer:
                 raise RuntimeError(f"Failed to prepare skills_active directory: {ex}") from ex
 
             for skill in resolved_skillset.skills:
-                if skill.content_ref and self._artifact_service:
-                    try:
-                        _artifact, payload = await self._artifact_service.read(
-                            artifact_id=skill.content_ref,
-                            principal="system",
-                            allow_restricted_raw=True,
-                        )
-                        skill_dir = active_dir / skill.skill_name
-                        skill_dir.mkdir(parents=True, exist_ok=True)
+                if not skill.content_ref:
+                    raise RuntimeError(
+                        "resolved skill snapshot cannot be materialized: "
+                        f"skill '{skill.skill_name}' has no content_ref"
+                    )
+                if not self._artifact_service:
+                    raise RuntimeError(
+                        "resolved skill snapshot cannot be materialized: "
+                        "artifact service is required for skill content refs"
+                    )
+                try:
+                    _artifact, payload = await self._artifact_service.read(
+                        artifact_id=skill.content_ref,
+                        principal="system",
+                        allow_restricted_raw=True,
+                    )
+                    skill_dir = active_dir / skill.skill_name
+                    skill_dir.mkdir(parents=True, exist_ok=True)
+                    if skill.format == AgentSkillFormat.BUNDLE:
+                        self._extract_skill_bundle(payload, skill_dir)
+                    else:
                         (skill_dir / "SKILL.md").write_bytes(payload)
-                    except Exception as ex:
-                        logger.warning(
-                            "Failed to materialize content for skill %s: %s",
-                            skill.skill_name,
-                            ex,
-                        )
+                except Exception as ex:
+                    raise RuntimeError(
+                        f"Failed to materialize content for skill {skill.skill_name}: {ex}"
+                    ) from ex
 
             manifest_content = {
                 "backing_path": str(active_dir),
@@ -146,6 +162,29 @@ class AgentSkillMaterializer:
                 shutil.rmtree(child)
             else:
                 child.unlink()
+
+    @staticmethod
+    def _extract_skill_bundle(payload: bytes, skill_dir: Path) -> None:
+        root = skill_dir.resolve()
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+            for member in archive.getmembers():
+                member_path = Path(member.name)
+                if member_path.is_absolute() or ".." in member_path.parts:
+                    raise RuntimeError(
+                        f"skill bundle contains unsafe path: {member.name}"
+                    )
+                target = (root / member_path).resolve()
+                if target != root and root not in target.parents:
+                    raise RuntimeError(
+                        f"skill bundle extracts outside skill directory: {member.name}"
+                    )
+                if not member.isfile() and not member.isdir():
+                    raise RuntimeError(
+                        f"skill bundle contains unsupported entry: {member.name}"
+                    )
+            archive.extractall(root, filter="data")
+        if not (skill_dir / "SKILL.md").is_file():
+            raise RuntimeError("skill bundle did not contain SKILL.md")
 
     def _validate_projection_path(self, visible_dir: Path) -> None:
         agents_dir = visible_dir.parent
