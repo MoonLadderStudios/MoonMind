@@ -472,21 +472,33 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).not.toContain('@keyframes mm-executing-letter-brighten');
     expect(missionControlCss).not.toContain('mm-executing-letter-brighten');
 
-    const letterWaveBlock = cssRuleBlocks(
+    const baseLetterWaveBlock = cssRuleBlock(missionControlCss, '.status-letter-wave');
+    expect(baseLetterWaveBlock).toContain('color: inherit');
+    expect(baseLetterWaveBlock).not.toContain('animation:');
+    expect(baseLetterWaveBlock).not.toContain('background-image:');
+    expect(baseLetterWaveBlock).not.toContain('background-clip: text');
+    expect(baseLetterWaveBlock).not.toContain('-webkit-background-clip: text');
+    expect(baseLetterWaveBlock).not.toContain('-webkit-text-fill-color: transparent');
+    expect(missionControlCss).not.toMatch(
+      /\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave[\s\S]*?background-clip:\s*text/,
+    );
+
+    const activeLetterWaveBlock = cssRuleBlocks(
       missionControlCss,
       '.status-running[data-effect="shimmer-sweep"] .status-letter-wave, .status-running.is-executing .status-letter-wave, .status-running.is-planning .status-letter-wave',
     ).join('\n');
-    expect(letterWaveBlock).toContain('color: var(--mm-executing-letter-bright)');
-    expect(letterWaveBlock).toContain('text-shadow: 0 0 10px var(--mm-executing-letter-halo)');
-    expect(letterWaveBlock).not.toContain('animation: mm-status-pill-shimmer');
-    expect(letterWaveBlock).not.toContain('-webkit-text-fill-color: transparent');
-    expect(letterWaveBlock).not.toContain('background-clip: text');
-    expect(letterWaveBlock).not.toContain('-webkit-background-clip: text');
-    expect(letterWaveBlock).not.toContain('white 50%');
-    expect(letterWaveBlock).toContain('var(--mm-executing-letter-halo)');
+    expect(activeLetterWaveBlock).toContain('color: var(--mm-executing-letter-bright)');
+    expect(activeLetterWaveBlock).toContain('text-shadow: 0 0 10px var(--mm-executing-letter-halo)');
+    expect(activeLetterWaveBlock).not.toContain('animation: mm-status-pill-shimmer');
+    expect(activeLetterWaveBlock).not.toContain('-webkit-text-fill-color: transparent');
+    expect(activeLetterWaveBlock).not.toContain('background-clip: text');
+    expect(activeLetterWaveBlock).not.toContain('-webkit-background-clip: text');
+    expect(activeLetterWaveBlock).not.toContain('white 50%');
+    expect(activeLetterWaveBlock).toContain('var(--mm-executing-letter-halo)');
     expect(missionControlCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,\s*\.status-running\.is-executing \.status-letter-wave,\s*\.status-running\.is-planning \.status-letter-wave[\s\S]*?text-shadow: none;/,
     );
+    expect(missionControlCss).not.toContain('-webkit-text-fill-color: transparent');
 
     const forcedColorsLetterWaveBlock = cssRuleBlockMatching(
       missionControlCss,
@@ -496,10 +508,8 @@ describe('Mission Control shared entry', () => {
     );
     expect(forcedColorsLetterWaveBlock).toContain('color: ButtonText');
     expect(forcedColorsLetterWaveBlock).toContain('animation: none');
-    expect(forcedColorsLetterWaveBlock).toContain('-webkit-text-fill-color: ButtonText');
-    expect(forcedColorsLetterWaveBlock).toContain('background-image: none');
-    expect(forcedColorsLetterWaveBlock).toContain('-webkit-background-clip: border-box');
-    expect(forcedColorsLetterWaveBlock).toContain('background-clip: border-box');
+    expect(forcedColorsLetterWaveBlock).not.toContain('-webkit-text-fill-color');
+    expect(forcedColorsLetterWaveBlock).not.toContain('background-clip');
   });
 
   it('enforces MM-430 additive shared styling modifiers', async () => {
