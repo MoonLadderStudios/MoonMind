@@ -287,6 +287,15 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ref, "artifact://skillsets/selected-skill")
         execute_activity.assert_awaited_once()
 
+    def test_resolved_skillset_field_accepts_missing_result(self) -> None:
+        self.assertIsNone(
+            MoonMindRunWorkflow._resolved_skillset_field(
+                None,
+                "manifest_ref",
+                "manifestRef",
+            )
+        )
+
     async def test_agent_node_rejects_selected_skill_excluded_by_selector(self) -> None:
         wf = MoonMindRunWorkflow()
         wf._owner_id = "owner-1"

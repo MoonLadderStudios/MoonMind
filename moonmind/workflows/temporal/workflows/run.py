@@ -3943,14 +3943,11 @@ class MoonMindRunWorkflow:
 
     @staticmethod
     def _resolved_skillset_field(resolved: Any, *keys: str) -> Any:
-        if isinstance(resolved, WorkflowMapping):
-            for key in keys:
-                value = resolved.get(key)
-                if value:
-                    return value
+        if resolved is None:
             return None
+        is_mapping = isinstance(resolved, WorkflowMapping)
         for key in keys:
-            value = getattr(resolved, key, None)
+            value = resolved.get(key) if is_mapping else getattr(resolved, key, None)
             if value:
                 return value
         return None
