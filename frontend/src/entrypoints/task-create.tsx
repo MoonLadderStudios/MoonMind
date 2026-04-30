@@ -1171,6 +1171,22 @@ function createStepStateEntry(
   };
 }
 
+function presetInputValuesFromPayload(
+  inputValues: Record<string, unknown> | undefined,
+): Record<string, string | boolean> {
+  return Object.entries(inputValues || {}).reduce<Record<string, string | boolean>>(
+    (values, [key, value]) => {
+      if (typeof value === "boolean") {
+        values[key] = value;
+      } else if (value !== null && value !== undefined) {
+        values[key] = String(value);
+      }
+      return values;
+    },
+    {},
+  );
+}
+
 function createStepStateEntriesFromTemporalDraft(
   draft: ReturnType<typeof buildTemporalSubmissionDraftFromExecution>,
 ): StepState[] {
@@ -1232,7 +1248,10 @@ function createStepStateEntriesFromTemporalDraft(
           ? JSON.stringify(toolPayload.inputs || step.skillArgs || {}, null, 2)
           : "{}",
       presetKey,
-      presetInputValues: {},
+      presetInputValues:
+        step.stepType === "preset"
+          ? presetInputValuesFromPayload(presetPayload.inputs)
+          : {},
       presetDetail: null,
       presetPreview:
         step.stepType === "preset"
@@ -2832,7 +2851,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [presetManagementName, setPresetManagementName] = useState("");
-  const [templateInputValues] = useState<Record<string, string | boolean>>({});
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
   const [presetReapplyNeeded, setPresetReapplyNeeded] = useState(false);
   const [appliedTemplateFeatureRequest, setAppliedTemplateFeatureRequest] =
@@ -4507,6 +4525,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     });
   }
 
+  function updateStepPresetIfCurrent(
+    localId: string,
+    presetKey: string,
+    updates: Partial<StepState>,
+  ) {
+    setSteps((current) =>
+      current.map((step) => {
+        if (step.localId !== localId || step.presetKey !== presetKey) {
+          return step;
+        }
+        return { ...step, ...updates };
+      }),
+    );
+  }
+
   async function handleStepPresetSelectionChange(
     localId: string,
     presetKey: string,
@@ -4519,7 +4552,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     updateStep(localId, { presetMessage: "Loading preset options..." });
     try {
       const detail = await loadPresetDetail(preset);
-      updateStep(localId, {
+      updateStepPresetIfCurrent(localId, presetKey, {
         presetDetail: detail,
         presetMessage: null,
       });
@@ -4528,7 +4561,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         error instanceof Error
           ? error
           : new Error("Failed to load preset options.");
-      updateStep(localId, {
+      updateStepPresetIfCurrent(localId, presetKey, {
         presetDetail: null,
         presetMessage: `Failed to load preset options: ${failure.message}`,
       });
@@ -4665,7 +4698,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   function resolveTemplateInputs(
     inputs: TaskTemplateInputDefinition[],
-    explicitInputValues: Record<string, unknown> = templateInputValues,
+    explicitInputValues: Record<string, unknown> = {},
     featureRequestOverride?: string,
   ): {
     values: Record<string, unknown>;
@@ -6643,6 +6676,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               const isPrimaryStep = index === 0;
               const stepLabel = isPrimaryStep ? " (Primary)" : "";
               const showSkillArgsField = showAdvancedStepOptions;
+              const visiblePresetInputs = step.presetDetail
+                ? (step.presetDetail.inputs || []).filter(
+                    (definition) =>
+                      isVisiblePresetInput(step.presetDetail?.slug, definition) &&
+                      !isFeatureRequestInputKey(definition.name),
+                  )
+                : [];
               return (
                 <section
                   key={step.localId}
@@ -6699,21 +6739,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
                   <fieldset className="queue-step-type-field">
                     <legend>Step Type</legend>
-                    <div
-                      className="queue-step-type-options"
-                    >
+                    <div className="queue-step-type-options">
                       {STEP_TYPE_OPTIONS.map((option) => (
-                        <div
+                        <label
                           key={option.value}
                           className="queue-step-type-option"
                           title={STEP_TYPE_HELP_TEXT[option.value]}
-                          onClick={() =>
-                            handleStepTypeChange(step.localId, option.value)
-                          }
                         >
                           <input
                             type="radio"
-                            aria-label={`Step Type ${option.label}`}
                             name={`queue-step-type-${step.localId}`}
                             value={option.value}
                             checked={step.stepType === option.value}
@@ -6726,28 +6760,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                               )
                             }
                           />
-                          <span aria-hidden="true">{option.label}</span>
-                        </div>
+                          <span className="sr-only">Step Type </span>
+                          {option.label}
+                        </label>
                       ))}
                     </div>
                   </fieldset>
-                  <label className="sr-only">
-                    Step Type
-                    <select
-                      data-step-field="stepType"
-                      data-step-index={String(index)}
-                      value={step.stepType}
-                      onChange={(event) =>
-                        handleStepTypeChange(step.localId, event.target.value)
-                      }
-                    >
-                      {STEP_TYPE_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
 
                   {step.stepType === "tool" ? (
                     <div className="stack queue-step-type-panel">
@@ -7136,22 +7154,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       className="stack queue-step-preset-options"
                       aria-label="Step Preset Options"
                     >
-                      {step.presetDetail &&
-                      (step.presetDetail.inputs || []).filter((definition) =>
-                        isVisiblePresetInput(
-                          step.presetDetail?.slug,
-                          definition,
-                        ) && !isFeatureRequestInputKey(definition.name),
-                      ).length > 0 ? (
+                      {visiblePresetInputs.length > 0 ? (
                         <div className="grid-2">
-                          {(step.presetDetail.inputs || [])
-                            .filter((definition) =>
-                              isVisiblePresetInput(
-                                step.presetDetail?.slug,
-                                definition,
-                              ) && !isFeatureRequestInputKey(definition.name),
-                            )
-                            .map((definition) => {
+                          {visiblePresetInputs.map((definition) => {
                               const inputId = `queue-step-${step.localId}-preset-input-${definition.name}`;
                               const value = stepTemplateInputDisplayValue(
                                 step,

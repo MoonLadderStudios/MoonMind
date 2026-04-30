@@ -1,22 +1,47 @@
 [
   {
-    "id": 4347927664,
+    "id": 4349179564,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier quota notice is informational and does not request a code change."
+    "rationale": "Qodo free-tier limit notice; no code action requested."
   },
   {
-    "id": 3164517105,
+    "id": 3165251939,
     "disposition": "addressed",
-    "rationale": "Added _AUTO_SKILL_SENTINEL and used it for the managed-session materialization guard."
+    "rationale": "Removed the dead templateInputValues state and made resolveTemplateInputs default to an empty explicit input object."
   },
   {
-    "id": 3164517135,
+    "id": 4201983734,
     "disposition": "addressed",
-    "rationale": "Reused _AUTO_SKILL_SENTINEL for the selected-skill activation guard."
+    "rationale": "Broad Gemini review summary; the actionable child comments covering dead state, radio accessibility, hidden select removal, duplicated filtering, and Step Type coverage were addressed."
   },
   {
-    "id": 4201130280,
+    "id": 3165251942,
     "disposition": "addressed",
-    "rationale": "Summary review requested replacing the magic auto string with a module-level constant, which is now implemented."
+    "rationale": "Replaced the clickable div Step Type option wrapper with a label wrapper and removed the redundant wrapper onClick and radio aria-label."
+  },
+  {
+    "id": 3165251945,
+    "disposition": "addressed",
+    "rationale": "Removed the hidden Step Type select and updated tests to use the radio controls."
+  },
+  {
+    "id": 3165251949,
+    "disposition": "addressed",
+    "rationale": "Factored visible preset input filtering into a visiblePresetInputs variable before the JSX block."
+  },
+  {
+    "id": 3165251953,
+    "disposition": "addressed",
+    "rationale": "Restored Step Type switching coverage by clicking radio options and checking the Tool, Skill, and Preset panels."
+  },
+  {
+    "id": 3165254042,
+    "disposition": "addressed",
+    "rationale": "Guarded async step preset detail updates so stale responses only apply when the step still has the same selected preset key, with a regression test."
+  },
+  {
+    "id": 4201985740,
+    "disposition": "not-applicable",
+    "rationale": "Codex review wrapper/summary only; the actionable Codex child comment was addressed separately."
   }
 ]

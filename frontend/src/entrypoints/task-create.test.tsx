@@ -129,6 +129,16 @@ async function clickApplyButton() {
   fireEvent.click(button);
 }
 
+function getStepTypeRadio(step: HTMLElement, label: "Skill" | "Tool" | "Preset") {
+  return within(step).getByRole("radio", {
+    name: new RegExp(`(?:Step Type\\s+)?${label}$`),
+  }) as HTMLInputElement;
+}
+
+function selectStepType(step: HTMLElement, label: "Skill" | "Tool" | "Preset") {
+  fireEvent.click(getStepTypeRadio(step, label));
+}
+
 function withAttachmentPolicy(payload: BootPayload = mockPayload): BootPayload {
   const initialData = payload.initialData as {
     dashboardConfig: {
@@ -3356,9 +3366,7 @@ describe("Task Create Entrypoint", () => {
       "section",
     ) as HTMLElement;
     await waitFor(() => {
-      expect(
-        (within(step).getByLabelText("Step Type") as HTMLSelectElement).value,
-      ).toBe("preset");
+      expect(getStepTypeRadio(step, "Preset").checked).toBe(true);
       expect(
         (within(step).getByLabelText("Preset") as HTMLSelectElement).value,
       ).toBe("global::::speckit-demo");
@@ -7080,25 +7088,21 @@ describe("Task Create Entrypoint", () => {
       "section",
     );
     expect(primaryStep).not.toBeNull();
+    const step = primaryStep as HTMLElement;
 
-    const stepType = within(primaryStep as HTMLElement).getByLabelText(
-      "Step Type",
-    ) as HTMLSelectElement;
+    const stepType = within(step).getByRole("group", {
+      name: "Step Type",
+    });
     expect(
-      Array.from(stepType.options).map((option) => option.textContent),
+      Array.from(stepType.querySelectorAll("label")).map((option) =>
+        option.textContent?.replace("Step Type ", "").trim(),
+      ),
     ).toEqual(["Skill", "Tool", "Preset"]);
-    expect(stepType.value).toBe("skill");
-    expect((within(primaryStep as HTMLElement).getByRole("radio", {
-      name: "Step Type Skill",
-    }) as HTMLInputElement).checked).toBe(true);
-    expect(within(primaryStep as HTMLElement).getByRole("radio", {
-      name: "Step Type Tool",
-    })).toBeTruthy();
-    expect(within(primaryStep as HTMLElement).getByRole("radio", {
-      name: "Step Type Preset",
-    })).toBeTruthy();
+    expect(getStepTypeRadio(step, "Skill").checked).toBe(true);
+    expect(getStepTypeRadio(step, "Tool")).toBeTruthy();
+    expect(getStepTypeRadio(step, "Preset")).toBeTruthy();
     expect(
-      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(step).getByLabelText(/Skill \(optional\)/),
     ).toBeTruthy();
   });
 
@@ -7110,15 +7114,9 @@ describe("Task Create Entrypoint", () => {
     );
     expect(primaryStep).not.toBeNull();
     const step = primaryStep as HTMLElement;
-    const skillRadio = within(step).getByRole("radio", {
-      name: "Step Type Skill",
-    });
-    const toolRadio = within(step).getByRole("radio", {
-      name: "Step Type Tool",
-    });
-    const presetRadio = within(step).getByRole("radio", {
-      name: "Step Type Preset",
-    });
+    const skillRadio = getStepTypeRadio(step, "Skill");
+    const toolRadio = getStepTypeRadio(step, "Tool");
+    const presetRadio = getStepTypeRadio(step, "Preset");
 
     expect(skillRadio.closest(".queue-step-type-option")?.getAttribute("title")).toBe(
       "Skill asks an agent to perform work using reusable behavior.",
@@ -7147,19 +7145,18 @@ describe("Task Create Entrypoint", () => {
     expect(primaryStep).not.toBeNull();
     const step = primaryStep as HTMLElement;
     const instructions = within(step).getByLabelText("Instructions") as HTMLTextAreaElement;
-    const stepType = within(step).getByLabelText("Step Type") as HTMLSelectElement;
 
     fireEvent.change(instructions, {
       target: { value: "Keep this Step Type instruction." },
     });
-    fireEvent.change(stepType, { target: { value: "tool" } });
+    selectStepType(step, "Tool");
 
     expect(instructions.value).toBe("Keep this Step Type instruction.");
     expect(within(step).getByLabelText("Tool")).toBeTruthy();
     expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
     expect(within(step).queryByLabelText("Preset")).toBeNull();
 
-    fireEvent.change(stepType, { target: { value: "preset" } });
+    selectStepType(step, "Preset");
 
     expect(instructions.value).toBe("Keep this Step Type instruction.");
     expect(within(step).getByLabelText("Preset")).toBeTruthy();
@@ -7182,12 +7179,8 @@ describe("Task Create Entrypoint", () => {
       "section",
     ) as HTMLElement;
 
-    fireEvent.change(within(primaryStep).getByLabelText("Step Type"), {
-      target: { value: "preset" },
-    });
-    fireEvent.change(within(secondStep).getByLabelText("Step Type"), {
-      target: { value: "preset" },
-    });
+    selectStepType(primaryStep, "Preset");
+    selectStepType(secondStep, "Preset");
 
     const firstPreset = within(primaryStep).getByLabelText(
       "Preset",
@@ -7214,6 +7207,109 @@ describe("Task Create Entrypoint", () => {
 
     expect(firstPreset.value).toBe(secondValue);
     expect(secondPreset.value).toBe(secondValue);
+  });
+
+  it("ignores stale step preset details after switching presets", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    let resolvePresetA: ((response: Response) => void) | null = null;
+    let resolvePresetB: ((response: Response) => void) | null = null;
+    const detailResponse = (slug: string, label: string) =>
+      ({
+        ok: true,
+        json: async () => ({
+          slug,
+          scope: "global",
+          title: label,
+          description: `${label} detail.`,
+          latestVersion: "1.0.0",
+          version: "1.0.0",
+          inputs: [
+            {
+              name: `${slug}_input`,
+              label: `${label} Input`,
+              type: "text",
+              required: false,
+            },
+          ],
+        }),
+      }) as Response;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "preset-a",
+                scope: "global",
+                title: "Preset A",
+                description: "First preset.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+              {
+                slug: "preset-b",
+                scope: "global",
+                title: "Preset B",
+                description: "Second preset.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/task-step-templates/preset-a?scope=global")) {
+        return new Promise<Response>((resolve) => {
+          resolvePresetA = resolve;
+        });
+      }
+      if (url.startsWith("/api/task-step-templates/preset-b?scope=global")) {
+        return new Promise<Response>((resolve) => {
+          resolvePresetB = resolve;
+        });
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(2);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::preset-a" },
+    });
+    await waitFor(() => {
+      expect(resolvePresetA).not.toBeNull();
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::preset-b" },
+    });
+    await waitFor(() => {
+      expect(resolvePresetB).not.toBeNull();
+    });
+
+    const resolveB = resolvePresetB as ((response: Response) => void) | null;
+    const resolveA = resolvePresetA as ((response: Response) => void) | null;
+    if (!resolveB || !resolveA) {
+      throw new Error("Preset detail requests were not started.");
+    }
+    resolveB(detailResponse("preset-b", "Preset B"));
+    expect(await within(step).findByLabelText("Preset B Input")).toBeTruthy();
+
+    resolveA(detailResponse("preset-a", "Preset A"));
+    await waitFor(() => {
+      expect(within(step).queryByLabelText("Preset A Input")).toBeNull();
+      expect(within(step).getByLabelText("Preset B Input")).toBeTruthy();
+    });
   });
 
   it("previews step preset generated steps and warnings without mutating the draft", async () => {
@@ -7272,9 +7368,7 @@ describe("Task Create Entrypoint", () => {
     fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Keep authored placeholder." },
     });
-    fireEvent.change(within(step).getByLabelText("Step Type"), {
-      target: { value: "preset" },
-    });
+    selectStepType(step, "Preset");
     const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
@@ -7301,9 +7395,7 @@ describe("Task Create Entrypoint", () => {
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Step Type"), {
-      target: { value: "preset" },
-    });
+    selectStepType(step, "Preset");
     const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
@@ -7378,9 +7470,7 @@ describe("Task Create Entrypoint", () => {
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Step Type"), {
-      target: { value: "preset" },
-    });
+    selectStepType(step, "Preset");
     const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
@@ -7445,9 +7535,7 @@ describe("Task Create Entrypoint", () => {
     fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Keep authored preset step." },
     });
-    fireEvent.change(within(step).getByLabelText("Step Type"), {
-      target: { value: "preset" },
-    });
+    selectStepType(step, "Preset");
     const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
@@ -7476,9 +7564,7 @@ describe("Task Create Entrypoint", () => {
     fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Do not submit unresolved preset." },
     });
-    fireEvent.change(within(step).getByLabelText("Step Type"), {
-      target: { value: "preset" },
-    });
+    selectStepType(step, "Preset");
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -7505,9 +7591,7 @@ describe("Task Create Entrypoint", () => {
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Step Type"), {
-      target: { value: "preset" },
-    });
+    selectStepType(step, "Preset");
     const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
@@ -7557,13 +7641,9 @@ describe("Task Create Entrypoint", () => {
         target: { value: "docker, qdrant" },
       },
     );
-    fireEvent.change(within(step).getByLabelText("Step Type"), {
-      target: { value: "tool" },
-    });
+    selectStepType(step, "Tool");
     expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
-    fireEvent.change(within(step).getByLabelText("Step Type"), {
-      target: { value: "skill" },
-    });
+    selectStepType(step, "Skill");
     expect(
       (within(step).getByLabelText(/Skill \(optional\)/) as HTMLInputElement)
         .value,
@@ -7582,9 +7662,7 @@ describe("Task Create Entrypoint", () => {
         ) as HTMLInputElement
       ).value,
     ).toBe("docker, qdrant");
-    fireEvent.change(within(step).getByLabelText("Step Type"), {
-      target: { value: "tool" },
-    });
+    selectStepType(step, "Tool");
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Run a tool Step Type submission." },
     });
@@ -7609,9 +7687,7 @@ describe("Task Create Entrypoint", () => {
     fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Fetch MM-563 through the trusted Jira tool." },
     });
-    fireEvent.change(within(step).getByLabelText("Step Type"), {
-      target: { value: "tool" },
-    });
+    selectStepType(step, "Tool");
     fireEvent.change(within(step).getByLabelText("Tool"), {
       target: { value: "jira.get_issue" },
     });
@@ -7658,9 +7734,7 @@ describe("Task Create Entrypoint", () => {
     fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Do not submit invalid tool inputs." },
     });
-    fireEvent.change(within(step).getByLabelText("Step Type"), {
-      target: { value: "tool" },
-    });
+    selectStepType(step, "Tool");
     fireEvent.change(within(step).getByLabelText("Tool"), {
       target: { value: "jira.get_issue" },
     });
