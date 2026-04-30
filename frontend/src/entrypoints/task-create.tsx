@@ -526,10 +526,16 @@ interface StepAttachmentRef {
 type StepType = "tool" | "skill" | "preset";
 
 const STEP_TYPE_HELP_TEXT: Record<StepType, string> = {
-  tool: "Tool runs a typed integration or system operation directly.",
   skill: "Skill asks an agent to perform work using reusable behavior.",
+  tool: "Tool runs a typed integration or system operation directly.",
   preset: "Preset inserts a reusable set of configured steps.",
 };
+
+const STEP_TYPE_OPTIONS: Array<{ value: StepType; label: string }> = [
+  { value: "skill", label: "Skill" },
+  { value: "tool", label: "Tool" },
+  { value: "preset", label: "Preset" },
+];
 
 interface StepState {
   localId: string;
@@ -544,6 +550,8 @@ interface StepState {
   skillArgs: string;
   skillRequiredCapabilities: string;
   presetKey: string;
+  presetInputValues: Record<string, string | boolean>;
+  presetDetail: TaskTemplateDetail | null;
   presetMessage: string | null;
   presetReapplyNeeded: boolean;
   presetPreview: PresetPreviewState | null;
@@ -1150,6 +1158,8 @@ function createStepStateEntry(
     skillArgs: "",
     skillRequiredCapabilities: "",
     presetKey: "",
+    presetInputValues: {},
+    presetDetail: null,
     presetMessage: null,
     presetReapplyNeeded: false,
     presetPreview: null,
@@ -1222,6 +1232,8 @@ function createStepStateEntriesFromTemporalDraft(
           ? JSON.stringify(toolPayload.inputs || step.skillArgs || {}, null, 2)
           : "{}",
       presetKey,
+      presetInputValues: {},
+      presetDetail: null,
       presetPreview:
         step.stepType === "preset"
           ? presetPreviewStateFromDraftPayload(presetKey, presetPayload)
@@ -2819,9 +2831,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
-  const [templateInputValues, setTemplateInputValues] = useState<
-    Record<string, string | boolean>
-  >({});
+  const [presetManagementName, setPresetManagementName] = useState("");
+  const [templateInputValues] = useState<Record<string, string | boolean>>({});
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
   const [presetReapplyNeeded, setPresetReapplyNeeded] = useState(false);
   const [appliedTemplateFeatureRequest, setAppliedTemplateFeatureRequest] =
@@ -3575,7 +3586,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }, [activeJiraColumnId, jiraBrowserOpen, jiraBrowserColumns]);
 
   useEffect(() => {
-    if (!taskTemplateCatalogEnabled || templateItems.length === 0) {
+    if (!taskTemplateCatalogEnabled || !selectedPresetKey) {
       return;
     }
     const selectedStillExists = templateItems.some(
@@ -3584,117 +3595,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (selectedStillExists) {
       return;
     }
-    const preferred = preferredTemplate(templateItems);
-    if (preferred) {
-      setSelectedPresetKey(preferred.key);
-    }
+    setSelectedPresetKey("");
   }, [selectedPresetKey, taskTemplateCatalogEnabled, templateItems]);
 
   const selectedPreset =
     templateItems.find((item) => item.key === selectedPresetKey) || null;
-  const selectedPresetDetailQuery = useQuery({
-    queryKey: [
-      "task-create",
-      "template-detail",
-      selectedPreset?.scope,
-      selectedPreset?.scopeRef || "",
-      selectedPreset?.slug,
-    ],
-    enabled: Boolean(taskTemplateCatalogEnabled && selectedPreset),
-    queryFn: async (): Promise<TaskTemplateDetail> => {
-      if (!selectedPreset) {
-        throw new Error("Choose a preset first.");
-      }
-      const response = await fetch(
-        withQueryParams(
-          interpolatePath(taskTemplateDetailEndpoint, {
-            slug: selectedPreset.slug,
-          }),
-          {
-            scope: selectedPreset.scope,
-            scopeRef: selectedPreset.scopeRef || undefined,
-          },
-        ),
-        { headers: { Accept: "application/json" } },
-      );
-      if (!response.ok) {
-        throw new Error(
-          await responseErrorMessage(response, "Failed to load preset details."),
-        );
-      }
-      return (await response.json()) as TaskTemplateDetail;
-    },
-  });
-  const selectedPresetInputs = selectedPresetDetailQuery.data?.inputs || [];
-  const visiblePresetInputs = selectedPresetInputs.filter((definition) =>
-    isVisiblePresetInput(selectedPreset?.slug, definition),
-  );
-  const presetJiraProjectInput = visiblePresetInputs.find((definition) =>
-    isJiraProjectInputKey(definition.name),
-  );
-  const presetJiraBoardInput = visiblePresetInputs.find(
-    (definition) => definition.type === "jira_board",
-  );
-  const presetJiraProjectKey = String(
-    (presetJiraProjectInput
-      ? templateInputValues[presetJiraProjectInput.name] ??
-        presetJiraProjectInput.default
-      : "") ||
-      jiraIntegration?.defaultProjectKey ||
-      "",
-  ).trim();
-  const presetNeedsJiraProjects = Boolean(
-    jiraIntegration?.enabled &&
-      (presetJiraProjectInput || presetJiraBoardInput),
-  );
-  const presetJiraProjectsQuery = useQuery({
-    queryKey: [
-      "task-create",
-      "preset-jira",
-      "projects",
-      jiraIntegration?.endpoints.projects,
-    ],
-    enabled: presetNeedsJiraProjects,
-    queryFn: async (): Promise<JiraProject[]> => {
-      const endpoint = jiraIntegration?.endpoints.projects || "";
-      const response = await fetch(endpoint, {
-        headers: { Accept: "application/json" },
-      });
-      if (!response.ok) {
-        throw new Error(
-          await responseErrorMessage(response, "Failed to load Jira projects."),
-        );
-      }
-      return readJiraItems<JiraProject>(await response.json());
-    },
-  });
-  const presetJiraBoardsQuery = useQuery({
-    queryKey: [
-      "task-create",
-      "preset-jira",
-      "boards",
-      jiraIntegration?.endpoints.boards,
-      presetJiraProjectKey,
-    ],
-    enabled: Boolean(
-      jiraIntegration?.enabled && presetJiraBoardInput && presetJiraProjectKey,
-    ),
-    queryFn: async (): Promise<JiraBoard[]> => {
-      const endpoint = interpolatePath(
-        jiraIntegration?.endpoints.boards || "",
-        { projectKey: presetJiraProjectKey },
-      );
-      const response = await fetch(endpoint, {
-        headers: { Accept: "application/json" },
-      });
-      if (!response.ok) {
-        throw new Error(
-          await responseErrorMessage(response, "Failed to load Jira boards."),
-        );
-      }
-      return readJiraItems<JiraBoard>(await response.json());
-    },
-  });
   const selectedPresetDeleteEnabled =
     taskTemplateSaveEnabled && selectedPreset?.scope === "personal";
   const deletePresetTooltip = selectedPreset
@@ -4221,12 +4126,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     );
   }
 
-  function handleTemplateFeatureRequestChange(value: string) {
-    setTemplateFeatureRequest(value);
-    setPresetJiraProvenance(null);
-    updatePresetReapplyStateForObjective(value, selectedObjectiveAttachmentFiles);
-  }
-
   function addDependency(workflowId: string) {
     const normalizedId = workflowId.trim();
     if (!normalizedId) {
@@ -4296,24 +4195,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     });
   }
 
-  function updateObjectiveAttachments(files: File[]) {
-    const limitMessage = attachmentLimitMessage(attachmentPolicy);
-    const nextTotalCount =
-      files.length +
-      Object.values(selectedStepAttachmentFiles).flat().length +
-      persistedAttachmentRefs.length;
-    if (nextTotalCount > attachmentPolicy.maxCount) {
-      setSubmitMessage(limitMessage);
-      return;
-    }
-    if (submitMessage === limitMessage) {
-      setSubmitMessage(null);
-    }
-    clearAttachmentTargetError(attachmentTargetKey("objective"));
-    setSelectedObjectiveAttachmentFiles(files);
-    updatePresetReapplyStateForObjective(templateFeatureRequest, files);
-  }
-
   function removePersistedObjectiveAttachment(artifactId: string) {
     setPersistedObjectiveAttachments((current) =>
       current.filter((attachment) => attachment.artifactId !== artifactId),
@@ -4333,26 +4214,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           : step,
       ),
     );
-  }
-
-  function removeObjectiveAttachment(fileToRemove: File) {
-    const targetKey = attachmentTargetKey("objective");
-    const previewKey = `${targetKey}:${attachmentFileKey(fileToRemove)}`;
-    setAttachmentTargetErrors((current) => {
-      const next = { ...current };
-      delete next[targetKey];
-      return next;
-    });
-    setPreviewFailureMessages((current) => {
-      const next = { ...current };
-      delete next[previewKey];
-      return next;
-    });
-    setSelectedObjectiveAttachmentFiles((current) => {
-      const next = current.filter((file) => file !== fileToRemove);
-      updatePresetReapplyStateForObjective(templateFeatureRequest, next);
-      return next;
-    });
   }
 
   function removeStepAttachment(localId: string, fileToRemove: File) {
@@ -4631,13 +4492,47 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     return "";
   }
 
-  function updateStepPreset(localId: string, presetKey: string) {
+  function updateStepPreset(
+    localId: string,
+    presetKey: string,
+    presetDetail: TaskTemplateDetail | null = null,
+  ) {
     updateStep(localId, {
       presetKey,
+      presetInputValues: {},
+      presetDetail,
       presetMessage: null,
       presetReapplyNeeded: false,
       presetPreview: null,
     });
+  }
+
+  async function handleStepPresetSelectionChange(
+    localId: string,
+    presetKey: string,
+  ) {
+    const preset = templateItems.find((item) => item.key === presetKey);
+    updateStepPreset(localId, presetKey);
+    if (!preset) {
+      return;
+    }
+    updateStep(localId, { presetMessage: "Loading preset options..." });
+    try {
+      const detail = await loadPresetDetail(preset);
+      updateStep(localId, {
+        presetDetail: detail,
+        presetMessage: null,
+      });
+    } catch (error) {
+      const failure =
+        error instanceof Error
+          ? error
+          : new Error("Failed to load preset options.");
+      updateStep(localId, {
+        presetDetail: null,
+        presetMessage: `Failed to load preset options: ${failure.message}`,
+      });
+    }
   }
 
   function updateStep(localId: string, updates: Partial<StepState>) {
@@ -4681,6 +4576,40 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const nextType: StepType =
       value === "tool" || value === "preset" ? value : "skill";
     updateStep(localId, { stepType: nextType, presetPreview: null });
+  }
+
+  function updateStepPresetInputValue(
+    localId: string,
+    definition: TaskTemplateInputDefinition,
+    value: string | boolean,
+  ) {
+    setSteps((current) =>
+      current.map((step) => {
+        if (step.localId !== localId) {
+          return step;
+        }
+        return {
+          ...step,
+          presetInputValues: {
+            ...step.presetInputValues,
+            [definition.name]: value,
+          },
+          presetPreview: null,
+          presetReapplyNeeded: Boolean(step.presetPreview),
+        };
+      }),
+    );
+  }
+
+  function handlePresetManagementNameChange(value: string) {
+    setPresetManagementName(value);
+    const normalized = value.trim().toLowerCase();
+    const matchedPreset =
+      templateItems.find((item) => item.title.trim().toLowerCase() === normalized) ||
+      templateItems.find((item) => item.slug.trim().toLowerCase() === normalized);
+    setSelectedPresetKey(matchedPreset?.key || "");
+    setTemplateMessage(null);
+    setPresetReapplyNeeded(false);
   }
 
   function addStep() {
@@ -4737,14 +4666,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   function resolveTemplateInputs(
     inputs: TaskTemplateInputDefinition[],
     explicitInputValues: Record<string, unknown> = templateInputValues,
+    featureRequestOverride?: string,
   ): {
     values: Record<string, unknown>;
     assumptions: string[];
   } {
     const values: Record<string, unknown> = {};
     const assumptions: string[] = [];
-    const primaryInstructions = String(steps[0]?.instructions || "").trim();
-    const explicitFeatureRequest = templateFeatureRequest.trim();
+    const primaryInstructions = String(
+      featureRequestOverride ?? steps[0]?.instructions ?? "",
+    ).trim();
+    const explicitFeatureRequest = String(
+      featureRequestOverride ?? templateFeatureRequest,
+    ).trim();
     const repositoryValue = repository.trim();
 
     inputs.forEach((definition) => {
@@ -4871,10 +4805,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     return { values, assumptions };
   }
 
-  function templateInputDisplayValue(
+  function stepTemplateInputDisplayValue(
+    step: StepState,
     definition: TaskTemplateInputDefinition,
   ): string {
-    const explicit = templateInputValues[definition.name];
+    const explicit = step.presetInputValues[definition.name];
     if (explicit !== undefined) {
       return String(explicit);
     }
@@ -4890,27 +4825,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return String(definition.default || repository || defaultRepository || "").trim();
     }
     return String(definition.default ?? "").trim();
-  }
-
-  function updateTemplateInputValue(
-    definition: TaskTemplateInputDefinition,
-    value: string | boolean,
-  ) {
-    const normalized = value;
-    setTemplateInputValues((current) => {
-      const next = { ...current, [definition.name]: normalized };
-      if (isJiraProjectInputKey(definition.name) && presetJiraBoardInput) {
-        next[presetJiraBoardInput.name] = "";
-      }
-      return next;
-    });
-    templateInputMemoryRef.current[definition.name] = normalized;
-    if (isJiraProjectInputKey(definition.name) && presetJiraBoardInput) {
-      templateInputMemoryRef.current[presetJiraBoardInput.name] = "";
-    }
-    if (appliedTemplates.length > 0) {
-      setPresetReapplyNeeded(true);
-    }
   }
 
   async function loadPresetDetail(
@@ -5128,57 +5042,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     );
   }
 
-  async function applyPresetToDraft({
-    preset,
-    detail,
-    inputValues,
-    setMessage,
-  }: {
-    preset: TemplateOption;
-    detail: TaskTemplateDetail;
-    inputValues: Record<string, unknown>;
-    setMessage: (message: string) => void;
-  }) {
-    const preview = await expandPresetForDraft({ preset, detail, inputValues });
-    applyPresetPreviewToDraft({ preset, detail, preview, setMessage });
-  }
-
-  async function handleApplyPreset() {
-    if (isApplyingPreset) return;
-    if (!selectedPreset) {
-      setTemplateMessage("Choose a preset first.");
-      return;
-    }
-    const detail = selectedPresetDetailQuery.data;
-    if (!detail) {
-      setTemplateMessage(
-        selectedPresetDetailQuery.isError
-          ? "Failed to load preset details."
-          : "Preset options are still loading.",
-      );
-      return;
-    }
-    setIsApplyingPreset(true);
-    setPresetReapplyNeeded(false);
-    setTemplateMessage("Applying preset...");
-
-    try {
-      await applyPresetToDraft({
-        preset: selectedPreset,
-        detail,
-        inputValues: templateInputValues,
-        setMessage: setTemplateMessage,
-      });
-      setPresetReapplyNeeded(false);
-    } catch (error) {
-      const failure =
-        error instanceof Error ? error : new Error("Failed to apply preset.");
-      setTemplateMessage(`Failed to apply preset: ${failure.message}`);
-    } finally {
-      setIsApplyingPreset(false);
-    }
-  }
-
   async function handlePreviewStepPreset(localId: string) {
     if (isApplyingPreset) return;
     const step = steps.find((candidate) => candidate.localId === localId);
@@ -5195,18 +5058,20 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     });
     try {
       const detail =
-        selectedPreset?.key === preset.key && selectedPresetDetailQuery.data
-          ? selectedPresetDetailQuery.data
+        step.presetDetail && step.presetKey === preset.key
+          ? step.presetDetail
           : await loadPresetDetail(preset);
       const preview = await expandPresetForDraft({
         preset,
         detail,
-        inputValues:
-          step.presetPreview?.presetKey === preset.key
-            ? step.presetPreview.inputs
-            : {},
+        inputValues: resolveTemplateInputs(
+          detail.inputs || [],
+          step.presetInputValues,
+          step.instructions,
+        ).values,
       });
       updateStep(localId, {
+        presetDetail: detail,
         presetPreview: preview,
         presetMessage: `Previewed preset '${preset.title}' (${preview.previewSteps.length} steps).`,
       });
@@ -5243,8 +5108,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     });
     try {
       const detail =
-        selectedPreset?.key === preset.key && selectedPresetDetailQuery.data
-          ? selectedPresetDetailQuery.data
+        step.presetDetail && step.presetKey === preset.key
+          ? step.presetDetail
           : await loadPresetDetail(preset);
       applyPresetPreviewToDraft({
         preset,
@@ -5268,14 +5133,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (!taskTemplateSaveEnabled) {
       return;
     }
-    const title = window.prompt("Preset title", "");
-    if (title === null || !title.trim()) {
-      setTemplateMessage("Preset save cancelled.");
+    const title = presetManagementName.trim();
+    if (!title) {
+      setTemplateMessage("Enter a preset name before saving.");
       return;
     }
-    const description =
-      window.prompt("Preset description", `Saved from task draft: ${title}`) ||
-      "";
 
     const presetSteps: Record<string, unknown>[] = [];
     for (let index = 0; index < steps.length; index += 1) {
@@ -5347,8 +5209,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         },
         body: JSON.stringify({
           scope: "personal",
-          title: title.trim(),
-          description: description.trim() || title.trim(),
+          title,
+          description: title,
           steps: presetSteps,
           suggestedInputs: [],
           tags: [],
@@ -5360,7 +5222,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         );
       }
       const created = (await response.json()) as { title?: string };
-      setTemplateMessage(`Saved preset '${created.title || title.trim()}'.`);
+      setTemplateMessage(`Saved preset '${created.title || title}'.`);
       await templateOptionsQuery.refetch();
     } catch (error) {
       const failure =
@@ -5405,6 +5267,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         );
       }
       setSelectedPresetKey("");
+      setPresetManagementName("");
       setPresetReapplyNeeded(false);
       setTemplateMessage(`Deleted preset '${selectedPreset.title}'.`);
       await templateOptionsQuery.refetch();
@@ -6464,14 +6327,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         "Choose a valid GitHub repository before selecting a branch"
       : "Select the branch to check out before the task starts";
   const publishModeTooltip = "Select how MoonMind publishes task changes";
-  const applyPresetDisabled = Boolean(
-    isApplyingPreset || (selectedPreset && selectedPresetDetailQuery.isLoading),
-  );
   const applyPresetTooltip = presetReapplyNeeded
-    ? "Reapply the selected preset to update preset-derived steps"
-    : selectedPreset && selectedPresetDetailQuery.isLoading
-      ? "Loading preset options..."
-    : "Apply the selected preset to the task draft";
+    ? "Preview the selected preset again before applying"
+    : "Apply the selected preset preview to the task draft";
   const modeLoadError =
     pageMode.mode !== "create" && !temporalTaskEditingEnabled
       ? "Temporal task editing is not enabled."
@@ -6839,11 +6697,43 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     </div>
                   </div>
 
-                  <label className="queue-step-type-field">
+                  <fieldset className="queue-step-type-field">
+                    <legend>Step Type</legend>
+                    <div
+                      className="queue-step-type-options"
+                    >
+                      {STEP_TYPE_OPTIONS.map((option) => (
+                        <div
+                          key={option.value}
+                          className="queue-step-type-option"
+                          title={STEP_TYPE_HELP_TEXT[option.value]}
+                          onClick={() =>
+                            handleStepTypeChange(step.localId, option.value)
+                          }
+                        >
+                          <input
+                            type="radio"
+                            aria-label={`Step Type ${option.label}`}
+                            name={`queue-step-type-${step.localId}`}
+                            value={option.value}
+                            checked={step.stepType === option.value}
+                            data-step-field="stepType"
+                            data-step-index={String(index)}
+                            onChange={(event) =>
+                              handleStepTypeChange(
+                                step.localId,
+                                event.target.value,
+                              )
+                            }
+                          />
+                          <span aria-hidden="true">{option.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <label className="sr-only">
                     Step Type
                     <select
-                      aria-label="Step Type"
-                      aria-describedby={`queue-step-type-help-${index}`}
                       data-step-field="stepType"
                       data-step-index={String(index)}
                       value={step.stepType}
@@ -6851,19 +6741,160 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         handleStepTypeChange(step.localId, event.target.value)
                       }
                     >
-                      <option value="tool">Tool</option>
-                      <option value="skill">Skill</option>
-                      <option value="preset">Preset</option>
+                      {STEP_TYPE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
                     </select>
-                    <span id={`queue-step-type-help-${index}`} className="small">
-                      {STEP_TYPE_HELP_TEXT[step.stepType]}
-                    </span>
                   </label>
+
+                  {step.stepType === "tool" ? (
+                    <div className="stack queue-step-type-panel">
+                      <label>
+                        Tool
+                        <input
+                          data-step-field="toolId"
+                          data-step-index={String(index)}
+                          placeholder="jira.get_issue"
+                          value={step.toolId}
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              toolId: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Tool Version (optional)
+                        <input
+                          data-step-field="toolVersion"
+                          data-step-index={String(index)}
+                          placeholder="1.0"
+                          value={step.toolVersion}
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              toolVersion: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Tool Inputs (JSON object)
+                        <textarea
+                          data-step-field="toolInputs"
+                          data-step-index={String(index)}
+                          placeholder='{"issueKey":"MM-563"}'
+                          value={step.toolInputs}
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              toolInputs: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
+                  ) : null}
+
+                  {step.stepType === "skill" ? (
+                    <div className="stack queue-step-type-panel">
+                      <label>
+                        Skill (optional)
+                        <input
+                          data-step-field="skillId"
+                          data-step-index={String(index)}
+                          list={SKILL_OPTIONS_DATALIST_ID}
+                          value={step.skillId}
+                          placeholder={
+                            isPrimaryStep
+                              ? "auto (default), moonspec-orchestrate, ..."
+                              : "inherit primary step skill"
+                          }
+                          onChange={(event) =>
+                            updateStep(step.localId, {
+                              skillId: event.target.value,
+                            })
+                          }
+                        />
+                        {isPrimaryStep ? null : (
+                          <span className="small">
+                            Leave skill blank to inherit primary step defaults.
+                          </span>
+                        )}
+                      </label>
+
+                      {showSkillArgsField ? (
+                        <label
+                          className="queue-step-skill-args-field"
+                          data-skill-args-index={String(index)}
+                        >
+                          {`Step ${index + 1} Skill Args (optional JSON object)`}
+                          <textarea
+                            className="queue-step-skill-args"
+                            data-step-field="skillArgs"
+                            data-step-index={String(index)}
+                            placeholder='{"notes":"optional context"}'
+                            value={step.skillArgs}
+                            onChange={(event) =>
+                              updateStep(step.localId, {
+                                skillArgs: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                      ) : null}
+                      {showAdvancedStepOptions ? (
+                        <label>
+                          {`Step ${index + 1} Skill Required Capabilities (optional CSV)`}
+                          <input
+                            data-step-field="skillRequiredCapabilities"
+                            data-step-index={String(index)}
+                            value={step.skillRequiredCapabilities}
+                            placeholder="docker,qdrant,unity"
+                            onChange={(event) =>
+                              updateStep(step.localId, {
+                                skillRequiredCapabilities: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {step.stepType === "preset" ? (
+                    <div
+                      className="stack queue-step-type-panel"
+                      aria-label="Step Preset"
+                    >
+                      <label>
+                        Preset
+                        <select
+                          value={step.presetKey}
+                          onChange={(event) => {
+                            void handleStepPresetSelectionChange(
+                              step.localId,
+                              event.target.value,
+                            );
+                          }}
+                        >
+                          <option value="">Select preset...</option>
+                          {templateItems.map((item) => (
+                            <option key={item.key} value={item.key}>
+                              {`${item.title} (${scopeLabel(item.scope)})`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  ) : null}
 
                   <div className="stack">
                     <div className="queue-field-heading">
                       <label htmlFor={`queue-step-instructions-${step.localId}`}>
-                        Instructions
+                        {step.stepType === "preset"
+                          ? "Feature Request / Initial Instructions"
+                          : "Instructions"}
                       </label>
                       <JiraProvenanceChip
                         label={`Step ${index + 1} instructions`}
@@ -7100,144 +7131,121 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     ) : null}
                   </div>
 
-                  {step.stepType === "tool" ? (
-                    <div className="stack queue-step-type-panel">
-                      <label>
-                        Tool
-                        <input
-                          data-step-field="toolId"
-                          data-step-index={String(index)}
-                          placeholder="jira.get_issue"
-                          value={step.toolId}
-                          onChange={(event) =>
-                            updateStep(step.localId, {
-                              toolId: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Tool Version (optional)
-                        <input
-                          data-step-field="toolVersion"
-                          data-step-index={String(index)}
-                          placeholder="1.0"
-                          value={step.toolVersion}
-                          onChange={(event) =>
-                            updateStep(step.localId, {
-                              toolVersion: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Tool Inputs (JSON object)
-                        <textarea
-                          data-step-field="toolInputs"
-                          data-step-index={String(index)}
-                          placeholder='{"issueKey":"MM-563"}'
-                          value={step.toolInputs}
-                          onChange={(event) =>
-                            updateStep(step.localId, {
-                              toolInputs: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-                      <p className="small">
-                        Tool steps run a typed integration or system operation
-                        with governed JSON inputs.
-                      </p>
-                    </div>
-                  ) : null}
-
-                  {step.stepType === "skill" ? (
-                    <>
-                      <label>
-                        Skill (optional)
-                        <input
-                          data-step-field="skillId"
-                          data-step-index={String(index)}
-                          list={SKILL_OPTIONS_DATALIST_ID}
-                          value={step.skillId}
-                          placeholder={
-                            isPrimaryStep
-                              ? "auto (default), moonspec-orchestrate, ..."
-                              : "inherit primary step skill"
-                          }
-                          onChange={(event) =>
-                            updateStep(step.localId, {
-                              skillId: event.target.value,
-                            })
-                          }
-                        />
-                        {isPrimaryStep ? null : (
-                          <span className="small">
-                            Leave skill blank to inherit primary step defaults.
-                          </span>
-                        )}
-                      </label>
-
-                      {showSkillArgsField ? (
-                        <label
-                          className="queue-step-skill-args-field"
-                          data-skill-args-index={String(index)}
-                        >
-                          {`Step ${index + 1} Skill Args (optional JSON object)`}
-                          <textarea
-                            className="queue-step-skill-args"
-                            data-step-field="skillArgs"
-                            data-step-index={String(index)}
-                            placeholder='{"notes":"optional context"}'
-                            value={step.skillArgs}
-                            onChange={(event) =>
-                              updateStep(step.localId, {
-                                skillArgs: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                      ) : null}
-                      {showAdvancedStepOptions ? (
-                        <label>
-                          {`Step ${index + 1} Skill Required Capabilities (optional CSV)`}
-                          <input
-                            data-step-field="skillRequiredCapabilities"
-                            data-step-index={String(index)}
-                            value={step.skillRequiredCapabilities}
-                            placeholder="docker,qdrant,unity"
-                            onChange={(event) =>
-                              updateStep(step.localId, {
-                                skillRequiredCapabilities: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                      ) : null}
-                    </>
-                  ) : null}
-
                   {step.stepType === "preset" ? (
                     <div
-                      className="stack queue-step-type-panel"
-                      aria-label="Step Preset"
+                      className="stack queue-step-preset-options"
+                      aria-label="Step Preset Options"
                     >
-                      <label>
-                        Preset
-                        <select
-                          value={step.presetKey}
-                          onChange={(event) => {
-                            updateStepPreset(step.localId, event.target.value);
-                          }}
-                        >
-                          <option value="">Select preset...</option>
-                          {templateItems.map((item) => (
-                            <option key={item.key} value={item.key}>
-                              {`${item.title} (${scopeLabel(item.scope)})`}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                      {step.presetDetail &&
+                      (step.presetDetail.inputs || []).filter((definition) =>
+                        isVisiblePresetInput(
+                          step.presetDetail?.slug,
+                          definition,
+                        ) && !isFeatureRequestInputKey(definition.name),
+                      ).length > 0 ? (
+                        <div className="grid-2">
+                          {(step.presetDetail.inputs || [])
+                            .filter((definition) =>
+                              isVisiblePresetInput(
+                                step.presetDetail?.slug,
+                                definition,
+                              ) && !isFeatureRequestInputKey(definition.name),
+                            )
+                            .map((definition) => {
+                              const inputId = `queue-step-${step.localId}-preset-input-${definition.name}`;
+                              const value = stepTemplateInputDisplayValue(
+                                step,
+                                definition,
+                              );
+                              if (definition.type === "enum") {
+                                return (
+                                  <label key={definition.name} htmlFor={inputId}>
+                                    {definition.label}
+                                    <select
+                                      id={inputId}
+                                      value={value}
+                                      onChange={(event) =>
+                                        updateStepPresetInputValue(
+                                          step.localId,
+                                          definition,
+                                          event.target.value,
+                                        )
+                                      }
+                                    >
+                                      {(definition.options || []).map((option) => (
+                                        <option key={option} value={option}>
+                                          {templateEnumOptionLabel(
+                                            definition,
+                                            option,
+                                          )}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                );
+                              }
+                              if (definition.type === "boolean") {
+                                return (
+                                  <label key={definition.name} htmlFor={inputId}>
+                                    {definition.label}
+                                    <input
+                                      id={inputId}
+                                      type="checkbox"
+                                      checked={value === "true"}
+                                      onChange={(event) =>
+                                        updateStepPresetInputValue(
+                                          step.localId,
+                                          definition,
+                                          event.target.checked,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                );
+                              }
+                              if (
+                                definition.type === "textarea" ||
+                                definition.type === "markdown"
+                              ) {
+                                return (
+                                  <label key={definition.name} htmlFor={inputId}>
+                                    {definition.label}
+                                    <textarea
+                                      id={inputId}
+                                      value={value}
+                                      placeholder={definition.placeholder || ""}
+                                      onChange={(event) =>
+                                        updateStepPresetInputValue(
+                                          step.localId,
+                                          definition,
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                );
+                              }
+                              return (
+                                <label key={definition.name} htmlFor={inputId}>
+                                  {definition.label}
+                                  <input
+                                    id={inputId}
+                                    type="text"
+                                    value={value}
+                                    placeholder={definition.placeholder || ""}
+                                    onChange={(event) =>
+                                      updateStepPresetInputValue(
+                                        step.localId,
+                                        definition,
+                                        event.target.value,
+                                      )
+                                    }
+                                  />
+                                </label>
+                              );
+                            })}
+                        </div>
+                      ) : null}
                       <button
                         type="button"
                         className="secondary"
@@ -7341,310 +7349,28 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         {taskTemplateCatalogEnabled ? (
           <section
             className="card stack"
-            aria-label="Task Presets"
+            aria-label="Preset Management"
           >
             <div className="actions">
-              <strong>Task Presets (optional)</strong>
+              <strong>Preset Management</strong>
             </div>
             <label>
-              Preset
-              <select
-                id="queue-template-select"
-                value={selectedPresetKey}
-                onChange={(event) => {
-                  setSelectedPresetKey(event.target.value);
-                  setTemplateInputValues({});
-                  templateInputMemoryRef.current = {};
-                  setTemplateMessage(null);
-                  setPresetReapplyNeeded(false);
-                }}
-              >
-                <option value="">Select preset...</option>
-                {templateItems.map((item) => (
-                  <option key={item.key} value={item.key}>
-                    {`${item.title} (${scopeLabel(item.scope)})`}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="stack">
-              <div className="queue-field-heading">
-                <label htmlFor="queue-template-feature-request">
-                  Feature Request / Initial Instructions
-                </label>
-                <JiraProvenanceChip
-                  label="Feature Request / Initial Instructions"
-                  provenance={presetJiraProvenance}
-                />
-                {jiraIntegration?.enabled ? (
-                  <button
-                    type="button"
-                    className="secondary jira-browse-button"
-                    aria-label="Browse Jira issues for preset instructions"
-                    title="Browse Jira issues for preset instructions"
-                    onClick={() => openJiraBrowser({ kind: "preset" })}
-                  >
-                    Browse Jira issue
-                  </button>
-                ) : null}
-              </div>
-              <textarea
-                id="queue-template-feature-request"
-                placeholder="Describe the feature request this preset should execute."
-                value={templateFeatureRequest}
+              Preset Name
+              <input
+                id="queue-template-preset-name"
+                list="queue-template-preset-name-options"
+                value={presetManagementName}
+                placeholder="New preset name"
                 onChange={(event) =>
-                  handleTemplateFeatureRequestChange(event.target.value)
+                  handlePresetManagementNameChange(event.target.value)
                 }
               />
-              {selectedPresetDetailQuery.isError ? (
-                <p className="notice small">Failed to load preset options.</p>
-              ) : null}
-              {visiblePresetInputs.length > 0 ? (
-                <div className="grid-2">
-                  {visiblePresetInputs.map((definition) => {
-                    const inputId = `queue-template-input-${definition.name}`;
-                    const value = templateInputDisplayValue(definition);
-                    if (
-                      isJiraProjectInputKey(definition.name) &&
-                      jiraIntegration?.enabled
-                    ) {
-                      return (
-                        <label key={definition.name} htmlFor={inputId}>
-                          {definition.label}
-                          <select
-                            id={inputId}
-                            value={value}
-                            disabled={
-                              presetJiraProjectsQuery.isLoading ||
-                              presetJiraProjectsQuery.isError
-                            }
-                            onChange={(event) =>
-                              updateTemplateInputValue(
-                                definition,
-                                event.target.value,
-                              )
-                            }
-                          >
-                            <option value="">Select project...</option>
-                            {(presetJiraProjectsQuery.data || []).map((project) => (
-                              <option
-                                key={project.projectKey}
-                                value={project.projectKey}
-                              >
-                                {project.name
-                                  ? `${project.name} (${project.projectKey})`
-                                  : project.projectKey}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      );
-                    }
-                    if (definition.type === "jira_board") {
-                      return (
-                        <label key={definition.name} htmlFor={inputId}>
-                          {definition.label}
-                          <select
-                            id={inputId}
-                            value={value}
-                            disabled={
-                              !presetJiraProjectKey ||
-                              presetJiraBoardsQuery.isLoading ||
-                              presetJiraBoardsQuery.isError
-                            }
-                            onChange={(event) =>
-                              updateTemplateInputValue(
-                                definition,
-                                event.target.value,
-                              )
-                            }
-                          >
-                            <option value="">No board selected</option>
-                            {(presetJiraBoardsQuery.data || []).map((board) => (
-                              <option key={board.id} value={board.id}>
-                                {board.name || board.id}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      );
-                    }
-                    if (definition.type === "enum") {
-                      return (
-                        <label key={definition.name} htmlFor={inputId}>
-                          {definition.label}
-                          <select
-                            id={inputId}
-                            value={value}
-                            onChange={(event) =>
-                              updateTemplateInputValue(
-                                definition,
-                                event.target.value,
-                              )
-                            }
-                          >
-                            {(definition.options || []).map((option) => (
-                              <option key={option} value={option}>
-                                {templateEnumOptionLabel(definition, option)}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      );
-                    }
-                    if (definition.type === "boolean") {
-                      return (
-                        <label key={definition.name} htmlFor={inputId}>
-                          {definition.label}
-                          <input
-                            id={inputId}
-                            type="checkbox"
-                            checked={value === "true"}
-                            onChange={(event) =>
-                              updateTemplateInputValue(
-                                definition,
-                                event.target.checked,
-                              )
-                            }
-                          />
-                        </label>
-                      );
-                    }
-                    if (
-                      definition.type === "textarea" ||
-                      definition.type === "markdown"
-                    ) {
-                      return (
-                        <label key={definition.name} htmlFor={inputId}>
-                          {definition.label}
-                          <textarea
-                            id={inputId}
-                            value={value}
-                            placeholder={definition.placeholder || ""}
-                            onChange={(event) =>
-                              updateTemplateInputValue(
-                                definition,
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </label>
-                      );
-                    }
-                    return (
-                      <label key={definition.name} htmlFor={inputId}>
-                        {definition.label}
-                        <input
-                          id={inputId}
-                          type="text"
-                          value={value}
-                          placeholder={definition.placeholder || ""}
-                          onChange={(event) =>
-                            updateTemplateInputValue(
-                              definition,
-                              event.target.value,
-                            )
-                          }
-                        />
-                      </label>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {presetJiraProjectsQuery.isError ? (
-                <p className="notice small">Failed to load Jira projects.</p>
-              ) : null}
-              {presetJiraBoardsQuery.isError ? (
-                <p className="notice small">Failed to load Jira boards.</p>
-              ) : null}
-              {attachmentPolicy.enabled ? (
-                <div className="queue-step-attachments">
-                  <label>
-                    {`Feature Request / Initial Instructions ${attachmentLabel}`}
-                    <input
-                      type="file"
-                      data-step-field="objective-attachments"
-                      accept={attachmentPolicy.allowedContentTypes.join(",")}
-                      multiple
-                      aria-label="Feature Request / Initial Instructions attachments"
-                      onChange={(event) => {
-                        updateObjectiveAttachments(
-                          Array.from(event.currentTarget.files || []),
-                        );
-                        event.currentTarget.value = "";
-                      }}
-                    />
-                  </label>
-                  {attachmentTargetErrors[attachmentTargetKey("objective")] ? (
-                    <p className="notice error">
-                      {attachmentTargetErrors[attachmentTargetKey("objective")]}
-                    </p>
-                  ) : null}
-                  {selectedObjectiveAttachmentFiles.length > 0 ? (
-                    <ul className="list queue-step-attachments-list">
-                      {selectedObjectiveAttachmentFiles.map((file) => (
-                        <li key={`${file.name}-${file.size}-${file.lastModified}`}>
-                          <span>
-                            <strong>{file.name}</strong>{" "}
-                            <span className="small">
-                              {`${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`}
-                            </span>
-                          </span>
-                          <AttachmentPreview
-                            file={file}
-                            alt={`Preview of objective attachment ${file.name}`}
-                            onError={() =>
-                              markAttachmentPreviewFailed(
-                                attachmentTargetKey("objective"),
-                                "Feature Request / Initial Instructions",
-                                file,
-                              )
-                            }
-                          />
-                          {previewFailureMessages[
-                            `${attachmentTargetKey("objective")}:${attachmentFileKey(file)}`
-                          ] ? (
-                            <p className="small notice error">
-                              {
-                                previewFailureMessages[
-                                  `${attachmentTargetKey("objective")}:${attachmentFileKey(file)}`
-                                ]
-                              }
-                            </p>
-                          ) : null}
-                          {attachmentTargetErrors[
-                            attachmentTargetKey("objective")
-                          ] ? (
-                            <button
-                              type="button"
-                              className="secondary"
-                              aria-label={`Retry upload for objective attachment ${file.name}`}
-                              title={`Retry upload for objective attachment ${file.name}`}
-                              onClick={() =>
-                                clearAttachmentTargetError(
-                                  attachmentTargetKey("objective"),
-                                )
-                              }
-                            >
-                              Retry
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="secondary"
-                            aria-label={`Remove objective attachment ${file.name}`}
-                            title={`Remove objective attachment ${file.name}`}
-                            onClick={() => removeObjectiveAttachment(file)}
-                          >
-                            Remove
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
+              <datalist id="queue-template-preset-name-options">
+                {templateItems.map((item) => (
+                  <option key={item.key} value={item.title} />
+                ))}
+              </datalist>
+            </label>
             <div className="actions queue-template-actions">
               {taskTemplateSaveEnabled ? (
                 <button
@@ -7652,7 +7378,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   id="queue-template-save-current"
                   className="queue-step-icon-button"
                   aria-label="Save preset"
-                  title="Save the current steps as a reusable preset"
+                  title="Save the current steps using the preset name"
+                  aria-disabled={!presetManagementName.trim()}
+                  disabled={!presetManagementName.trim()}
                   onClick={handleSaveCurrentStepsAsPreset}
                 >
                   <SaveIcon />
@@ -7675,17 +7403,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <TrashIcon />
                 </button>
               ) : null}
-              <button
-                type="button"
-                id="queue-template-apply"
-                onClick={handleApplyPreset}
-                aria-disabled={applyPresetDisabled}
-                aria-busy={isApplyingPreset}
-                title={applyPresetTooltip}
-                disabled={applyPresetDisabled}
-              >
-                {presetReapplyNeeded ? "Reapply preset" : "Apply"}
-              </button>
             </div>
             <p className="small" id="queue-template-message">
               {presetStatusText}

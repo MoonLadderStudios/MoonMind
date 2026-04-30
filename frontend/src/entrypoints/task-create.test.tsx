@@ -6879,17 +6879,15 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
-  it("deletes the selected preset from the Task Presets actions", async () => {
+  it("deletes the selected preset from Preset Management", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
 
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const presetsSection = await screen.findByLabelText("Task Presets");
-    await within(presetsSection).findByRole("option", {
-      name: "Personal Demo (Personal)",
-    });
-    fireEvent.change(within(presetsSection).getByLabelText("Preset"), {
-      target: { value: "personal::::personal-demo" },
+    const presetsSection = await screen.findByLabelText("Preset Management");
+    await screen.findByText("Loaded 4 presets.");
+    fireEvent.change(within(presetsSection).getByLabelText("Preset Name"), {
+      target: { value: "Personal Demo" },
     });
     await waitFor(() => {
       expect(
@@ -6916,6 +6914,35 @@ describe("Task Create Entrypoint", () => {
     expect(await screen.findByText("Deleted preset 'Personal Demo'.")).toBeTruthy();
 
     confirmSpy.mockRestore();
+  });
+
+  it("saves presets from a typed Preset Name", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetsSection = await screen.findByLabelText("Preset Management");
+    await screen.findByText("Loaded 4 presets.");
+    fireEvent.change(within(presetsSection).getByLabelText("Preset Name"), {
+      target: { value: "New Draft Preset" },
+    });
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Save these instructions." },
+    });
+    fireEvent.click(within(presetsSection).getByRole("button", {
+      name: "Save preset",
+    }));
+
+    await waitFor(() => {
+      const saveCall = fetchSpy.mock.calls.find(
+        ([url, init]) =>
+          String(url) === "/api/task-step-templates/save-from-task" &&
+          init?.method === "POST",
+      );
+      expect(saveCall).toBeTruthy();
+      const body = JSON.parse(String(saveCall?.[1]?.body || "{}"));
+      expect(body.title).toBe("New Draft Preset");
+      expect(body.description).toBe("New Draft Preset");
+      expect(body.steps[0].instructions).toBe("Save these instructions.");
+    });
   });
 
   it("adds hover tooltips to Create page buttons", async () => {
@@ -7059,8 +7086,17 @@ describe("Task Create Entrypoint", () => {
     ) as HTMLSelectElement;
     expect(
       Array.from(stepType.options).map((option) => option.textContent),
-    ).toEqual(["Tool", "Skill", "Preset"]);
+    ).toEqual(["Skill", "Tool", "Preset"]);
     expect(stepType.value).toBe("skill");
+    expect((within(primaryStep as HTMLElement).getByRole("radio", {
+      name: "Step Type Skill",
+    }) as HTMLInputElement).checked).toBe(true);
+    expect(within(primaryStep as HTMLElement).getByRole("radio", {
+      name: "Step Type Tool",
+    })).toBeTruthy();
+    expect(within(primaryStep as HTMLElement).getByRole("radio", {
+      name: "Step Type Preset",
+    })).toBeTruthy();
     expect(
       within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
     ).toBeTruthy();
@@ -7074,33 +7110,30 @@ describe("Task Create Entrypoint", () => {
     );
     expect(primaryStep).not.toBeNull();
     const step = primaryStep as HTMLElement;
-    const stepType = within(step).getByLabelText("Step Type") as HTMLSelectElement;
-    const helpId = stepType.getAttribute("aria-describedby");
+    const skillRadio = within(step).getByRole("radio", {
+      name: "Step Type Skill",
+    });
+    const toolRadio = within(step).getByRole("radio", {
+      name: "Step Type Tool",
+    });
+    const presetRadio = within(step).getByRole("radio", {
+      name: "Step Type Preset",
+    });
 
-    expect(helpId).toBeTruthy();
-
-    expect(
-      within(step).getByText(
-        "Skill asks an agent to perform work using reusable behavior.",
-      ),
-    ).toBeTruthy();
-    expect(document.getElementById(helpId as string)?.textContent).toBe(
+    expect(skillRadio.closest(".queue-step-type-option")?.getAttribute("title")).toBe(
       "Skill asks an agent to perform work using reusable behavior.",
     );
-
-    fireEvent.change(stepType, { target: { value: "tool" } });
+    expect(toolRadio.closest(".queue-step-type-option")?.getAttribute("title")).toBe(
+      "Tool runs a typed integration or system operation directly.",
+    );
+    expect(presetRadio.closest(".queue-step-type-option")?.getAttribute("title")).toBe(
+      "Preset inserts a reusable set of configured steps.",
+    );
     expect(
-      within(step).getByText(
-        "Tool runs a typed integration or system operation directly.",
+      within(step).queryByText(
+        "Skill asks an agent to perform work using reusable behavior.",
       ),
-    ).toBeTruthy();
-
-    fireEvent.change(stepType, { target: { value: "preset" } });
-    expect(
-      within(step).getByText(
-        "Preset inserts a reusable set of configured steps.",
-      ),
-    ).toBeTruthy();
+    ).toBeNull();
     expect(within(step).queryByText(/Temporal Activity/)).toBeNull();
     expect(within(step).queryByText(/Capability/)).toBeNull();
   });
@@ -7462,8 +7495,12 @@ describe("Task Create Entrypoint", () => {
   it("previews and applies a step preset from the step editor without using Task Presets", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const taskPresetsSection = await screen.findByLabelText("Task Presets");
-    expect(within(taskPresetsSection).getByRole("button", { name: "Apply" })).toBeTruthy();
+    const presetManagementSection = await screen.findByLabelText(
+      "Preset Management",
+    );
+    expect(
+      within(presetManagementSection).queryByRole("button", { name: "Apply" }),
+    ).toBeNull();
 
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
