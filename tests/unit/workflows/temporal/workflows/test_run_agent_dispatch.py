@@ -261,6 +261,41 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(kwargs["args"][1:], ["owner-1", "/workspace/repo", False, False])
 
+    async def test_agent_node_accepts_mapping_skill_resolution_result(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        resolved = {
+            "snapshotId": "skillset-wf-step-1",
+            "manifestRef": "artifact://skillsets/selected-skill",
+            "skills": [],
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+            new=AsyncMock(return_value=resolved),
+        ) as execute_activity:
+            ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills=None,
+                node_inputs={
+                    "selectedSkill": "moonspec-breakdown",
+                    "workspaceRoot": "/workspace/repo",
+                },
+                node_id="step-1",
+                existing_skillset_ref=None,
+            )
+
+        self.assertEqual(ref, "artifact://skillsets/selected-skill")
+        execute_activity.assert_awaited_once()
+
+    def test_resolved_skillset_field_accepts_missing_result(self) -> None:
+        self.assertIsNone(
+            MoonMindRunWorkflow._resolved_skillset_field(
+                None,
+                "manifest_ref",
+                "manifestRef",
+            )
+        )
+
     async def test_agent_node_rejects_selected_skill_excluded_by_selector(self) -> None:
         wf = MoonMindRunWorkflow()
         wf._owner_id = "owner-1"

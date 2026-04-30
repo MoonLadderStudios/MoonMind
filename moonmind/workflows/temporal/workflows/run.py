@@ -3927,11 +3927,30 @@ class MoonMindRunWorkflow:
             ],
             **self._execute_kwargs_for_route(route),
         )
-        manifest_ref = getattr(resolved, "manifest_ref", None)
+        manifest_ref = self._resolved_skillset_field(
+            resolved,
+            "manifest_ref",
+            "manifestRef",
+        )
         if manifest_ref:
             return str(manifest_ref)
-        snapshot_id = getattr(resolved, "snapshot_id", None)
+        snapshot_id = self._resolved_skillset_field(
+            resolved,
+            "snapshot_id",
+            "snapshotId",
+        )
         return str(snapshot_id) if snapshot_id else None
+
+    @staticmethod
+    def _resolved_skillset_field(resolved: Any, *keys: str) -> Any:
+        if resolved is None:
+            return None
+        is_mapping = isinstance(resolved, WorkflowMapping)
+        for key in keys:
+            value = resolved.get(key) if is_mapping else getattr(resolved, key, None)
+            if value:
+                return value
+        return None
 
     @staticmethod
     def _existing_agent_skillset_ref(
