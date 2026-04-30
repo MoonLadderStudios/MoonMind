@@ -1368,6 +1368,13 @@ tr[data-proposal-id].proposal-consuming td {
   white-space: pre;
 }
 
+.status-running[data-effect="shimmer-sweep"] .status-letter-wave,
+.status-running.is-executing .status-letter-wave,
+.status-running.is-planning .status-letter-wave {
+  color: var(--mm-executing-letter-bright);
+  text-shadow: 0 0 10px var(--mm-executing-letter-halo);
+}
+
 .status-letter-wave__glyph {
   display: inline-block;
   color: inherit;
@@ -1389,6 +1396,11 @@ tr[data-proposal-id].proposal-consuming td {
     filter: none !important;
   }
 
+  .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
+  .status-running.is-executing .status-letter-wave,
+  .status-running.is-planning .status-letter-wave {
+    text-shadow: none;
+  }
 }
 
 @media (forced-colors: active) {
