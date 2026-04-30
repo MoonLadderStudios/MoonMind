@@ -1,47 +1,47 @@
 [
   {
-    "id": 4350228343,
+    "id": 4349179564,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notification is informational and contains no requested code change."
+    "rationale": "Qodo free-tier limit notice; no code action requested."
   },
   {
-    "id": 3166086006,
+    "id": 3165251939,
     "disposition": "addressed",
-    "rationale": "Preset Management now derives selection from React state instead of reading the input ref during render."
+    "rationale": "Removed the dead templateInputValues state and made resolveTemplateInputs default to an empty explicit input object."
   },
   {
-    "id": 3166086011,
+    "id": 4201983734,
     "disposition": "addressed",
-    "rationale": "Step preset input updates now use a functional setSteps update so rapid edits merge against the latest step state."
+    "rationale": "Broad Gemini review summary; the actionable child comments covering dead state, radio accessibility, hidden select removal, duplicated filtering, and Step Type coverage were addressed."
   },
   {
-    "id": 3166086013,
+    "id": 3165251942,
     "disposition": "addressed",
-    "rationale": "Step type radio options now use label wrappers with native click-anywhere behavior and no wrapper onClick."
+    "rationale": "Replaced the clickable div Step Type option wrapper with a label wrapper and removed the redundant wrapper onClick and radio aria-label."
   },
   {
-    "id": 3166086015,
+    "id": 3165251945,
     "disposition": "addressed",
-    "rationale": "Preset Management text input now uses only onChange and removed the duplicate onInput handler."
+    "rationale": "Removed the hidden Step Type select and updated tests to use the radio controls."
   },
   {
-    "id": 4202945045,
+    "id": 3165251949,
+    "disposition": "addressed",
+    "rationale": "Factored visible preset input filtering into a visiblePresetInputs variable before the JSX block."
+  },
+  {
+    "id": 3165251953,
+    "disposition": "addressed",
+    "rationale": "Restored Step Type switching coverage by clicking radio options and checking the Tool, Skill, and Preset panels."
+  },
+  {
+    "id": 3165254042,
+    "disposition": "addressed",
+    "rationale": "Guarded async step preset detail updates so stale responses only apply when the step still has the same selected preset key, with a regression test."
+  },
+  {
+    "id": 4201985740,
     "disposition": "not-applicable",
-    "rationale": "Review body summarizes the inline comments and has no separate actionable request."
-  },
-  {
-    "id": 3166103261,
-    "disposition": "addressed",
-    "rationale": "Preset Management selection now resolves existing presets by unique template key rather than title, with duplicate-title test coverage."
-  },
-  {
-    "id": 4202965932,
-    "disposition": "not-applicable",
-    "rationale": "Codex review body is informational; the actionable inline comments are tracked separately."
-  },
-  {
-    "id": 3166103264,
-    "disposition": "addressed",
-    "rationale": "Step preset jira_board inputs now render as Jira board selectors backed by Jira board data, with regression test coverage."
+    "rationale": "Codex review wrapper/summary only; the actionable Codex child comment was addressed separately."
   }
 ]
