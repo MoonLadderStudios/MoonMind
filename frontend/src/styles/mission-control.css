@@ -2530,13 +2530,52 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   padding: 0;
 }
 
-.queue-step-type-field select {
-  max-width: 16rem;
+.queue-step-type-field {
+  border: 0;
+  margin: 0;
+  order: 1;
+  padding: 0;
+}
+
+.queue-step-type-field legend {
+  font-weight: 700;
+  margin-bottom: 0.4rem;
+}
+
+.queue-step-type-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.queue-step-type-option {
+  align-items: center;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 0.45rem;
+  min-height: 2.35rem;
+  padding: 0.45rem 0.7rem;
+}
+
+.queue-step-type-option:has(input:checked) {
+  background: rgb(var(--mm-accent) / 0.13);
+  border-color: rgb(var(--mm-accent) / 0.62);
+}
+
+.queue-step-type-option-label::before {
+  content: attr(data-label);
+}
+
+.queue-step-instructions-block {
+  order: 3;
 }
 
 .queue-step-type-panel {
   border: 1px solid rgb(var(--mm-border));
   border-radius: 8px;
+  order: 2;
   padding: 0.75rem;
   background: rgb(var(--mm-panel) / 0.58);
 }

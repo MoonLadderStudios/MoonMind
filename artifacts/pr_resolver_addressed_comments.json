@@ -1,17 +1,47 @@
 [
   {
-    "id": 4350220583,
+    "id": 4350228343,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier quota notice; no code action requested."
+    "rationale": "Qodo free-tier notification is informational and contains no requested code change."
   },
   {
-    "id": 3166079083,
+    "id": 3166086006,
     "disposition": "addressed",
-    "rationale": "Updated _resolved_skillset_field to explicitly handle None and use shared mapping/object key iteration, with regression coverage for missing results."
+    "rationale": "Preset Management now derives selection from React state instead of reading the input ref during render."
   },
   {
-    "id": 4202935592,
+    "id": 3166086011,
+    "disposition": "addressed",
+    "rationale": "Step preset input updates now use a functional setSteps update so rapid edits merge against the latest step state."
+  },
+  {
+    "id": 3166086013,
+    "disposition": "addressed",
+    "rationale": "Step type radio options now use label wrappers with native click-anywhere behavior and no wrapper onClick."
+  },
+  {
+    "id": 3166086015,
+    "disposition": "addressed",
+    "rationale": "Preset Management text input now uses only onChange and removed the duplicate onInput handler."
+  },
+  {
+    "id": 4202945045,
     "disposition": "not-applicable",
-    "rationale": "Review summary that duplicates the actionable inline comment handled under comment 3166079083."
+    "rationale": "Review body summarizes the inline comments and has no separate actionable request."
+  },
+  {
+    "id": 3166103261,
+    "disposition": "addressed",
+    "rationale": "Preset Management selection now resolves existing presets by unique template key rather than title, with duplicate-title test coverage."
+  },
+  {
+    "id": 4202965932,
+    "disposition": "not-applicable",
+    "rationale": "Codex review body is informational; the actionable inline comments are tracked separately."
+  },
+  {
+    "id": 3166103264,
+    "disposition": "addressed",
+    "rationale": "Step preset jira_board inputs now render as Jira board selectors backed by Jira board data, with regression test coverage."
   }
 ]

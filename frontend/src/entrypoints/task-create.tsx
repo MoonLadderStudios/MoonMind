@@ -526,10 +526,16 @@ interface StepAttachmentRef {
 type StepType = "tool" | "skill" | "preset";
 
 const STEP_TYPE_HELP_TEXT: Record<StepType, string> = {
-  tool: "Tool runs a typed integration or system operation directly.",
   skill: "Skill asks an agent to perform work using reusable behavior.",
+  tool: "Tool runs a typed integration or system operation directly.",
   preset: "Preset inserts a reusable set of configured steps.",
 };
+
+const STEP_TYPE_OPTIONS: Array<{ value: StepType; label: string }> = [
+  { value: "skill", label: "Skill" },
+  { value: "tool", label: "Tool" },
+  { value: "preset", label: "Preset" },
+];
 
 interface StepState {
   localId: string;
@@ -544,6 +550,7 @@ interface StepState {
   skillArgs: string;
   skillRequiredCapabilities: string;
   presetKey: string;
+  presetInputValues: Record<string, unknown>;
   presetMessage: string | null;
   presetReapplyNeeded: boolean;
   presetPreview: PresetPreviewState | null;
@@ -1150,6 +1157,7 @@ function createStepStateEntry(
     skillArgs: "",
     skillRequiredCapabilities: "",
     presetKey: "",
+    presetInputValues: {},
     presetMessage: null,
     presetReapplyNeeded: false,
     presetPreview: null,
@@ -1222,6 +1230,13 @@ function createStepStateEntriesFromTemporalDraft(
           ? JSON.stringify(toolPayload.inputs || step.skillArgs || {}, null, 2)
           : "{}",
       presetKey,
+      presetInputValues:
+        step.stepType === "preset" &&
+        presetPayload.inputs &&
+        typeof presetPayload.inputs === "object" &&
+        !Array.isArray(presetPayload.inputs)
+          ? (presetPayload.inputs as Record<string, unknown>)
+          : {},
       presetPreview:
         step.stepType === "preset"
           ? presetPreviewStateFromDraftPayload(presetKey, presetPayload)
@@ -2819,6 +2834,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
+  const [presetManagementName, setPresetManagementName] = useState("");
+  const [stepPresetDetails, setStepPresetDetails] = useState<
+    Record<string, TaskTemplateDetail>
+  >({});
   const [templateInputValues, setTemplateInputValues] = useState<
     Record<string, string | boolean>
   >({});
@@ -3316,21 +3335,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     },
   });
 
+  const jiraBoardProjectKey = jiraBrowserOpen
+    ? selectedJiraProjectKey
+    : selectedJiraProjectKey || jiraIntegration?.defaultProjectKey || "";
   const jiraBoardsQuery = useQuery({
     queryKey: [
       "task-create",
       "jira",
       "boards",
       jiraIntegration?.endpoints.boards,
-      selectedJiraProjectKey,
+      jiraBoardProjectKey,
     ],
-    enabled: Boolean(
-      jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraProjectKey,
-    ),
+    enabled: Boolean(jiraIntegration?.enabled && jiraBoardProjectKey),
     queryFn: async (): Promise<JiraBoard[]> => {
       const endpoint = interpolatePath(
         jiraIntegration?.endpoints.boards || "",
-        { projectKey: selectedJiraProjectKey },
+        { projectKey: jiraBoardProjectKey },
       );
       const response = await fetch(endpoint, {
         headers: { Accept: "application/json" },
@@ -3587,6 +3607,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const preferred = preferredTemplate(templateItems);
     if (preferred) {
       setSelectedPresetKey(preferred.key);
+      setPresetManagementName(preferred.title);
     }
   }, [selectedPresetKey, taskTemplateCatalogEnabled, templateItems]);
 
@@ -4320,21 +4341,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     );
   }
 
-  function removePersistedStepAttachment(localId: string, artifactId: string) {
-    setSteps((current) =>
-      current.map((step) =>
-        step.localId === localId
-          ? {
-              ...step,
-              inputAttachments: step.inputAttachments.filter(
-                (attachment) => attachment.artifactId !== artifactId,
-              ),
-            }
-          : step,
-      ),
-    );
-  }
-
   function removeObjectiveAttachment(fileToRemove: File) {
     const targetKey = attachmentTargetKey("objective");
     const previewKey = `${targetKey}:${attachmentFileKey(fileToRemove)}`;
@@ -4353,6 +4359,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       updatePresetReapplyStateForObjective(templateFeatureRequest, next);
       return next;
     });
+  }
+
+  function removePersistedStepAttachment(localId: string, artifactId: string) {
+    setSteps((current) =>
+      current.map((step) =>
+        step.localId === localId
+          ? {
+              ...step,
+              inputAttachments: step.inputAttachments.filter(
+                (attachment) => attachment.artifactId !== artifactId,
+              ),
+            }
+          : step,
+      ),
+    );
   }
 
   function removeStepAttachment(localId: string, fileToRemove: File) {
@@ -4634,10 +4655,47 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   function updateStepPreset(localId: string, presetKey: string) {
     updateStep(localId, {
       presetKey,
+      presetInputValues: {},
       presetMessage: null,
       presetReapplyNeeded: false,
       presetPreview: null,
     });
+    const preset = templateItems.find((item) => item.key === presetKey);
+    if (!preset || stepPresetDetails[presetKey]) {
+      return;
+    }
+    void loadPresetDetail(preset)
+      .then((detail) => {
+        setStepPresetDetails((current) => ({
+          ...current,
+          [presetKey]: detail,
+        }));
+      })
+      .catch(() => {
+        updateStep(localId, { presetMessage: "Failed to load preset options." });
+      });
+  }
+
+  function updateStepPresetInputValue(
+    localId: string,
+    definition: TaskTemplateInputDefinition,
+    value: string | boolean,
+  ) {
+    setSteps((current) =>
+      current.map((step) =>
+        step.localId === localId
+          ? {
+              ...step,
+              presetInputValues: {
+                ...step.presetInputValues,
+                [definition.name]: value,
+              },
+              presetReapplyNeeded: false,
+              presetPreview: null,
+            }
+          : step,
+      ),
+    );
   }
 
   function updateStep(localId: string, updates: Partial<StepState>) {
@@ -4681,6 +4739,18 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const nextType: StepType =
       value === "tool" || value === "preset" ? value : "skill";
     updateStep(localId, { stepType: nextType, presetPreview: null });
+  }
+
+  function handlePresetManagementNameChange(nextName: string) {
+    setPresetManagementName(nextName);
+    const matchingPreset = templateItems.find(
+      (item) => item.key === nextName.trim(),
+    );
+    setSelectedPresetKey(matchingPreset?.key || "");
+    setTemplateInputValues({});
+    templateInputMemoryRef.current = {};
+    setTemplateMessage(null);
+    setPresetReapplyNeeded(false);
   }
 
   function addStep() {
@@ -4737,6 +4807,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   function resolveTemplateInputs(
     inputs: TaskTemplateInputDefinition[],
     explicitInputValues: Record<string, unknown> = templateInputValues,
+    objectiveText: string = templateFeatureRequest,
   ): {
     values: Record<string, unknown>;
     assumptions: string[];
@@ -4744,7 +4815,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const values: Record<string, unknown> = {};
     const assumptions: string[] = [];
     const primaryInstructions = String(steps[0]?.instructions || "").trim();
-    const explicitFeatureRequest = templateFeatureRequest.trim();
+    const explicitFeatureRequest = objectiveText.trim();
     const repositoryValue = repository.trim();
 
     inputs.forEach((definition) => {
@@ -4871,25 +4942,32 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     return { values, assumptions };
   }
 
-  function templateInputDisplayValue(
+  function presetInputDisplayValue(
     definition: TaskTemplateInputDefinition,
+    inputValues: Record<string, unknown>,
   ): string {
-    const explicit = templateInputValues[definition.name];
+    const explicit = inputValues[definition.name];
     if (explicit !== undefined) {
       return String(explicit);
     }
-    if (definition.type === "jira_board") {
-      return String(definition.default || jiraIntegration?.defaultBoardId || "").trim();
+    if (isRepositoryInputKey(definition.name)) {
+      return String(definition.default || repository || defaultRepository || "").trim();
     }
     if (isJiraProjectInputKey(definition.name)) {
       return String(
         definition.default || jiraIntegration?.defaultProjectKey || "",
       ).trim();
     }
-    if (isRepositoryInputKey(definition.name)) {
-      return String(definition.default || repository || defaultRepository || "").trim();
+    if (definition.type === "jira_board") {
+      return String(definition.default || jiraIntegration?.defaultBoardId || "").trim();
     }
     return String(definition.default ?? "").trim();
+  }
+
+  function templateInputDisplayValue(
+    definition: TaskTemplateInputDefinition,
+  ): string {
+    return presetInputDisplayValue(definition, templateInputValues);
   }
 
   function updateTemplateInputValue(
@@ -4967,10 +5045,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     preset,
     detail,
     inputValues,
+    objectiveText = templateFeatureRequest,
   }: {
     preset: TemplateOption;
     detail: TaskTemplateDetail;
     inputValues: Record<string, unknown>;
+    objectiveText?: string;
   }): Promise<PresetPreviewState> {
     const scopeParams = {
       scope: preset.scope,
@@ -4979,6 +5059,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const { values: inputs, assumptions } = resolveTemplateInputs(
       detail.inputs || [],
       inputValues,
+      objectiveText,
     );
     const version =
       detail.version || detail.latestVersion || preset.latestVersion || "1.0.0";
@@ -5197,14 +5278,16 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const detail =
         selectedPreset?.key === preset.key && selectedPresetDetailQuery.data
           ? selectedPresetDetailQuery.data
-          : await loadPresetDetail(preset);
+          : stepPresetDetails[preset.key] || (await loadPresetDetail(preset));
+      setStepPresetDetails((current) => ({
+        ...current,
+        [preset.key]: detail,
+      }));
       const preview = await expandPresetForDraft({
         preset,
         detail,
-        inputValues:
-          step.presetPreview?.presetKey === preset.key
-            ? step.presetPreview.inputs
-            : {},
+        inputValues: step.presetInputValues,
+        objectiveText: step.instructions,
       });
       updateStep(localId, {
         presetPreview: preview,
@@ -5245,7 +5328,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const detail =
         selectedPreset?.key === preset.key && selectedPresetDetailQuery.data
           ? selectedPresetDetailQuery.data
-          : await loadPresetDetail(preset);
+          : stepPresetDetails[preset.key] || (await loadPresetDetail(preset));
+      setStepPresetDetails((current) => ({
+        ...current,
+        [preset.key]: detail,
+      }));
       applyPresetPreviewToDraft({
         preset,
         detail,
@@ -5268,14 +5355,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (!taskTemplateSaveEnabled) {
       return;
     }
-    const title = window.prompt("Preset title", "");
-    if (title === null || !title.trim()) {
-      setTemplateMessage("Preset save cancelled.");
+    const title = presetManagementName.trim();
+    if (!title) {
+      setTemplateMessage("Enter a Preset Name before saving.");
       return;
     }
-    const description =
-      window.prompt("Preset description", `Saved from task draft: ${title}`) ||
-      "";
 
     const presetSteps: Record<string, unknown>[] = [];
     for (let index = 0; index < steps.length; index += 1) {
@@ -5347,8 +5431,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         },
         body: JSON.stringify({
           scope: "personal",
-          title: title.trim(),
-          description: description.trim() || title.trim(),
+          title,
+          description: `Saved from task draft: ${title}`,
           steps: presetSteps,
           suggestedInputs: [],
           tags: [],
@@ -5360,7 +5444,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         );
       }
       const created = (await response.json()) as { title?: string };
-      setTemplateMessage(`Saved preset '${created.title || title.trim()}'.`);
+      setTemplateMessage(`Saved preset '${created.title || title}'.`);
       await templateOptionsQuery.refetch();
     } catch (error) {
       const failure =
@@ -5405,6 +5489,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         );
       }
       setSelectedPresetKey("");
+      setPresetManagementName("");
       setPresetReapplyNeeded(false);
       setTemplateMessage(`Deleted preset '${selectedPreset.title}'.`);
       await templateOptionsQuery.refetch();
@@ -6785,6 +6870,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               const isPrimaryStep = index === 0;
               const stepLabel = isPrimaryStep ? " (Primary)" : "";
               const showSkillArgsField = showAdvancedStepOptions;
+              const stepPreset =
+                templateItems.find((item) => item.key === step.presetKey) ||
+                null;
+              const stepPresetDetail =
+                (stepPreset?.key === selectedPreset?.key
+                  ? selectedPresetDetailQuery.data
+                  : undefined) ||
+                (stepPreset ? stepPresetDetails[stepPreset.key] : undefined);
+              const stepPresetInputs = (stepPresetDetail?.inputs || []).filter(
+                (definition) => isVisiblePresetInput(stepPreset?.slug, definition),
+              );
               return (
                 <section
                   key={step.localId}
@@ -6839,31 +6935,50 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     </div>
                   </div>
 
-                  <label className="queue-step-type-field">
-                    Step Type
-                    <select
-                      aria-label="Step Type"
-                      aria-describedby={`queue-step-type-help-${index}`}
-                      data-step-field="stepType"
-                      data-step-index={String(index)}
-                      value={step.stepType}
-                      onChange={(event) =>
-                        handleStepTypeChange(step.localId, event.target.value)
-                      }
-                    >
-                      <option value="tool">Tool</option>
-                      <option value="skill">Skill</option>
-                      <option value="preset">Preset</option>
-                    </select>
-                    <span id={`queue-step-type-help-${index}`} className="small">
-                      {STEP_TYPE_HELP_TEXT[step.stepType]}
-                    </span>
-                  </label>
+                  <fieldset
+                    className="queue-step-type-field"
+                    role="radiogroup"
+                    aria-label="Step Type"
+                  >
+                    <legend>Step Type</legend>
+                    <div className="queue-step-type-options">
+                      {STEP_TYPE_OPTIONS.map((option) => (
+                        <label
+                          key={option.value}
+                          className="queue-step-type-option"
+                          title={STEP_TYPE_HELP_TEXT[option.value]}
+                        >
+                          <input
+                            type="radio"
+                            aria-label={`Step Type ${option.label}`}
+                            name={`queue-step-type-${step.localId}`}
+                            data-step-field="stepType"
+                            data-step-index={String(index)}
+                            value={option.value}
+                            checked={step.stepType === option.value}
+                            onChange={(event) =>
+                              handleStepTypeChange(
+                                step.localId,
+                                event.target.value,
+                              )
+                            }
+                          />
+                          <span
+                            aria-hidden="true"
+                            className="queue-step-type-option-label"
+                            data-label={option.label}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
 
-                  <div className="stack">
+                  <div className="stack queue-step-instructions-block">
                     <div className="queue-field-heading">
                       <label htmlFor={`queue-step-instructions-${step.localId}`}>
-                        Instructions
+                        {step.stepType === "preset"
+                          ? "Feature Request / Initial Instructions"
+                          : "Instructions"}
                       </label>
                       <JiraProvenanceChip
                         label={`Step ${index + 1} instructions`}
@@ -6892,7 +7007,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       data-step-field="instructions"
                       data-step-index={String(index)}
                       placeholder={
-                        isPrimaryStep
+                        step.stepType === "preset"
+                          ? "Describe the feature request this preset should execute."
+                          : isPrimaryStep
                           ? "Describe the task to execute against the repository."
                           : "Step-specific instructions (leave blank to continue from the task objective)."
                       }
@@ -7152,7 +7269,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   ) : null}
 
                   {step.stepType === "skill" ? (
-                    <>
+                    <div className="stack queue-step-type-panel">
                       <label>
                         Skill (optional)
                         <input
@@ -7214,7 +7331,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           />
                         </label>
                       ) : null}
-                    </>
+                    </div>
                   ) : null}
 
                   {step.stepType === "preset" ? (
@@ -7238,6 +7355,132 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           ))}
                         </select>
                       </label>
+                      {stepPresetInputs.length > 0 ? (
+                        <div className="grid-2">
+                          {stepPresetInputs.map((definition) => {
+                            const inputId = `queue-step-${step.localId}-preset-input-${definition.name}`;
+                            const value = presetInputDisplayValue(
+                              definition,
+                              step.presetInputValues,
+                            );
+                            if (definition.type === "enum") {
+                              return (
+                                <label key={definition.name} htmlFor={inputId}>
+                                  {definition.label}
+                                  <select
+                                    id={inputId}
+                                    value={value}
+                                    onChange={(event) =>
+                                      updateStepPresetInputValue(
+                                        step.localId,
+                                        definition,
+                                        event.target.value,
+                                      )
+                                    }
+                                  >
+                                    {(definition.options || []).map((option) => (
+                                      <option key={option} value={option}>
+                                        {templateEnumOptionLabel(
+                                          definition,
+                                          option,
+                                        )}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                              );
+                            }
+                            if (definition.type === "boolean") {
+                              return (
+                                <label key={definition.name} htmlFor={inputId}>
+                                  {definition.label}
+                                  <input
+                                    id={inputId}
+                                    type="checkbox"
+                                    checked={value === "true"}
+                                    onChange={(event) =>
+                                      updateStepPresetInputValue(
+                                        step.localId,
+                                        definition,
+                                        event.target.checked,
+                                      )
+                                    }
+                                  />
+                                </label>
+                              );
+                            }
+                            if (
+                              definition.type === "textarea" ||
+                              definition.type === "markdown"
+                            ) {
+                              return (
+                                <label key={definition.name} htmlFor={inputId}>
+                                  {definition.label}
+                                  <textarea
+                                    id={inputId}
+                                    value={value}
+                                    placeholder={definition.placeholder || ""}
+                                    onChange={(event) =>
+                                      updateStepPresetInputValue(
+                                        step.localId,
+                                        definition,
+                                        event.target.value,
+                                      )
+                                    }
+                                  />
+                                </label>
+                              );
+                            }
+                            if (definition.type === "jira_board") {
+                              return (
+                                <label key={definition.name} htmlFor={inputId}>
+                                  {definition.label}
+                                  <select
+                                    id={inputId}
+                                    value={value}
+                                    disabled={
+                                      jiraBoardsQuery.isLoading ||
+                                      jiraBoardsQuery.isError
+                                    }
+                                    onChange={(event) =>
+                                      updateStepPresetInputValue(
+                                        step.localId,
+                                        definition,
+                                        event.target.value,
+                                      )
+                                    }
+                                  >
+                                    <option value="">Select board...</option>
+                                    {(jiraBoardsQuery.data || []).map((board) => (
+                                      <option key={board.id} value={board.id}>
+                                        {board.name || board.id}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                              );
+                            }
+                            return (
+                              <label key={definition.name} htmlFor={inputId}>
+                                {definition.label}
+                                <input
+                                  id={inputId}
+                                  type="text"
+                                  value={value}
+                                  placeholder={definition.placeholder || ""}
+                                  onChange={(event) =>
+                                    updateStepPresetInputValue(
+                                      step.localId,
+                                      definition,
+                                      event.target.value,
+                                    )
+                                  }
+                                />
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                       <button
                         type="button"
                         className="secondary"
@@ -7258,7 +7501,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           !step.presetPreview
                         }
                         aria-busy={isApplyingPreset}
-                        title={applyPresetTooltip}
+                        title="Apply the previewed preset to this step"
                         disabled={
                           isApplyingPreset ||
                           !step.presetKey ||
@@ -7341,18 +7584,41 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         {taskTemplateCatalogEnabled ? (
           <section
             className="card stack"
-            aria-label="Task Presets"
+            aria-label="Preset Management"
           >
             <div className="actions">
-              <strong>Task Presets (optional)</strong>
+              <strong>Preset Management</strong>
             </div>
+            <label>
+              Preset Name
+              <input
+                id="queue-template-select"
+                list="queue-template-name-options"
+                value={presetManagementName}
+                onChange={(event) =>
+                  handlePresetManagementNameChange(event.target.value)
+                }
+                placeholder="Type a new preset name or choose an existing personal preset"
+              />
+              <datalist id="queue-template-name-options">
+                {templateItems.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {`${item.title} (${scopeLabel(item.scope)})`}
+                  </option>
+                ))}
+              </datalist>
+            </label>
             <label>
               Preset
               <select
-                id="queue-template-select"
+                id="queue-template-preset-select"
                 value={selectedPresetKey}
                 onChange={(event) => {
-                  setSelectedPresetKey(event.target.value);
+                  const nextKey = event.target.value;
+                  const nextPreset =
+                    templateItems.find((item) => item.key === nextKey) || null;
+                  setSelectedPresetKey(nextKey);
+                  setPresetManagementName(nextPreset?.title || "");
                   setTemplateInputValues({});
                   templateInputMemoryRef.current = {};
                   setTemplateMessage(null);
@@ -7675,22 +7941,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <TrashIcon />
                 </button>
               ) : null}
-              <button
-                type="button"
-                id="queue-template-apply"
-                onClick={handleApplyPreset}
-                aria-disabled={applyPresetDisabled}
-                aria-busy={isApplyingPreset}
-                title={applyPresetTooltip}
-                disabled={applyPresetDisabled}
-              >
-                {presetReapplyNeeded ? "Reapply preset" : "Apply"}
-              </button>
             </div>
             <p className="small" id="queue-template-message">
               {presetStatusText}
             </p>
           </section>
+        ) : null}
+        {taskTemplateCatalogEnabled ? (
+          <button
+            type="button"
+            id="queue-template-apply"
+            className="secondary queue-template-apply-button"
+            onClick={handleApplyPreset}
+            aria-disabled={applyPresetDisabled}
+            aria-busy={isApplyingPreset}
+            title={applyPresetTooltip}
+            disabled={applyPresetDisabled}
+          >
+            {presetReapplyNeeded ? "Reapply preset" : "Apply"}
+          </button>
         ) : null}
 
         <section
