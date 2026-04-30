@@ -1364,6 +1364,7 @@ tr[data-proposal-id].proposal-consuming td {
   z-index: 2;
   display: inline-flex;
   align-items: center;
+  color: inherit;
   white-space: pre;
 }
 
@@ -1408,10 +1409,6 @@ tr[data-proposal-id].proposal-consuming td {
   .status-running.is-planning .status-letter-wave {
     color: ButtonText;
     animation: none;
-    -webkit-text-fill-color: ButtonText;
-    background-image: none;
-    -webkit-background-clip: border-box;
-    background-clip: border-box;
   }
 }
 
