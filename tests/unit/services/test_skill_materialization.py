@@ -199,6 +199,60 @@ async def test_materializer_rejects_incompatible_agents_skills_path(tmp_path: Pa
     assert source_file.read_text(encoding="utf-8") == "do not rewrite"
 
 @pytest.mark.asyncio
+async def test_materializer_preserves_checked_in_skills_until_projection_ready(
+    tmp_path: Path,
+):
+    source_dir = tmp_path / ".agents" / "skills"
+    source_skill = source_dir / "repo-skill" / "SKILL.md"
+    source_skill.parent.mkdir(parents=True)
+    source_skill.write_text("checked-in source input\n", encoding="utf-8")
+    materializer = AgentSkillMaterializer(
+        str(tmp_path),
+        artifact_service=_StaticArtifactService({}),
+        source_preservation_root=str(tmp_path / "runtime" / "repo_agents_skills"),
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="missing_content_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[_skill("active", "missing-artifact")],
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to materialize content"):
+        await materializer.materialize(
+            resolved_skillset=skillset,
+            runtime_id="test_runtime",
+            mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+        )
+
+    assert source_dir.is_dir()
+    assert source_skill.read_text(encoding="utf-8") == "checked-in source input\n"
+    assert not (tmp_path / ".agents" / "skills").is_symlink()
+
+@pytest.mark.asyncio
+async def test_materializer_refuses_to_clear_symlinked_active_dir(tmp_path: Path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "keep.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    backing_link = tmp_path / "skills_active"
+    backing_link.symlink_to(outside)
+    materializer = AgentSkillMaterializer(str(tmp_path))
+    skillset = ResolvedSkillSet(
+        snapshot_id="symlink_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[],
+    )
+
+    with pytest.raises(RuntimeError, match="refusing to clear symlinked directory"):
+        await materializer.materialize(
+            resolved_skillset=skillset,
+            runtime_id="test_runtime",
+            mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+@pytest.mark.asyncio
 async def test_materializer_does_not_block_on_incompatible_gemini_skills_path(
     tmp_path: Path,
 ):

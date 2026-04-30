@@ -2637,7 +2637,7 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_prepare_turn_instructions_fails_when_active_projection_collides(
+async def test_agent_runtime_prepare_turn_instructions_preserves_checked_in_skills_before_projection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2675,34 +2675,43 @@ async def test_agent_runtime_prepare_turn_instructions_fails_when_active_project
     )
     activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)
 
-    with pytest.raises(TemporalActivityRuntimeError) as exc_info:
-        await activities.agent_runtime_prepare_turn_instructions(
-            {
-                "request": {
-                    "agentKind": "managed",
-                    "agentId": "codex",
-                    "correlationId": "corr-1",
-                    "idempotencyKey": "idem-1",
-                    "resolvedSkillsetRef": "art-pr-resolver-snapshot",
-                    "parameters": {
-                        "instructions": "Resolve the PR.",
-                        "metadata": {
-                            "moonmind": {
-                                "selectedSkill": "pr-resolver",
-                            },
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "resolvedSkillsetRef": "art-pr-resolver-snapshot",
+                "parameters": {
+                    "instructions": "Resolve the PR.",
+                    "metadata": {
+                        "moonmind": {
+                            "selectedSkill": "pr-resolver",
                         },
                     },
                 },
-                "workspacePath": str(workspace),
-            }
-        )
+            },
+            "workspacePath": str(workspace),
+        }
+    )
 
-    message = str(exc_info.value)
-    assert "skill projection failed before runtime launch" in message
-    assert "object kind: directory" in message
-    assert (
-        checked_in_skill / "SKILL.md"
-    ).read_text(encoding="utf-8") == "checked-in source input\n"
+    assert result.startswith("Active MoonMind skill snapshot:")
+    visible_skills = workspace / ".agents" / "skills"
+    assert visible_skills.is_symlink()
+    assert (visible_skills / "pr-resolver" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "resolved active body\n"
+    preserved_skill = (
+        managed_root
+        / "job-1"
+        / "runtime"
+        / "skill_sources"
+        / "repo_agents_skills"
+        / "pr-resolver"
+        / "SKILL.md"
+    )
+    assert preserved_skill.read_text(encoding="utf-8") == "checked-in source input\n"
 
 
 @pytest.mark.asyncio

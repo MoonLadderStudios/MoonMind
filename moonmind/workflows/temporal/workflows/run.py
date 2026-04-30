@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any, Optional, TypedDict
 
@@ -3927,6 +3927,14 @@ class MoonMindRunWorkflow:
             ],
             **self._execute_kwargs_for_route(route),
         )
+        if selected_skill:
+            normalized_skill = str(selected_skill).strip().lower()
+            resolved_skill_names = self._resolved_skillset_skill_names(resolved)
+            if normalized_skill not in resolved_skill_names:
+                raise ValueError(
+                    f"selected skill '{selected_skill}' was not resolved into the "
+                    "agent skill snapshot"
+                )
         manifest_ref = self._resolved_skillset_field(
             resolved,
             "manifest_ref",
@@ -3940,6 +3948,36 @@ class MoonMindRunWorkflow:
             "snapshotId",
         )
         return str(snapshot_id) if snapshot_id else None
+
+    @staticmethod
+    def _resolved_skillset_skill_names(resolved: Any) -> set[str]:
+        if resolved is None:
+            return set()
+        skills = (
+            resolved.get("skills")
+            if isinstance(resolved, WorkflowMapping)
+            else getattr(resolved, "skills", None)
+        )
+        if not isinstance(skills, Iterable) or isinstance(skills, (str, bytes)):
+            return set()
+        names: set[str] = set()
+        for skill in skills:
+            if isinstance(skill, WorkflowMapping):
+                raw_name = (
+                    skill.get("skill_name")
+                    or skill.get("skillName")
+                    or skill.get("name")
+                )
+            else:
+                raw_name = (
+                    getattr(skill, "skill_name", None)
+                    or getattr(skill, "skillName", None)
+                    or getattr(skill, "name", None)
+                )
+            name = str(raw_name or "").strip().lower()
+            if name:
+                names.add(name)
+        return names
 
     @staticmethod
     def _resolved_skillset_field(resolved: Any, *keys: str) -> Any:

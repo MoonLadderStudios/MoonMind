@@ -24,12 +24,18 @@ class AgentSkillMaterializer:
         workspace_root: str,
         artifact_service: Any | None = None,
         backing_root: str | None = None,
+        source_preservation_root: str | None = None,
     ) -> None:
         if not workspace_root:
             raise ValueError("workspace_root must be provided")
         self.workspace_root = Path(workspace_root).resolve()
         self._artifact_service = artifact_service
         self.backing_root = Path(backing_root).resolve() if backing_root else None
+        self.source_preservation_root = (
+            Path(source_preservation_root).resolve()
+            if source_preservation_root
+            else None
+        )
 
     async def materialize(
         self,
@@ -51,13 +57,19 @@ class AgentSkillMaterializer:
             active_dir = self.backing_root or self.workspace_root / "skills_active"
             visible_dir = self.workspace_root / ".agents" / "skills"
             manifest_path = active_dir / "_manifest.json"
+            preserve_visible_source = self._should_preserve_visible_source_dir(
+                visible_dir
+            )
 
-            self._validate_projection_path(visible_dir)
+            self._validate_projection_path(
+                visible_dir,
+                allow_existing_visible_dir=preserve_visible_source,
+            )
 
             try:
                 active_dir.mkdir(parents=True, exist_ok=True)
                 self._clear_directory(active_dir)
-            except OSError as ex:
+            except (OSError, RuntimeError) as ex:
                 raise RuntimeError(f"Failed to prepare skills_active directory: {ex}") from ex
 
             for skill in resolved_skillset.skills:
@@ -118,12 +130,16 @@ class AgentSkillMaterializer:
                 ) from ex
 
             try:
+                if preserve_visible_source:
+                    self._move_visible_source_to_preservation_root(visible_dir)
                 links = ensure_shared_skill_links(
                     run_root=self.workspace_root,
                     skills_active_path=active_dir,
                     require_gemini_link=False,
                 )
             except (OSError, SkillWorkspaceError) as ex:
+                if preserve_visible_source:
+                    self._restore_preserved_visible_source(visible_dir)
                 raise RuntimeError(
                     self._projection_error_message(visible_dir, cause=str(ex))
                 ) from ex
@@ -155,13 +171,61 @@ class AgentSkillMaterializer:
             
         return result
 
+    def _should_preserve_visible_source_dir(self, visible_dir: Path) -> bool:
+        if self.source_preservation_root is None:
+            return False
+        if not visible_dir.exists() or visible_dir.is_symlink():
+            return False
+        return visible_dir.is_dir()
+
+    def _move_visible_source_to_preservation_root(self, visible_dir: Path) -> None:
+        if self.source_preservation_root is None:
+            return
+        try:
+            self.source_preservation_root.parent.mkdir(parents=True, exist_ok=True)
+            if self.source_preservation_root.exists():
+                self._remove_directory_path(self.source_preservation_root)
+            shutil.move(str(visible_dir), str(self.source_preservation_root))
+        except OSError as ex:
+            raise RuntimeError(
+                self._projection_error_message(visible_dir, cause=str(ex))
+            ) from ex
+
+    def _restore_preserved_visible_source(self, visible_dir: Path) -> None:
+        if self.source_preservation_root is None:
+            return
+        try:
+            if visible_dir.is_symlink():
+                visible_dir.unlink()
+            elif visible_dir.exists():
+                self._remove_directory_path(visible_dir)
+            if self.source_preservation_root.exists():
+                shutil.move(str(self.source_preservation_root), str(visible_dir))
+        except OSError as ex:
+            raise RuntimeError(
+                self._projection_error_message(visible_dir, cause=str(ex))
+            ) from ex
+
     @staticmethod
     def _clear_directory(path: Path) -> None:
+        if path.is_symlink():
+            raise RuntimeError(f"refusing to clear symlinked directory: {path}")
+        if not path.is_dir():
+            raise RuntimeError(f"refusing to clear non-directory path: {path}")
         for child in path.iterdir():
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child)
             else:
                 child.unlink()
+
+    @staticmethod
+    def _remove_directory_path(path: Path) -> None:
+        if path.is_symlink():
+            raise RuntimeError(f"refusing to remove symlinked directory: {path}")
+        if path.is_dir():
+            shutil.rmtree(path)
+            return
+        path.unlink()
 
     @staticmethod
     def _extract_skill_bundle(payload: bytes, skill_dir: Path) -> None:
@@ -186,11 +250,20 @@ class AgentSkillMaterializer:
         if not (skill_dir / "SKILL.md").is_file():
             raise RuntimeError("skill bundle did not contain SKILL.md")
 
-    def _validate_projection_path(self, visible_dir: Path) -> None:
+    def _validate_projection_path(
+        self,
+        visible_dir: Path,
+        *,
+        allow_existing_visible_dir: bool = False,
+    ) -> None:
         agents_dir = visible_dir.parent
         if agents_dir.exists() and not agents_dir.is_dir():
             raise RuntimeError(self._projection_error_message(agents_dir))
-        if visible_dir.exists() and not visible_dir.is_symlink():
+        if (
+            visible_dir.exists()
+            and not visible_dir.is_symlink()
+            and not (allow_existing_visible_dir and visible_dir.is_dir())
+        ):
             raise RuntimeError(self._projection_error_message(visible_dir))
 
     @staticmethod
