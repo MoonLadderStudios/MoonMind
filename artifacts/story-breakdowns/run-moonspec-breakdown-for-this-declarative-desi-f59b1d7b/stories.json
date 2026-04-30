@@ -1,0 +1,723 @@
+{
+  "source": {
+    "title": "Step Types",
+    "path": "docs/Steps/StepTypes.md",
+    "referencePath": "docs/Steps/StepTypes.md",
+    "originalDesignText": "# Step Types\n\nStatus: Draft\nOwners: MoonMind Engineering (Task Platform + UI)\nLast Updated: 2026-04-28\nRelated: `docs/Tasks/TaskPresetsSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/AgentSkillSystem.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Tools/DockerComposeUpdateSystem.md`\n\n---\n\n## 1. Purpose\n\nDefine the desired-state MoonMind **Step Type** model.\n\nA MoonMind task is composed from steps. Each step has exactly one user-facing\n**Step Type** that determines:\n\n1. what the step represents,\n2. which configuration fields are shown,\n3. how the step is validated,\n4. whether the step is executable as-authored or expands into executable steps,\n5. how the step maps into the runtime plan and Temporal execution model.\n\nThe canonical Step Types are:\n\n1. `tool`\n2. `skill`\n3. `preset`\n\nThe product-facing label is **Step Type**. Users should not need to understand\ninternal terms such as capability registries, Temporal activities, plan nodes, or\nruntime adapter commands when authoring ordinary tasks.\n\n---\n\n## 2. Desired-State Summary\n\nMoonMind should expose one step-authoring control:\n\n```text\nStep Type\n[ Tool ] [ Skill ] [ Preset ]\n```\n\nChanging the Step Type changes the form below it.\n\n```text\nTool   -> choose a typed operation and configure its inputs\nSkill  -> choose agent behavior and configure its instructions/runtime context\nPreset -> choose a reusable template, configure preset inputs, preview expansion, apply\n```\n\nA **Tool** step and a **Skill** step are executable step types.\n\nA **Preset** step is normally an authoring-time placeholder. Applying a preset\nexpands it into concrete Tool and/or Skill steps. The durable execution payload\nshould contain expanded executable steps, not unresolved preset invocations,\nunless a future linked-preset mode is explicitly introduced.\n\n---\n\n## 3. Terminology\n\n| Term | Desired meaning |\n|------|-----------------|\n| **Task** | A top-level user request submitted to MoonMind. |\n| **Step** | A user-visible unit of work inside a task or plan. |\n| **Step Type** | The user-facing discriminator for how a step is configured and materialized. Canonical values: `tool`, `skill`, `preset`. |\n| **Tool** | A typed, schema-backed, policy-checked operation MoonMind can run directly. Examples: transition a Jira issue, add a Jira comment, create a pull request, update a deployment stack. |\n| **Skill** | Agent-facing reusable behavior, instructions, or execution mode used when the step requires reasoning, implementation, planning, or open-ended work. |\n| **Preset** | A reusable, parameterized authoring template that expands into one or more concrete steps. |\n| **Expansion** | The deterministic process of turning a preset plus user inputs into concrete steps. |\n| **Plan** | The runtime execution artifact derived from a task's executable steps. |\n| **Activity** | A Temporal implementation detail for side-effecting work. It is not the user-facing Step Type label. |\n\nThe term **Capability** should not be used as the umbrella product term for Tool,\nSkill, and Preset. It may still appear in security or worker-placement contexts,\nsuch as `requiredCapabilities`, where it means a required permission or worker\naffordance.\n\n---\n\n## 4. Core Invariants\n\n1. Every authored step has exactly one Step Type.\n2. The Step Type controls the available sub-options for that step.\n3. `tool` and `skill` steps are executable.\n4. `preset` steps are authoring-time placeholders by default.\n5. Applying a preset produces concrete executable steps.\n6. Preset expansion must be deterministic and validated before execution.\n7. Preset-derived execution must not depend on live catalog lookup at runtime.\n8. Preset provenance is audit and reconstruction metadata, not hidden runtime work.\n9. Arbitrary shell snippets are not a Step Type.\n10. Temporal Activity is not a Step Type.\n11. Existing legacy payload shapes may be read during migration, but new authoring\n    surfaces should converge on the Step Type model.\n12. Step Type terminology must stay consistent across UI, API, docs, validation,\n    proposal promotion, and preset expansion.\n\n---\n\n## 5. Step Type Taxonomy\n\n### 5.1 `tool`\n\nA Tool step runs a typed executable operation.\n\nUse a Tool step when the desired work is explicit, bounded, and can be represented\nas a known operation with typed inputs and outputs.\n\nExamples:\n\n1. Fetch a Jira issue.\n2. Transition a Jira issue.\n3. Add a Jira comment.\n4. Create a GitHub pull request.\n5. Request GitHub reviewers.\n6. Run a test command through a controlled runner.\n7. Update a Docker Compose deployment stack through a privileged typed contract.\n\nA Tool is not an arbitrary script. Tool definitions must declare their contract:\n\n1. name and version,\n2. input schema,\n3. output schema,\n4. required authorization,\n5. required worker capabilities,\n6. retry policy,\n7. execution binding,\n8. validation and error model.\n\nA Tool step should be presented in the UI as direct, deterministic work:\n\n```text\nStep Type: Tool\nTool: Jira -> Transition Issue\nIssue key: MM-123\nTarget status: In Progress\nComment: optional\n```\n\nDesired payload shape:\n\n```json\n{\n  \"id\": \"move-jira-to-in-progress\",\n  \"title\": \"Move Jira issue to In Progress\",\n  \"type\": \"tool\",\n  \"tool\": {\n    \"id\": \"jira.transition_issue\",\n    \"version\": \"1.0.0\",\n    \"inputs\": {\n      \"issueKey\": \"MM-123\",\n      \"targetStatus\": \"In Progress\"\n    }\n  }\n}\n```\n\n### 5.2 `skill`\n\nA Skill step invokes agent-facing behavior.\n\nUse a Skill step when the desired work requires interpretation, planning,\nimplementation, synthesis, or other open-ended reasoning.\n\nExamples:\n\n1. Implement a Jira issue in a repository.\n2. Triage an ambiguous Jira issue.\n3. Convert a feature request into a Moon Spec.\n4. Resolve a pull request review thread.\n5. Investigate failing tests and propose a fix.\n\nA Skill step may use tools internally, but the user-authored step is still a\nSkill because the primary work is agentic.\n\nA Skill step should expose fields such as:\n\n1. skill selector,\n2. instructions,\n3. relevant repository or project context,\n4. runtime or model preferences when applicable,\n5. allowed tools or required capabilities when applicable,\n6. approval or autonomy controls when applicable.\n\nExample UI:\n\n```text\nStep Type: Skill\nSkill: Code Implementation\nRepository: MoonLadderStudios/MoonMind\nInstructions: Implement MM-123 and open a PR.\n```\n\nDesired payload shape:\n\n```json\n{\n  \"id\": \"implement-issue\",\n  \"title\": \"Implement Jira issue\",\n  \"type\": \"skill\",\n  \"skill\": {\n    \"id\": \"code.implementation\",\n    \"version\": \"1.0.0\",\n    \"inputs\": {\n      \"repository\": \"MoonLadderStudios/MoonMind\",\n      \"issueKey\": \"MM-123\",\n      \"instructions\": \"Implement the issue and prepare a pull request.\"\n    }\n  }\n}\n```\n\n### 5.3 `preset`\n\nA Preset step selects a reusable template and configures its inputs.\n\nUse a Preset step when the user wants to insert a known multi-step workflow rather\nthan configure each step manually.\n\nExamples:\n\n1. Jira implementation flow.\n2. Jira breakdown flow.\n3. Moon Spec orchestration flow.\n4. PR review and fix flow.\n5. Deployment verification flow.\n\nA Preset step is not normally executable. It is a temporary authoring state that\nsupports preview and application.\n\nExample UI:\n\n```text\nStep Type: Preset\nPreset: Jira -> Implement Issue with PR\nIssue key: MM-123\nStart status: In Progress\nSuccess status: Ready for Review\nImplementation skill: Code Implementation\n\n[Preview expansion]\n[Apply preset]\n```\n\nTemporary authoring payload before expansion:\n\n```json\n{\n  \"id\": \"apply-jira-implementation-flow\",\n  \"title\": \"Apply Jira implementation flow\",\n  \"type\": \"preset\",\n  \"preset\": {\n    \"id\": \"jira.implementation_flow\",\n    \"version\": \"2026-04-28\",\n    \"inputs\": {\n      \"issueKey\": \"MM-123\",\n      \"startStatus\": \"In Progress\",\n      \"successStatus\": \"Ready for Review\",\n      \"implementationSkill\": \"code.implementation\"\n    }\n  }\n}\n```\n\nAfter application, the draft should contain executable Tool and Skill steps:\n\n```json\n[\n  {\n    \"id\": \"fetch-jira-issue\",\n    \"title\": \"Fetch Jira issue\",\n    \"type\": \"tool\",\n    \"tool\": {\n      \"id\": \"jira.get_issue\",\n      \"version\": \"1.0.0\",\n      \"inputs\": {\n        \"issueKey\": \"MM-123\"\n      }\n    },\n    \"source\": {\n      \"kind\": \"preset-derived\",\n      \"presetId\": \"jira.implementation_flow\",\n      \"presetVersion\": \"2026-04-28\",\n      \"originalStepId\": \"fetch-issue\"\n    }\n  },\n  {\n    \"id\": \"move-jira-to-in-progress\",\n    \"title\": \"Move Jira issue to In Progress\",\n    \"type\": \"tool\",\n    \"tool\": {\n      \"id\": \"jira.transition_issue\",\n      \"version\": \"1.0.0\",\n      \"inputs\": {\n        \"issueKey\": \"MM-123\",\n        \"targetStatus\": \"In Progress\"\n      }\n    },\n    \"source\": {\n      \"kind\": \"preset-derived\",\n      \"presetId\": \"jira.implementation_flow\",\n      \"presetVersion\": \"2026-04-28\",\n      \"originalStepId\": \"start-work\"\n    }\n  },\n  {\n    \"id\": \"implement-issue\",\n    \"title\": \"Implement Jira issue\",\n    \"type\": \"skill\",\n    \"skill\": {\n      \"id\": \"code.implementation\",\n      \"version\": \"1.0.0\",\n      \"inputs\": {\n        \"repository\": \"MoonLadderStudios/MoonMind\",\n        \"issueKey\": \"MM-123\"\n      }\n    },\n    \"source\": {\n      \"kind\": \"preset-derived\",\n      \"presetId\": \"jira.implementation_flow\",\n      \"presetVersion\": \"2026-04-28\",\n      \"originalStepId\": \"implement\"\n    }\n  }\n]\n```\n\n---\n\n## 6. User Experience Contract\n\n### 6.1 Step editor\n\nThe step editor must render controls from the selected Step Type.\n\n```text\nStep\n  Title\n  Step Type\n  Type-specific configuration\n  Advanced options\n```\n\nWhen the user changes Step Type, the UI must either:\n\n1. preserve compatible fields,\n2. clearly discard incompatible fields, or\n3. require confirmation when meaningful data would be lost.\n\n### 6.2 Step type picker\n\nThe Step Type picker should use concise labels and explanatory helper text:\n\n| Step Type | Helper text |\n|-----------|-------------|\n| Tool | Run a typed integration or system operation directly. |\n| Skill | Ask an agent to perform work using reusable behavior. |\n| Preset | Insert a reusable set of configured steps. |\n\n### 6.3 Tool picker\n\nTool selection should support search and grouping by integration or domain.\n\nExamples:\n\n```text\nJira\n  Fetch issue\n  Transition issue\n  Add comment\n  Assign issue\n\nGitHub\n  Create pull request\n  Request reviewers\n  Add labels\n\nDeployment\n  Update Compose stack\n```\n\nEach tool form should be schema-driven. Dynamic options should be supported\nthrough option providers. For example, a Jira transition tool can derive target\nstatuses from the selected issue and the current user's permissions.\n\n### 6.4 Skill picker\n\nSkill selection should support search, descriptions, and compatibility hints.\n\nSkill configuration should make the agentic boundary clear. Users should be able\nto distinguish deterministic Tool steps from agentic Skill steps.\n\n### 6.5 Preset picker\n\nPresets should be selectable from the same step-authoring surface as Tool and\nSkill. There should not be a separate Presets section for using or applying a\npreset.\n\nThe Presets section is for management only:\n\n1. create preset,\n2. edit preset,\n3. version preset,\n4. duplicate preset,\n5. deprecate preset,\n6. test preset expansion,\n7. inspect audit metadata.\n\nUsing a preset belongs in the step editor.\n\n### 6.6 Preset preview and apply\n\nBefore applying a preset, the UI should show a preview such as:\n\n```text\nThis preset will insert 7 steps:\n1. Fetch Jira issue\n2. Move Jira issue to In Progress\n3. Implement issue\n4. Run tests\n5. Create pull request\n6. Comment on Jira\n7. Move Jira issue to Ready for Review\n```\n\nApplying the preset replaces the temporary Preset step with the expanded steps.\nThe user can then edit those steps like ordinary steps.\n\nThe UI should support:\n\n1. undo expansion,\n2. show preset origin,\n3. detach from preset provenance,\n4. compare generated steps with source preset when possible,\n5. update to a newer preset version only as an explicit user action.\n\n---\n\n## 7. Runtime and Payload Contract\n\n### 7.1 Authoring payload\n\nDraft task authoring may temporarily contain `type: \"preset\"` while the user is\nconfiguring and previewing a preset.\n\nExecutable task submission should contain only executable steps by default:\n\n1. `type: \"tool\"`\n2. `type: \"skill\"`\n\nPreset-derived steps should preserve source metadata:\n\n```json\n{\n  \"source\": {\n    \"kind\": \"preset-derived\",\n    \"presetId\": \"jira.implementation_flow\",\n    \"presetVersion\": \"2026-04-28\",\n    \"includePath\": [\"root\", \"implementation\"],\n    \"originalStepId\": \"implement\"\n  }\n}\n```\n\nThis metadata is for audit, UI grouping, proposal reconstruction, and review. It\nmust not be required for runtime correctness.\n\n### 7.2 Runtime plan mapping\n\nExecutable steps compile into the runtime plan contract.\n\nDesired mapping:\n\n| Step Type | Runtime materialization |\n|-----------|-------------------------|\n| `tool` | Plan node invoking a typed tool definition. |\n| `skill` | Plan node or agent execution request invoking agent-facing skill behavior. |\n| `preset` | No runtime node by default; expands before submission. |\n\nThe execution layer may translate Tool steps into Temporal Activities and Skill\nsteps into activities, child workflows, or runtime-specific managed sessions. That\ntranslation is an implementation concern and should not affect the Step Type UI.\n\n### 7.3 Backward compatibility\n\nDuring migration, MoonMind may continue reading legacy shapes such as:\n\n1. `step.skill`,\n2. `step.tool`,\n3. `step.skillId`,\n4. preset/template step metadata,\n5. plan nodes with existing `tool.type` values.\n\nNew authoring surfaces should still normalize into the desired Step Type model.\nCompatibility readers must not cause new UI or docs to reintroduce ambiguous\numbrella terminology.\n\n---\n\n## 8. Validation Rules\n\n### 8.1 Common validation\n\nEvery step must have:\n\n1. stable local identity,\n2. title or generated display label,\n3. Step Type,\n4. type-specific payload,\n5. validation errors surfaced before submission.\n\n### 8.2 Tool validation\n\nA Tool step is valid only when:\n\n1. the selected tool exists,\n2. the tool version can be resolved or pinned,\n3. inputs validate against the tool schema,\n4. the user has required authorization,\n5. required worker capabilities are available,\n6. forbidden fields are absent,\n7. retry and side-effect policy is known.\n\nTool validation must reject arbitrary shell snippets unless the selected tool is\nan explicitly approved typed command tool with bounded inputs and policy.\n\n### 8.3 Skill validation\n\nA Skill step is valid only when:\n\n1. the selected skill exists or can be resolved by documented `auto` semantics,\n2. skill inputs validate against the skill contract,\n3. runtime compatibility is known,\n4. required context is present,\n5. selected tools or permissions are allowed,\n6. approval/autonomy constraints are enforceable.\n\n### 8.4 Preset validation\n\nA Preset step is valid for preview/application only when:\n\n1. the preset exists,\n2. the preset version is active or explicitly previewable,\n3. inputs validate against the preset input schema,\n4. expansion succeeds deterministically,\n5. generated steps validate under their own Tool or Skill rules,\n6. step count and policy limits are enforced,\n7. expansion warnings are visible to the user.\n\nA submitted task must not contain unresolved Preset steps unless the submit path\nexplicitly supports a future linked-preset execution mode.\n\n---\n\n## 9. Jira Example\n\nJira interactions illustrate why Step Type matters.\n\nSome Jira work is deterministic and should be a Tool step:\n\n```text\nStep Type: Tool\nTool: Jira -> Transition Issue\nIssue key: MM-123\nTarget status: Ready for Review\n```\n\nOther Jira work is agentic and should be a Skill step:\n\n```text\nStep Type: Skill\nSkill: Jira Triage\nInstructions: Read the issue and decide whether it needs clarification, breakdown, or implementation.\n```\n\nA reusable Jira workflow should be a Preset step while authoring:\n\n```text\nStep Type: Preset\nPreset: Jira Implementation Flow\nIssue key: MM-123\n```\n\nApplying the preset may expand into both Tool and Skill steps:\n\n1. Tool: fetch Jira issue,\n2. Tool: transition Jira issue to In Progress,\n3. Skill: implement issue,\n4. Tool: run tests,\n5. Tool: create pull request,\n6. Tool: add Jira comment,\n7. Tool: transition Jira issue to Ready for Review.\n\nThis keeps simple Jira state changes deterministic while still supporting\nagentic work when interpretation or implementation is required.\n\n---\n\n## 10. Naming Policy\n\n### 10.1 Keep `Tool`\n\nMoonMind should keep **Tool** as the user-facing Step Type for typed executable\noperations.\n\nPreferred terms:\n\n1. Tool,\n2. Typed Tool,\n3. Executable Tool,\n4. Tool Definition.\n\nAvoid using **Script** for this concept. Script implies arbitrary code or shell\nexecution and weakens the desired distinction between typed, governed operations\nand ad hoc commands.\n\nAvoid using **Executable** as the main UI label. It is accurate as an adjective\nbut awkward as a Step Type and can imply binaries rather than typed product\noperations.\n\n### 10.2 Use `Step Type` in UI\n\nPreferred UI label:\n\n```text\nStep Type\n```\n\nAvoid:\n\n1. Capability,\n2. Activity,\n3. Invocation,\n4. Command,\n5. Script.\n\nThese terms may still appear in narrow technical contexts, but they should not be\nused as the primary user-facing discriminator for steps.\n\n### 10.3 Keep `Activity` Temporal-specific\n\nActivity means Temporal Activity. It should remain an implementation concept in\nTemporal design docs and worker execution code.\n\nDo not use Activity as the Step Type label.\n\n---\n\n## 11. API Shape\n\nThe desired API shape is explicit and discriminated.\n\n```ts\ntype StepType = \"tool\" | \"skill\" | \"preset\";\n\ntype BaseStep = {\n  id: string;\n  title?: string;\n  type: StepType;\n  source?: StepSource;\n};\n\ntype ToolStep = BaseStep & {\n  type: \"tool\";\n  tool: {\n    id: string;\n    version?: string;\n    inputs: Record<string, unknown>;\n  };\n};\n\ntype SkillStep = BaseStep & {\n  type: \"skill\";\n  skill: {\n    id: string;\n    version?: string;\n    inputs: Record<string, unknown>;\n  };\n};\n\ntype PresetStep = BaseStep & {\n  type: \"preset\";\n  preset: {\n    id: string;\n    version?: string;\n    inputs: Record<string, unknown>;\n  };\n};\n\ntype Step = ToolStep | SkillStep | PresetStep;\n```\n\nFor executable submission, the accepted shape is normally:\n\n```ts\ntype ExecutableStep = ToolStep | SkillStep;\n```\n\nPreset expansion APIs may accept `PresetStep` and return concrete executable\nsteps plus provenance metadata.\n\n---\n\n## 12. Preset Management vs Preset Use\n\nPreset management and preset use are separate experiences.\n\nPreset management lives in the Presets section:\n\n1. catalog browsing,\n2. create/edit/version,\n3. governance and lifecycle,\n4. save-from-task,\n5. audit and usage inspection.\n\nPreset use lives inside step authoring:\n\n1. add or edit a step,\n2. choose `Step Type = Preset`,\n3. select a preset,\n4. configure inputs,\n5. preview generated steps,\n6. apply into executable steps.\n\nThere should not be a separate Presets section for choosing and applying a preset\nto the current task. The Presets section is management-only.\n\n---\n\n## 13. Proposal and Promotion Semantics\n\nTask proposals must preserve executable intent.\n\nWhen a proposal is created from preset-derived work, it may carry preset\nprovenance, but the stored promotable task payload should already be executable\nand flattened by default.\n\nPromotion must not silently re-expand a live preset catalog entry. If the user\nwants to refresh a proposal or draft to the latest preset version, that must be an\nexplicit action with preview and validation.\n\nRules:\n\n1. Stored proposals should contain executable Tool and Skill steps.\n2. Preset provenance may be preserved as metadata.\n3. Promotion validates the reviewed flat payload.\n4. Promotion does not require live preset lookup for correctness.\n5. Refreshing from a preset catalog is explicit, not automatic.\n\n---\n\n## 14. Migration Guidance\n\nThe implementation may migrate in phases.\n\n### Phase 1: UI terminology\n\n1. Rename the step selector label to **Step Type**.\n2. Offer Tool, Skill, and Preset in the same step editor.\n3. Keep existing backend fields where necessary.\n4. Normalize UI copy so Tool means typed operation, not arbitrary script.\n\n### Phase 2: Draft model normalization\n\n1. Introduce explicit `step.type` in draft state.\n2. Model Tool, Skill, and Preset sub-payloads separately.\n3. Preserve compatibility with existing `skillId`, `tool`, and template fields.\n4. Add validation that rejects invalid mixed-type steps.\n\n### Phase 3: Preset expansion normalization\n\n1. Make Preset an authoring-time placeholder.\n2. Expand presets into concrete Tool and Skill steps.\n3. Preserve source metadata on expanded steps.\n4. Ensure submission payloads are executable without live preset lookup.\n\n### Phase 4: Runtime contract convergence\n\n1. Compile executable steps into the canonical plan format.\n2. Pin tool and skill registry snapshots where required.\n3. Align proposal promotion, task editing, and execution reconstruction with the\n   Step Type model.\n\n---\n\n## 15. Non-Goals\n\n1. Redefining Temporal Activity semantics.\n2. Replacing the plan executor.\n3. Making presets hidden runtime work.\n4. Introducing arbitrary shell scripts as a first-class Step Type.\n5. Removing legacy compatibility readers immediately.\n6. Requiring users to understand worker capability placement to author ordinary\n   steps.\n7. Treating Tool and Skill as the same thing merely because both may eventually\n   map into plan nodes.\n\n---\n\n## 16. Open Design Decisions\n\n### Q1: Should linked presets exist?\n\nDesired default: no. Presets expand into concrete steps at authoring time.\n\nA future linked-preset mode may exist, but it must be explicit and visibly\ndifferent from ordinary preset application. It would need separate rules for\nversion pinning, drift detection, refresh behavior, validation, and audit.\n\n### Q2: Should the API use `step.type` or `step.action.kind`?\n\nPreferred user-facing term: `Step Type`.\n\nPreferred desired-state payload in this document: `step.type`.\n\n`step.action.kind` remains a reasonable internal alternative if implementation\nconstraints require nesting execution configuration under `action`. The UI should\nstill say Step Type.\n\n### Q3: Should `tool` be renamed to `script` or `executable`?\n\nDesired answer: no.\n\nKeep `tool` as the user-facing Step Type and define it as a typed executable\noperation. Use `Typed Tool` or `Executable Tool` in technical docs when extra\nprecision is needed. Avoid `Script` for governed operations.\n"
+  },
+  "extractedAt": "2026-04-30T18:07:04Z",
+  "outputMode": "jira",
+  "designSummary": "The design defines Step Type as the user-facing discriminator for MoonMind task steps, with canonical values tool, skill, and preset. Tool and skill steps are executable, while preset steps are authoring-time placeholders that deterministically expand into validated executable steps with provenance metadata. The model spans UI authoring, typed contracts, validation, API payloads, runtime plan mapping, proposal promotion, naming, migration compatibility, and explicit non-goals around arbitrary scripts, hidden runtime preset work, and exposing Temporal implementation details to users.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Single Step Type discriminator",
+      "type": "requirement",
+      "source_section": "1. Purpose; 4. Core Invariants",
+      "explanation": "Every authored step has exactly one user-facing Step Type that drives configuration, validation, execution eligibility, and runtime mapping."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Canonical taxonomy",
+      "type": "state-model",
+      "source_section": "2. Desired-State Summary; 5. Step Type Taxonomy",
+      "explanation": "The only canonical Step Types are tool, skill, and preset, with tool and skill executable and preset authoring-only by default."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Tool typed operation contract",
+      "type": "integration",
+      "source_section": "5.1 tool",
+      "explanation": "Tool steps represent explicit bounded operations with declared schemas, authorization, worker capabilities, retry policy, execution binding, validation, and error model."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Skill agentic work contract",
+      "type": "integration",
+      "source_section": "5.2 skill",
+      "explanation": "Skill steps represent agent-facing reusable behavior for reasoning, implementation, synthesis, or other open-ended work, including runtime context and controls."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Preset authoring placeholder",
+      "type": "requirement",
+      "source_section": "5.3 preset; 7.1 Authoring payload",
+      "explanation": "Preset steps are temporary authoring states used to select and configure reusable templates before expansion."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Deterministic preset expansion",
+      "type": "state-model",
+      "source_section": "4. Core Invariants; 5.3 preset; 6.6 Preset preview and apply",
+      "explanation": "Applying a preset deterministically replaces the temporary preset step with concrete tool and/or skill steps."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Preset provenance metadata",
+      "type": "artifact",
+      "source_section": "5.3 preset; 7.1 Authoring payload; 13. Proposal and Promotion Semantics",
+      "explanation": "Expanded preset-derived steps preserve source metadata for audit, grouping, review, and reconstruction, but provenance is not required for runtime correctness."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Step editor UX",
+      "type": "requirement",
+      "source_section": "6.1 Step editor; 6.2 Step type picker",
+      "explanation": "The editor renders controls from the selected Step Type and handles type changes by preserving compatible fields, discarding incompatible fields visibly, or requiring confirmation."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Tool picker UX",
+      "type": "requirement",
+      "source_section": "6.3 Tool picker",
+      "explanation": "Tool selection supports search, domain grouping, schema-driven forms, and dynamic option providers such as Jira transition choices."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Skill picker UX",
+      "type": "requirement",
+      "source_section": "6.4 Skill picker",
+      "explanation": "Skill selection supports search, descriptions, compatibility hints, and clear distinction between deterministic tools and agentic skills."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Preset picker and preview UX",
+      "type": "requirement",
+      "source_section": "6.5 Preset picker; 6.6 Preset preview and apply",
+      "explanation": "Preset use lives inside step authoring, supports preview/apply/undo/origin/detach/compare/update flows, and is separate from preset management."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Executable submission payload",
+      "type": "state-model",
+      "source_section": "7.1 Authoring payload; 7.2 Runtime plan mapping; 11. API Shape",
+      "explanation": "Executable submissions normally contain only tool and skill steps and compile to the runtime plan; preset has no runtime node by default."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Migration compatibility readers",
+      "type": "migration",
+      "source_section": "7.3 Backward compatibility; 14. Migration Guidance",
+      "explanation": "During migration MoonMind may read legacy step shapes while new authoring surfaces normalize to the Step Type model and avoid reintroducing ambiguous terminology."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Common validation rules",
+      "type": "requirement",
+      "source_section": "8.1 Common validation",
+      "explanation": "Every step must have stable local identity, title or display label, Step Type, type-specific payload, and pre-submission validation errors."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Type-specific validation rules",
+      "type": "security",
+      "source_section": "8.2 Tool validation; 8.3 Skill validation; 8.4 Preset validation",
+      "explanation": "Tool, skill, and preset validation enforce existence, version/schema compatibility, authorization, runtime or worker capabilities, policy limits, expansion warnings, and rejection of unresolved presets or arbitrary shell snippets."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Jira workflow classification",
+      "type": "integration",
+      "source_section": "9. Jira Example",
+      "explanation": "Jira deterministic operations are tools, Jira triage or implementation is a skill, and reusable Jira flows are presets that expand into mixed executable steps."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Naming policy",
+      "type": "constraint",
+      "source_section": "10. Naming Policy",
+      "explanation": "The UI should use Step Type and Tool, avoid Capability/Activity/Invocation/Command/Script as primary labels, and reserve Activity for Temporal implementation details."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Explicit API shape",
+      "type": "artifact",
+      "source_section": "11. API Shape",
+      "explanation": "The desired API is an explicit discriminated union over type with tool, skill, and preset sub-payloads, plus executable submissions limited to ToolStep or SkillStep."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Preset management separation",
+      "type": "requirement",
+      "source_section": "12. Preset Management vs Preset Use",
+      "explanation": "Preset management is a catalog/governance experience, while applying a preset to a task belongs inside step authoring."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Proposal promotion semantics",
+      "type": "artifact",
+      "source_section": "13. Proposal and Promotion Semantics",
+      "explanation": "Stored proposals preserve executable flattened intent, validate reviewed payloads, and never silently re-expand live catalog entries."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Migration phases",
+      "type": "migration",
+      "source_section": "14. Migration Guidance",
+      "explanation": "Migration proceeds through UI terminology, draft normalization, preset expansion normalization, and runtime convergence while preserving necessary compatibility readers."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Non-goals",
+      "type": "non-goal",
+      "source_section": "15. Non-Goals",
+      "explanation": "The design excludes redefining Temporal Activity semantics, replacing the plan executor, hidden runtime presets, arbitrary shell scripts as a Step Type, immediate removal of legacy readers, forcing worker placement concepts on users, and collapsing Tool and Skill together."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "Open design defaults",
+      "type": "constraint",
+      "source_section": "16. Open Design Decisions",
+      "explanation": "The desired defaults are no linked presets, step.type as the preferred payload discriminator, and tool rather than script or executable as the Step Type name."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Add Step Type authoring controls",
+      "shortName": "step-type-controls",
+      "description": "As a task author, I can choose Tool, Skill, or Preset from one Step Type control so the editor shows only the configuration appropriate for that step.",
+      "sourceReference": {
+        "path": "docs/Steps/StepTypes.md",
+        "title": "Step Types",
+        "sections": [
+          "1. Purpose",
+          "2. Desired-State Summary",
+          "4. Core Invariants",
+          "6.1 Step editor",
+          "6.2 Step type picker",
+          "10. Naming Policy"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "scope": [
+        "Expose Step Type as the product-facing selector",
+        "Render type-specific configuration surfaces",
+        "Handle type switching with preserve, visible discard, or confirmation behavior",
+        "Use approved labels and helper copy"
+      ],
+      "outOfScope": [
+        "Implementing runtime plan execution",
+        "Building preset management screens"
+      ],
+      "independentTest": "A UI test creates a draft step, switches among Tool, Skill, and Preset, verifies the appropriate controls and helper text, and verifies data-loss confirmation when incompatible meaningful fields would be discarded.",
+      "acceptanceCriteria": [
+        "The editor shows exactly one Step Type selector with Tool, Skill, and Preset options.",
+        "Changing Step Type changes the visible type-specific form.",
+        "Compatible fields are preserved across changes where possible.",
+        "Incompatible meaningful data is either visibly discarded or requires confirmation before removal.",
+        "Primary UI labels use Step Type and avoid Capability, Activity, Invocation, Command, or Script as the umbrella label."
+      ],
+      "requirements": [
+        "Every authored step must have one selected Step Type.",
+        "The selected Step Type must drive available sub-options.",
+        "The product-facing picker must use Tool, Skill, and Preset helper text from the design."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the single user-facing discriminator in the editor.",
+        "DESIGN-REQ-002": "Owns the canonical three-option selector.",
+        "DESIGN-REQ-008": "Owns editor rendering and type-change behavior.",
+        "DESIGN-REQ-017": "Owns user-facing naming policy in the authoring UI."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "Existing Create page draft state can represent the selected Step Type before backend convergence is complete."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Model explicit Step Type payloads and validation",
+      "shortName": "step-type-payloads",
+      "description": "As a platform maintainer, I can validate draft and submitted steps as an explicit discriminated model so invalid mixed-type payloads fail before execution.",
+      "sourceReference": {
+        "path": "docs/Steps/StepTypes.md",
+        "title": "Step Types",
+        "sections": [
+          "7.1 Authoring payload",
+          "8. Validation Rules",
+          "11. API Shape",
+          "14. Migration Guidance"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-021"
+        ]
+      },
+      "scope": [
+        "Introduce or normalize explicit type-discriminated draft payloads",
+        "Validate common fields for every step",
+        "Validate tool, skill, and preset sub-payloads separately",
+        "Reject invalid mixed-type steps and unresolved preset submissions by default"
+      ],
+      "outOfScope": [
+        "Changing Temporal Activity semantics",
+        "Removing all legacy compatibility readers immediately"
+      ],
+      "independentTest": "Unit and route-level tests submit valid Tool, Skill, and Preset draft payloads plus invalid mixed, missing, arbitrary shell, and unresolved-preset executable payloads, then assert deterministic validation errors.",
+      "acceptanceCriteria": [
+        "A step payload has stable local identity, display label or title, type, and exactly the matching type-specific sub-payload.",
+        "Tool validation checks tool existence/version, schema inputs, authorization, worker capability, forbidden fields, retry policy, and side-effect policy where those services are available.",
+        "Skill validation checks skill resolution, contract inputs, runtime compatibility, required context, allowed tools or permissions, and autonomy constraints.",
+        "Preset validation checks preset/version, input schema, deterministic expansion, generated-step validation, policy limits, and visible warnings.",
+        "Executable submission rejects unresolved Preset steps unless a separately supported linked-preset mode is explicitly enabled."
+      ],
+      "requirements": [
+        "Use an explicit Step discriminated union or equivalent normalized internal shape.",
+        "Keep legacy readers during migration while preventing new authoring surfaces from emitting ambiguous shapes.",
+        "Surface validation errors before submission."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-012": "Owns executable submission constraints in validation.",
+        "DESIGN-REQ-013": "Owns migration reader behavior without new ambiguous writes.",
+        "DESIGN-REQ-014": "Owns common validation fields.",
+        "DESIGN-REQ-015": "Owns type-specific validation gates.",
+        "DESIGN-REQ-018": "Owns the explicit discriminated API shape.",
+        "DESIGN-REQ-021": "Owns draft model normalization migration phase."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Backend validation can be introduced before every picker catalog is fully redesigned by using existing registry services."
+      ],
+      "needsClarification": [
+        "[NEEDS CLARIFICATION] If implementation constraints prefer step.action.kind internally, define the adapter boundary that still exposes Step Type and step.type externally."
+      ]
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Implement typed Tool step authoring",
+      "shortName": "typed-tool-steps",
+      "description": "As a task author, I can select a typed Tool operation and configure schema-backed inputs so deterministic integration work is governed and executable.",
+      "sourceReference": {
+        "path": "docs/Steps/StepTypes.md",
+        "title": "Step Types",
+        "sections": [
+          "5.1 tool",
+          "6.3 Tool picker",
+          "8.2 Tool validation",
+          "9. Jira Example",
+          "10.1 Keep Tool"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-022"
+        ]
+      },
+      "scope": [
+        "Tool catalog search and grouping",
+        "Schema-driven tool forms",
+        "Dynamic option provider support",
+        "Governed typed command handling where explicitly approved"
+      ],
+      "outOfScope": [
+        "General arbitrary shell snippets as a Step Type",
+        "Agentic interpretation or implementation flows"
+      ],
+      "independentTest": "A UI/API integration test configures Jira transition as a Tool step with dynamic status options and verifies that arbitrary shell-like payloads are rejected unless represented by an approved typed command tool.",
+      "acceptanceCriteria": [
+        "Tool picker supports search and grouping by integration or domain.",
+        "Tool forms are generated from typed input schemas.",
+        "Dynamic options can be loaded from option providers such as Jira transitions.",
+        "Tool steps serialize with type tool and a tool sub-payload containing id, optional version, and inputs.",
+        "Arbitrary scripts are rejected as Tool steps unless backed by an approved typed command tool contract."
+      ],
+      "requirements": [
+        "Tool definitions must declare name/version, input schema, output schema, authorization, worker capability, retry policy, execution binding, validation, and error model.",
+        "Deterministic Jira operations such as fetching or transitioning issues are represented as Tool steps."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-003": "Owns typed Tool contract and operation semantics.",
+        "DESIGN-REQ-009": "Owns Tool picker and schema-driven form behavior.",
+        "DESIGN-REQ-015": "Owns Tool-specific validation within the broader validation model.",
+        "DESIGN-REQ-016": "Owns deterministic Jira operation classification.",
+        "DESIGN-REQ-022": "Owns the non-goal that arbitrary shell scripts are not a first-class Step Type."
+      },
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Existing tool registries can provide enough metadata for initial picker rendering and validation."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Implement Skill step authoring",
+      "shortName": "agentic-skill-steps",
+      "description": "As a task author, I can select an agent-facing Skill with instructions and runtime context so open-ended work is clearly separated from deterministic tools.",
+      "sourceReference": {
+        "path": "docs/Steps/StepTypes.md",
+        "title": "Step Types",
+        "sections": [
+          "5.2 skill",
+          "6.4 Skill picker",
+          "8.3 Skill validation",
+          "9. Jira Example"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-022"
+        ]
+      },
+      "scope": [
+        "Skill selector with search and descriptions",
+        "Skill inputs for instructions and relevant repository/project context",
+        "Runtime/model preferences where applicable",
+        "Allowed tool and approval/autonomy controls where applicable"
+      ],
+      "outOfScope": [
+        "Collapsing Skill and Tool into a common umbrella type",
+        "Executing deterministic integration work through a Skill when a Tool contract exists"
+      ],
+      "independentTest": "A UI/API integration test creates a Skill step for Jira triage or code implementation, verifies compatibility hints and required context validation, and confirms the serialized payload remains type skill with a skill sub-payload.",
+      "acceptanceCriteria": [
+        "Skill picker supports search, descriptions, and compatibility hints.",
+        "Skill configuration makes the agentic boundary clear to users.",
+        "Skill steps serialize with type skill and a skill sub-payload containing id, optional version, and inputs.",
+        "Required context, runtime compatibility, allowed tools or permissions, and approval constraints are validated before submission.",
+        "Jira triage and implementation examples are represented as Skill steps rather than Tool steps."
+      ],
+      "requirements": [
+        "Use Skill for interpretation, planning, implementation, synthesis, or other open-ended reasoning.",
+        "A Skill may use tools internally without changing the user-authored Step Type."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-004": "Owns Skill contract and agentic semantics.",
+        "DESIGN-REQ-010": "Owns Skill picker behavior.",
+        "DESIGN-REQ-015": "Owns Skill-specific validation within the broader validation model.",
+        "DESIGN-REQ-016": "Owns agentic Jira work classification.",
+        "DESIGN-REQ-022": "Owns the non-goal of treating Tool and Skill as the same thing."
+      },
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Skill contracts expose enough metadata for compatibility hints and required context checks."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Preview and apply Preset steps",
+      "shortName": "preset-preview-apply",
+      "description": "As a task author, I can configure a Preset inside the step editor, preview the generated steps, and apply it into concrete executable Tool and Skill steps.",
+      "sourceReference": {
+        "path": "docs/Steps/StepTypes.md",
+        "title": "Step Types",
+        "sections": [
+          "5.3 preset",
+          "6.5 Preset picker",
+          "6.6 Preset preview and apply",
+          "8.4 Preset validation",
+          "12. Preset Management vs Preset Use",
+          "16. Open Design Decisions"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-023"
+        ]
+      },
+      "scope": [
+        "Preset selection inside the step editor",
+        "Input schema configuration",
+        "Deterministic preview of generated steps",
+        "Apply replacement into executable steps",
+        "Undo, origin display, detach, compare, and explicit version update affordances where supported"
+      ],
+      "outOfScope": [
+        "Making presets hidden runtime work",
+        "Using Presets management screens as the place to apply a preset to a task"
+      ],
+      "independentTest": "A UI/API integration test configures a Jira implementation preset, previews the generated step list, applies it, verifies the draft now contains Tool and Skill steps with source provenance, and verifies undo restores the temporary Preset step.",
+      "acceptanceCriteria": [
+        "Preset use is available from the same step-authoring surface as Tool and Skill.",
+        "The preview lists the concrete steps that will be inserted before application.",
+        "Applying a preset replaces the temporary Preset step with expanded Tool and Skill steps.",
+        "Generated steps validate under their own Tool or Skill rules before submission.",
+        "Preset-derived steps preserve provenance metadata for audit and reconstruction.",
+        "Refreshing to a newer preset version is explicit, visible, and validated."
+      ],
+      "requirements": [
+        "Preset expansion must be deterministic and validated before execution.",
+        "Preset provenance must not be required for runtime correctness.",
+        "Preset management remains separate from preset use."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-005": "Owns Preset as an authoring placeholder.",
+        "DESIGN-REQ-006": "Owns deterministic expansion behavior.",
+        "DESIGN-REQ-007": "Owns provenance metadata on expanded steps.",
+        "DESIGN-REQ-011": "Owns Preset picker, preview, apply, undo, origin, detach, compare, and update UX.",
+        "DESIGN-REQ-015": "Owns Preset-specific validation.",
+        "DESIGN-REQ-019": "Owns separation of preset use from preset management.",
+        "DESIGN-REQ-023": "Owns the default of no linked presets for ordinary preset application."
+      },
+      "dependencies": [
+        "STORY-002",
+        "STORY-003",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Initial implementation can omit linked preset execution and treat linked presets as a future explicit mode."
+      ],
+      "needsClarification": [
+        "[NEEDS CLARIFICATION] Define whether any linked-preset mode is in scope now; the design default says no and requires a visibly different mode if introduced later."
+      ]
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Compile executable steps into runtime plans",
+      "shortName": "runtime-plan-mapping",
+      "description": "As an operator, submitted tasks execute from flattened Tool and Skill steps so runtime correctness does not depend on unresolved presets or live catalog re-expansion.",
+      "sourceReference": {
+        "path": "docs/Steps/StepTypes.md",
+        "title": "Step Types",
+        "sections": [
+          "7.1 Authoring payload",
+          "7.2 Runtime plan mapping",
+          "11. API Shape",
+          "13. Proposal and Promotion Semantics",
+          "14. Migration Guidance",
+          "15. Non-Goals"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-022"
+        ]
+      },
+      "scope": [
+        "Compile Tool steps to typed tool plan nodes",
+        "Compile Skill steps to agent execution requests or runtime-specific plan nodes",
+        "Reject unresolved Preset nodes on normal execution paths",
+        "Retain provenance only as audit/reconstruction metadata",
+        "Keep proposal promotion based on reviewed flattened payloads"
+      ],
+      "outOfScope": [
+        "Replacing the plan executor",
+        "Redefining Temporal Activity semantics",
+        "Silently re-expanding live preset catalog entries during promotion or execution"
+      ],
+      "independentTest": "A workflow or service-boundary test submits a preset-derived flattened task and verifies the runtime plan contains only Tool and Skill execution nodes, preserves provenance metadata, and fails fast for unresolved Preset steps on the normal submission path.",
+      "acceptanceCriteria": [
+        "Executable submissions normally accept only Tool and Skill steps.",
+        "Tool steps map to typed tool plan nodes.",
+        "Skill steps map to plan nodes, child workflows, activities, or managed sessions without changing the Step Type UI contract.",
+        "Preset steps produce no runtime node by default.",
+        "Preset provenance is retained for audit and reconstruction but is not required to execute.",
+        "Promotion validates the reviewed flat payload and never silently re-expands a live preset."
+      ],
+      "requirements": [
+        "Durable execution payloads should contain expanded executable steps by default.",
+        "Preset-derived execution must not depend on live catalog lookup at runtime.",
+        "Proposal promotion must preserve executable intent."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-006": "Owns expansion-before-execution requirement at runtime boundary.",
+        "DESIGN-REQ-007": "Owns provenance as non-runtime metadata.",
+        "DESIGN-REQ-012": "Owns runtime plan mapping and executable submission contract.",
+        "DESIGN-REQ-018": "Owns executable step subset of the API shape.",
+        "DESIGN-REQ-020": "Owns proposal promotion semantics.",
+        "DESIGN-REQ-021": "Owns runtime contract convergence migration phase.",
+        "DESIGN-REQ-022": "Owns non-goals around plan executor replacement and Temporal Activity semantics."
+      },
+      "dependencies": [
+        "STORY-002",
+        "STORY-005"
+      ],
+      "assumptions": [
+        "Existing plan compiler has an extension point for preserving source metadata without using it for execution correctness."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Align terminology and migration guardrails",
+      "shortName": "terminology-migration-guardrails",
+      "description": "As a maintainer, I can migrate docs, UI copy, APIs, and proposal flows toward the Step Type model without reintroducing ambiguous naming or unsafe compatibility shortcuts.",
+      "sourceReference": {
+        "path": "docs/Steps/StepTypes.md",
+        "title": "Step Types",
+        "sections": [
+          "3. Terminology",
+          "7.3 Backward compatibility",
+          "10. Naming Policy",
+          "12. Preset Management vs Preset Use",
+          "13. Proposal and Promotion Semantics",
+          "14. Migration Guidance",
+          "15. Non-Goals",
+          "16. Open Design Decisions"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023"
+        ]
+      },
+      "scope": [
+        "Update product copy and docs to use Step Type consistently",
+        "Keep Activity Temporal-specific",
+        "Keep Capability only for worker/security affordance contexts",
+        "Track migration phases across UI, draft model, preset expansion, and runtime contract convergence",
+        "Document and enforce open decision defaults"
+      ],
+      "outOfScope": [
+        "Removing all legacy readers immediately",
+        "Requiring users to understand worker capability placement",
+        "Renaming Tool to Script or Executable"
+      ],
+      "independentTest": "A docs/copy lint or targeted regression test verifies Step Type terminology in authoring surfaces and checks that proposal promotion and preset use flows do not require live preset lookup or user-facing Activity/Capability terminology.",
+      "acceptanceCriteria": [
+        "User-facing authoring surfaces use Step Type for the discriminator.",
+        "Tool remains the user-facing label for typed executable operations.",
+        "Activity remains Temporal-specific and is not presented as a Step Type.",
+        "Compatibility readers do not cause new UI, docs, or payload writes to reintroduce ambiguous umbrella terminology.",
+        "Preset management remains catalog/governance only while preset use remains in step authoring.",
+        "Migration tracking preserves compatibility readers where necessary without treating them as the desired model."
+      ],
+      "requirements": [
+        "Use Tool, Skill, and Preset terminology consistently across UI, API, docs, validation, proposal promotion, and preset expansion.",
+        "Prefer step.type as the desired-state payload discriminator unless a documented internal alternative is chosen.",
+        "Keep linked presets out of the ordinary path unless explicitly introduced with versioning, drift, refresh, validation, and audit rules."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-013": "Owns compatibility-reader terminology guardrails.",
+        "DESIGN-REQ-017": "Owns naming policy across surfaces.",
+        "DESIGN-REQ-019": "Owns management-vs-use separation as a product rule.",
+        "DESIGN-REQ-020": "Owns promotion copy and behavior guardrails.",
+        "DESIGN-REQ-021": "Owns migration phase tracking.",
+        "DESIGN-REQ-022": "Owns explicit non-goals as guardrails.",
+        "DESIGN-REQ-023": "Owns open design defaults and unresolved decision tracking."
+      },
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Terminology alignment can be delivered incrementally while runtime convergence is implemented in separate stories."
+      ],
+      "needsClarification": [
+        "[NEEDS CLARIFICATION] Confirm whether step.type is the final public API field or whether step.action.kind will be used internally with an external Step Type mapping."
+      ]
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-002",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-001",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-005",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-006",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-002",
+      "STORY-006",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-003",
+      "STORY-004",
+      "STORY-006",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-005",
+      "STORY-007"
+    ]
+  }
+}
