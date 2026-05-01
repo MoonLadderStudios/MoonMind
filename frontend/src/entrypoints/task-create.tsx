@@ -1573,7 +1573,12 @@ function groupedToolChoices(
     if (search && !haystack.includes(search)) {
       return;
     }
-    groups.set(group, [...(groups.get(group) || []), tool]);
+    const groupTools = groups.get(group);
+    if (groupTools) {
+      groupTools.push(tool);
+    } else {
+      groups.set(group, [tool]);
+    }
   });
   return Array.from(groups.entries())
     .sort(([left], [right]) => left.localeCompare(right))
@@ -4902,8 +4907,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }
 
-  function applyJiraTargetStatus(localId: string, status: string) {
-    if (!status) {
+  function applyJiraTransitionId(localId: string, transitionId: string) {
+    if (!transitionId) {
       return;
     }
     const step = stepsRef.current.find((item) => item.localId === localId);
@@ -4912,7 +4917,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     updateStep(localId, {
       toolInputs: updateToolInputsText(step.toolInputs, {
-        targetStatus: status,
+        transitionId,
+        targetStatus: undefined,
       }),
     });
   }
@@ -7336,7 +7342,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                               <select
                                 value=""
                                 onChange={(event) =>
-                                  applyJiraTargetStatus(
+                                  applyJiraTransitionId(
                                     step.localId,
                                     event.target.value,
                                   )
@@ -7344,7 +7350,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                               >
                                 <option value="">Select returned status...</option>
                                 {jiraTransitionState.options.map((option) => (
-                                  <option key={option.id} value={option.name}>
+                                  <option key={option.id} value={option.id}>
                                     {option.name}
                                   </option>
                                 ))}

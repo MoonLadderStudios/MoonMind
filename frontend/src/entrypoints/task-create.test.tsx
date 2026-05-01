@@ -12297,7 +12297,7 @@ describe("Task Create governed Tool authoring", () => {
               type: "object",
               properties: {
                 issueKey: { type: "string" },
-                targetStatus: { type: "string" },
+                transitionId: { type: "string" },
               },
             },
           },
@@ -12439,11 +12439,11 @@ describe("Task Create governed Tool authoring", () => {
       tool: "jira.get_transitions",
       arguments: { issueKey: "MM-576", expandFields: true },
     });
-    fireEvent.change(statusSelect, { target: { value: "Code Review" } });
+    fireEvent.change(statusSelect, { target: { value: "51" } });
     expect(
       (within(step).getByLabelText("Tool Inputs (JSON object)") as HTMLTextAreaElement)
         .value,
-    ).toContain('"targetStatus": "Code Review"');
+    ).toContain('"transitionId": "51"');
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -12464,7 +12464,7 @@ describe("Task Create governed Tool authoring", () => {
         id: "jira.transition_issue",
         inputs: {
           issueKey: "MM-576",
-          targetStatus: "Code Review",
+          transitionId: "51",
         },
       },
     });
