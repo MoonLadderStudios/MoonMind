@@ -5183,7 +5183,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }
 
-  async function handleApplyStepPreset(localId: string) {
+  async function handleExpandStepPreset(localId: string) {
     if (isApplyingPreset) return;
     const step = steps.find((candidate) => candidate.localId === localId);
     const preset = templateItems.find((item) => item.key === step?.presetKey);
@@ -5191,15 +5191,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       updateStep(localId, { presetMessage: "Choose a preset first." });
       return;
     }
-    if (!step.presetPreview || step.presetPreview.presetKey !== preset.key) {
-      updateStep(localId, {
-        presetMessage: "Preview the selected preset before applying.",
-      });
-      return;
-    }
     setIsApplyingPreset(true);
     updateStep(localId, {
-      presetMessage: "Applying preset preview...",
+      presetMessage: "Expanding preset...",
       presetReapplyNeeded: false,
     });
     try {
@@ -5207,18 +5201,30 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         step.presetDetail && step.presetKey === preset.key
           ? step.presetDetail
           : await loadPresetDetail(preset);
+      const preview =
+        step.presetPreview && step.presetPreview.presetKey === preset.key
+          ? step.presetPreview
+          : await expandPresetForDraft({
+              preset,
+              detail,
+              inputValues: resolveTemplateInputs(
+                detail.inputs || [],
+                step.presetInputValues,
+                step.instructions,
+              ).values,
+            });
       applyPresetPreviewToDraft({
         preset,
         detail,
-        preview: step.presetPreview,
+        preview,
         replaceLocalId: localId,
         setMessage: (message) => updateStep(localId, { presetMessage: message }),
       });
     } catch (error) {
       const failure =
-        error instanceof Error ? error : new Error("Failed to apply preset.");
+        error instanceof Error ? error : new Error("Failed to expand preset.");
       updateStep(localId, {
-        presetMessage: `Failed to apply preset: ${failure.message}`,
+        presetMessage: `Failed to expand preset: ${failure.message}`,
       });
     } finally {
       setIsApplyingPreset(false);
@@ -6423,9 +6429,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         "Choose a valid GitHub repository before selecting a branch"
       : "Select the branch to check out before the task starts";
   const publishModeTooltip = "Select how MoonMind publishes task changes";
-  const applyPresetTooltip = presetReapplyNeeded
-    ? "Preview the selected preset again before applying"
-    : "Apply the selected preset preview to the task draft";
+  const expandStepPresetTooltip =
+    "Expand the selected preset into editable steps at this position";
   const modeLoadError =
     pageMode.mode !== "create" && !temporalTaskEditingEnabled
       ? "Temporal task editing is not enabled."
@@ -7333,19 +7338,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         className="secondary"
                         aria-disabled={
                           isApplyingPreset ||
-                          !step.presetKey ||
-                          !step.presetPreview
+                          !step.presetKey
                         }
                         aria-busy={isApplyingPreset}
-                        title={applyPresetTooltip}
+                        title={expandStepPresetTooltip}
                         disabled={
                           isApplyingPreset ||
-                          !step.presetKey ||
-                          !step.presetPreview
+                          !step.presetKey
                         }
-                        onClick={() => handleApplyStepPreset(step.localId)}
+                        onClick={() => handleExpandStepPreset(step.localId)}
                       >
-                        Apply preview
+                        Expand
                       </button>
                       {step.presetPreview ? (
                         <div
