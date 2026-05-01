@@ -1189,6 +1189,16 @@ function presetInputValuesFromPayload(
   );
 }
 
+function presetInputValueSignature(
+  inputValues: Record<string, string | boolean>,
+): string {
+  return JSON.stringify(
+    Object.entries(inputValues).sort(([left], [right]) =>
+      left.localeCompare(right),
+    ),
+  );
+}
+
 function createStepStateEntriesFromTemporalDraft(
   draft: ReturnType<typeof buildTemporalSubmissionDraftFromExecution>,
 ): StepState[] {
@@ -2809,6 +2819,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     ?.supportedTaskRuntimes || ["codex_cli", "gemini_cli", "claude_code"];
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
+  const stepsRef = useRef<StepState[]>(steps);
   const [nextStepNumber, setNextStepNumber] = useState(2);
   const [showAdvancedStepOptions, setShowAdvancedStepOptions] = useState(false);
   const [runtime, setRuntime] = useState(defaultRuntime);
@@ -2905,6 +2916,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const temporalDraftAppliedRef = useRef<string | null>(null);
   const jiraProjectSelectionInitializedRef = useRef(false);
   const jiraBoardSelectionInitializedRef = useRef(false);
+
+  useEffect(() => {
+    stepsRef.current = steps;
+  }, [steps]);
 
   const temporalDraftQuery = useQuery({
     queryKey: [
@@ -4542,6 +4557,27 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     );
   }
 
+  function currentStepPresetMatches(
+    localId: string,
+    presetKey: string,
+    expectedInstructions?: string,
+    expectedInputValues?: Record<string, string | boolean>,
+  ): boolean {
+    const currentStep = stepsRef.current.find((step) => step.localId === localId);
+    const inputValuesMatch =
+      expectedInputValues === undefined ||
+      presetInputValueSignature(currentStep?.presetInputValues || {}) ===
+        presetInputValueSignature(expectedInputValues);
+    return Boolean(
+      currentStep &&
+        currentStep.stepType === "preset" &&
+        currentStep.presetKey === presetKey &&
+        (expectedInstructions === undefined ||
+          currentStep.instructions === expectedInstructions) &&
+        inputValuesMatch,
+    );
+  }
+
   async function handleStepPresetSelectionChange(
     localId: string,
     presetKey: string,
@@ -4590,6 +4626,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           !showAdvancedStepOptions
         ) {
           nextStep.skillArgs = "";
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(updates, "instructions") &&
+          nextStep.stepType === "preset" &&
+          nextStep.instructions !== step.instructions
+        ) {
+          nextStep.presetReapplyNeeded = Boolean(step.presetPreview);
+          nextStep.presetPreview = null;
         }
         return nextStep;
       }),
@@ -5146,6 +5190,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       updateStep(localId, { presetMessage: "Choose a preset first." });
       return;
     }
+    const requestedInstructions = step.instructions;
+    const requestedInputValues = { ...step.presetInputValues };
     setIsApplyingPreset(true);
     updateStep(localId, {
       presetMessage: "Previewing preset...",
@@ -5166,7 +5212,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           step.instructions,
         ).values,
       });
-      updateStep(localId, {
+      if (
+        !currentStepPresetMatches(
+          localId,
+          preset.key,
+          requestedInstructions,
+          requestedInputValues,
+        )
+      ) {
+        return;
+      }
+      updateStepPresetIfCurrent(localId, preset.key, {
         presetDetail: detail,
         presetPreview: preview,
         presetMessage: `Previewed preset '${preset.title}' (${preview.previewSteps.length} steps).`,
@@ -5174,16 +5230,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     } catch (error) {
       const failure =
         error instanceof Error ? error : new Error("Failed to preview preset.");
-      updateStep(localId, {
-        presetMessage: `Failed to preview preset: ${failure.message}`,
-        presetPreview: null,
-      });
+      if (
+        currentStepPresetMatches(
+          localId,
+          preset.key,
+          requestedInstructions,
+          requestedInputValues,
+        )
+      ) {
+        updateStepPresetIfCurrent(localId, preset.key, {
+          presetMessage: `Failed to preview preset: ${failure.message}`,
+          presetPreview: null,
+        });
+      }
     } finally {
       setIsApplyingPreset(false);
     }
   }
 
-  async function handleApplyStepPreset(localId: string) {
+  async function handleExpandStepPreset(localId: string) {
     if (isApplyingPreset) return;
     const step = steps.find((candidate) => candidate.localId === localId);
     const preset = templateItems.find((item) => item.key === step?.presetKey);
@@ -5191,15 +5256,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       updateStep(localId, { presetMessage: "Choose a preset first." });
       return;
     }
-    if (!step.presetPreview || step.presetPreview.presetKey !== preset.key) {
-      updateStep(localId, {
-        presetMessage: "Preview the selected preset before applying.",
-      });
-      return;
-    }
+    const requestedInstructions = step.instructions;
+    const requestedInputValues = { ...step.presetInputValues };
     setIsApplyingPreset(true);
     updateStep(localId, {
-      presetMessage: "Applying preset preview...",
+      presetMessage: "Expanding preset...",
       presetReapplyNeeded: false,
     });
     try {
@@ -5207,19 +5268,50 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         step.presetDetail && step.presetKey === preset.key
           ? step.presetDetail
           : await loadPresetDetail(preset);
+      const preview =
+        step.presetPreview && step.presetPreview.presetKey === preset.key
+          ? step.presetPreview
+          : await expandPresetForDraft({
+              preset,
+              detail,
+              inputValues: resolveTemplateInputs(
+                detail.inputs || [],
+                step.presetInputValues,
+                step.instructions,
+              ).values,
+            });
+      if (
+        !currentStepPresetMatches(
+          localId,
+          preset.key,
+          requestedInstructions,
+          requestedInputValues,
+        )
+      ) {
+        return;
+      }
       applyPresetPreviewToDraft({
         preset,
         detail,
-        preview: step.presetPreview,
+        preview,
         replaceLocalId: localId,
-        setMessage: (message) => updateStep(localId, { presetMessage: message }),
+        setMessage: (message) => setTemplateMessage(message),
       });
     } catch (error) {
       const failure =
-        error instanceof Error ? error : new Error("Failed to apply preset.");
-      updateStep(localId, {
-        presetMessage: `Failed to apply preset: ${failure.message}`,
-      });
+        error instanceof Error ? error : new Error("Failed to expand preset.");
+      if (
+        currentStepPresetMatches(
+          localId,
+          preset.key,
+          requestedInstructions,
+          requestedInputValues,
+        )
+      ) {
+        updateStepPresetIfCurrent(localId, preset.key, {
+          presetMessage: `Failed to expand preset: ${failure.message}`,
+        });
+      }
     } finally {
       setIsApplyingPreset(false);
     }
@@ -6423,9 +6515,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         "Choose a valid GitHub repository before selecting a branch"
       : "Select the branch to check out before the task starts";
   const publishModeTooltip = "Select how MoonMind publishes task changes";
-  const applyPresetTooltip = presetReapplyNeeded
-    ? "Preview the selected preset again before applying"
-    : "Apply the selected preset preview to the task draft";
+  const expandStepPresetTooltip =
+    "Expand the selected preset into editable steps at this position";
   const modeLoadError =
     pageMode.mode !== "create" && !temporalTaskEditingEnabled
       ? "Temporal task editing is not enabled."
@@ -6955,6 +7046,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         Preset
                         <select
                           value={step.presetKey}
+                          disabled={isApplyingPreset}
+                          aria-disabled={isApplyingPreset}
                           onChange={(event) => {
                             void handleStepPresetSelectionChange(
                               step.localId,
@@ -7235,6 +7328,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                     <select
                                       id={inputId}
                                       value={value}
+                                      disabled={isApplyingPreset}
                                       onChange={(event) =>
                                         updateStepPresetInputValue(
                                           step.localId,
@@ -7263,6 +7357,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                       id={inputId}
                                       type="checkbox"
                                       checked={value === "true"}
+                                      disabled={isApplyingPreset}
                                       onChange={(event) =>
                                         updateStepPresetInputValue(
                                           step.localId,
@@ -7285,6 +7380,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                       id={inputId}
                                       value={value}
                                       placeholder={definition.placeholder || ""}
+                                      disabled={isApplyingPreset}
                                       onChange={(event) =>
                                         updateStepPresetInputValue(
                                           step.localId,
@@ -7304,6 +7400,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                     type="text"
                                     value={value}
                                     placeholder={definition.placeholder || ""}
+                                    disabled={isApplyingPreset}
                                     onChange={(event) =>
                                       updateStepPresetInputValue(
                                         step.localId,
@@ -7333,19 +7430,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         className="secondary"
                         aria-disabled={
                           isApplyingPreset ||
-                          !step.presetKey ||
-                          !step.presetPreview
+                          !step.presetKey
                         }
                         aria-busy={isApplyingPreset}
-                        title={applyPresetTooltip}
+                        title={expandStepPresetTooltip}
                         disabled={
                           isApplyingPreset ||
-                          !step.presetKey ||
-                          !step.presetPreview
+                          !step.presetKey
                         }
-                        onClick={() => handleApplyStepPreset(step.localId)}
+                        onClick={() => handleExpandStepPreset(step.localId)}
                       >
-                        Apply preview
+                        Expand
                       </button>
                       {step.presetPreview ? (
                         <div

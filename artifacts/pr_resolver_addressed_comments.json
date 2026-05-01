@@ -1,37 +1,37 @@
 [
   {
-    "id": 4355930654,
+    "id": 4357009057,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notification only; no code or documentation action requested."
+    "rationale": "Qodo review summary only; no requested code change."
   },
   {
-    "id": 3170697440,
+    "id": 4357009307,
     "disposition": "addressed",
-    "rationale": "Normalized selected_skill before comparing it against normalized resolved skill names in MoonMindRunWorkflow."
+    "rationale": "Addressed both reported issues by invalidating stale preset previews and writing in-place expansion completion messages to the global preset status."
   },
   {
-    "id": 3170697446,
+    "id": 3171488902,
     "disposition": "addressed",
-    "rationale": "Made directory clearing reject symlinked and non-directory paths before deleting children, with regression coverage preserving a symlink target sentinel."
+    "rationale": "Added current-state validation before applying async preset expansion results so removed or changed preset steps are not mutated."
   },
   {
-    "id": 3170697450,
-    "disposition": "addressed",
-    "rationale": "Aligned SkillSystem docs with the transactional preserve-and-link fallback and its restore/publication guard requirements."
-  },
-  {
-    "id": 4208365026,
+    "id": 4209275635,
     "disposition": "not-applicable",
-    "rationale": "Summary review; its actionable child comments are tracked and addressed individually."
+    "rationale": "Automated Codex review summary; the actionable inline comment is tracked separately."
   },
   {
-    "id": 4208377384,
-    "disposition": "not-applicable",
-    "rationale": "Codex review wrapper comment only; no actionable feedback."
-  },
-  {
-    "id": 3170708826,
+    "id": 3171502561,
     "disposition": "addressed",
-    "rationale": "Delayed moving the checked-in skill tree until active materialization and manifest writing succeed, and added restore-on-projection-failure behavior plus regression coverage."
+    "rationale": "Preset-step instruction edits now clear cached previews, and tests cover regeneration after instructions change."
+  },
+  {
+    "id": 3171514617,
+    "disposition": "addressed",
+    "rationale": "Preset selection and preset inputs are disabled while expansion is in progress, with current-state guards before applying async results."
+  },
+  {
+    "id": 4209307861,
+    "disposition": "addressed",
+    "rationale": "Review-level race-condition recommendation was addressed by disabling preset controls during expansion and guarding stale async results."
   }
 ]

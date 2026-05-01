@@ -7162,7 +7162,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(within(step).getByLabelText("Preset")).toBeTruthy();
     expect(within(step).getByRole("button", { name: "Preview" })).toBeTruthy();
     expect(
-      within(step).getByRole("button", { name: "Apply preview" }),
+      within(step).getByRole("button", { name: "Expand" }),
     ).toBeTruthy();
     expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
     expect(within(step).queryByLabelText("Tool")).toBeNull();
@@ -7406,7 +7406,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
     expect(await within(step).findByText("Clarify spec")).toBeTruthy();
-    fireEvent.click(within(step).getByRole("button", { name: "Apply preview" }));
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(await screen.findByDisplayValue("Clarify the {{ inputs.feature_name }} scope.")).toBeTruthy();
     expect(screen.getByDisplayValue("Write a plan for the task builder recovery.")).toBeTruthy();
@@ -7481,7 +7481,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
     expect(await within(step).findByText("Fetch Jira issue")).toBeTruthy();
-    fireEvent.click(within(step).getByRole("button", { name: "Apply preview" }));
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(await screen.findByDisplayValue("Fetch MM-558.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -7602,7 +7602,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
     expect(await within(step).findByText("Clarify spec")).toBeTruthy();
-    fireEvent.click(within(step).getByRole("button", { name: "Apply preview" }));
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(await screen.findByDisplayValue("Clarify the {{ inputs.feature_name }} scope.")).toBeTruthy();
     expect(
