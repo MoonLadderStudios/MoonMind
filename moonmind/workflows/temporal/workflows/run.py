@@ -100,6 +100,16 @@ _TERMINAL_LAST_ERROR_UNSET = object()
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 _PR_OPTIONAL_AGENT_SKILLS = frozenset({"jira-issue-creator", "jira-pr-verify", "jira-verify"})
+_JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
+_JIRA_BACKED_AGENT_SKILLS = frozenset(
+    {
+        "jira-orchestrate",
+        "jira-issue-updater",
+        "jira-issue-creator",
+        "jira-pr-verify",
+        "jira-verify",
+    }
+)
 
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.Run workflow."""
@@ -3462,7 +3472,11 @@ class MoonMindRunWorkflow:
                 or post_merge_jira_config.get("issue_key"),
                 max_chars=40,
             )
-            effective_jira_issue_key = jira_issue_key or post_merge_issue_key
+            effective_jira_issue_key = (
+                jira_issue_key
+                or post_merge_issue_key
+                or self._canonical_jira_issue_key_from_parameters(parameters)
+            )
             post_merge_jira: dict[str, Any] = dict(post_merge_jira_config)
             if effective_jira_issue_key and "enabled" not in post_merge_jira:
                 post_merge_jira["enabled"] = True
@@ -3506,6 +3520,104 @@ class MoonMindRunWorkflow:
                 ),
             }
         return None
+
+    def _canonical_jira_issue_key_from_parameters(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> str | None:
+        task_payload = self._mapping_value(parameters, "task")
+        explicit_key = self._first_explicit_jira_issue_key(parameters, task_payload)
+        if explicit_key:
+            return explicit_key
+        if not self._is_jira_backed_task(parameters, task_payload):
+            return None
+        keys: set[str] = set()
+        for text in self._jira_issue_key_text_sources(parameters, task_payload):
+            keys.update(
+                match.group(0).upper()
+                for match in _JIRA_ISSUE_KEY_PATTERN.finditer(text)
+            )
+            if len(keys) > 1:
+                return None
+        if len(keys) == 1:
+            return next(iter(keys))
+        return None
+
+    def _first_explicit_jira_issue_key(
+        self,
+        parameters: Mapping[str, Any],
+        task_payload: Mapping[str, Any],
+    ) -> str | None:
+        mappings: list[Mapping[str, Any]] = [parameters, task_payload]
+        for key in ("metadata", "origin", "inputs", "input", "traceability"):
+            nested = task_payload.get(key)
+            if isinstance(nested, Mapping):
+                mappings.append(nested)
+        for mapping in mappings:
+            candidate = self._coerce_text(
+                mapping.get("jiraIssueKey")
+                or mapping.get("jira_issue_key")
+                or mapping.get("issueKey")
+                or mapping.get("issue_key"),
+                max_chars=40,
+            )
+            if candidate and _JIRA_ISSUE_KEY_PATTERN.fullmatch(candidate.upper()):
+                return candidate.upper()
+        return None
+
+    def _is_jira_backed_task(
+        self,
+        parameters: Mapping[str, Any],
+        task_payload: Mapping[str, Any],
+    ) -> bool:
+        skill_names: set[str] = set()
+        for payload in (parameters, task_payload):
+            for key in ("tool", "skill"):
+                nested = payload.get(key)
+                if isinstance(nested, Mapping):
+                    name = self._coerce_text(
+                        nested.get("name") or nested.get("id"),
+                        max_chars=120,
+                    )
+                    if name:
+                        skill_names.add(name.lower())
+        skills_payload = task_payload.get("skills")
+        if isinstance(skills_payload, Mapping):
+            include = skills_payload.get("include")
+            if isinstance(include, Sequence) and not isinstance(include, (str, bytes)):
+                for item in include:
+                    if isinstance(item, Mapping):
+                        name = self._coerce_text(
+                            item.get("name") or item.get("id"),
+                            max_chars=120,
+                        )
+                        if name:
+                            skill_names.add(name.lower())
+                    else:
+                        name = self._coerce_text(item, max_chars=120)
+                        if name:
+                            skill_names.add(name.lower())
+        return bool(skill_names & _JIRA_BACKED_AGENT_SKILLS)
+
+    def _jira_issue_key_text_sources(
+        self,
+        parameters: Mapping[str, Any],
+        task_payload: Mapping[str, Any],
+    ) -> Iterable[str]:
+        for payload in (parameters, task_payload):
+            for key in ("title", "instructions", "summary", "description"):
+                value = payload.get(key)
+                if isinstance(value, str):
+                    yield value
+        steps = task_payload.get("steps")
+        if isinstance(steps, Sequence) and not isinstance(steps, (str, bytes)):
+            for step in steps:
+                if not isinstance(step, Mapping):
+                    continue
+                for key in ("title", "instructions", "summary", "description"):
+                    value = step.get(key)
+                    if isinstance(value, str):
+                        yield value
 
     @staticmethod
     def _normalize_positive_int(
