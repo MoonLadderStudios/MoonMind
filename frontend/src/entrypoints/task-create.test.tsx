@@ -4741,12 +4741,19 @@ describe.skip("Task Create Entrypoint", () => {
 
     const request = latestCreateRequest() as {
       payload: {
+        requiredCapabilities?: string[];
         task: {
           tool: Record<string, unknown>;
           skill: Record<string, unknown>;
         };
       };
     };
+    expect(request.payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "git",
+      "gh",
+      "jira",
+    ]);
     expect(request.payload.task.tool).toEqual({
       type: "skill",
       name: "moonspec-orchestrate",
@@ -12409,6 +12416,79 @@ describe("Task Create governed Tool authoring", () => {
     );
     expect((within(step).getByLabelText("Tool") as HTMLInputElement).value)
       .toBe("github.create_pull_request");
+  });
+
+  it("submits an authored MM-577 Skill step with agentic controls", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Implement MM-577 with the agentic Skill workflow." },
+    });
+    fireEvent.change(within(step).getByLabelText(/Skill \(optional\)/), {
+      target: { value: "moonspec-orchestrate" },
+    });
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(
+      within(step).getByLabelText("Step 1 Skill Args (optional JSON object)"),
+      {
+        target: { value: '{"issueKey":"MM-577","mode":"runtime"}' },
+      },
+    );
+    fireEvent.change(
+      within(step).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
+      {
+        target: { value: "git, jira" },
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: {
+        requiredCapabilities?: string[];
+        task: {
+          tool: Record<string, unknown>;
+          skill: Record<string, unknown>;
+        };
+      };
+    };
+    expect(request.payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "git",
+      "gh",
+      "jira",
+    ]);
+    expect(request.payload.task.tool).toEqual({
+      type: "skill",
+      name: "moonspec-orchestrate",
+      version: "1.0",
+      inputs: {
+        issueKey: "MM-577",
+        mode: "runtime",
+      },
+      requiredCapabilities: ["git", "jira"],
+    });
+    expect(request.payload.task.skill).toEqual({
+      id: "moonspec-orchestrate",
+      args: {
+        issueKey: "MM-577",
+        mode: "runtime",
+      },
+      requiredCapabilities: ["git", "jira"],
+    });
   });
 
   it("loads trusted Jira transition statuses into submitted Tool inputs", async () => {

@@ -1,27 +1,22 @@
 [
   {
-    "id": 4358333916,
+    "id": 4358603238,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier limit notice is an external bot status message and does not request a code change."
+    "rationale": "Qodo free-tier notice; no code or documentation action requested."
   },
   {
-    "id": 3172481417,
+    "id": 3172687498,
     "disposition": "addressed",
-    "rationale": "Jira transition selection now writes transitionId and clears legacy targetStatus so submitted Tool inputs match the jira.transition_issue contract."
+    "rationale": "Added an assertion that the submitted top-level payload requiredCapabilities includes codex_cli, git, gh, and jira."
   },
   {
-    "id": 4210435915,
-    "disposition": "not-applicable",
-    "rationale": "Codex review body is an informational summary; its actionable line comment is tracked separately."
-  },
-  {
-    "id": 3172483616,
+    "id": 3172687502,
     "disposition": "addressed",
-    "rationale": "Grouped trusted Tool choices now append into existing arrays instead of recreating arrays on every tool."
+    "rationale": "Added an acceptance scenario covering CSV trimming and malformed required capability validation."
   },
   {
-    "id": 4210438690,
+    "id": 4210649445,
     "disposition": "not-applicable",
-    "rationale": "Gemini review body is an informational summary; its actionable line comment is tracked separately."
+    "rationale": "Top-level review summary duplicates the two inline actionable comments, both of which are addressed separately."
   }
 ]
