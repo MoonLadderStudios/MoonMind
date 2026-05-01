@@ -1008,8 +1008,8 @@ function jiraTargetLabel(
   }
   if (target.kind === "preset") {
     return target.attachmentsOnly
-      ? "Feature Request / Initial Instructions attachments"
-      : "Feature Request / Initial Instructions";
+      ? "Instructions attachments (Preset)"
+      : "Instructions (Preset)";
   }
   const index = steps.findIndex((step) => step.localId === target.localId);
   if (target.attachmentsOnly) {
@@ -4549,7 +4549,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         [
           {
             key: attachmentTargetKey("objective"),
-            label: "Feature Request / Initial Instructions",
+            label: "Instructions",
             files: selectedObjectiveAttachmentFiles,
           },
           ...steps.map((step, index) => ({
@@ -6234,7 +6234,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 error instanceof Error
                   ? error
                   : new Error("Failed to upload objective attachment.");
-              const message = `Feature Request / Initial Instructions: ${failure.message}`;
+              const message = `Instructions: ${failure.message}`;
               setAttachmentTargetErrors((current) => ({
                 ...current,
                 [objectiveTargetKey]: message,
@@ -6980,11 +6980,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   onChange={(event) => selectJiraImportTarget(event.target.value)}
                 >
                   <option value="preset-text">
-                    Feature Request / Initial Instructions
+                    Instructions (Preset)
                   </option>
                   {attachmentPolicy.enabled ? (
                     <option value="preset-attachments">
-                      Feature Request / Initial Instructions attachments
+                      Instructions attachments (Preset)
                     </option>
                   ) : null}
                   {steps.map((step, index) => (
@@ -7542,8 +7542,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     <div className="queue-field-heading">
                       <label htmlFor={`queue-step-instructions-${step.localId}`}>
                         {step.stepType === "preset"
-                          ? "Feature Request / Initial Instructions"
-                          : "Instructions"}
+                          ? "Instructions"
+                          : `Step ${index + 1} Instructions`}
                       </label>
                       <JiraProvenanceChip
                         label={`Step ${index + 1} instructions`}

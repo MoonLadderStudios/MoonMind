@@ -1,27 +1,32 @@
 [
   {
-    "id": 4361276169,
+    "id": 4361443001,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier limit notice; informational bot message with no code action requested."
+    "rationale": "Qodo free-tier notice is informational and contains no actionable code feedback."
   },
   {
-    "id": 3174886044,
+    "id": 4213218170,
     "disposition": "addressed",
-    "rationale": "Removed clipping from the Step Type segmented control so the existing focus ring remains visible."
+    "rationale": "Removed the duplicate-label ambiguity by making Jira preset targets context-specific and non-preset instruction labels step-specific."
   },
   {
-    "id": 4213051744,
-    "disposition": "not-applicable",
-    "rationale": "Codex review summary wrapper; actionable inline feedback is tracked separately."
-  },
-  {
-    "id": 3174887989,
+    "id": 3175033901,
     "disposition": "addressed",
-    "rationale": "Removed the redundant Step Type -webkit-backdrop-filter declaration while keeping the standard backdrop-filter."
+    "rationale": "Jira preset import target labels now render as Instructions (Preset) and Instructions attachments (Preset)."
   },
   {
-    "id": 4213053751,
-    "disposition": "not-applicable",
-    "rationale": "Gemini review summary wrapper; actionable inline feedback is tracked separately."
+    "id": 3175033931,
+    "disposition": "addressed",
+    "rationale": "Non-preset step instruction fields now use Step N Instructions while preset steps keep Instructions."
+  },
+  {
+    "id": 3175033942,
+    "disposition": "addressed",
+    "rationale": "Reviewed Jira import tests now query Step 1 Instructions for step fields instead of the ambiguous Instructions label."
+  },
+  {
+    "id": 3175033948,
+    "disposition": "addressed",
+    "rationale": "Preset and step assertions now use distinct accessible labels: Instructions for preset and Step 1 Instructions for step text."
   }
 ]

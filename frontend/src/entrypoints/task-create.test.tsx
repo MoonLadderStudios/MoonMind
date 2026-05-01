@@ -5082,7 +5082,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(screen.queryByLabelText("Step 1 attachment file picker")).toBeNull();
     expect(
-      screen.queryByLabelText("Feature Request / Initial Instructions attachments"),
+      screen.queryByLabelText("Instructions attachments"),
     ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -5103,7 +5103,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(await screen.findByText("Step 1 Images (optional)")).toBeTruthy();
     expect(
       await screen.findByText(
-        "Feature Request / Initial Instructions Images",
+        "Instructions Images",
       ),
     ).toBeTruthy();
   });
@@ -5349,13 +5349,13 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Review objective context." },
     });
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Use the product sketch as objective context." },
       },
     );
     const objectiveInput = await screen.findByLabelText(
-      "Feature Request / Initial Instructions attachments",
+      "Instructions attachments",
     );
     const file = new File(["fake image"], "objective.png", {
       type: "image/png",
@@ -6208,7 +6208,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     fireEvent.change(boardSelect, { target: { value: "7" } });
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       { target: { value: "docs/Design.md" } },
     );
     await clickApplyButton();
@@ -6311,7 +6311,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(notesInput.value).toBe("hello ");
     fireEvent.click(screen.getByLabelText("Enabled"));
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       { target: { value: "Build configurable options." } },
     );
     await clickApplyButton();
@@ -6462,7 +6462,7 @@ describe.skip("Task Create Entrypoint", () => {
       ).toBe("none");
     });
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       { target: { value: "Build the second preset." } },
     );
     await clickApplyButton();
@@ -6792,7 +6792,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(await screen.findByPlaceholderText("owner/repo")).not.toBeNull();
     expect(await screen.findByLabelText("Provider profile")).not.toBeNull();
     expect(
-      await screen.findByLabelText("Feature Request / Initial Instructions"),
+      await screen.findByLabelText("Instructions"),
     ).not.toBeNull();
     expect(await screen.findByLabelText("Branch")).not.toBeNull();
     expect(screen.queryByLabelText("Target Branch (optional)")).toBeNull();
@@ -7036,7 +7036,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       within(dialog).getByRole("button", { name: /ENG-101/ }).getAttribute("title"),
     ).toBe(
-      "Import Jira issue ENG-101 into Feature Request / Initial Instructions",
+      "Import Jira issue ENG-101 into Instructions",
     );
   });
 
@@ -8951,7 +8951,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Task Create" },
       },
@@ -9119,7 +9119,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Route Jira child tasks correctly." },
       },
@@ -9192,7 +9192,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Task Create" },
       },
@@ -9203,7 +9203,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
 
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Task Create with revised objective" },
       },
@@ -9236,7 +9236,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Task Create" },
       },
@@ -9251,7 +9251,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     fireEvent.change(
       await screen.findByLabelText(
-        "Feature Request / Initial Instructions attachments",
+        "Instructions attachments",
       ),
       {
         target: { files: [objectiveFile] },
@@ -9320,7 +9320,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Task Create" },
       },
@@ -9425,7 +9425,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Task Create" },
       },
@@ -9807,7 +9807,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       await screen.findByRole("dialog", { name: "Browse Jira issue" }),
     ).toBeTruthy();
-    expect(screen.getByText("Target: Feature Request / Initial Instructions"))
+    expect(screen.getByText("Target: Instructions (Preset)"))
       .toBeTruthy();
   });
 
@@ -10326,7 +10326,7 @@ describe.skip("Task Create Entrypoint", () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
     const presetInstructions = await screen.findByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.click(
       screen.getByRole("button", {
@@ -10352,7 +10352,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     const stepInstructions = await screen.findByLabelText("Instructions");
     const presetInstructions = screen.getByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.change(stepInstructions, {
       target: { value: "Keep existing step instructions." },
@@ -10403,7 +10403,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     const stepInstructions = await screen.findByLabelText("Instructions");
     const presetInstructions = screen.getByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.change(stepInstructions, {
       target: { value: "Keep existing step instructions." },
@@ -10500,7 +10500,7 @@ describe.skip("Task Create Entrypoint", () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
     const presetInstructions = await screen.findByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.click(
       screen.getByRole("button", {
@@ -10547,7 +10547,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     const stepInstructions = await screen.findByLabelText("Instructions");
     const presetInstructions = screen.getByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.change(stepInstructions, {
       target: { value: "Keep existing step instructions." },
@@ -10580,7 +10580,7 @@ describe.skip("Task Create Entrypoint", () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
     const presetInstructions = await screen.findByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.change(presetInstructions, {
       target: { value: "Keep existing preset instructions." },
@@ -10608,7 +10608,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     const primaryStep = await screen.findByLabelText("Instructions");
     const presetInstructions = screen.getByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.change(primaryStep, {
       target: { value: "Keep primary instructions." },
@@ -10811,7 +10811,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     const stepInstructions = await screen.findByLabelText("Instructions");
     const presetInstructions = screen.getByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.change(stepInstructions, {
       target: { value: "Keep existing step instructions." },
@@ -10852,7 +10852,7 @@ describe.skip("Task Create Entrypoint", () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
     const presetInstructions = await screen.findByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
 
     fireEvent.click(
@@ -10886,7 +10886,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Task Create" },
       },
@@ -10919,7 +10919,7 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBeTruthy();
 
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Task Create" },
       },
@@ -10949,7 +10949,7 @@ describe.skip("Task Create Entrypoint", () => {
     const importedText =
       "ENG-202: Build browser shell\n\nLet operators browse Jira stories.";
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: importedText },
       },
@@ -10993,7 +10993,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Task Create" },
       },
@@ -11057,7 +11057,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Task Create" },
       },
@@ -11110,7 +11110,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       screen.getByLabelText(
-        "Jira import provenance for Feature Request / Initial Instructions",
+        "Jira import provenance for Instructions",
       ).textContent,
     ).toBe("Jira: ENG-202");
     await waitFor(() => {
@@ -11275,7 +11275,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
 
     const presetInstructions = await screen.findByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.change(presetInstructions, {
       target: { value: "Keep objective text." },
@@ -11345,7 +11345,7 @@ describe.skip("Task Create Entrypoint", () => {
       <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
     );
 
-    const stepInstructions = await screen.findByLabelText("Instructions");
+    const stepInstructions = await screen.findByLabelText("Step 1 Instructions");
     fireEvent.change(stepInstructions, {
       target: { value: "Keep step text." },
     });
@@ -11439,10 +11439,10 @@ describe.skip("Task Create Entrypoint", () => {
     expect(await screen.findAllByText("wireframe.png")).toHaveLength(2);
     expect(
       (screen.getByLabelText(
-        "Feature Request / Initial Instructions",
+        "Instructions",
       ) as HTMLTextAreaElement).value,
     ).toBe("ENG-202: Build browser shell\n\nLet operators browse Jira stories.");
-    expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(
+    expect((screen.getByLabelText("Step 1 Instructions") as HTMLTextAreaElement).value).toBe(
       "Complete Jira issue ENG-202: Build browser shell",
     );
   });
@@ -11495,7 +11495,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
 
     const presetInstructions = await screen.findByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.change(presetInstructions, {
       target: {
@@ -11580,7 +11580,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
     fireEvent.change(
-      screen.getByLabelText("Feature Request / Initial Instructions"),
+      screen.getByLabelText("Instructions"),
       {
         target: { value: "Task Create" },
       },
@@ -11724,9 +11724,9 @@ describe.skip("Task Create Entrypoint", () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
     const presetInstructions = await screen.findByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
-    const stepInstructions = screen.getByLabelText("Instructions");
+    const stepInstructions = screen.getByLabelText("Step 1 Instructions");
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -11742,7 +11742,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       screen.getByLabelText(
-        "Jira import provenance for Feature Request / Initial Instructions",
+        "Jira import provenance for Instructions",
       ),
     ).toBeTruthy();
     fireEvent.change(presetInstructions, {
@@ -11750,7 +11750,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     expect(
       screen.queryByLabelText(
-        "Jira import provenance for Feature Request / Initial Instructions",
+        "Jira import provenance for Instructions",
       ),
     ).toBeNull();
     await waitFor(() => {
@@ -11848,7 +11848,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       screen.queryByLabelText(
-        "Jira import provenance for Feature Request / Initial Instructions",
+        "Jira import provenance for Instructions",
       ),
     ).toBeNull();
   });
@@ -11914,9 +11914,9 @@ describe.skip("Task Create Entrypoint", () => {
     });
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
-    const stepInstructions = await screen.findByLabelText("Instructions");
+    const stepInstructions = await screen.findByLabelText("Step 1 Instructions");
     const presetInstructions = screen.getByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.change(presetInstructions, {
       target: { value: "Manual objective after Jira failure." },
@@ -12452,7 +12452,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
       target: { value: "Keep authored MM-578 preset placeholder." },
     });
     selectStepType(step, "Preset");
@@ -12488,7 +12488,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
     const firstGeneratedStep = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(firstGeneratedStep).getByLabelText("Instructions"), {
+    fireEvent.change(within(firstGeneratedStep).getByLabelText("Step 1 Instructions"), {
       target: { value: "Edited generated MM-578 step." },
     });
     expect(screen.getByDisplayValue("Edited generated MM-578 step.")).toBeTruthy();
@@ -12585,7 +12585,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
       target: { value: "Keep authored MM-578 preset step." },
     });
     selectStepType(step, "Preset");
@@ -12780,7 +12780,7 @@ describe("Task Create governed Tool authoring", () => {
       "section",
     ) as HTMLElement;
     selectStepType(step, "Skill");
-    fireEvent.change(within(step).getByLabelText("Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
       target: { value: "Implement MM-577 with the agentic Skill workflow." },
     });
     fireEvent.change(within(step).getByLabelText(/Skill \(optional\)/), {
@@ -12852,7 +12852,7 @@ describe("Task Create governed Tool authoring", () => {
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
       target: { value: "Transition MM-576 through trusted Jira." },
     });
     selectStepType(step, "Tool");

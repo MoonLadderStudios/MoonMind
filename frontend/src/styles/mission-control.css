@@ -2741,15 +2741,11 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 }
 
 .queue-step-type-panel {
-  border: 1px solid rgb(var(--mm-border));
-  border-radius: 8px;
-  padding: 0.75rem;
-  background: rgb(var(--mm-panel) / 0.58);
+  padding: 0.25rem 0 0;
 }
 
 .queue-step-preset-options {
-  border-top: 1px solid rgb(var(--mm-border) / 0.7);
-  padding-top: 0.75rem;
+  padding-top: 0.25rem;
 }
 
 .queue-step-extension {
