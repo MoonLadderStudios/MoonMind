@@ -61,6 +61,11 @@ class _RolloutTurnScan:
     saw_task_complete: bool = False
     error_text: str | None = None
 
+@dataclass(frozen=True)
+class _CompletedTurnInspection:
+    assistant_text: str = ""
+    rollout_scan: _RolloutTurnScan | None = None
+
 @dataclass
 class _RolloutLiveMirror:
     path: str | None = None
@@ -601,6 +606,23 @@ class CodexManagedSessionRuntime:
                 parts.append(text.strip())
         return "\n".join(parts).strip()
 
+    @classmethod
+    def _error_text_from_value(cls, value: Any) -> str | None:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        if isinstance(value, Mapping):
+            for field_name in ("message", "error", "reason", "detail"):
+                recovered = cls._error_text_from_value(value.get(field_name))
+                if recovered:
+                    return recovered
+        if isinstance(value, list):
+            for item in value:
+                recovered = cls._error_text_from_value(item)
+                if recovered:
+                    return recovered
+        return None
+
     @staticmethod
     def _payload_references_turn(payload: Any, vendor_turn_id: str) -> bool:
         if not vendor_turn_id:
@@ -732,9 +754,11 @@ class CodexManagedSessionRuntime:
                     continue
                 saw_task_complete = True
                 for field_name in ("error", "reason", "message"):
-                    value = event_payload.get(field_name)
-                    if isinstance(value, str) and value.strip():
-                        error_text = value.strip()
+                    extracted_error = self._error_text_from_value(
+                        event_payload.get(field_name)
+                    )
+                    if extracted_error:
+                        error_text = extracted_error
                         break
         except OSError:
             return _RolloutTurnScan()
@@ -1152,16 +1176,18 @@ class CodexManagedSessionRuntime:
         state: CodexSessionRuntimeState,
         thread_payload: Mapping[str, Any],
         vendor_turn_id: str,
+        rollout_scan: _RolloutTurnScan | None = None,
     ) -> tuple[str, str | None]:
-        vendor_thread_path = self._resolved_rollout_path(
-            state=state,
-            thread_payload=thread_payload,
-        )
-        rollout_scan = self._scan_rollout_for_turn(
-            vendor_thread_path,
-            vendor_turn_id=vendor_turn_id,
-            turn_started_at=state.last_control_at,
-        )
+        if rollout_scan is None:
+            vendor_thread_path = self._resolved_rollout_path(
+                state=state,
+                thread_payload=thread_payload,
+            )
+            rollout_scan = self._scan_rollout_for_turn(
+                vendor_thread_path,
+                vendor_turn_id=vendor_turn_id,
+                turn_started_at=state.last_control_at,
+            )
         if rollout_scan.error_text:
             return "failed", rollout_scan.error_text
         if rollout_scan.saw_task_complete:
@@ -1193,6 +1219,33 @@ class CodexManagedSessionRuntime:
             state.vendor_thread_path = recovered_path
         return recovered_path
 
+    def _inspect_completed_turn(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> _CompletedTurnInspection:
+        assistant_text = self._extract_assistant_text(
+            thread_payload,
+            vendor_turn_id=vendor_turn_id,
+        )
+        if assistant_text:
+            return _CompletedTurnInspection(assistant_text=assistant_text)
+        vendor_thread_path = self._resolved_rollout_path(
+            state=state,
+            thread_payload=thread_payload,
+        )
+        rollout_scan = self._scan_rollout_for_turn(
+            vendor_thread_path,
+            vendor_turn_id=vendor_turn_id,
+            turn_started_at=state.last_control_at,
+        )
+        return _CompletedTurnInspection(
+            assistant_text=rollout_scan.assistant_text,
+            rollout_scan=rollout_scan,
+        )
+
     def _assistant_text_for_completed_turn(
         self,
         *,
@@ -1200,21 +1253,11 @@ class CodexManagedSessionRuntime:
         thread_payload: Mapping[str, Any],
         vendor_turn_id: str,
     ) -> str:
-        assistant_text = self._extract_assistant_text(
-            thread_payload,
-            vendor_turn_id=vendor_turn_id,
-        )
-        if assistant_text:
-            return assistant_text
-        vendor_thread_path = self._resolved_rollout_path(
+        return self._inspect_completed_turn(
             state=state,
             thread_payload=thread_payload,
-        )
-        return self._extract_assistant_text_from_rollout(
-            vendor_thread_path,
             vendor_turn_id=vendor_turn_id,
-            turn_started_at=state.last_control_at,
-        )
+        ).assistant_text
 
     @staticmethod
     def _find_turn_payload(
@@ -1379,13 +1422,13 @@ class CodexManagedSessionRuntime:
         )
         return vendor_thread_id
 
-    @staticmethod
+    @classmethod
     def _terminal_turn_outcome(
+        cls,
         turn_payload: Mapping[str, Any],
     ) -> tuple[str, str | None] | None:
         raw_status = str(turn_payload.get("status") or "").strip().lower()
-        error_value = turn_payload.get("error")
-        error_text = str(error_value).strip() if error_value not in (None, "") else None
+        error_text = cls._error_text_from_value(turn_payload.get("error"))
         if raw_status == "completed":
             return "completed", None
         if raw_status in {"failed", "error"}:
@@ -1493,17 +1536,24 @@ class CodexManagedSessionRuntime:
 
         status, error_text = outcome
         assistant_text = ""
+        completed_turn_inspection: _CompletedTurnInspection | None = None
         if status == "completed":
-            assistant_text = self._assistant_text_for_completed_turn(
+            completed_turn_inspection = self._inspect_completed_turn(
                 state=state,
                 thread_payload=thread_payload,
                 vendor_turn_id=active_turn_id,
             )
+            assistant_text = completed_turn_inspection.assistant_text
         if status == "completed" and not assistant_text:
             status, error_text = self._completed_turn_without_assistant_outcome(
                 state=state,
                 thread_payload=thread_payload,
                 vendor_turn_id=active_turn_id,
+                rollout_scan=(
+                    completed_turn_inspection.rollout_scan
+                    if completed_turn_inspection is not None
+                    else None
+                ),
             )
             if status == "failed":
                 self._append_spool(
@@ -1656,17 +1706,20 @@ class CodexManagedSessionRuntime:
 
         assistant_text = ""
         metadata: dict[str, Any] = {}
+        completed_turn_inspection: _CompletedTurnInspection | None = None
         if status == "completed":
-            assistant_text = self._assistant_text_for_completed_turn(
+            completed_turn_inspection = self._inspect_completed_turn(
                 state=state,
                 thread_payload=thread_payload,
                 vendor_turn_id=vendor_turn_id,
             )
+            assistant_text = completed_turn_inspection.assistant_text
             if not assistant_text:
                 status, error_text = self._completed_turn_without_assistant_outcome(
                     state=state,
                     thread_payload=thread_payload,
                     vendor_turn_id=vendor_turn_id,
+                    rollout_scan=completed_turn_inspection.rollout_scan,
                 )
                 if status == "failed":
                     self._append_spool(
