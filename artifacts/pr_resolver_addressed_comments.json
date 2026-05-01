@@ -23,5 +23,10 @@
     "id": 3175475113,
     "disposition": "addressed",
     "rationale": "Removed the matching test expectation for the unused custom property."
+  },
+  {
+    "id": 4362115950,
+    "disposition": "not-applicable",
+    "rationale": "Review trigger comment only; it does not request a code change."
   }
 ]
