@@ -149,7 +149,8 @@ Classify this as a single-story runtime feature request for task authoring: impl
 2. **Given** Skill work may use tools internally, **When** a task author submits the Skill step, **Then** the authored step remains represented as agentic Skill work and is distinguishable from deterministic Tool work.
 3. **Given** the Skill selector is missing, unresolved, or only valid under unsupported auto semantics, **When** the task author submits, **Then** submission is blocked with actionable validation feedback.
 4. **Given** Skill args, context, required capabilities, permissions, runtime/model preferences, or approval/autonomy controls are malformed or unsupported, **When** the author submits, **Then** validation fails before execution with field-specific feedback when possible.
-5. **Given** a user reviews or edits a Skill step, **When** the Skill picker and configuration controls are shown, **Then** the UI communicates that the work is agentic and separate from direct Tool execution.
+5. **Given** required capabilities are authored as CSV text, **When** the author submits a Skill step, **Then** each capability is trimmed, empty entries are rejected or omitted consistently, and malformed CSV values are blocked before execution.
+6. **Given** a user reviews or edits a Skill step, **When** the Skill picker and configuration controls are shown, **Then** the UI communicates that the work is agentic and separate from direct Tool execution.
 
 ### Edge Cases
 

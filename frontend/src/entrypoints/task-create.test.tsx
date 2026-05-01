@@ -4741,12 +4741,19 @@ describe.skip("Task Create Entrypoint", () => {
 
     const request = latestCreateRequest() as {
       payload: {
+        requiredCapabilities?: string[];
         task: {
           tool: Record<string, unknown>;
           skill: Record<string, unknown>;
         };
       };
     };
+    expect(request.payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "git",
+      "gh",
+      "jira",
+    ]);
     expect(request.payload.task.tool).toEqual({
       type: "skill",
       name: "moonspec-orchestrate",
@@ -12451,12 +12458,19 @@ describe("Task Create governed Tool authoring", () => {
     });
     const request = latestCreateRequest() as {
       payload: {
+        requiredCapabilities?: string[];
         task: {
           tool: Record<string, unknown>;
           skill: Record<string, unknown>;
         };
       };
     };
+    expect(request.payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "git",
+      "gh",
+      "jira",
+    ]);
     expect(request.payload.task.tool).toEqual({
       type: "skill",
       name: "moonspec-orchestrate",
