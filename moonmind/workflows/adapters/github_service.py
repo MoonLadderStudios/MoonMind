@@ -81,6 +81,8 @@ def _pull_request_has_merge_conflicts(pr_data: Mapping[str, Any]) -> bool:
         return True
     if merge_state_status in _CONFLICTING_MERGE_STATE_STATUSES:
         return True
+    if mergeable is False:
+        return True
     if (
         isinstance(mergeable, str)
         and mergeable.strip().upper() in _CONFLICTING_MERGEABLE_VALUES
@@ -489,7 +491,14 @@ class GitHubService:
                     checksPassing=checks_passing,
                     automatedReviewComplete=automated_review_complete,
                     policyAllowed=True,
-                    blockers=[],
+                    blockers=[
+                        {
+                            "kind": "merge_conflict",
+                            "summary": "Pull request has merge conflicts.",
+                            "retryable": False,
+                            "source": "github",
+                        }
+                    ],
                 )
 
             if checks_required and pr_merged is not True and not blockers:
