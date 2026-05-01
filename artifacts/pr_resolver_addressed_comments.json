@@ -1,27 +1,27 @@
 [
   {
-    "id": 4360791766,
+    "id": 4361162624,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier limit notice; no code action requested."
+    "rationale": "Qodo quota notice is informational and contains no requested code change."
   },
   {
-    "id": 3174456211,
+    "id": 3174796895,
     "disposition": "addressed",
-    "rationale": "Updated the segmented-control overflow and edge radii so the keyboard focus box-shadow remains visible on the first and last Step Type options."
+    "rationale": "Added explicit detection for GitHub REST mergeable=false conflict responses."
   },
   {
-    "id": 4212560240,
+    "id": 4212956261,
     "disposition": "not-applicable",
-    "rationale": "Codex review wrapper comment; the actionable inline focus-ring feedback is tracked separately."
+    "rationale": "Broad review summary; its actionable points are tracked by the line comments."
   },
   {
-    "id": 3174457616,
+    "id": 3174796906,
     "disposition": "addressed",
-    "rationale": "Replaced the selected Step Type segment's hardcoded #fff text color with the theme variable rgb(var(--mm-accent-contrast))."
+    "rationale": "Conflict readiness now includes a non-retryable merge_conflict blocker with GitHub source evidence."
   },
   {
-    "id": 4212561724,
-    "disposition": "not-applicable",
-    "rationale": "Review summary only; the actionable hardcoded-color feedback is tracked separately."
+    "id": 3174796910,
+    "disposition": "addressed",
+    "rationale": "Updated readiness tests to assert the merge_conflict blocker and added boolean mergeable=false coverage."
   }
 ]
