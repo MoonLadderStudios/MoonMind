@@ -423,10 +423,11 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).toMatch(/--mm-executing-sweep-end-y:\s*-160%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-x:\s*-12%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-y:\s*-10%/);
-    expect(missionControlCss).not.toContain('--mm-executing-letter-cycle-duration');
-    expect(missionControlCss).not.toContain('--mm-executing-letter-sweep-start-ratio');
-    expect(missionControlCss).not.toContain('--mm-executing-letter-sweep-travel-ratio');
-    expect(missionControlCss).not.toContain('--mm-executing-letter-sweep-direction');
+    expect(missionControlCss).toContain('--mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)');
+    expect(missionControlCss).toContain('--mm-executing-letter-sweep-start-ratio: 0.2');
+    expect(missionControlCss).toContain('--mm-executing-letter-sweep-travel-ratio: 0.18');
+    expect(missionControlCss).toContain('--mm-executing-letter-pulse-duration-ratio: 0.05');
+    expect(missionControlCss).toContain('--mm-executing-letter-sweep-direction: 1');
     expect(missionControlCss).toContain('--mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32)');
     expect(missionControlCss).toContain('--mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, white 32%)');
 
@@ -478,12 +479,13 @@ describe('Mission Control shared entry', () => {
     expect(shimmerAfterBlock).toBe('');
     expect(cssRuleBlock(missionControlCss, '.status-letter-wave')).toContain('z-index: 2');
     const glyphBlock = cssRuleBlock(missionControlCss, '.status-letter-wave__glyph');
-    expect(glyphBlock).not.toContain('animation-name');
-    expect(glyphBlock).not.toContain('animation-delay');
-    expect(glyphBlock).not.toContain('--mm-letter-phase');
+    expect(glyphBlock).toContain('--mm-letter-phase');
+    expect(glyphBlock).toContain('var(--mm-letter-index)');
+    expect(glyphBlock).toContain('var(--mm-letter-count)');
+    expect(glyphBlock).toContain('var(--mm-executing-letter-sweep-direction)');
     expect(glyphBlock).not.toContain('will-change');
-    expect(missionControlCss).not.toContain('@keyframes mm-executing-letter-brighten');
-    expect(missionControlCss).not.toContain('mm-executing-letter-brighten');
+    expect(missionControlCss).toContain('@keyframes mm-executing-letter-brighten');
+    expect(missionControlCss).toContain('mm-executing-letter-brighten');
 
     const baseLetterWaveBlock = cssRuleBlock(missionControlCss, '.status-letter-wave');
     expect(baseLetterWaveBlock).toContain('color: inherit');
@@ -500,16 +502,34 @@ describe('Mission Control shared entry', () => {
       missionControlCss,
       '.status-running[data-effect="shimmer-sweep"] .status-letter-wave, .status-running.is-executing .status-letter-wave, .status-running.is-planning .status-letter-wave',
     ).join('\n');
-    expect(activeLetterWaveBlock).toContain('color: var(--mm-executing-letter-bright)');
-    expect(activeLetterWaveBlock).toContain('text-shadow: 0 0 10px var(--mm-executing-letter-halo)');
+    expect(activeLetterWaveBlock).toContain('color: inherit');
+    expect(activeLetterWaveBlock).not.toContain('color: var(--mm-executing-letter-bright)');
+    expect(activeLetterWaveBlock).not.toContain('text-shadow: 0 0 10px var(--mm-executing-letter-halo)');
     expect(activeLetterWaveBlock).not.toContain('animation: mm-status-pill-shimmer');
     expect(activeLetterWaveBlock).not.toContain('-webkit-text-fill-color: transparent');
     expect(activeLetterWaveBlock).not.toContain('background-clip: text');
     expect(activeLetterWaveBlock).not.toContain('-webkit-background-clip: text');
     expect(activeLetterWaveBlock).not.toContain('white 50%');
-    expect(activeLetterWaveBlock).toContain('var(--mm-executing-letter-halo)');
+    const activeGlyphBlock = cssRuleBlocks(
+      missionControlCss,
+      '.status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph, .status-running.is-executing .status-letter-wave__glyph, .status-running.is-planning .status-letter-wave__glyph',
+    ).join('\n');
+    expect(activeGlyphBlock).toContain('animation-name: mm-executing-letter-brighten');
+    expect(activeGlyphBlock).toContain(
+      'animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms))',
+    );
+    expect(activeGlyphBlock).toContain('animation-timing-function: linear');
+    expect(activeGlyphBlock).toContain('animation-iteration-count: infinite');
+    expect(activeGlyphBlock).toContain('animation-delay: calc(');
+    expect(activeGlyphBlock).toContain('var(--mm-letter-phase)');
+    expect(missionControlCss).toMatch(
+      /@keyframes mm-executing-letter-brighten\s*\{[\s\S]*?color:\s*var\(--mm-executing-letter-bright\);[\s\S]*?text-shadow:\s*0 0 10px var\(--mm-executing-letter-halo\);/,
+    );
     expect(missionControlCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,\s*\.status-running\.is-executing \.status-letter-wave,\s*\.status-running\.is-planning \.status-letter-wave[\s\S]*?text-shadow: none;/,
+    );
+    expect(missionControlCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-letter-wave__glyph\s*\{[\s\S]*?animation:\s*none !important;[\s\S]*?text-shadow:\s*none !important;[\s\S]*?filter:\s*none !important;/,
     );
     expect(missionControlCss).not.toContain('-webkit-text-fill-color: transparent');
 
@@ -520,9 +540,15 @@ describe('Mission Control shared entry', () => {
         Boolean(rule.parent?.toString().startsWith('@media (forced-colors: active)')),
     );
     expect(forcedColorsLetterWaveBlock).toContain('color: ButtonText');
-    expect(forcedColorsLetterWaveBlock).toContain('animation: none');
     expect(forcedColorsLetterWaveBlock).not.toContain('-webkit-text-fill-color');
     expect(forcedColorsLetterWaveBlock).not.toContain('background-clip');
+    const forcedColorsGlyphBlock = cssRuleBlockMatching(
+      missionControlCss,
+      (rule) =>
+        rule.selector.includes('.status-letter-wave__glyph') &&
+        Boolean(rule.parent?.toString().startsWith('@media (forced-colors: active)')),
+    );
+    expect(forcedColorsGlyphBlock).toContain('animation: none');
   });
 
   it('enforces MM-430 additive shared styling modifiers', async () => {
