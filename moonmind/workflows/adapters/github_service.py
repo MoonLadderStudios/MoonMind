@@ -65,6 +65,29 @@ class PullRequestReadinessResult(BaseModel):
 _GITHUB_PR_URL_RE = re.compile(
     r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)"
 )
+_CONFLICTING_MERGEABLE_STATES = {"dirty"}
+_CONFLICTING_MERGE_STATE_STATUSES = {"CONFLICTING", "DIRTY"}
+_CONFLICTING_MERGEABLE_VALUES = {"CONFLICTING", "DIRTY"}
+
+
+def _pull_request_has_merge_conflicts(pr_data: Mapping[str, Any]) -> bool:
+    mergeable_state = str(pr_data.get("mergeable_state") or "").strip().lower()
+    merge_state_status = str(
+        pr_data.get("mergeStateStatus") or pr_data.get("merge_state_status") or ""
+    ).strip().upper()
+    mergeable = pr_data.get("mergeable")
+
+    if mergeable_state in _CONFLICTING_MERGEABLE_STATES:
+        return True
+    if merge_state_status in _CONFLICTING_MERGE_STATE_STATUSES:
+        return True
+    if (
+        isinstance(mergeable, str)
+        and mergeable.strip().upper() in _CONFLICTING_MERGEABLE_VALUES
+    ):
+        return True
+    return False
+
 
 class GitHubService:
     """Thin wrapper around the GitHub REST API for pull-request operations.
@@ -405,6 +428,7 @@ class GitHubService:
         checks_complete: bool | None = None
         checks_passing: bool | None = None
         automated_review_complete: bool | None = None
+        merge_conflicted = False
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             try:
@@ -419,6 +443,7 @@ class GitHubService:
                 head = pr_data.get("head") if isinstance(pr_data, dict) else {}
                 if isinstance(head, dict):
                     observed_head_sha = str(head.get("sha") or head_sha)
+                merge_conflicted = _pull_request_has_merge_conflicts(pr_data)
             except httpx.HTTPStatusError as exc:
                 blockers.append(
                     {
@@ -452,6 +477,19 @@ class GitHubService:
                         "retryable": False,
                         "source": "github",
                     }
+                )
+
+            if pr_open is True and pr_merged is not True and merge_conflicted:
+                return PullRequestReadinessResult(
+                    headSha=observed_head_sha,
+                    ready=True,
+                    pullRequestOpen=pr_open,
+                    pullRequestMerged=pr_merged,
+                    checksComplete=checks_complete,
+                    checksPassing=checks_passing,
+                    automatedReviewComplete=automated_review_complete,
+                    policyAllowed=True,
+                    blockers=[],
                 )
 
             if checks_required and pr_merged is not True and not blockers:
