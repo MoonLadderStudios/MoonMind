@@ -2544,25 +2544,66 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
 .queue-step-type-options {
   display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
+  align-items: stretch;
+  background: var(--mm-input-well);
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5);
+  overflow: hidden;
 }
 
 .queue-step-type-option {
   align-items: center;
-  border: 1px solid rgb(var(--mm-border));
-  border-radius: 8px;
+  border: 0;
+  border-left: 1px solid rgb(var(--mm-border));
+  color: rgb(var(--mm-ink));
   cursor: pointer;
   display: inline-flex;
-  flex-direction: row;
-  gap: 0.4rem;
+  flex: 1 1 0;
+  font-weight: 600;
+  justify-content: center;
   min-height: 2.25rem;
-  padding: 0.45rem 0.7rem;
+  min-width: 0;
+  padding: 0.5rem 0.9rem;
+  position: relative;
+  text-align: center;
+  transition: var(--mm-control-transition);
+}
+
+.queue-step-type-option:first-child {
+  border-left: 0;
+}
+
+.queue-step-type-option:hover:not(:has(input:checked)) {
+  background: rgb(var(--mm-accent) / 0.08);
+  color: rgb(var(--mm-accent));
 }
 
 .queue-step-type-option:has(input:checked) {
-  border-color: rgb(var(--mm-accent));
-  background: rgb(var(--mm-accent) / 0.1);
+  background: rgb(var(--mm-accent));
+  border-left-color: transparent;
+  color: #fff;
+}
+
+.queue-step-type-option:has(input:checked) + .queue-step-type-option {
+  border-left-color: transparent;
+}
+
+.queue-step-type-option:has(input:focus-visible) {
+  box-shadow: var(--mm-control-focus-ring);
+  z-index: 1;
+}
+
+.queue-step-type-option input[type="radio"] {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
 }
 
 .queue-step-type-panel {
