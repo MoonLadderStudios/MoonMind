@@ -1,37 +1,22 @@
 [
   {
-    "id": 4357009057,
+    "id": 4209468049,
     "disposition": "not-applicable",
-    "rationale": "Qodo review summary only; no requested code change."
+    "rationale": "Bot review summary only; no actionable request beyond the inline discussion."
   },
   {
-    "id": 4357009307,
+    "id": 3171663351,
     "disposition": "addressed",
-    "rationale": "Addressed both reported issues by invalidating stale preset previews and writing in-place expansion completion messages to the global preset status."
+    "rationale": "Refactored test_api_service_mounts_agent_runtime_workspace_volume to use _has_volume_mount."
   },
   {
-    "id": 3171488902,
-    "disposition": "addressed",
-    "rationale": "Added current-state validation before applying async preset expansion results so removed or changed preset steps are not mutated."
-  },
-  {
-    "id": 4209275635,
+    "id": 4357283451,
     "disposition": "not-applicable",
-    "rationale": "Automated Codex review summary; the actionable inline comment is tracked separately."
+    "rationale": "Qodo walkthrough summary only; no remediation requested."
   },
   {
-    "id": 3171502561,
+    "id": 4357283529,
     "disposition": "addressed",
-    "rationale": "Preset-step instruction edits now clear cached previews, and tests cover regeneration after instructions change."
-  },
-  {
-    "id": 3171514617,
-    "disposition": "addressed",
-    "rationale": "Preset selection and preset inputs are disabled while expansion is in progress, with current-state guards before applying async results."
-  },
-  {
-    "id": 4209307861,
-    "disposition": "addressed",
-    "rationale": "Review-level race-condition recommendation was addressed by disabling preset controls during expansion and guarding stale async results."
+    "rationale": "Restored _should_exclude_publish_path to a Path-only contract, normalized string workspace_path at the publish call site, and added relative-path/string-workspace regression coverage."
   }
 ]

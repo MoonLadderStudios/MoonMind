@@ -5195,7 +5195,7 @@ class TemporalAgentRuntimeActivities:
             normalized == ".agents/skills"
             or normalized.startswith(".agents/skills/")
         ):
-            projection = workspace / ".agents" / "skills"
+            projection = workspace.expanduser().resolve() / ".agents" / "skills"
             if projection.is_symlink():
                 return True
         return False
@@ -5448,10 +5448,14 @@ class TemporalAgentRuntimeActivities:
             return {}
 
         try:
+            workspace_path = Path(workspace).expanduser().resolve()
             changed_paths = tuple(
                 path
                 for path in self._parse_git_status_paths(status_stdout)
-                if not self._should_exclude_publish_path(path, workspace=workspace)
+                if not self._should_exclude_publish_path(
+                    path,
+                    workspace=workspace_path,
+                )
             )
         except ValueError as exc:
             return {
