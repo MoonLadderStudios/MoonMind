@@ -12366,6 +12366,9 @@ describe("Task Create MM-578 Preset preview and apply", () => {
               source: {
                 kind: "preset-derived",
                 presetId: "mm-578-preset",
+                presetVersion: "1.0.0",
+                includePath: ["root", "fetch"],
+                originalStepId: "fetch-jira-issue",
               },
             },
             {
@@ -12375,6 +12378,13 @@ describe("Task Create MM-578 Preset preview and apply", () => {
               skill: {
                 id: "moonspec-orchestrate",
                 args: { issueKey: "MM-578" },
+              },
+              source: {
+                kind: "preset-derived",
+                presetId: "mm-578-preset",
+                presetVersion: "1.0.0",
+                includePath: ["root", "implement"],
+                originalStepId: "implement-preset-story",
               },
             },
           ],
@@ -12484,7 +12494,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
     expect(screen.getByDisplayValue("Edited generated MM-578 step.")).toBeTruthy();
   });
 
-  it("submits applied preset-generated Tool steps with executable binding", async () => {
+  it("submits applied preset-generated Tool and Skill steps with executable binding and provenance", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
@@ -12525,8 +12535,33 @@ describe("Task Create MM-578 Preset preview and apply", () => {
         id: "jira.get_issue",
         inputs: { issueKey: "MM-578" },
       },
+      source: {
+        kind: "preset-derived",
+        presetId: "mm-578-preset",
+        presetVersion: "1.0.0",
+        includePath: ["root", "fetch"],
+        originalStepId: "fetch-jira-issue",
+      },
     });
     expect(request.payload.task.steps[0]?.["skill"]).toBeUndefined();
+    expect(request.payload.task.steps[1]).toEqual({
+      id: "tpl:mm-578-preset:1.0.0:02",
+      title: "Implement preset story",
+      type: "skill",
+      instructions: "Implement MM-578.",
+      skill: {
+        id: "moonspec-orchestrate",
+        args: { issueKey: "MM-578" },
+      },
+      source: {
+        kind: "preset-derived",
+        presetId: "mm-578-preset",
+        presetVersion: "1.0.0",
+        includePath: ["root", "implement"],
+        originalStepId: "implement-preset-story",
+      },
+    });
+    expect(request.payload.task.steps[1]?.["tool"]).toBeUndefined();
   });
 
   it("keeps drafts unchanged on preview failure and blocks unresolved Preset submission", async () => {

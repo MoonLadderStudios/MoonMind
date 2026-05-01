@@ -77,6 +77,22 @@ def _clean_optional_str(value: object) -> str | None:
     cleaned = _clean_str(value)
     return cleaned or None
 
+
+def _normalize_preset_version_alias(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    if "version" not in value:
+        return value
+    normalized = dict(value)
+    legacy_version = _clean_optional_str(normalized.pop("version"))
+    current_version = _clean_optional_str(normalized.get("presetVersion"))
+    if legacy_version and current_version and legacy_version != current_version:
+        raise TaskContractError("presetVersion conflicts with legacy version")
+    if legacy_version and not current_version:
+        normalized["presetVersion"] = legacy_version
+    return normalized
+
+
 def _contains_data_image_url(value: object) -> bool:
     if isinstance(value, str):
         return _DATA_IMAGE_URL_PATTERN.match(value.strip()) is not None
@@ -880,12 +896,17 @@ class TaskStepSource(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_version(cls, value: object) -> object:
+        return _normalize_preset_version_alias(value)
+
     kind: Literal["manual", "preset-derived", "preset-include", "detached"] | None = (
         Field(None, alias="kind")
     )
     preset_id: str | None = Field(None, alias="presetId")
     preset_slug: str | None = Field(None, alias="presetSlug")
-    version: str | None = Field(None, alias="version")
+    preset_version: str | None = Field(None, alias="presetVersion")
     include_path: list[str] | None = Field(None, alias="includePath")
     original_step_id: str | None = Field(None, alias="originalStepId")
 
@@ -893,7 +914,7 @@ class TaskStepSource(BaseModel):
         "kind",
         "preset_id",
         "preset_slug",
-        "version",
+        "preset_version",
         "original_step_id",
         mode="before",
     )
@@ -920,9 +941,14 @@ class AuthoredPresetBinding(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_version(cls, value: object) -> object:
+        return _normalize_preset_version_alias(value)
+
     preset_id: str | None = Field(None, alias="presetId")
     preset_slug: str | None = Field(None, alias="presetSlug")
-    version: str | None = Field(None, alias="version")
+    preset_version: str | None = Field(None, alias="presetVersion")
     alias: str | None = Field(None, alias="alias")
     include_path: list[str] | None = Field(None, alias="includePath")
     input_mapping: dict[str, Any] | None = Field(None, alias="inputMapping")
@@ -931,7 +957,7 @@ class AuthoredPresetBinding(BaseModel):
     @field_validator(
         "preset_id",
         "preset_slug",
-        "version",
+        "preset_version",
         "alias",
         "scope",
         mode="before",

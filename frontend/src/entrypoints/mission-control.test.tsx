@@ -264,6 +264,19 @@ describe('Mission Control shared entry', () => {
     );
   });
 
+  it('keeps the Step Type segmented control focus ring visible', async () => {
+    const stepTypeBlock = cssRuleBlock(missionControlCss, '.queue-step-type-options');
+    const stepTypeFocusBlock = cssRuleBlock(
+      missionControlCss,
+      '.queue-step-type-option:has(input:focus-visible)',
+    );
+
+    expect(stepTypeBlock).toContain('backdrop-filter: blur(14px) saturate(140%)');
+    expect(stepTypeBlock).not.toContain('-webkit-backdrop-filter');
+    expect(stepTypeBlock).not.toContain('overflow: hidden');
+    expect(stepTypeFocusBlock).toContain('box-shadow: var(--mm-control-focus-ring)');
+  });
+
   it('keeps liquidGL opt-in and away from default dense surfaces', async () => {
     expect(cssRuleBlock(missionControlCss, '.panel')).not.toContain('liquid');
     expect(cssRuleBlock(missionControlCss, '.card')).not.toContain('liquid');

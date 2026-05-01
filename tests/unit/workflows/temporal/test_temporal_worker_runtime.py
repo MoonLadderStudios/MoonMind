@@ -261,6 +261,9 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
                         "source": {
                             "kind": "preset-derived",
                             "presetId": "jira-flow",
+                            "presetVersion": "catalog-version-that-need-not-exist",
+                            "includePath": ["root", "fetch"],
+                            "originalStepId": "fetch-jira-issue",
                         },
                     }
                 ],
@@ -277,7 +280,64 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
     }
     assert plan["nodes"][0]["inputs"]["selectedSkill"] == "jira.get_issue"
     assert plan["nodes"][0]["inputs"]["type"] == "tool"
-    assert plan["nodes"][0]["inputs"]["source"]["presetId"] == "jira-flow"
+    assert plan["nodes"][0]["inputs"]["source"] == {
+        "kind": "preset-derived",
+        "presetId": "jira-flow",
+        "presetVersion": "catalog-version-that-need-not-exist",
+        "includePath": ["root", "fetch"],
+        "originalStepId": "fetch-jira-issue",
+    }
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        None,
+        {"kind": "detached"},
+        {
+            "kind": "preset-derived",
+            "presetId": "removed-preset",
+            "presetVersion": "stale",
+        },
+    ],
+)
+def test_runtime_planner_materializes_tool_steps_without_source_lookup(
+    source: dict[str, object] | None,
+):
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+    step: dict[str, object] = {
+        "id": "fetch-issue",
+        "type": "tool",
+        "instructions": "Fetch MM-579.",
+        "tool": {
+            "id": "jira.get_issue",
+            "version": "1.0.0",
+            "inputs": {"issueKey": "MM-579"},
+        },
+    }
+    if source is not None:
+        step["source"] = source
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Run explicit tool step.",
+                "runtime": {"mode": "codex_cli"},
+                "steps": [step],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"][0]["tool"]["name"] == "jira.get_issue"
+    if source is None:
+        assert "source" not in plan["nodes"][0]["inputs"]
+    else:
+        assert plan["nodes"][0]["inputs"]["source"] == source
 
 def test_runtime_planner_maps_explicit_skill_step_to_agent_runtime_node():
     planner = _build_runtime_planner()
