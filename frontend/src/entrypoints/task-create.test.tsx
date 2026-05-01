@@ -4741,12 +4741,19 @@ describe.skip("Task Create Entrypoint", () => {
 
     const request = latestCreateRequest() as {
       payload: {
+        requiredCapabilities?: string[];
         task: {
           tool: Record<string, unknown>;
           skill: Record<string, unknown>;
         };
       };
     };
+    expect(request.payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "git",
+      "gh",
+      "jira",
+    ]);
     expect(request.payload.task.tool).toEqual({
       type: "skill",
       name: "moonspec-orchestrate",
@@ -7162,7 +7169,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(within(step).getByLabelText("Preset")).toBeTruthy();
     expect(within(step).getByRole("button", { name: "Preview" })).toBeTruthy();
     expect(
-      within(step).getByRole("button", { name: "Apply preview" }),
+      within(step).getByRole("button", { name: "Expand" }),
     ).toBeTruthy();
     expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
     expect(within(step).queryByLabelText("Tool")).toBeNull();
@@ -7406,7 +7413,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
     expect(await within(step).findByText("Clarify spec")).toBeTruthy();
-    fireEvent.click(within(step).getByRole("button", { name: "Apply preview" }));
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(await screen.findByDisplayValue("Clarify the {{ inputs.feature_name }} scope.")).toBeTruthy();
     expect(screen.getByDisplayValue("Write a plan for the task builder recovery.")).toBeTruthy();
@@ -7481,7 +7488,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
     expect(await within(step).findByText("Fetch Jira issue")).toBeTruthy();
-    fireEvent.click(within(step).getByRole("button", { name: "Apply preview" }));
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(await screen.findByDisplayValue("Fetch MM-558.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -7602,7 +7609,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
     expect(await within(step).findByText("Clarify spec")).toBeTruthy();
-    fireEvent.click(within(step).getByRole("button", { name: "Apply preview" }));
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(await screen.findByDisplayValue("Clarify the {{ inputs.feature_name }} scope.")).toBeTruthy();
     expect(
@@ -7614,7 +7621,7 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBe(true);
   });
 
-  it("preserves hidden Skill fields but blocks Tool submissions without a selected Tool", async () => {
+  it("visibly discards incompatible Skill fields after changing Step Type", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
@@ -7643,25 +7650,31 @@ describe.skip("Task Create Entrypoint", () => {
     );
     selectStepType(step, "Tool");
     expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
+    expect(
+      within(step).getByText(
+        "Skill configuration discarded after changing Step Type. Shared instructions were preserved.",
+      ),
+    ).toBeTruthy();
+
     selectStepType(step, "Skill");
     expect(
       (within(step).getByLabelText(/Skill \(optional\)/) as HTMLInputElement)
         .value,
-    ).toBe("custom-skill");
+    ).toBe("");
     expect(
       (
         within(step).getByLabelText(
           "Step 1 Skill Args (optional JSON object)",
         ) as HTMLTextAreaElement
       ).value,
-    ).toBe('{"hidden":true}');
+    ).toBe("");
     expect(
       (
         within(step).getByLabelText(
           /Step 1 Skill Required Capabilities \(optional CSV\)/,
         ) as HTMLInputElement
       ).value,
-    ).toBe("docker, qdrant");
+    ).toBe("");
     selectStepType(step, "Tool");
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Run a tool Step Type submission." },
@@ -12251,5 +12264,316 @@ describe.skip("Task Create Entrypoint", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
+  });
+});
+
+describe("Task Create governed Tool authoring", () => {
+  let fetchSpy: MockInstance;
+  let toolDiscoveryResponse: Response;
+  let transitionResponse: Response;
+
+  function latestCreateRequest(): Record<string, unknown> {
+    const call = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    expect(call).toBeTruthy();
+    return JSON.parse(String(call?.[1]?.body || "{}")) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  beforeEach(() => {
+    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    vi.mocked(navigateTo).mockReset();
+    toolDiscoveryResponse = {
+      ok: true,
+      json: async () => ({
+        tools: [
+          {
+            name: "jira.get_issue",
+            description: "Fetch a Jira issue.",
+            inputSchema: { type: "object" },
+          },
+          {
+            name: "jira.transition_issue",
+            description: "Transition a Jira issue.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                issueKey: { type: "string" },
+                transitionId: { type: "string" },
+              },
+            },
+          },
+          {
+            name: "github.create_pull_request",
+            description: "Create a GitHub pull request.",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }),
+    } as Response;
+    transitionResponse = {
+      ok: true,
+      json: async () => ({
+        result: {
+          transitions: [
+            { id: "31", name: "In Progress", to: { name: "In Progress" } },
+            { id: "51", name: "Code Review", to: { name: "Code Review" } },
+          ],
+        },
+      }),
+    } as Response;
+    fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/mcp/tools") {
+          return Promise.resolve(toolDiscoveryResponse);
+        }
+        if (url === "/mcp/tools/call") {
+          return Promise.resolve(transitionResponse);
+        }
+        if (url.startsWith("/api/tasks/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: { worker: [] } }),
+          } as Response);
+        }
+        if (url.startsWith("/api/github/branches")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [], defaultBranch: "main", error: null }),
+          } as Response);
+        }
+        if (url.startsWith("/api/task-step-templates")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        if (url.startsWith("/api/v1/provider-profiles")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [
+              {
+                profile_id: "profile:codex-default",
+                account_label: "Codex Default",
+                is_default: true,
+              },
+            ],
+          } as Response);
+        }
+        if (url.startsWith("/api/executions?")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        if (url === "/api/executions") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ workflowId: "mm:workflow-123" }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: async () => `Unhandled fetch ${url} ${String(init?.method || "GET")}`,
+        } as Response);
+      });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("groups and filters trusted Tool choices", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Tool");
+
+    expect(await within(step).findByText("Jira")).toBeTruthy();
+    expect(within(step).getByText("GitHub")).toBeTruthy();
+    expect(within(step).getByRole("button", { name: /jira.get_issue/ }))
+      .toBeTruthy();
+    fireEvent.change(within(step).getByLabelText("Search Tools"), {
+      target: { value: "pull" },
+    });
+
+    expect(within(step).queryByRole("button", { name: /jira.get_issue/ }))
+      .toBeNull();
+    fireEvent.click(
+      within(step).getByRole("button", {
+        name: /github.create_pull_request/,
+      }),
+    );
+    expect((within(step).getByLabelText("Tool") as HTMLInputElement).value)
+      .toBe("github.create_pull_request");
+  });
+
+  it("submits an authored MM-577 Skill step with agentic controls", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Implement MM-577 with the agentic Skill workflow." },
+    });
+    fireEvent.change(within(step).getByLabelText(/Skill \(optional\)/), {
+      target: { value: "moonspec-orchestrate" },
+    });
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(
+      within(step).getByLabelText("Step 1 Skill Args (optional JSON object)"),
+      {
+        target: { value: '{"issueKey":"MM-577","mode":"runtime"}' },
+      },
+    );
+    fireEvent.change(
+      within(step).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
+      {
+        target: { value: "git, jira" },
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: {
+        requiredCapabilities?: string[];
+        task: {
+          tool: Record<string, unknown>;
+          skill: Record<string, unknown>;
+        };
+      };
+    };
+    expect(request.payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "git",
+      "gh",
+      "jira",
+    ]);
+    expect(request.payload.task.tool).toEqual({
+      type: "skill",
+      name: "moonspec-orchestrate",
+      version: "1.0",
+      inputs: {
+        issueKey: "MM-577",
+        mode: "runtime",
+      },
+      requiredCapabilities: ["git", "jira"],
+    });
+    expect(request.payload.task.skill).toEqual({
+      id: "moonspec-orchestrate",
+      args: {
+        issueKey: "MM-577",
+        mode: "runtime",
+      },
+      requiredCapabilities: ["git", "jira"],
+    });
+  });
+
+  it("loads trusted Jira transition statuses into submitted Tool inputs", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Transition MM-576 through trusted Jira." },
+    });
+    selectStepType(step, "Tool");
+    fireEvent.click(
+      await within(step).findByRole("button", { name: /jira.transition_issue/ }),
+    );
+    fireEvent.change(within(step).getByLabelText("Tool Inputs (JSON object)"), {
+      target: { value: '{"issueKey":"MM-576"}' },
+    });
+    fireEvent.click(
+      within(step).getByRole("button", { name: "Load Jira target statuses" }),
+    );
+
+    const statusSelect = await within(step).findByLabelText("Jira Target Status");
+    const transitionCall = fetchSpy.mock.calls.find(
+      ([url]) => String(url) === "/mcp/tools/call",
+    );
+    expect(JSON.parse(String(transitionCall?.[1]?.body))).toEqual({
+      tool: "jira.get_transitions",
+      arguments: { issueKey: "MM-576", expandFields: true },
+    });
+    fireEvent.change(statusSelect, { target: { value: "51" } });
+    expect(
+      (within(step).getByLabelText("Tool Inputs (JSON object)") as HTMLTextAreaElement)
+        .value,
+    ).toContain('"transitionId": "51"');
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: { task: { steps: Array<Record<string, unknown>> } };
+    };
+    expect(request.payload.task.steps[0]).toEqual({
+      type: "tool",
+      instructions: "Transition MM-576 through trusted Jira.",
+      tool: {
+        type: "tool",
+        id: "jira.transition_issue",
+        inputs: {
+          issueKey: "MM-576",
+          transitionId: "51",
+        },
+      },
+    });
+    expect(request.payload.task.steps[0]?.["skill"]).toBeUndefined();
+  });
+
+  it("keeps manual Tool authoring available when trusted discovery fails", async () => {
+    toolDiscoveryResponse = {
+      ok: false,
+      status: 503,
+      text: async () => "Tool discovery unavailable",
+    } as Response;
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Tool");
+
+    expect(
+      await within(step).findByText(
+        "Trusted Tool discovery is unavailable. Manual Tool authoring remains available.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(within(step).getByLabelText("Tool"), {
+      target: { value: "jira.get_issue" },
+    });
+    expect((within(step).getByLabelText("Tool") as HTMLInputElement).value)
+      .toBe("jira.get_issue");
   });
 });

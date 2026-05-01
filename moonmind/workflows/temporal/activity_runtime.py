@@ -4067,10 +4067,14 @@ class TemporalAgentRuntimeActivities:
                 / "skills_active"
                 / resolved_skillset.snapshot_id
             )
+            skill_source_preservation_root = (
+                run_root / "runtime" / "skill_sources" / "repo_agents_skills"
+            )
             materializer = AgentSkillMaterializer(
                 workspace_root=str(workspace),
                 artifact_service=self._artifact_service,
                 backing_root=str(skills_backing_root),
+                source_preservation_root=str(skill_source_preservation_root),
             )
             await materializer.materialize(
                 resolved_skillset=resolved_skillset,
@@ -5191,7 +5195,7 @@ class TemporalAgentRuntimeActivities:
             normalized == ".agents/skills"
             or normalized.startswith(".agents/skills/")
         ):
-            projection = workspace / ".agents" / "skills"
+            projection = workspace.expanduser().resolve() / ".agents" / "skills"
             if projection.is_symlink():
                 return True
         return False
@@ -5444,10 +5448,14 @@ class TemporalAgentRuntimeActivities:
             return {}
 
         try:
+            workspace_path = Path(workspace).expanduser().resolve()
             changed_paths = tuple(
                 path
                 for path in self._parse_git_status_paths(status_stdout)
-                if not self._should_exclude_publish_path(path, workspace=workspace)
+                if not self._should_exclude_publish_path(
+                    path,
+                    workspace=workspace_path,
+                )
             )
         except ValueError as exc:
             return {

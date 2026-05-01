@@ -508,6 +508,34 @@ interface TemplateCatalogResult {
   failedScopes: TemplateScope[];
 }
 
+interface TrustedToolDefinition {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
+interface ToolDiscoveryResponse {
+  tools?: TrustedToolDefinition[];
+}
+
+interface ToolChoiceGroup {
+  group: string;
+  tools: TrustedToolDefinition[];
+}
+
+interface JiraTransitionOption {
+  id: string;
+  name: string;
+}
+
+interface JiraTransitionState {
+  isLoading: boolean;
+  error: string | null;
+  issueKey: string;
+  toolId: string;
+  options: JiraTransitionOption[];
+}
+
 interface AttachmentPolicy {
   enabled: boolean;
   maxCount: number;
@@ -555,6 +583,7 @@ interface StepState {
   presetMessage: string | null;
   presetReapplyNeeded: boolean;
   presetPreview: PresetPreviewState | null;
+  stepTypeMessage: string | null;
   templateStepId: string;
   templateInstructions: string;
   inputAttachments: StepAttachmentRef[];
@@ -1163,6 +1192,7 @@ function createStepStateEntry(
     presetMessage: null,
     presetReapplyNeeded: false,
     presetPreview: null,
+    stepTypeMessage: null,
     templateStepId: "",
     templateInstructions: "",
     inputAttachments: [],
@@ -1184,6 +1214,16 @@ function presetInputValuesFromPayload(
       return values;
     },
     {},
+  );
+}
+
+function presetInputValueSignature(
+  inputValues: Record<string, string | boolean>,
+): string {
+  return JSON.stringify(
+    Object.entries(inputValues).sort(([left], [right]) =>
+      left.localeCompare(right),
+    ),
   );
 }
 
@@ -1503,6 +1543,84 @@ function parseToolInputsText(
   } catch {
     return { ok: false };
   }
+}
+
+function toolDefinitionId(tool: TrustedToolDefinition): string {
+  return String(tool.name || "").trim();
+}
+
+function toolGroupLabel(toolId: string): string {
+  const namespace = toolId.split(".")[0] || "other";
+  if (namespace.toLowerCase() === "github") {
+    return "GitHub";
+  }
+  return namespace.charAt(0).toUpperCase() + namespace.slice(1);
+}
+
+function groupedToolChoices(
+  tools: TrustedToolDefinition[],
+  searchText: string,
+): ToolChoiceGroup[] {
+  const search = searchText.trim().toLowerCase();
+  const groups = new Map<string, TrustedToolDefinition[]>();
+  tools.forEach((tool) => {
+    const id = toolDefinitionId(tool);
+    if (!id) {
+      return;
+    }
+    const group = toolGroupLabel(id);
+    const haystack = `${group} ${id} ${tool.description || ""}`.toLowerCase();
+    if (search && !haystack.includes(search)) {
+      return;
+    }
+    const groupTools = groups.get(group);
+    if (groupTools) {
+      groupTools.push(tool);
+    } else {
+      groups.set(group, [tool]);
+    }
+  });
+  return Array.from(groups.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([group, groupTools]) => ({
+      group,
+      tools: groupTools.sort((left, right) =>
+        toolDefinitionId(left).localeCompare(toolDefinitionId(right)),
+      ),
+    }));
+}
+
+function toolContractSummary(tool: TrustedToolDefinition | null): string {
+  if (!tool) {
+    return "Tool definitions declare schema-backed inputs, authorization, worker capability, retry, binding, validation, and error contracts.";
+  }
+  const schema = tool.inputSchema || {};
+  const properties = schema.properties;
+  const propertyNames =
+    properties && typeof properties === "object" && !Array.isArray(properties)
+      ? Object.keys(properties as Record<string, unknown>).sort()
+      : [];
+  if (propertyNames.length > 0) {
+    return `Schema-backed inputs: ${propertyNames.join(", ")}. Tool execution remains governed by authorization, capability, retry, binding, validation, and error contracts.`;
+  }
+  return "This Tool exposes a governed contract with schema-backed inputs and policy-checked deterministic execution.";
+}
+
+function extractIssueKeyFromToolInputs(value: string): string {
+  const parsed = parseToolInputsText(value);
+  if (!parsed.ok) {
+    return "";
+  }
+  return String(parsed.value.issueKey || "").trim();
+}
+
+function updateToolInputsText(
+  value: string,
+  updates: Record<string, unknown>,
+): string {
+  const parsed = parseToolInputsText(value);
+  const base = parsed.ok ? parsed.value : {};
+  return JSON.stringify({ ...base, ...updates }, null, 2);
 }
 
 function validatePrimaryStepSubmission(
@@ -2807,6 +2925,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     ?.supportedTaskRuntimes || ["codex_cli", "gemini_cli", "claude_code"];
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
+  const stepsRef = useRef<StepState[]>(steps);
   const [nextStepNumber, setNextStepNumber] = useState(2);
   const [showAdvancedStepOptions, setShowAdvancedStepOptions] = useState(false);
   const [runtime, setRuntime] = useState(defaultRuntime);
@@ -2871,6 +2990,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedJiraIssueKey, setSelectedJiraIssueKey] = useState("");
   const [pendingJiraImportIssueKey, setPendingJiraImportIssueKey] =
     useState("");
+  const [toolSearchTextByStep, setToolSearchTextByStep] = useState<
+    Record<string, string>
+  >({});
+  const [jiraTransitionStateByStep, setJiraTransitionStateByStep] = useState<
+    Record<string, JiraTransitionState>
+  >({});
   const [jiraImportMode, setJiraImportMode] =
     useState<JiraImportMode>("preset-brief");
   const [jiraWriteMode, setJiraWriteMode] =
@@ -2903,6 +3028,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const temporalDraftAppliedRef = useRef<string | null>(null);
   const jiraProjectSelectionInitializedRef = useRef(false);
   const jiraBoardSelectionInitializedRef = useRef(false);
+
+  useEffect(() => {
+    stepsRef.current = steps;
+  }, [steps]);
 
   const temporalDraftQuery = useQuery({
     queryKey: [
@@ -3280,6 +3409,42 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       const data = (await response.json()) as SkillsResponse;
       return data.items?.worker || [];
+    },
+  });
+
+  const hasToolStep = steps.some((step) => step.stepType === "tool");
+  const trustedToolsQuery = useQuery({
+    queryKey: ["task-create", "trusted-tools"],
+    enabled: hasToolStep,
+    retry: false,
+    queryFn: async (): Promise<TrustedToolDefinition[]> => {
+      const response = await fetch("/mcp/tools", {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(
+            response,
+            "Failed to load trusted Tool discovery.",
+          ),
+        );
+      }
+      const data = (await response.json()) as ToolDiscoveryResponse;
+      return (data.tools || [])
+        .map((tool) => {
+          const inputSchema =
+            tool.inputSchema &&
+            typeof tool.inputSchema === "object" &&
+            !Array.isArray(tool.inputSchema)
+              ? (tool.inputSchema as Record<string, unknown>)
+              : undefined;
+          return {
+            name: String(tool.name || "").trim(),
+            description: String(tool.description || "").trim(),
+            ...(inputSchema ? { inputSchema } : {}),
+          };
+        })
+        .filter((tool) => Boolean(tool.name));
     },
   });
 
@@ -4540,6 +4705,27 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     );
   }
 
+  function currentStepPresetMatches(
+    localId: string,
+    presetKey: string,
+    expectedInstructions?: string,
+    expectedInputValues?: Record<string, string | boolean>,
+  ): boolean {
+    const currentStep = stepsRef.current.find((step) => step.localId === localId);
+    const inputValuesMatch =
+      expectedInputValues === undefined ||
+      presetInputValueSignature(currentStep?.presetInputValues || {}) ===
+        presetInputValueSignature(expectedInputValues);
+    return Boolean(
+      currentStep &&
+        currentStep.stepType === "preset" &&
+        currentStep.presetKey === presetKey &&
+        (expectedInstructions === undefined ||
+          currentStep.instructions === expectedInstructions) &&
+        inputValuesMatch,
+    );
+  }
+
   async function handleStepPresetSelectionChange(
     localId: string,
     presetKey: string,
@@ -4589,6 +4775,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         ) {
           nextStep.skillArgs = "";
         }
+        if (
+          Object.prototype.hasOwnProperty.call(updates, "instructions") &&
+          nextStep.stepType === "preset" &&
+          nextStep.instructions !== step.instructions
+        ) {
+          nextStep.presetReapplyNeeded = Boolean(step.presetPreview);
+          nextStep.presetPreview = null;
+        }
         return nextStep;
       }),
     );
@@ -4605,10 +4799,195 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     });
   }
 
+  function selectTrustedTool(localId: string, toolId: string) {
+    updateStep(localId, { toolId });
+    setJiraTransitionStateByStep((current) => {
+      if (!current[localId]) {
+        return current;
+      }
+      const { [localId]: _removed, ...rest } = current;
+      return rest;
+    });
+  }
+
+  async function loadJiraTransitionOptions(step: StepState) {
+    const issueKey = extractIssueKeyFromToolInputs(step.toolInputs);
+    if (!issueKey) {
+      setJiraTransitionStateByStep((current) => ({
+        ...current,
+        [step.localId]: {
+          isLoading: false,
+          error: "Enter issueKey in Tool Inputs before loading Jira target statuses.",
+          issueKey: "",
+          toolId: step.toolId.trim(),
+          options: [],
+        },
+      }));
+      return;
+    }
+    setJiraTransitionStateByStep((current) => ({
+      ...current,
+      [step.localId]: {
+        isLoading: true,
+        error: null,
+        issueKey,
+        toolId: step.toolId.trim(),
+        options: [],
+      },
+    }));
+    try {
+      const response = await fetch("/mcp/tools/call", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          tool: "jira.get_transitions",
+          arguments: { issueKey, expandFields: true },
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(
+            response,
+            "Failed to load Jira target statuses.",
+          ),
+        );
+      }
+      const data = (await response.json()) as {
+        result?: { transitions?: Array<Record<string, unknown>> };
+      };
+      const seen = new Set<string>();
+      const options = (data.result?.transitions || [])
+        .map((transition) => {
+          const to = transition.to;
+          const target =
+            to && typeof to === "object" && !Array.isArray(to)
+              ? String((to as Record<string, unknown>).name || "").trim()
+              : "";
+          const name = target || String(transition.name || "").trim();
+          const id = String(transition.id || name).trim();
+          return { id, name };
+        })
+        .filter((option) => {
+          if (!option.name || seen.has(option.name)) {
+            return false;
+          }
+          seen.add(option.name);
+          return true;
+        });
+      setJiraTransitionStateByStep((current) => ({
+        ...current,
+        [step.localId]: {
+          isLoading: false,
+          error:
+            options.length > 0
+              ? null
+              : "No Jira target statuses were returned for this issue.",
+          issueKey,
+          toolId: step.toolId.trim(),
+          options,
+        },
+      }));
+    } catch (error) {
+      setJiraTransitionStateByStep((current) => ({
+        ...current,
+        [step.localId]: {
+          isLoading: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to load Jira target statuses.",
+          issueKey,
+          toolId: step.toolId.trim(),
+          options: [],
+        },
+      }));
+    }
+  }
+
+  function applyJiraTransitionId(localId: string, transitionId: string) {
+    if (!transitionId) {
+      return;
+    }
+    const step = stepsRef.current.find((item) => item.localId === localId);
+    if (!step) {
+      return;
+    }
+    updateStep(localId, {
+      toolInputs: updateToolInputsText(step.toolInputs, {
+        transitionId,
+        targetStatus: undefined,
+      }),
+    });
+  }
+
   function handleStepTypeChange(localId: string, value: string) {
     const nextType: StepType =
       value === "tool" || value === "preset" ? value : "skill";
-    updateStep(localId, { stepType: nextType, presetPreview: null });
+    setSteps((current) =>
+      current.map((step) => {
+        if (step.localId !== localId || step.stepType === nextType) {
+          return step;
+        }
+
+        const discardedLabels: string[] = [];
+        const nextStep: StepState = {
+          ...step,
+          stepType: nextType,
+          presetPreview: null,
+          stepTypeMessage: null,
+        };
+
+        if (
+          step.stepType === "skill" &&
+          (step.skillId.trim() ||
+            step.skillArgs.trim() ||
+            step.skillRequiredCapabilities.trim())
+        ) {
+          discardedLabels.push("Skill configuration");
+          nextStep.skillId = "";
+          nextStep.skillArgs = "";
+          nextStep.skillRequiredCapabilities = "";
+        }
+
+        if (
+          step.stepType === "tool" &&
+          (step.toolId.trim() ||
+            step.toolVersion.trim() ||
+            (step.toolInputs.trim() && step.toolInputs.trim() !== "{}"))
+        ) {
+          discardedLabels.push("Tool configuration");
+          nextStep.toolId = "";
+          nextStep.toolVersion = "";
+          nextStep.toolInputs = "{}";
+        }
+
+        if (
+          step.stepType === "preset" &&
+          (step.presetKey ||
+            Object.keys(step.presetInputValues).length > 0 ||
+            step.presetPreview)
+        ) {
+          discardedLabels.push("Preset configuration");
+          nextStep.presetKey = "";
+          nextStep.presetInputValues = {};
+          nextStep.presetDetail = null;
+          nextStep.presetMessage = null;
+          nextStep.presetReapplyNeeded = false;
+          nextStep.presetPreview = null;
+        }
+
+        if (discardedLabels.length > 0) {
+          nextStep.stepTypeMessage = `${discardedLabels.join(
+            ", ",
+          )} discarded after changing Step Type. Shared instructions were preserved.`;
+        }
+
+        return nextStep;
+      }),
+    );
   }
 
   function updateStepPresetInputValue(
@@ -5083,6 +5462,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       updateStep(localId, { presetMessage: "Choose a preset first." });
       return;
     }
+    const requestedInstructions = step.instructions;
+    const requestedInputValues = { ...step.presetInputValues };
     setIsApplyingPreset(true);
     updateStep(localId, {
       presetMessage: "Previewing preset...",
@@ -5103,7 +5484,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           step.instructions,
         ).values,
       });
-      updateStep(localId, {
+      if (
+        !currentStepPresetMatches(
+          localId,
+          preset.key,
+          requestedInstructions,
+          requestedInputValues,
+        )
+      ) {
+        return;
+      }
+      updateStepPresetIfCurrent(localId, preset.key, {
         presetDetail: detail,
         presetPreview: preview,
         presetMessage: `Previewed preset '${preset.title}' (${preview.previewSteps.length} steps).`,
@@ -5111,16 +5502,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     } catch (error) {
       const failure =
         error instanceof Error ? error : new Error("Failed to preview preset.");
-      updateStep(localId, {
-        presetMessage: `Failed to preview preset: ${failure.message}`,
-        presetPreview: null,
-      });
+      if (
+        currentStepPresetMatches(
+          localId,
+          preset.key,
+          requestedInstructions,
+          requestedInputValues,
+        )
+      ) {
+        updateStepPresetIfCurrent(localId, preset.key, {
+          presetMessage: `Failed to preview preset: ${failure.message}`,
+          presetPreview: null,
+        });
+      }
     } finally {
       setIsApplyingPreset(false);
     }
   }
 
-  async function handleApplyStepPreset(localId: string) {
+  async function handleExpandStepPreset(localId: string) {
     if (isApplyingPreset) return;
     const step = steps.find((candidate) => candidate.localId === localId);
     const preset = templateItems.find((item) => item.key === step?.presetKey);
@@ -5128,15 +5528,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       updateStep(localId, { presetMessage: "Choose a preset first." });
       return;
     }
-    if (!step.presetPreview || step.presetPreview.presetKey !== preset.key) {
-      updateStep(localId, {
-        presetMessage: "Preview the selected preset before applying.",
-      });
-      return;
-    }
+    const requestedInstructions = step.instructions;
+    const requestedInputValues = { ...step.presetInputValues };
     setIsApplyingPreset(true);
     updateStep(localId, {
-      presetMessage: "Applying preset preview...",
+      presetMessage: "Expanding preset...",
       presetReapplyNeeded: false,
     });
     try {
@@ -5144,19 +5540,50 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         step.presetDetail && step.presetKey === preset.key
           ? step.presetDetail
           : await loadPresetDetail(preset);
+      const preview =
+        step.presetPreview && step.presetPreview.presetKey === preset.key
+          ? step.presetPreview
+          : await expandPresetForDraft({
+              preset,
+              detail,
+              inputValues: resolveTemplateInputs(
+                detail.inputs || [],
+                step.presetInputValues,
+                step.instructions,
+              ).values,
+            });
+      if (
+        !currentStepPresetMatches(
+          localId,
+          preset.key,
+          requestedInstructions,
+          requestedInputValues,
+        )
+      ) {
+        return;
+      }
       applyPresetPreviewToDraft({
         preset,
         detail,
-        preview: step.presetPreview,
+        preview,
         replaceLocalId: localId,
-        setMessage: (message) => updateStep(localId, { presetMessage: message }),
+        setMessage: (message) => setTemplateMessage(message),
       });
     } catch (error) {
       const failure =
-        error instanceof Error ? error : new Error("Failed to apply preset.");
-      updateStep(localId, {
-        presetMessage: `Failed to apply preset: ${failure.message}`,
-      });
+        error instanceof Error ? error : new Error("Failed to expand preset.");
+      if (
+        currentStepPresetMatches(
+          localId,
+          preset.key,
+          requestedInstructions,
+          requestedInputValues,
+        )
+      ) {
+        updateStepPresetIfCurrent(localId, preset.key, {
+          presetMessage: `Failed to expand preset: ${failure.message}`,
+        });
+      }
     } finally {
       setIsApplyingPreset(false);
     }
@@ -6360,9 +6787,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         "Choose a valid GitHub repository before selecting a branch"
       : "Select the branch to check out before the task starts";
   const publishModeTooltip = "Select how MoonMind publishes task changes";
-  const applyPresetTooltip = presetReapplyNeeded
-    ? "Preview the selected preset again before applying"
-    : "Apply the selected preset preview to the task draft";
+  const expandStepPresetTooltip =
+    "Expand the selected preset into editable steps at this position";
   const modeLoadError =
     pageMode.mode !== "create" && !temporalTaskEditingEnabled
       ? "Temporal task editing is not enabled."
@@ -6683,6 +7109,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       !isFeatureRequestInputKey(definition.name),
                   )
                 : [];
+              const toolSearchText = toolSearchTextByStep[step.localId] || "";
+              const trustedToolDefinitions = trustedToolsQuery.data || [];
+              const toolChoiceGroups = groupedToolChoices(
+                trustedToolDefinitions,
+                toolSearchText,
+              );
+              const selectedTrustedTool =
+                trustedToolDefinitions.find(
+                  (tool) => toolDefinitionId(tool) === step.toolId.trim(),
+                ) || null;
+              const jiraTransitionState =
+                jiraTransitionStateByStep[step.localId] || null;
+              const showJiraTransitionOptions =
+                step.stepType === "tool" &&
+                step.toolId.trim() === "jira.transition_issue";
               return (
                 <section
                   key={step.localId}
@@ -6766,9 +7207,76 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       ))}
                     </div>
                   </fieldset>
+                  {step.stepTypeMessage ? (
+                    <p className="notice small">{step.stepTypeMessage}</p>
+                  ) : null}
 
                   {step.stepType === "tool" ? (
                     <div className="stack queue-step-type-panel">
+                      <p className="small">
+                        Tool steps run typed governed operations with schema-backed
+                        inputs, authorization, capability, retry, binding,
+                        validation, and error contracts.
+                      </p>
+                      <label>
+                        Search Tools
+                        <input
+                          data-step-field="toolSearch"
+                          data-step-index={String(index)}
+                          placeholder="Search by integration, tool, or purpose"
+                          value={toolSearchText}
+                          onChange={(event) =>
+                            setToolSearchTextByStep((current) => ({
+                              ...current,
+                              [step.localId]: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      {trustedToolsQuery.isLoading || trustedToolsQuery.isFetching ? (
+                        <p className="small">Loading trusted Tools...</p>
+                      ) : trustedToolsQuery.isError ? (
+                        <p className="notice small">
+                          Trusted Tool discovery is unavailable. Manual Tool
+                          authoring remains available.
+                        </p>
+                      ) : toolChoiceGroups.length > 0 ? (
+                        <div className="queue-tool-choice-groups">
+                          {toolChoiceGroups.map((group) => (
+                            <div
+                              key={`${step.localId}-tool-group-${group.group}`}
+                              className="queue-tool-choice-group"
+                            >
+                              <strong>{group.group}</strong>
+                              <div className="queue-tool-choice-list">
+                                {group.tools.map((tool) => {
+                                  const toolId = toolDefinitionId(tool);
+                                  return (
+                                    <button
+                                      key={`${step.localId}-tool-${toolId}`}
+                                      type="button"
+                                      className={
+                                        step.toolId.trim() === toolId
+                                          ? "secondary active"
+                                          : "secondary"
+                                      }
+                                      aria-pressed={step.toolId.trim() === toolId}
+                                      title={tool.description || toolId}
+                                      onClick={() =>
+                                        selectTrustedTool(step.localId, toolId)
+                                      }
+                                    >
+                                      {toolId}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : trustedToolDefinitions.length > 0 ? (
+                        <p className="small">No trusted Tools match this search.</p>
+                      ) : null}
                       <label>
                         Tool
                         <input
@@ -6777,12 +7285,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           placeholder="jira.get_issue"
                           value={step.toolId}
                           onChange={(event) =>
-                            updateStep(step.localId, {
-                              toolId: event.target.value,
-                            })
+                            selectTrustedTool(step.localId, event.target.value)
                           }
                         />
                       </label>
+                      <p className="small">
+                        {toolContractSummary(selectedTrustedTool)}
+                      </p>
                       <label>
                         Tool Version (optional)
                         <input
@@ -6811,6 +7320,45 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           }
                         />
                       </label>
+                      {showJiraTransitionOptions ? (
+                        <div className="stack queue-tool-dynamic-options">
+                          <button
+                            type="button"
+                            className="secondary"
+                            aria-busy={Boolean(jiraTransitionState?.isLoading)}
+                            disabled={Boolean(jiraTransitionState?.isLoading)}
+                            onClick={() => void loadJiraTransitionOptions(step)}
+                          >
+                            Load Jira target statuses
+                          </button>
+                          {jiraTransitionState?.error ? (
+                            <p className="notice small">
+                              {jiraTransitionState.error}
+                            </p>
+                          ) : null}
+                          {jiraTransitionState?.options.length ? (
+                            <label>
+                              Jira Target Status
+                              <select
+                                value=""
+                                onChange={(event) =>
+                                  applyJiraTransitionId(
+                                    step.localId,
+                                    event.target.value,
+                                  )
+                                }
+                              >
+                                <option value="">Select returned status...</option>
+                                {jiraTransitionState.options.map((option) => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
 
@@ -6889,6 +7437,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         Preset
                         <select
                           value={step.presetKey}
+                          disabled={isApplyingPreset}
+                          aria-disabled={isApplyingPreset}
                           onChange={(event) => {
                             void handleStepPresetSelectionChange(
                               step.localId,
@@ -7169,6 +7719,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                     <select
                                       id={inputId}
                                       value={value}
+                                      disabled={isApplyingPreset}
                                       onChange={(event) =>
                                         updateStepPresetInputValue(
                                           step.localId,
@@ -7197,6 +7748,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                       id={inputId}
                                       type="checkbox"
                                       checked={value === "true"}
+                                      disabled={isApplyingPreset}
                                       onChange={(event) =>
                                         updateStepPresetInputValue(
                                           step.localId,
@@ -7219,6 +7771,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                       id={inputId}
                                       value={value}
                                       placeholder={definition.placeholder || ""}
+                                      disabled={isApplyingPreset}
                                       onChange={(event) =>
                                         updateStepPresetInputValue(
                                           step.localId,
@@ -7238,6 +7791,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                     type="text"
                                     value={value}
                                     placeholder={definition.placeholder || ""}
+                                    disabled={isApplyingPreset}
                                     onChange={(event) =>
                                       updateStepPresetInputValue(
                                         step.localId,
@@ -7267,19 +7821,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         className="secondary"
                         aria-disabled={
                           isApplyingPreset ||
-                          !step.presetKey ||
-                          !step.presetPreview
+                          !step.presetKey
                         }
                         aria-busy={isApplyingPreset}
-                        title={applyPresetTooltip}
+                        title={expandStepPresetTooltip}
                         disabled={
                           isApplyingPreset ||
-                          !step.presetKey ||
-                          !step.presetPreview
+                          !step.presetKey
                         }
-                        onClick={() => handleApplyStepPreset(step.localId)}
+                        onClick={() => handleExpandStepPreset(step.localId)}
                       >
-                        Apply preview
+                        Expand
                       </button>
                       {step.presetPreview ? (
                         <div
