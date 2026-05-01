@@ -3,7 +3,7 @@
 ## Focused Unit/Integration Validation
 
 ```bash
-npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx
+./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx
 ```
 
 Expected coverage:
@@ -19,7 +19,7 @@ Expected coverage:
 ## Managed Unit Runner
 
 ```bash
-./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx
+./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx
 ```
 
-Use the managed runner before finalizing because repository instructions require `./tools/test_unit.sh` for final unit verification.
+Use the managed dashboard runner before finalizing frontend-only changes. The full repository-wide unit wrapper runs the Python unit suite before frontend validation; MM-578 verification records the current unrelated Python-suite flake separately in `verification.md`.

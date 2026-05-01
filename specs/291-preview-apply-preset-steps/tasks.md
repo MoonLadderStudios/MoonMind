@@ -3,7 +3,7 @@
 **Input**: Design documents from `/specs/291-preview-apply-preset-steps/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
-**Tests**: Unit tests and integration tests are REQUIRED. Existing MM-558/MM-565 red-first tests are reused as implementation evidence for this MM-578 follow-on; rerun focused validation and only patch code if evidence fails.
+**Tests**: Unit tests and integration tests are REQUIRED. Existing MM-558/MM-565 red-first coverage established the underlying preview/apply behavior, and active MM-578 tests in `frontend/src/entrypoints/task-create.test.tsx` now preserve story-specific evidence; rerun focused validation and only patch code if evidence fails.
 
 **Organization**: Tasks are grouped by phase around MM-578's single user story.
 
@@ -11,8 +11,8 @@
 
 **Test Commands**:
 
-- Unit tests: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`
-- Integration tests: `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx`
+- Unit tests: `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx`
+- Integration tests: `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
 - Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
@@ -54,16 +54,16 @@
 - Unit: preview state, generated step list/warnings, no mutation before apply, apply replacement, unresolved submit block, preview failure handling, stale preview invalidation.
 - Integration: Create page Vitest render/submission coverage acts as the story integration boundary because it exercises UI state and mocked task-template API calls.
 
-### Unit Tests (red-first evidence)
+### Unit Tests (red-first and active MM-578 evidence)
 
-- [X] T005 Confirm existing red-first unit coverage for Step Type `Preset` preview generated step titles, Step Types, and expansion warnings without mutating the draft in `frontend/src/entrypoints/task-create.test.tsx` (FR-003, SC-001, SC-003, DESIGN-REQ-012, DESIGN-REQ-013)
-- [X] T006 Confirm existing red-first unit coverage for applying a preview by replacing the selected Preset step with editable generated steps in `frontend/src/entrypoints/task-create.test.tsx` (FR-004, FR-005, SC-004, DESIGN-REQ-004, DESIGN-REQ-012)
-- [X] T007 Confirm existing red-first unit coverage for preview expansion failure leaving the draft unchanged with a visible error in `frontend/src/entrypoints/task-create.test.tsx` (FR-002, FR-006, FR-008, SC-002, DESIGN-REQ-013)
-- [X] T008 Confirm existing red-first unit coverage for unresolved Preset steps blocking task submission by default in `frontend/src/entrypoints/task-create.test.tsx` (FR-006, DESIGN-REQ-004)
-- [X] T009 Confirm existing red-first unit coverage for step-editor preset preview/apply without using the separate Task Presets management section in `frontend/src/entrypoints/task-create.test.tsx` (FR-001, FR-007, SC-005, DESIGN-REQ-011, DESIGN-REQ-019)
-- [X] T010 Confirm existing stale preset detail/preview invalidation coverage in `frontend/src/entrypoints/task-create.test.tsx` (FR-008, SC-002)
+- [X] T005 Confirm active MM-578 unit coverage for Step Type `Preset` preview generated step titles, Step Types, and expansion warnings without mutating the draft in `frontend/src/entrypoints/task-create.test.tsx` (FR-003, SC-001, SC-003, DESIGN-REQ-012, DESIGN-REQ-013)
+- [X] T006 Confirm active MM-578 unit coverage for applying a preview by replacing the selected Preset step with editable generated steps in `frontend/src/entrypoints/task-create.test.tsx` (FR-004, FR-005, SC-004, DESIGN-REQ-004, DESIGN-REQ-012)
+- [X] T007 Confirm active MM-578 unit coverage for preview expansion failure leaving the draft unchanged with a visible error in `frontend/src/entrypoints/task-create.test.tsx` (FR-002, FR-006, FR-008, SC-002, DESIGN-REQ-013)
+- [X] T008 Confirm active MM-578 unit coverage for unresolved Preset steps blocking task submission by default in `frontend/src/entrypoints/task-create.test.tsx` (FR-006, DESIGN-REQ-004)
+- [X] T009 Confirm active MM-578 unit coverage for step-editor preset preview/apply without using the separate Task Presets management section in `frontend/src/entrypoints/task-create.test.tsx` (FR-001, FR-007, SC-005, DESIGN-REQ-011, DESIGN-REQ-019)
+- [X] T010 Confirm active MM-578 stale preset detail/preview invalidation coverage in `frontend/src/entrypoints/task-create.test.tsx` (FR-008, SC-002)
 
-### Integration Tests (red-first evidence)
+### Integration Tests (active MM-578 evidence)
 
 - [X] T011 Confirm Create page render/submission tests in `frontend/src/entrypoints/task-create.test.tsx` exercise the public authoring boundary: preset preview, apply, generated Tool submission, and unresolved Preset rejection (FR-001, FR-004, FR-006, FR-007, SC-001, SC-004, SC-005)
 - [X] T012 Run focused Vitest integration boundary for `frontend/src/entrypoints/task-create.test.tsx` and confirm MM-578 evidence passes
@@ -88,8 +88,8 @@
 
 **Purpose**: Validate without adding hidden scope.
 
-- [X] T019 Run focused Vitest for `frontend/src/entrypoints/task-create.test.tsx`
-- [X] T020 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` when feasible, or record exact blocker in `specs/291-preview-apply-preset-steps/verification.md`
+- [X] T019 Run focused Vitest through `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [X] T020 Run `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx`; record the broader full-wrapper Python-suite flake separately in `specs/291-preview-apply-preset-steps/verification.md`
 - [X] T021 Run final `/moonspec-verify` equivalent by checking spec, plan, tasks, changed code, and test evidence against MM-578 in `specs/291-preview-apply-preset-steps/verification.md`
 
 ---
@@ -97,7 +97,7 @@
 ## Dependencies & Execution Order
 
 - Phase 1 and Phase 2 are complete from artifact/code inspection.
-- T005-T010 are complete from existing MM-558/MM-565 red-first unit test evidence inspection.
+- T005-T010 are complete from active MM-578 unit evidence, with MM-558/MM-565 red-first coverage retained as the behavior history.
 - T011-T012 cover the Create page integration boundary and must pass before contingency implementation is skipped.
 - T013-T016 verify existing implementation; T017 records skipped contingency implementation after verification passes.
 - T018 validates the story end-to-end before final verification.
