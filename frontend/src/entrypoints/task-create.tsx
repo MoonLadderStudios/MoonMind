@@ -586,7 +586,6 @@ interface StepState {
   presetInputValues: Record<string, string | boolean>;
   presetDetail: TaskTemplateDetail | null;
   presetMessage: string | null;
-  presetReapplyNeeded: boolean;
   stepTypeMessage: string | null;
   templateStepId: string;
   templateInstructions: string;
@@ -607,6 +606,7 @@ interface PresetExpansionState {
   inputs: Record<string, unknown>;
   assumptions: string[];
   capabilities: string[];
+  warnings: string[];
   appliedTemplate?: TaskTemplateExpandResponse["appliedTemplate"];
 }
 
@@ -1187,7 +1187,6 @@ function createStepStateEntry(
     presetInputValues: {},
     presetDetail: null,
     presetMessage: null,
-    presetReapplyNeeded: false,
     stepTypeMessage: null,
     templateStepId: "",
     templateInstructions: "",
@@ -4677,9 +4676,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   ]);
 
   function stepPresetStatusText(step: StepState): string {
-    if (step.presetReapplyNeeded) {
-      return PRESET_REAPPLY_REQUIRED_MESSAGE;
-    }
     if (step.presetMessage) {
       return step.presetMessage;
     }
@@ -4705,7 +4701,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       presetInputValues: {},
       presetDetail,
       presetMessage: null,
-      presetReapplyNeeded: false,
     });
   }
 
@@ -4984,7 +4979,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           nextStep.presetInputValues = {};
           nextStep.presetDetail = null;
           nextStep.presetMessage = null;
-          nextStep.presetReapplyNeeded = false;
         }
 
         if (discardedLabels.length > 0) {
@@ -5014,7 +5008,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             ...step.presetInputValues,
             [definition.name]: value,
           },
-          presetReapplyNeeded: false,
         };
       }),
     );
@@ -5331,6 +5324,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       capabilities: Array.isArray(expanded.capabilities)
         ? expanded.capabilities
         : [],
+      warnings: Array.isArray(expanded.warnings)
+        ? expanded.warnings
+            .map((warning) => String(warning).trim())
+            .filter(Boolean)
+        : [],
       appliedTemplate: expanded.appliedTemplate,
     };
   }
@@ -5421,8 +5419,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       expansion.assumptions.length > 0
         ? ` Auto-filled ${expansion.assumptions.length} input(s): ${expansion.assumptions.join(", ")}.`
         : "";
+    const warningSuffix =
+      expansion.warnings.length > 0
+        ? ` ${expansion.warnings.join(" ")}`
+        : "";
     setMessage(
-      `Applied preset '${preset.title}' (${expandedSteps.length} steps).${autoFillSuffix}`,
+      `Applied preset '${preset.title}' (${expandedSteps.length} steps).${autoFillSuffix}${warningSuffix}`,
     );
   }
 
@@ -5439,7 +5441,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     setIsApplyingPreset(true);
     updateStep(localId, {
       presetMessage: "Expanding preset...",
-      presetReapplyNeeded: false,
     });
     try {
       const detail =

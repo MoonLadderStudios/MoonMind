@@ -12390,6 +12390,11 @@ describe("Task Create MM-578 Preset expansion", () => {
 
     expect(await screen.findByDisplayValue("Fetch MM-578.")).toBeTruthy();
     expect(screen.getByDisplayValue("Implement MM-578.")).toBeTruthy();
+    expect(
+      screen.getByText((content) =>
+        content.includes("Generated steps should be reviewed before apply."),
+      ),
+    ).toBeTruthy();
     expect(screen.queryByLabelText("Step Preset")).toBeNull();
 
     const firstGeneratedStep = (await screen.findByText("Step 1 (Primary)")).closest(
