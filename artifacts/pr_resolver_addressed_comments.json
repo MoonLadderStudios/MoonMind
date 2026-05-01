@@ -1,27 +1,27 @@
 [
   {
-    "id": 4360791766,
+    "id": 4361276169,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier limit notice; no code action requested."
+    "rationale": "Qodo free-tier limit notice; informational bot message with no code action requested."
   },
   {
-    "id": 3174456211,
+    "id": 3174886044,
     "disposition": "addressed",
-    "rationale": "Updated the segmented-control overflow and edge radii so the keyboard focus box-shadow remains visible on the first and last Step Type options."
+    "rationale": "Removed clipping from the Step Type segmented control so the existing focus ring remains visible."
   },
   {
-    "id": 4212560240,
+    "id": 4213051744,
     "disposition": "not-applicable",
-    "rationale": "Codex review wrapper comment; the actionable inline focus-ring feedback is tracked separately."
+    "rationale": "Codex review summary wrapper; actionable inline feedback is tracked separately."
   },
   {
-    "id": 3174457616,
+    "id": 3174887989,
     "disposition": "addressed",
-    "rationale": "Replaced the selected Step Type segment's hardcoded #fff text color with the theme variable rgb(var(--mm-accent-contrast))."
+    "rationale": "Removed the redundant Step Type -webkit-backdrop-filter declaration while keeping the standard backdrop-filter."
   },
   {
-    "id": 4212561724,
+    "id": 4213053751,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the actionable hardcoded-color feedback is tracked separately."
+    "rationale": "Gemini review summary wrapper; actionable inline feedback is tracked separately."
   }
 ]

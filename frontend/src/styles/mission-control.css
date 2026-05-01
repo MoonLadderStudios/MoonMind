@@ -2555,8 +2555,6 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
     inset 0 1px 0 rgb(255 255 255 / 0.08),
     inset 0 -1px 0 rgb(0 0 0 / 0.25);
   backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  overflow: hidden;
   isolation: isolate;
 }
 
