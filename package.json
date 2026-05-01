@@ -20,6 +20,7 @@
     "ui:typecheck": "tsc --noEmit -p frontend/tsconfig.json",
     "ui:lint": "eslint -c frontend/eslint.config.mjs frontend/src",
     "ui:test": "vitest run --config frontend/vite.config.ts",
+    "ui:test:task-create": "./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx",
     "ui:test:watch": "vitest --config frontend/vite.config.ts",
     "api:types": "bash tools/run_repo_python.sh tools/generate_openapi_types.py",
     "api:types:check": "npm run api:types && git diff --exit-code -- frontend/src/generated/openapi.ts",
