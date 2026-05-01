@@ -2569,21 +2569,20 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
     linear-gradient(
         115deg,
         transparent 35%,
-        rgb(255 255 255 / 0.22) 50%,
+        rgb(255 255 255 / 0.14) 50%,
         transparent 65%
       )
       0 0 / 220% 100% no-repeat,
-    linear-gradient(180deg, rgb(255 255 255 / 0.22), transparent 55%),
     linear-gradient(
       135deg,
-      rgb(var(--mm-accent)) 0%,
-      rgb(var(--mm-accent-2)) 100%
+      color-mix(in srgb, rgb(var(--mm-accent)) 82%, black) 0%,
+      color-mix(in srgb, rgb(var(--mm-accent-2)) 70%, black) 100%
     );
   box-shadow:
     0 0 0 1px rgb(var(--mm-accent) / 0.55),
     0 0 18px rgb(var(--mm-accent) / 0.55),
     0 0 32px rgb(var(--mm-accent-2) / 0.22),
-    inset 0 1px 0 rgb(255 255 255 / 0.4);
+    inset 0 1px 0 rgb(255 255 255 / 0.22);
   transform: translateX(0);
   transition: transform 360ms cubic-bezier(0.34, 1.3, 0.5, 1);
   animation: queue-step-type-thumb-shimmer 5.5s ease-in-out infinite;
@@ -2608,13 +2607,11 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   100% {
     background-position:
       -60% 0,
-      0 0,
       0 0;
   }
   50% {
     background-position:
       160% 0,
-      0 0,
       0 0;
   }
 }
@@ -2695,7 +2692,8 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
 .queue-step-type-option:has(input:checked) {
   color: rgb(var(--mm-accent-contrast));
-  text-shadow: 0 0 12px rgb(var(--mm-accent-contrast) / 0.5);
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.45);
 }
 
 .queue-step-type-option:has(input:focus-visible) {
