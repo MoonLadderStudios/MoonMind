@@ -1,27 +1,32 @@
 [
   {
-    "id": 4361162624,
+    "id": 4361443001,
     "disposition": "not-applicable",
-    "rationale": "Qodo quota notice is informational and contains no requested code change."
+    "rationale": "Qodo free-tier notice is informational and contains no actionable code feedback."
   },
   {
-    "id": 3174796895,
+    "id": 4213218170,
     "disposition": "addressed",
-    "rationale": "Added explicit detection for GitHub REST mergeable=false conflict responses."
+    "rationale": "Removed the duplicate-label ambiguity by making Jira preset targets context-specific and non-preset instruction labels step-specific."
   },
   {
-    "id": 4212956261,
-    "disposition": "not-applicable",
-    "rationale": "Broad review summary; its actionable points are tracked by the line comments."
-  },
-  {
-    "id": 3174796906,
+    "id": 3175033901,
     "disposition": "addressed",
-    "rationale": "Conflict readiness now includes a non-retryable merge_conflict blocker with GitHub source evidence."
+    "rationale": "Jira preset import target labels now render as Instructions (Preset) and Instructions attachments (Preset)."
   },
   {
-    "id": 3174796910,
+    "id": 3175033931,
     "disposition": "addressed",
-    "rationale": "Updated readiness tests to assert the merge_conflict blocker and added boolean mergeable=false coverage."
+    "rationale": "Non-preset step instruction fields now use Step N Instructions while preset steps keep Instructions."
+  },
+  {
+    "id": 3175033942,
+    "disposition": "addressed",
+    "rationale": "Reviewed Jira import tests now query Step 1 Instructions for step fields instead of the ambiguous Instructions label."
+  },
+  {
+    "id": 3175033948,
+    "disposition": "addressed",
+    "rationale": "Preset and step assertions now use distinct accessible labels: Instructions for preset and Step 1 Instructions for step text."
   }
 ]

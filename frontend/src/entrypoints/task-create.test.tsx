@@ -9807,7 +9807,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       await screen.findByRole("dialog", { name: "Browse Jira issue" }),
     ).toBeTruthy();
-    expect(screen.getByText("Target: Instructions"))
+    expect(screen.getByText("Target: Instructions (Preset)"))
       .toBeTruthy();
   });
 
@@ -11345,7 +11345,7 @@ describe.skip("Task Create Entrypoint", () => {
       <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
     );
 
-    const stepInstructions = await screen.findByLabelText("Instructions");
+    const stepInstructions = await screen.findByLabelText("Step 1 Instructions");
     fireEvent.change(stepInstructions, {
       target: { value: "Keep step text." },
     });
@@ -11442,7 +11442,7 @@ describe.skip("Task Create Entrypoint", () => {
         "Instructions",
       ) as HTMLTextAreaElement).value,
     ).toBe("ENG-202: Build browser shell\n\nLet operators browse Jira stories.");
-    expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(
+    expect((screen.getByLabelText("Step 1 Instructions") as HTMLTextAreaElement).value).toBe(
       "Complete Jira issue ENG-202: Build browser shell",
     );
   });
@@ -11726,7 +11726,7 @@ describe.skip("Task Create Entrypoint", () => {
     const presetInstructions = await screen.findByLabelText(
       "Instructions",
     );
-    const stepInstructions = screen.getByLabelText("Instructions");
+    const stepInstructions = screen.getByLabelText("Step 1 Instructions");
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -11914,7 +11914,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
-    const stepInstructions = await screen.findByLabelText("Instructions");
+    const stepInstructions = await screen.findByLabelText("Step 1 Instructions");
     const presetInstructions = screen.getByLabelText(
       "Instructions",
     );
@@ -12442,7 +12442,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
       target: { value: "Keep authored MM-578 preset placeholder." },
     });
     selectStepType(step, "Preset");
@@ -12478,7 +12478,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
     const firstGeneratedStep = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(firstGeneratedStep).getByLabelText("Instructions"), {
+    fireEvent.change(within(firstGeneratedStep).getByLabelText("Step 1 Instructions"), {
       target: { value: "Edited generated MM-578 step." },
     });
     expect(screen.getByDisplayValue("Edited generated MM-578 step.")).toBeTruthy();
@@ -12550,7 +12550,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
       target: { value: "Keep authored MM-578 preset step." },
     });
     selectStepType(step, "Preset");
@@ -12745,7 +12745,7 @@ describe("Task Create governed Tool authoring", () => {
       "section",
     ) as HTMLElement;
     selectStepType(step, "Skill");
-    fireEvent.change(within(step).getByLabelText("Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
       target: { value: "Implement MM-577 with the agentic Skill workflow." },
     });
     fireEvent.change(within(step).getByLabelText(/Skill \(optional\)/), {
@@ -12817,7 +12817,7 @@ describe("Task Create governed Tool authoring", () => {
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
       target: { value: "Transition MM-576 through trusted Jira." },
     });
     selectStepType(step, "Tool");
