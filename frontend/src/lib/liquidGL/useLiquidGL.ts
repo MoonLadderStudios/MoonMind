@@ -62,10 +62,7 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
       attributedTargetElement = null;
     };
 
-    const keepFallbackVisible = (element: HTMLElement) => {
-      if (options.reveal !== false) {
-        return;
-      }
+    const showFallback = (element: HTMLElement) => {
       element.style.opacity = "1";
       element.style.visibility = "visible";
       element.style.pointerEvents = "auto";
@@ -94,7 +91,7 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
 
     const markInitialized = (element: HTMLElement) => {
       initializedElement = element;
-      keepFallbackVisible(element);
+      showFallback(element);
       element.setAttribute(INITIALIZED_ATTR, "true");
       if (stallTimerId !== null) {
         window.clearTimeout(stallTimerId);
@@ -160,7 +157,7 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
       } catch (error) {
         console.warn("liquidGL initialization failed", error);
         destroyInstances();
-        keepFallbackVisible(element);
+        showFallback(element);
         attempts += 1;
         scheduleAttempt(INIT_RETRY_DELAY_MS);
         return;

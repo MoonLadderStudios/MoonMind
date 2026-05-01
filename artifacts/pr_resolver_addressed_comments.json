@@ -1,32 +1,37 @@
 [
   {
-    "id": 4361443001,
+    "id": 4361936183,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice is informational and contains no actionable code feedback."
+    "rationale": "Qodo free-tier notice is informational and has no requested code change."
   },
   {
-    "id": 4213218170,
+    "id": 4213665593,
     "disposition": "addressed",
-    "rationale": "Removed the duplicate-label ambiguity by making Jira preset targets context-specific and non-preset instruction labels step-specific."
+    "rationale": "Renamed the helper to showFallback and removed the reveal guard so visibility and pointer events are restored for all reveal modes."
   },
   {
-    "id": 3175033901,
+    "id": 3175452748,
     "disposition": "addressed",
-    "rationale": "Jira preset import target labels now render as Instructions (Preset) and Instructions attachments (Preset)."
+    "rationale": "showFallback now unconditionally restores opacity, visibility, and pointer events; regression tests cover default reveal initialization."
   },
   {
-    "id": 3175033931,
+    "id": 3175452753,
     "disposition": "addressed",
-    "rationale": "Non-preset step instruction fields now use Step N Instructions while preset steps keep Instructions."
+    "rationale": "markInitialized now calls showFallback unconditionally, restoring interactivity for the default fade reveal path."
   },
   {
-    "id": 3175033942,
+    "id": 3175452761,
     "disposition": "addressed",
-    "rationale": "Reviewed Jira import tests now query Step 1 Instructions for step fields instead of the ambiguous Instructions label."
+    "rationale": "Initialization failure now calls showFallback unconditionally so the fallback UI remains visible and interactive."
   },
   {
-    "id": 3175033948,
+    "id": 3175454275,
     "disposition": "addressed",
-    "rationale": "Preset and step assertions now use distinct accessible labels: Instructions for preset and Step 1 Instructions for step text."
+    "rationale": "Removed the reveal:false-only guard and added coverage that default reveal targets regain pointerEvents=auto."
+  },
+  {
+    "id": 4213667024,
+    "disposition": "not-applicable",
+    "rationale": "Codex review wrapper is informational; the actionable inline Codex comment was addressed separately."
   }
 ]
