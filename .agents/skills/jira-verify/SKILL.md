@@ -13,6 +13,7 @@ Verify whether the current checkout/branch satisfies a Jira issue, then publish 
 - Required: current repository checkout containing the branch to verify.
 - Required for Jira content and posting: MoonMind's trusted Jira tool surface, normally `jira.get_issue` and `jira.add_comment`.
 - Optional: update status, boolean, default `false`. When `true`, and only when the final verification verdict is `PASS`, the skill may move the Jira issue to a terminal done state through MoonMind's trusted Jira tool surface.
+- Optional: transition ID, transition name, or transition fields. Use these to disambiguate or satisfy required fields when moving the issue to a terminal state.
 - Optional: base branch or comparison ref. If omitted, infer from upstream, `origin/main`, `origin/master`, `main`, or `master`.
 - Optional: required test commands, scope limits, or explicit non-goals.
 
@@ -25,7 +26,7 @@ If Jira content is not already available to the runtime, use the trusted MCP pat
 1. List tools with `GET $MOONMIND_URL/mcp/tools`.
 2. Verify Jira authentication with `POST $MOONMIND_URL/mcp/tools/call` and JSON `{"tool":"jira.verify_connection","arguments":{}}`.
 3. Fetch the issue with `POST $MOONMIND_URL/mcp/tools/call` and JSON `{"tool":"jira.get_issue","arguments":{"issueKey":"ENG-123"}}`.
-4. If `update status` is true, fetch available transitions with `POST $MOONMIND_URL/mcp/tools/call` and JSON `{"tool":"jira.get_transitions","arguments":{"issueKey":"ENG-123"}}`, then transition only through `jira.transition_issue` after the PASS-only checks below succeed.
+4. If `update status` is true, fetch available transitions with `POST $MOONMIND_URL/mcp/tools/call` and JSON `{"tool":"jira.get_transitions","arguments":{"issueKey":"ENG-123"}}`, then transition only through `jira.transition_issue` with JSON `{"tool":"jira.transition_issue","arguments":{"issueKey":"ENG-123","transitionId":"101","fields":{}}}` after the PASS-only checks below succeed.
 
 If `jira.verify_connection` reports `jira_auth_failed`, or `jira.get_issue` / `jira.add_comment` is unavailable or policy-denied, report `BLOCKED`. If `update status` is true and transition tools are unavailable or policy-denied, leave the verification/comment path intact but report status update as skipped/blocked in the outputs and Jira comment. Do not scrape private Atlassian browser pages, ask for `ATLASSIAN_API_KEY`, or call Jira directly with raw credentials.
 
@@ -71,9 +72,9 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
 
 6. If `update status` is true, decide whether to update Jira status.
    - Do not attempt any status update unless the overall verification result is `PASS`.
-   - Treat an issue that is already in a done-category status as a successful no-op; record that no transition was needed.
+   - Treat an issue that is already in a done-category status as already done; record that no transition was needed.
    - Fetch available transitions through the trusted Jira tool surface.
-   - Select a completion transition only when exactly one available transition targets a Jira done-category status.
+   - Select a completion transition: if a specific transition ID or name was provided, use it if available; otherwise, select a completion transition only when exactly one available transition targets a Jira done-category status.
    - If zero or multiple done-category transitions are available, do not guess. Record the status update as blocked and leave the issue unchanged.
    - If the transition requires fields that were not explicitly provided by the trusted tool input or operator context, do not guess values. Record the status update as blocked and leave the issue unchanged.
    - Execute the selected transition only through `jira.transition_issue`, then record selected transition ID/name, whether the issue was already done, and whether the transition succeeded.
@@ -107,7 +108,7 @@ Validation:
 - Tests not run: <reason>
 
 Status update:
-- <omitted when update status is false; otherwise no-op / transitioned / skipped / blocked>
+- <omitted when `update status` is false; otherwise already done / transitioned / skipped / blocked>
 ```
 
 8. Scan and post to Jira.

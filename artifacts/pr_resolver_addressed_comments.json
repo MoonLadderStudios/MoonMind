@@ -1,32 +1,32 @@
 [
   {
-    "id": 4361443001,
+    "id": 4361890911,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice is informational and contains no actionable code feedback."
+    "rationale": "Qodo free-tier notice is informational and does not request a code or documentation change."
   },
   {
-    "id": 4213218170,
+    "id": 3175416715,
     "disposition": "addressed",
-    "rationale": "Removed the duplicate-label ambiguity by making Jira preset targets context-specific and non-preset instruction labels step-specific."
+    "rationale": "Added optional transition ID, transition name, and transition fields to the jira-verify skill inputs."
   },
   {
-    "id": 3175033901,
+    "id": 3175416726,
     "disposition": "addressed",
-    "rationale": "Jira preset import target labels now render as Instructions (Preset) and Instructions attachments (Preset)."
+    "rationale": "Added the trusted MCP jira.transition_issue call shape with issueKey, transitionId, and fields."
   },
   {
-    "id": 3175033931,
+    "id": 3175416732,
     "disposition": "addressed",
-    "rationale": "Non-preset step instruction fields now use Step N Instructions while preset steps keep Instructions."
+    "rationale": "Updated completion transition selection to prefer a provided transition ID or name before the single done-category fallback."
   },
   {
-    "id": 3175033942,
+    "id": 3175416737,
     "disposition": "addressed",
-    "rationale": "Reviewed Jira import tests now query Step 1 Instructions for step fields instead of the ambiguous Instructions label."
+    "rationale": "Normalized status update wording to use already done instead of no-op in the workflow and suggested comment shape."
   },
   {
-    "id": 3175033948,
-    "disposition": "addressed",
-    "rationale": "Preset and step assertions now use distinct accessible labels: Instructions for preset and Step 1 Instructions for step text."
+    "id": 4213624998,
+    "disposition": "not-applicable",
+    "rationale": "Review summary aggregates the four line comments and has no separate actionable request."
   }
 ]
