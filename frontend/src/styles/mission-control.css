@@ -55,6 +55,10 @@
   --mm-executing-sweep-layer-offset-y: -10%;
   --mm-executing-sweep-core-opacity: 0.34;
   --mm-executing-sweep-halo-opacity: 0.14;
+  --mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration);
+  --mm-executing-letter-sweep-start-ratio: 0.2;
+  --mm-executing-letter-sweep-travel-ratio: 0.18;
+  --mm-executing-letter-sweep-direction: 1;
   --mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32);
   --mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, white 32%);
   --mm-font-headline: var(--mm-font-sans);
@@ -1373,13 +1377,64 @@ tr[data-proposal-id].proposal-consuming td {
 .status-running[data-effect="shimmer-sweep"] .status-letter-wave,
 .status-running.is-executing .status-letter-wave,
 .status-running.is-planning .status-letter-wave {
-  color: var(--mm-executing-letter-bright);
-  text-shadow: 0 0 10px var(--mm-executing-letter-halo);
+  color: inherit;
 }
 
 .status-letter-wave__glyph {
+  --mm-letter-phase: calc(
+    var(--mm-executing-letter-sweep-start-ratio) +
+    (
+      (
+        (
+          var(--mm-letter-index) * var(--mm-executing-letter-sweep-direction)
+        ) +
+        (
+          (var(--mm-letter-count) - 1 - var(--mm-letter-index)) *
+          (1 - var(--mm-executing-letter-sweep-direction))
+        )
+      ) /
+      max(var(--mm-letter-count) - 1, 1)
+    ) *
+    var(--mm-executing-letter-sweep-travel-ratio)
+  );
   display: inline-block;
   color: inherit;
+}
+
+.status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
+.status-running.is-executing .status-letter-wave__glyph,
+.status-running.is-planning .status-letter-wave__glyph {
+  animation-name: mm-executing-letter-brighten;
+  animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms));
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-delay: calc(
+    var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms)) *
+    (var(--mm-letter-phase) - 0.22)
+  );
+}
+
+@keyframes mm-executing-letter-brighten {
+  0%,
+  18%,
+  45%,
+  100% {
+    color: inherit;
+    text-shadow: none;
+    filter: brightness(1);
+  }
+
+  22% {
+    color: var(--mm-executing-letter-bright);
+    text-shadow: 0 0 10px var(--mm-executing-letter-halo);
+    filter: brightness(1.18);
+  }
+
+  27% {
+    color: color-mix(in srgb, var(--mm-executing-letter-bright) 72%, currentColor 28%);
+    text-shadow: 0 0 6px var(--mm-executing-letter-halo);
+    filter: brightness(1.08);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1394,6 +1449,7 @@ tr[data-proposal-id].proposal-consuming td {
   }
 
   .status-letter-wave__glyph {
+    animation: none !important;
     text-shadow: none !important;
     filter: none !important;
   }
@@ -1410,8 +1466,13 @@ tr[data-proposal-id].proposal-consuming td {
   .status-running.is-executing .status-letter-wave,
   .status-running.is-planning .status-letter-wave {
     color: ButtonText;
-    animation: none;
     background-image: none;
+  }
+
+  .status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
+  .status-running.is-executing .status-letter-wave__glyph,
+  .status-running.is-planning .status-letter-wave__glyph {
+    animation: none;
   }
 }
 

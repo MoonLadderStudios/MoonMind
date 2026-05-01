@@ -1,37 +1,32 @@
 [
   {
-    "id": 4361936183,
+    "id": 4361984817,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice is informational and has no requested code change."
+    "rationale": "Qodo free-tier limit notice is informational and contains no requested code change."
   },
   {
-    "id": 4213665593,
-    "disposition": "addressed",
-    "rationale": "Renamed the helper to showFallback and removed the reveal guard so visibility and pointer events are restored for all reveal modes."
-  },
-  {
-    "id": 3175452748,
-    "disposition": "addressed",
-    "rationale": "showFallback now unconditionally restores opacity, visibility, and pointer events; regression tests cover default reveal initialization."
-  },
-  {
-    "id": 3175452753,
-    "disposition": "addressed",
-    "rationale": "markInitialized now calls showFallback unconditionally, restoring interactivity for the default fade reveal path."
-  },
-  {
-    "id": 3175452761,
-    "disposition": "addressed",
-    "rationale": "Initialization failure now calls showFallback unconditionally so the fallback UI remains visible and interactive."
-  },
-  {
-    "id": 3175454275,
-    "disposition": "addressed",
-    "rationale": "Removed the reveal:false-only guard and added coverage that default reveal targets regain pointerEvents=auto."
-  },
-  {
-    "id": 4213667024,
+    "id": 4213692380,
     "disposition": "not-applicable",
-    "rationale": "Codex review wrapper is informational; the actionable inline Codex comment was addressed separately."
+    "rationale": "Broad review summary only; the actionable CSS delay and unused variable items are tracked in the line comments below."
+  },
+  {
+    "id": 3175475110,
+    "disposition": "addressed",
+    "rationale": "Adjusted glyph animation-delay to subtract the 0.22 keyframe peak offset and added CSS contract coverage."
+  },
+  {
+    "id": 3175475111,
+    "disposition": "addressed",
+    "rationale": "Removed the unused --mm-executing-letter-pulse-duration-ratio custom property from the stylesheet."
+  },
+  {
+    "id": 3175475113,
+    "disposition": "addressed",
+    "rationale": "Removed the matching test expectation for the unused custom property."
+  },
+  {
+    "id": 4362115950,
+    "disposition": "not-applicable",
+    "rationale": "Review trigger comment only; it does not request a code change."
   }
 ]
