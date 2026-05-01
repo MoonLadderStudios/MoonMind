@@ -1,22 +1,37 @@
 [
   {
-    "id": 4360936262,
+    "id": 4361302204,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notification is informational and does not request a code or documentation change."
+    "rationale": "Qodo free-tier notice only; no code action requested."
   },
   {
-    "id": 3174592231,
+    "id": 3174920141,
     "disposition": "addressed",
-    "rationale": "Extracted the MM-578 success fetch mock into mockMm578PresetFetch and made the preview-failure test override only the failing expand endpoint while delegating all other requests."
+    "rationale": "The router now defines _PRESET_SOURCE_KINDS locally before use."
   },
   {
-    "id": 3174592234,
+    "id": 3174920149,
     "disposition": "addressed",
-    "rationale": "Added npm run ui:test:task-create and updated the MM-578 plan to use the shorter focused test command."
+    "rationale": "Imported Sequence from collections.abc for the runtime isinstance check."
   },
   {
-    "id": 4212720212,
+    "id": 3174920155,
+    "disposition": "addressed",
+    "rationale": "Imported Mapping from collections.abc for the runtime isinstance checks."
+  },
+  {
+    "id": 4213092169,
     "disposition": "not-applicable",
-    "rationale": "Broad review summary duplicated the two actionable comments, which were handled individually."
+    "rationale": "General review summary; specific actionable import findings are tracked separately."
+  },
+  {
+    "id": 3174930124,
+    "disposition": "addressed",
+    "rationale": "Canonical task payload validation now accepts stored preset provenance version keys and serializes canonical presetVersion."
+  },
+  {
+    "id": 4213103269,
+    "disposition": "not-applicable",
+    "rationale": "Codex review overview; the actionable child comment is tracked separately."
   }
 ]

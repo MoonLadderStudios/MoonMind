@@ -6416,6 +6416,10 @@ export interface components {
             authoredPresetCount: number;
             /** Stepsourcekinds */
             stepSourceKinds?: string[];
+            /** Presetsourcemetadata */
+            presetSourceMetadata?: {
+                [key: string]: unknown;
+            }[];
         };
         /**
          * TaskTemplateAppliedMetadataSchema

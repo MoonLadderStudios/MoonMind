@@ -6,9 +6,10 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
-from typing import Any, Mapping, Sequence
+from typing import Any
 from uuid import UUID
 
 import httpx

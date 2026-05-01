@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from moonmind.workflows.tasks.task_contract import (
     build_canonical_task_view,
     build_effective_task_skill_selectors,
+    CanonicalTaskPayload,
     TaskExecutionSpec,
     TaskStepSpec,
 )
@@ -83,6 +84,47 @@ def test_task_step_spec_with_step_skills() -> None:
     assert spec.skills is not None
     assert spec.skills.exclude == ["bad-skill"]
     assert spec.skills.materialization_mode == "none"
+
+def test_canonical_task_payload_accepts_legacy_preset_version_keys() -> None:
+    payload = CanonicalTaskPayload.model_validate(
+        {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "Run stored proposal.",
+                "authoredPresets": [
+                    {
+                        "presetId": "runtime-quality-followup",
+                        "version": "2026-04-17",
+                    }
+                ],
+                "steps": [
+                    {
+                        "type": "skill",
+                        "instructions": "Implement issue.",
+                        "skill": {"id": "moonspec-implement"},
+                        "source": {
+                            "kind": "preset-derived",
+                            "presetId": "runtime-quality-followup",
+                            "version": "2026-04-17",
+                        },
+                    }
+                ],
+            },
+        }
+    )
+
+    task = payload.model_dump(by_alias=True, exclude_none=True)["task"]
+    assert task["authoredPresets"] == [
+        {
+            "presetId": "runtime-quality-followup",
+            "presetVersion": "2026-04-17",
+        }
+    ]
+    assert task["steps"][0]["source"] == {
+        "kind": "preset-derived",
+        "presetId": "runtime-quality-followup",
+        "presetVersion": "2026-04-17",
+    }
 
 def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
     spec = TaskExecutionSpec.model_validate(
