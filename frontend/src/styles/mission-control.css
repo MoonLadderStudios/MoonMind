@@ -58,7 +58,6 @@
   --mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration);
   --mm-executing-letter-sweep-start-ratio: 0.2;
   --mm-executing-letter-sweep-travel-ratio: 0.18;
-  --mm-executing-letter-pulse-duration-ratio: 0.05;
   --mm-executing-letter-sweep-direction: 1;
   --mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32);
   --mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, white 32%);
@@ -1411,7 +1410,7 @@ tr[data-proposal-id].proposal-consuming td {
   animation-iteration-count: infinite;
   animation-delay: calc(
     var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms)) *
-    var(--mm-letter-phase)
+    (var(--mm-letter-phase) - 0.22)
   );
 }
 

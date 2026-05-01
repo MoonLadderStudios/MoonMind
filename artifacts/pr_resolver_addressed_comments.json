@@ -1,22 +1,27 @@
 [
   {
-    "id": 4361831919,
+    "id": 4361984817,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice is informational and does not request a code change."
+    "rationale": "Qodo free-tier limit notice is informational and contains no requested code change."
   },
   {
-    "id": 3175382898,
-    "disposition": "addressed",
-    "rationale": "Preset expansion now preserves backend warnings and surfaces them in the applied preset status message, with UI test coverage."
-  },
-  {
-    "id": 3175382900,
-    "disposition": "addressed",
-    "rationale": "Removed the dead per-step presetReapplyNeeded state and all related writes/checks from StepState."
-  },
-  {
-    "id": 4213593099,
+    "id": 4213692380,
     "disposition": "not-applicable",
-    "rationale": "Summary review comment duplicates the two actionable review comments, both of which were addressed separately."
+    "rationale": "Broad review summary only; the actionable CSS delay and unused variable items are tracked in the line comments below."
+  },
+  {
+    "id": 3175475110,
+    "disposition": "addressed",
+    "rationale": "Adjusted glyph animation-delay to subtract the 0.22 keyframe peak offset and added CSS contract coverage."
+  },
+  {
+    "id": 3175475111,
+    "disposition": "addressed",
+    "rationale": "Removed the unused --mm-executing-letter-pulse-duration-ratio custom property from the stylesheet."
+  },
+  {
+    "id": 3175475113,
+    "disposition": "addressed",
+    "rationale": "Removed the matching test expectation for the unused custom property."
   }
 ]
