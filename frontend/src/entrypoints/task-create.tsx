@@ -508,6 +508,34 @@ interface TemplateCatalogResult {
   failedScopes: TemplateScope[];
 }
 
+interface TrustedToolDefinition {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
+interface ToolDiscoveryResponse {
+  tools?: TrustedToolDefinition[];
+}
+
+interface ToolChoiceGroup {
+  group: string;
+  tools: TrustedToolDefinition[];
+}
+
+interface JiraTransitionOption {
+  id: string;
+  name: string;
+}
+
+interface JiraTransitionState {
+  isLoading: boolean;
+  error: string | null;
+  issueKey: string;
+  toolId: string;
+  options: JiraTransitionOption[];
+}
+
 interface AttachmentPolicy {
   enabled: boolean;
   maxCount: number;
@@ -1515,6 +1543,84 @@ function parseToolInputsText(
   } catch {
     return { ok: false };
   }
+}
+
+function toolDefinitionId(tool: TrustedToolDefinition): string {
+  return String(tool.name || "").trim();
+}
+
+function toolGroupLabel(toolId: string): string {
+  const namespace = toolId.split(".")[0] || "other";
+  if (namespace.toLowerCase() === "github") {
+    return "GitHub";
+  }
+  return namespace.charAt(0).toUpperCase() + namespace.slice(1);
+}
+
+function groupedToolChoices(
+  tools: TrustedToolDefinition[],
+  searchText: string,
+): ToolChoiceGroup[] {
+  const search = searchText.trim().toLowerCase();
+  const groups = new Map<string, TrustedToolDefinition[]>();
+  tools.forEach((tool) => {
+    const id = toolDefinitionId(tool);
+    if (!id) {
+      return;
+    }
+    const group = toolGroupLabel(id);
+    const haystack = `${group} ${id} ${tool.description || ""}`.toLowerCase();
+    if (search && !haystack.includes(search)) {
+      return;
+    }
+    const groupTools = groups.get(group);
+    if (groupTools) {
+      groupTools.push(tool);
+    } else {
+      groups.set(group, [tool]);
+    }
+  });
+  return Array.from(groups.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([group, groupTools]) => ({
+      group,
+      tools: groupTools.sort((left, right) =>
+        toolDefinitionId(left).localeCompare(toolDefinitionId(right)),
+      ),
+    }));
+}
+
+function toolContractSummary(tool: TrustedToolDefinition | null): string {
+  if (!tool) {
+    return "Tool definitions declare schema-backed inputs, authorization, worker capability, retry, binding, validation, and error contracts.";
+  }
+  const schema = tool.inputSchema || {};
+  const properties = schema.properties;
+  const propertyNames =
+    properties && typeof properties === "object" && !Array.isArray(properties)
+      ? Object.keys(properties as Record<string, unknown>).sort()
+      : [];
+  if (propertyNames.length > 0) {
+    return `Schema-backed inputs: ${propertyNames.join(", ")}. Tool execution remains governed by authorization, capability, retry, binding, validation, and error contracts.`;
+  }
+  return "This Tool exposes a governed contract with schema-backed inputs and policy-checked deterministic execution.";
+}
+
+function extractIssueKeyFromToolInputs(value: string): string {
+  const parsed = parseToolInputsText(value);
+  if (!parsed.ok) {
+    return "";
+  }
+  return String(parsed.value.issueKey || "").trim();
+}
+
+function updateToolInputsText(
+  value: string,
+  updates: Record<string, unknown>,
+): string {
+  const parsed = parseToolInputsText(value);
+  const base = parsed.ok ? parsed.value : {};
+  return JSON.stringify({ ...base, ...updates }, null, 2);
 }
 
 function validatePrimaryStepSubmission(
@@ -2884,6 +2990,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedJiraIssueKey, setSelectedJiraIssueKey] = useState("");
   const [pendingJiraImportIssueKey, setPendingJiraImportIssueKey] =
     useState("");
+  const [toolSearchTextByStep, setToolSearchTextByStep] = useState<
+    Record<string, string>
+  >({});
+  const [jiraTransitionStateByStep, setJiraTransitionStateByStep] = useState<
+    Record<string, JiraTransitionState>
+  >({});
   const [jiraImportMode, setJiraImportMode] =
     useState<JiraImportMode>("preset-brief");
   const [jiraWriteMode, setJiraWriteMode] =
@@ -3297,6 +3409,42 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       const data = (await response.json()) as SkillsResponse;
       return data.items?.worker || [];
+    },
+  });
+
+  const hasToolStep = steps.some((step) => step.stepType === "tool");
+  const trustedToolsQuery = useQuery({
+    queryKey: ["task-create", "trusted-tools"],
+    enabled: hasToolStep,
+    retry: false,
+    queryFn: async (): Promise<TrustedToolDefinition[]> => {
+      const response = await fetch("/mcp/tools", {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(
+            response,
+            "Failed to load trusted Tool discovery.",
+          ),
+        );
+      }
+      const data = (await response.json()) as ToolDiscoveryResponse;
+      return (data.tools || [])
+        .map((tool) => {
+          const inputSchema =
+            tool.inputSchema &&
+            typeof tool.inputSchema === "object" &&
+            !Array.isArray(tool.inputSchema)
+              ? (tool.inputSchema as Record<string, unknown>)
+              : undefined;
+          return {
+            name: String(tool.name || "").trim(),
+            description: String(tool.description || "").trim(),
+            ...(inputSchema ? { inputSchema } : {}),
+          };
+        })
+        .filter((tool) => Boolean(tool.name));
     },
   });
 
@@ -4648,6 +4796,130 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       const { [localId]: _removed, ...rest } = current;
       return rest;
+    });
+  }
+
+  function selectTrustedTool(localId: string, toolId: string) {
+    updateStep(localId, { toolId });
+    setJiraTransitionStateByStep((current) => {
+      if (!current[localId]) {
+        return current;
+      }
+      const { [localId]: _removed, ...rest } = current;
+      return rest;
+    });
+  }
+
+  async function loadJiraTransitionOptions(step: StepState) {
+    const issueKey = extractIssueKeyFromToolInputs(step.toolInputs);
+    if (!issueKey) {
+      setJiraTransitionStateByStep((current) => ({
+        ...current,
+        [step.localId]: {
+          isLoading: false,
+          error: "Enter issueKey in Tool Inputs before loading Jira target statuses.",
+          issueKey: "",
+          toolId: step.toolId.trim(),
+          options: [],
+        },
+      }));
+      return;
+    }
+    setJiraTransitionStateByStep((current) => ({
+      ...current,
+      [step.localId]: {
+        isLoading: true,
+        error: null,
+        issueKey,
+        toolId: step.toolId.trim(),
+        options: [],
+      },
+    }));
+    try {
+      const response = await fetch("/mcp/tools/call", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          tool: "jira.get_transitions",
+          arguments: { issueKey, expandFields: true },
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(
+            response,
+            "Failed to load Jira target statuses.",
+          ),
+        );
+      }
+      const data = (await response.json()) as {
+        result?: { transitions?: Array<Record<string, unknown>> };
+      };
+      const seen = new Set<string>();
+      const options = (data.result?.transitions || [])
+        .map((transition) => {
+          const to = transition.to;
+          const target =
+            to && typeof to === "object" && !Array.isArray(to)
+              ? String((to as Record<string, unknown>).name || "").trim()
+              : "";
+          const name = target || String(transition.name || "").trim();
+          const id = String(transition.id || name).trim();
+          return { id, name };
+        })
+        .filter((option) => {
+          if (!option.name || seen.has(option.name)) {
+            return false;
+          }
+          seen.add(option.name);
+          return true;
+        });
+      setJiraTransitionStateByStep((current) => ({
+        ...current,
+        [step.localId]: {
+          isLoading: false,
+          error:
+            options.length > 0
+              ? null
+              : "No Jira target statuses were returned for this issue.",
+          issueKey,
+          toolId: step.toolId.trim(),
+          options,
+        },
+      }));
+    } catch (error) {
+      setJiraTransitionStateByStep((current) => ({
+        ...current,
+        [step.localId]: {
+          isLoading: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to load Jira target statuses.",
+          issueKey,
+          toolId: step.toolId.trim(),
+          options: [],
+        },
+      }));
+    }
+  }
+
+  function applyJiraTransitionId(localId: string, transitionId: string) {
+    if (!transitionId) {
+      return;
+    }
+    const step = stepsRef.current.find((item) => item.localId === localId);
+    if (!step) {
+      return;
+    }
+    updateStep(localId, {
+      toolInputs: updateToolInputsText(step.toolInputs, {
+        transitionId,
+        targetStatus: undefined,
+      }),
     });
   }
 
@@ -6837,6 +7109,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       !isFeatureRequestInputKey(definition.name),
                   )
                 : [];
+              const toolSearchText = toolSearchTextByStep[step.localId] || "";
+              const trustedToolDefinitions = trustedToolsQuery.data || [];
+              const toolChoiceGroups = groupedToolChoices(
+                trustedToolDefinitions,
+                toolSearchText,
+              );
+              const selectedTrustedTool =
+                trustedToolDefinitions.find(
+                  (tool) => toolDefinitionId(tool) === step.toolId.trim(),
+                ) || null;
+              const jiraTransitionState =
+                jiraTransitionStateByStep[step.localId] || null;
+              const showJiraTransitionOptions =
+                step.stepType === "tool" &&
+                step.toolId.trim() === "jira.transition_issue";
               return (
                 <section
                   key={step.localId}
@@ -6926,6 +7213,70 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
                   {step.stepType === "tool" ? (
                     <div className="stack queue-step-type-panel">
+                      <p className="small">
+                        Tool steps run typed governed operations with schema-backed
+                        inputs, authorization, capability, retry, binding,
+                        validation, and error contracts.
+                      </p>
+                      <label>
+                        Search Tools
+                        <input
+                          data-step-field="toolSearch"
+                          data-step-index={String(index)}
+                          placeholder="Search by integration, tool, or purpose"
+                          value={toolSearchText}
+                          onChange={(event) =>
+                            setToolSearchTextByStep((current) => ({
+                              ...current,
+                              [step.localId]: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      {trustedToolsQuery.isLoading || trustedToolsQuery.isFetching ? (
+                        <p className="small">Loading trusted Tools...</p>
+                      ) : trustedToolsQuery.isError ? (
+                        <p className="notice small">
+                          Trusted Tool discovery is unavailable. Manual Tool
+                          authoring remains available.
+                        </p>
+                      ) : toolChoiceGroups.length > 0 ? (
+                        <div className="queue-tool-choice-groups">
+                          {toolChoiceGroups.map((group) => (
+                            <div
+                              key={`${step.localId}-tool-group-${group.group}`}
+                              className="queue-tool-choice-group"
+                            >
+                              <strong>{group.group}</strong>
+                              <div className="queue-tool-choice-list">
+                                {group.tools.map((tool) => {
+                                  const toolId = toolDefinitionId(tool);
+                                  return (
+                                    <button
+                                      key={`${step.localId}-tool-${toolId}`}
+                                      type="button"
+                                      className={
+                                        step.toolId.trim() === toolId
+                                          ? "secondary active"
+                                          : "secondary"
+                                      }
+                                      aria-pressed={step.toolId.trim() === toolId}
+                                      title={tool.description || toolId}
+                                      onClick={() =>
+                                        selectTrustedTool(step.localId, toolId)
+                                      }
+                                    >
+                                      {toolId}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : trustedToolDefinitions.length > 0 ? (
+                        <p className="small">No trusted Tools match this search.</p>
+                      ) : null}
                       <label>
                         Tool
                         <input
@@ -6934,12 +7285,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           placeholder="jira.get_issue"
                           value={step.toolId}
                           onChange={(event) =>
-                            updateStep(step.localId, {
-                              toolId: event.target.value,
-                            })
+                            selectTrustedTool(step.localId, event.target.value)
                           }
                         />
                       </label>
+                      <p className="small">
+                        {toolContractSummary(selectedTrustedTool)}
+                      </p>
                       <label>
                         Tool Version (optional)
                         <input
@@ -6968,6 +7320,45 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           }
                         />
                       </label>
+                      {showJiraTransitionOptions ? (
+                        <div className="stack queue-tool-dynamic-options">
+                          <button
+                            type="button"
+                            className="secondary"
+                            aria-busy={Boolean(jiraTransitionState?.isLoading)}
+                            disabled={Boolean(jiraTransitionState?.isLoading)}
+                            onClick={() => void loadJiraTransitionOptions(step)}
+                          >
+                            Load Jira target statuses
+                          </button>
+                          {jiraTransitionState?.error ? (
+                            <p className="notice small">
+                              {jiraTransitionState.error}
+                            </p>
+                          ) : null}
+                          {jiraTransitionState?.options.length ? (
+                            <label>
+                              Jira Target Status
+                              <select
+                                value=""
+                                onChange={(event) =>
+                                  applyJiraTransitionId(
+                                    step.localId,
+                                    event.target.value,
+                                  )
+                                }
+                              >
+                                <option value="">Select returned status...</option>
+                                {jiraTransitionState.options.map((option) => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
 

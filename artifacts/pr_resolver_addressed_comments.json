@@ -1,22 +1,27 @@
 [
   {
-    "id": 4209468049,
+    "id": 4358333916,
     "disposition": "not-applicable",
-    "rationale": "Bot review summary only; no actionable request beyond the inline discussion."
+    "rationale": "Qodo free-tier limit notice is an external bot status message and does not request a code change."
   },
   {
-    "id": 3171663351,
+    "id": 3172481417,
     "disposition": "addressed",
-    "rationale": "Refactored test_api_service_mounts_agent_runtime_workspace_volume to use _has_volume_mount."
+    "rationale": "Jira transition selection now writes transitionId and clears legacy targetStatus so submitted Tool inputs match the jira.transition_issue contract."
   },
   {
-    "id": 4357283451,
+    "id": 4210435915,
     "disposition": "not-applicable",
-    "rationale": "Qodo walkthrough summary only; no remediation requested."
+    "rationale": "Codex review body is an informational summary; its actionable line comment is tracked separately."
   },
   {
-    "id": 4357283529,
+    "id": 3172483616,
     "disposition": "addressed",
-    "rationale": "Restored _should_exclude_publish_path to a Path-only contract, normalized string workspace_path at the publish call site, and added relative-path/string-workspace regression coverage."
+    "rationale": "Grouped trusted Tool choices now append into existing arrays instead of recreating arrays on every tool."
+  },
+  {
+    "id": 4210438690,
+    "disposition": "not-applicable",
+    "rationale": "Gemini review body is an informational summary; its actionable line comment is tracked separately."
   }
 ]
