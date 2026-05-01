@@ -1141,10 +1141,35 @@ class CodexManagedSessionRuntime:
             recovered_error = self._extract_turn_error_from_logs(vendor_turn_id)
             if recovered_error:
                 return "failed", recovered_error
-            return "failed", "codex app-server turn/completed produced no assistant output"
+            return "completed", None
         if scan.assistant_text:
             return "completed", None
         return None
+
+    def _completed_turn_without_assistant_outcome(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> tuple[str, str | None]:
+        vendor_thread_path = self._resolved_rollout_path(
+            state=state,
+            thread_payload=thread_payload,
+        )
+        rollout_scan = self._scan_rollout_for_turn(
+            vendor_thread_path,
+            vendor_turn_id=vendor_turn_id,
+            turn_started_at=state.last_control_at,
+        )
+        if rollout_scan.error_text:
+            return "failed", rollout_scan.error_text
+        if rollout_scan.saw_task_complete:
+            recovered_error = self._extract_turn_error_from_logs(vendor_turn_id)
+            if recovered_error:
+                return "failed", recovered_error
+            return "completed", None
+        return "failed", "codex app-server turn/completed produced no assistant output"
 
     def _resolved_rollout_path(
         self,
@@ -1475,15 +1500,19 @@ class CodexManagedSessionRuntime:
                 vendor_turn_id=active_turn_id,
             )
         if status == "completed" and not assistant_text:
-            error_text = "codex app-server turn/completed produced no assistant output"
-            self._append_spool(
-                "stderr",
-                (
-                    "codex app-server turn completed without assistant output: "
-                    f"{active_turn_id}\n"
-                ),
+            status, error_text = self._completed_turn_without_assistant_outcome(
+                state=state,
+                thread_payload=thread_payload,
+                vendor_turn_id=active_turn_id,
             )
-            status = "failed"
+            if status == "failed":
+                self._append_spool(
+                    "stderr",
+                    (
+                        "codex app-server turn completed without assistant output: "
+                        f"{active_turn_id}\n"
+                    ),
+                )
         self._finalize_turn(
             state=state,
             turn_id=active_turn_id,
@@ -1634,15 +1663,21 @@ class CodexManagedSessionRuntime:
                 vendor_turn_id=vendor_turn_id,
             )
             if not assistant_text:
-                error_text = "codex app-server turn/completed produced no assistant output"
-                self._append_spool(
-                    "stderr",
-                    (
-                        "codex app-server turn completed without assistant output: "
-                        f"{vendor_turn_id}\n"
-                    ),
+                status, error_text = self._completed_turn_without_assistant_outcome(
+                    state=state,
+                    thread_payload=thread_payload,
+                    vendor_turn_id=vendor_turn_id,
                 )
-                status = "failed"
+                if status == "failed":
+                    self._append_spool(
+                        "stderr",
+                        (
+                            "codex app-server turn completed without assistant output: "
+                            f"{vendor_turn_id}\n"
+                        ),
+                    )
+                else:
+                    metadata["assistantTextMissing"] = True
             else:
                 metadata["assistantText"] = assistant_text
         if error_text:
