@@ -1,32 +1,37 @@
 [
   {
-    "id": 4361890911,
+    "id": 4361936183,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice is informational and does not request a code or documentation change."
+    "rationale": "Qodo free-tier notice is informational and has no requested code change."
   },
   {
-    "id": 3175416715,
+    "id": 4213665593,
     "disposition": "addressed",
-    "rationale": "Added optional transition ID, transition name, and transition fields to the jira-verify skill inputs."
+    "rationale": "Renamed the helper to showFallback and removed the reveal guard so visibility and pointer events are restored for all reveal modes."
   },
   {
-    "id": 3175416726,
+    "id": 3175452748,
     "disposition": "addressed",
-    "rationale": "Added the trusted MCP jira.transition_issue call shape with issueKey, transitionId, and fields."
+    "rationale": "showFallback now unconditionally restores opacity, visibility, and pointer events; regression tests cover default reveal initialization."
   },
   {
-    "id": 3175416732,
+    "id": 3175452753,
     "disposition": "addressed",
-    "rationale": "Updated completion transition selection to prefer a provided transition ID or name before the single done-category fallback."
+    "rationale": "markInitialized now calls showFallback unconditionally, restoring interactivity for the default fade reveal path."
   },
   {
-    "id": 3175416737,
+    "id": 3175452761,
     "disposition": "addressed",
-    "rationale": "Normalized status update wording to use already done instead of no-op in the workflow and suggested comment shape."
+    "rationale": "Initialization failure now calls showFallback unconditionally so the fallback UI remains visible and interactive."
   },
   {
-    "id": 4213624998,
+    "id": 3175454275,
+    "disposition": "addressed",
+    "rationale": "Removed the reveal:false-only guard and added coverage that default reveal targets regain pointerEvents=auto."
+  },
+  {
+    "id": 4213667024,
     "disposition": "not-applicable",
-    "rationale": "Review summary aggregates the four line comments and has no separate actionable request."
+    "rationale": "Codex review wrapper is informational; the actionable inline Codex comment was addressed separately."
   }
 ]
