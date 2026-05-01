@@ -85,7 +85,7 @@ describe("Task Create Step Type authoring", () => {
     window.localStorage.clear();
     fetchSpy = vi
       .spyOn(window, "fetch")
-      .mockImplementation((input: RequestInfo | URL) => {
+      .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url.startsWith("/api/tasks/skills")) {
           return Promise.resolve({
@@ -136,11 +136,24 @@ describe("Task Create Step Type authoring", () => {
               description: "Implement a Jira issue.",
               latestVersion: "1.0.0",
               version: "1.0.0",
-              inputs: [],
+              inputs: [
+                {
+                  name: "feature_request",
+                  label: "Feature Request",
+                  type: "text",
+                  required: true,
+                },
+              ],
             }),
           } as Response);
         }
         if (url.startsWith("/api/task-step-templates/jira-orchestrate:expand?scope=global")) {
+          const body = JSON.parse(String(init?.body || "{}")) as {
+            inputs?: { feature_request?: string };
+          };
+          const featureRequest = String(
+            body.inputs?.feature_request || "the selected Jira issue",
+          );
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -148,13 +161,13 @@ describe("Task Create Step Type authoring", () => {
                 {
                   id: "tpl:jira-orchestrate:1.0.0:01",
                   title: "Read Jira issue",
-                  instructions: "Read the selected Jira issue.",
+                  instructions: `Read ${featureRequest}.`,
                   skill: { id: "jira-implement" },
                 },
                 {
                   id: "tpl:jira-orchestrate:1.0.0:02",
                   title: "Implement Jira issue",
-                  instructions: "Implement the selected Jira issue.",
+                  instructions: `Implement ${featureRequest}.`,
                   skill: { id: "moonspec-orchestrate" },
                 },
               ],
@@ -253,6 +266,12 @@ describe("Task Create Step Type authoring", () => {
       target: { value: "Keep trailing skill." },
     });
     selectStepType(secondStep, "Preset");
+    fireEvent.change(
+      within(secondStep).getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "the selected Jira issue" },
+      },
+    );
 
     const presetSelect = within(secondStep).getByLabelText(
       "Preset",
@@ -270,6 +289,9 @@ describe("Task Create Step Type authoring", () => {
     expect(screen.getByDisplayValue("Implement the selected Jira issue.")).toBeTruthy();
     expect(screen.getByDisplayValue("Keep first manual skill.")).toBeTruthy();
     expect(screen.getByDisplayValue("Keep trailing skill.")).toBeTruthy();
+    expect(
+      await screen.findByText("Applied preset 'Jira Orchestrate' (2 steps)."),
+    ).toBeTruthy();
 
     const renderedSteps = Array.from(
       document.querySelectorAll<HTMLElement>(".queue-step-section"),
@@ -296,5 +318,125 @@ describe("Task Create Step Type authoring", () => {
       (within(renderedFourth).getByLabelText("Instructions") as HTMLTextAreaElement)
         .value,
     ).toBe("Keep trailing skill.");
+  });
+
+  it("regenerates a preset preview after preset instructions change", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-orchestrate" },
+    });
+    const instructions = within(step).getByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(instructions, { target: { value: "old issue" } });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+    await waitFor(() => {
+      const previewCall = fetchSpy.mock.calls.find(([url]) =>
+        String(url).startsWith(
+          "/api/task-step-templates/jira-orchestrate:expand?scope=global",
+        ),
+      );
+      expect(previewCall).toBeTruthy();
+      const body = JSON.parse(String(previewCall?.[1]?.body || "{}"));
+      expect(body.inputs.feature_request).toBe("old issue");
+    });
+
+    fireEvent.change(instructions, { target: { value: "new issue" } });
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+
+    expect(await screen.findByDisplayValue("Read new issue.")).toBeTruthy();
+    expect(screen.getByDisplayValue("Implement new issue.")).toBeTruthy();
+    expect(screen.queryByDisplayValue("Read old issue.")).toBeNull();
+
+    const expandCalls = fetchSpy.mock.calls.filter(([url]) =>
+      String(url).startsWith(
+        "/api/task-step-templates/jira-orchestrate:expand?scope=global",
+      ),
+    );
+    expect(expandCalls).toHaveLength(2);
+  });
+
+  it("ignores async preset expansion results after the preset step changes", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    let resolveExpand: ((response: Response) => void) | null = null;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/task-step-templates/jira-orchestrate:expand?scope=global",
+        )
+      ) {
+        return new Promise<Response>((resolve) => {
+          resolveExpand = resolve;
+        });
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-orchestrate" },
+    });
+    const instructions = within(step).getByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(instructions, { target: { value: "old issue" } });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    await waitFor(() => {
+      expect(resolveExpand).not.toBeNull();
+      expect(presetSelect.disabled).toBe(true);
+    });
+    fireEvent.change(instructions, { target: { value: "new issue" } });
+
+    const resolve = resolveExpand as ((response: Response) => void) | null;
+    if (!resolve) {
+      throw new Error("Preset expansion request did not start.");
+    }
+    resolve({
+      ok: true,
+      json: async () => ({
+        steps: [
+          {
+            id: "tpl:jira-orchestrate:1.0.0:01",
+            title: "Read Jira issue",
+            instructions: "Read old issue.",
+            skill: { id: "jira-implement" },
+          },
+        ],
+        appliedTemplate: {
+          slug: "jira-orchestrate",
+          version: "1.0.0",
+        },
+        warnings: [],
+      }),
+    } as Response);
+
+    await waitFor(() => {
+      expect(presetSelect.disabled).toBe(false);
+    });
+    expect(screen.queryByDisplayValue("Read old issue.")).toBeNull();
+    expect(
+      (instructions as HTMLTextAreaElement).value,
+    ).toBe("new issue");
   });
 });
