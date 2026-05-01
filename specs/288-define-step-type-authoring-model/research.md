@@ -3,7 +3,7 @@
 ## Request Classification
 
 Decision: Classify MM-575 as one independently testable runtime story and do not run `moonspec-breakdown`.
-Evidence: `artifacts/moonspec/MM-575-orchestration-input.md` contains one user story, one acceptance set, and one requirement cluster for explicit Step Type authoring; `specs/288-define-step-type-authoring-model/spec.md` preserves that brief.
+Evidence: The committed `specs/288-define-step-type-authoring-model/spec.md` reproduces the normalized MM-575 Jira preset brief with one user story, one acceptance set, and one requirement cluster for explicit Step Type authoring.
 Rationale: The Jira preset brief asks for one cohesive authoring model: explicit selected Step Type, matching visible controls, explicit incompatible-data handling, and consistent terminology.
 Alternatives considered: Treating `docs/Steps/StepTypes.md` as a broad design was rejected because the Jira issue selects specific sections and coverage IDs for one story.
 Test implications: No breakdown tests; proceed with one-spec UI integration and runtime contract validation.

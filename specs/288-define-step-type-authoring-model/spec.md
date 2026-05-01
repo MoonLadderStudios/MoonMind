@@ -15,9 +15,9 @@ Source design path (optional): .
 Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
 Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts."
 
-Preserved source Jira preset brief: `MM-575` from the trusted `jira.get_issue` response, reproduced in `## Original Preset Brief` below for downstream verification.
+Preserved source Jira preset brief: `MM-575` from the trusted `jira.get_issue` response, reproduced in `## Original Preset Brief` below for durable downstream verification. Raw local orchestration captures were treated as transient run artifacts; the reproduced brief is the committed traceability record.
 
-Original brief reference: trusted `jira.get_issue` MCP response for `MM-575` and local artifact `artifacts/moonspec/MM-575-orchestration-input.md`.
+Original brief reference: trusted `jira.get_issue` MCP response for `MM-575`, with the normalized brief reproduced below for permanence.
 Classification: single-story runtime feature request.
 Resume decision: no existing Moon Spec feature directory preserved `MM-575`, so `Specify` was the first incomplete MM-575 stage.
 
@@ -33,7 +33,7 @@ Issue type: Story
 Labels: moonmind-workflow-mm-911309af-6b4f-48e7-8835-e533aa9af8cf
 
 Canonical source: normalized Jira preset brief synthesized from trusted jira.get_issue response fields because the MCP issue response did not expose recommendedImports.presetInstructions, normalizedPresetBrief, presetBrief, or presetInstructions, and the Implementation plan and Source fields were null.
-Trusted response artifact: artifacts/moonspec/MM-575-trusted-jira-get-issue.json
+Trusted response source: runtime `jira.get_issue` response for `MM-575`; relevant normalized fields are reproduced in this committed brief.
 
 Source Reference
 Source Document: docs/Steps/StepTypes.md

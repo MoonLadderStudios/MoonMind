@@ -1,7 +1,7 @@
 # MoonSpec Verification Report
 
 **Feature**: Define Step Type Authoring Model  
-**Spec**: `/work/agent_jobs/mm:ae921b44-0c56-4085-95a9-e3b28e9d61e8/repo/specs/288-define-step-type-authoring-model/spec.md`  
+**Spec**: spec.md
 **Original Request Source**: spec.md `Input` / trusted Jira preset brief for `MM-575`  
 **Verdict**: FULLY_IMPLEMENTED  
 **Confidence**: HIGH

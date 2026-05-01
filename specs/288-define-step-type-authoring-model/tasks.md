@@ -32,7 +32,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Preserve MM-575 trusted Jira preset brief in `specs/288-define-step-type-authoring-model/spec.md` and `artifacts/moonspec/MM-575-orchestration-input.md` (SC-005)
+- [X] T001 Preserve MM-575 trusted Jira preset brief in `specs/288-define-step-type-authoring-model/spec.md` as the committed traceability record (SC-005)
 - [X] T002 Confirm source requirements in `docs/Steps/StepTypes.md` cover DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-005, DESIGN-REQ-006, and DESIGN-REQ-014
 - [X] T003 Confirm relevant existing implementation and tests are in `frontend/src/entrypoints/task-create.tsx`, `frontend/src/entrypoints/task-create-step-type.test.tsx`, and `tests/unit/workflows/tasks/test_task_contract.py`
 
