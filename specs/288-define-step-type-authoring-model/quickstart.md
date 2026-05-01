@@ -15,4 +15,6 @@ Automated checks:
 ./tools/test_unit.sh --dashboard-only --ui-args entrypoints/task-create-step-type.test.tsx
 ./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py
 ./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json
+./tools/test_unit.sh
+/moonspec-verify
 ```

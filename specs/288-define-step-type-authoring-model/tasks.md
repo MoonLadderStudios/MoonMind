@@ -7,6 +7,8 @@
 
 **Source Traceability**: MM-575 Jira preset brief is preserved in `spec.md`. Tasks cover exactly one story: FR-001 through FR-006, acceptance scenarios 1-5, SC-001 through SC-005, and DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-005, DESIGN-REQ-006, and DESIGN-REQ-014.
 
+**Requirement Status Summary**: `plan.md` classifies every in-scope FR, acceptance scenario, SC, and DESIGN-REQ row as `implemented_verified`. This task list therefore preserves traceability, confirms existing unit and integration evidence, retains red-first reasoning as verification of prior coverage, and requires final validation rather than adding new production implementation tasks.
+
 **Test Commands**:
 
 - Focused UI verification: `./tools/test_unit.sh --dashboard-only --ui-args entrypoints/task-create-step-type.test.tsx`
@@ -19,6 +21,14 @@
 - **[P]**: Can run in parallel (different files, no dependencies)
 - Include exact file paths in descriptions
 - Include requirement, scenario, or source IDs when the task implements or validates behavior
+
+## Requirement Status Coverage
+
+| Status from plan.md | Covered IDs | Task handling |
+| --- | --- | --- |
+| implemented_verified | FR-001, FR-002, FR-003, FR-005, FR-006; SCN-001, SCN-002, SCN-003, SCN-005; SC-001, SC-002, SC-003, SC-005; DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-006, DESIGN-REQ-014 | Existing Create page implementation and rendered UI tests are confirmed in T004, T008, T009, T011, T013, T015, and T017. |
+| implemented_verified | FR-004; SCN-004; SC-004; DESIGN-REQ-005 | Existing runtime contract tests are confirmed in T005, T006, T007, T012, T014, and T017. |
+
 
 ## Phase 1: Setup
 
@@ -78,6 +88,7 @@
 
 1. Preserve MM-575 and the trusted preset brief in feature artifacts.
 2. Treat `docs/Steps/StepTypes.md` as runtime source requirements.
-3. Reuse existing Step Type UI and runtime validation where evidence passes.
-4. Run focused UI, runtime contract, and type validation.
-5. Write final `verification.md` with requirement coverage and test evidence.
+3. Carry forward the `implemented_verified` status from `plan.md` for every in-scope FR, scenario, SC, and DESIGN-REQ row.
+4. Reuse existing Step Type UI and runtime validation where evidence passes; do not add production implementation tasks unless validation fails.
+5. Run focused UI, runtime contract, and type validation.
+6. Write final `verification.md` with requirement coverage and test evidence.
