@@ -1,22 +1,32 @@
 [
   {
-    "id": 4361831919,
+    "id": 4361890911,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice is informational and does not request a code change."
+    "rationale": "Qodo free-tier notice is informational and does not request a code or documentation change."
   },
   {
-    "id": 3175382898,
+    "id": 3175416715,
     "disposition": "addressed",
-    "rationale": "Preset expansion now preserves backend warnings and surfaces them in the applied preset status message, with UI test coverage."
+    "rationale": "Added optional transition ID, transition name, and transition fields to the jira-verify skill inputs."
   },
   {
-    "id": 3175382900,
+    "id": 3175416726,
     "disposition": "addressed",
-    "rationale": "Removed the dead per-step presetReapplyNeeded state and all related writes/checks from StepState."
+    "rationale": "Added the trusted MCP jira.transition_issue call shape with issueKey, transitionId, and fields."
   },
   {
-    "id": 4213593099,
+    "id": 3175416732,
+    "disposition": "addressed",
+    "rationale": "Updated completion transition selection to prefer a provided transition ID or name before the single done-category fallback."
+  },
+  {
+    "id": 3175416737,
+    "disposition": "addressed",
+    "rationale": "Normalized status update wording to use already done instead of no-op in the workflow and suggested comment shape."
+  },
+  {
+    "id": 4213624998,
     "disposition": "not-applicable",
-    "rationale": "Summary review comment duplicates the two actionable review comments, both of which were addressed separately."
+    "rationale": "Review summary aggregates the four line comments and has no separate actionable request."
   }
 ]
