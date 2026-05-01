@@ -12281,150 +12281,148 @@ describe("Task Create MM-578 Preset preview and apply", () => {
     >;
   }
 
-  beforeEach(() => {
-    window.history.pushState({}, "Task Create", "/tasks/new");
-    window.sessionStorage.clear();
-    window.localStorage.clear();
-    vi.mocked(navigateTo).mockReset();
-    fetchSpy = vi
-      .spyOn(window, "fetch")
-      .mockImplementation((input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.startsWith("/api/tasks/skills")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              items: { worker: ["moonspec-orchestrate"] },
-            }),
-          } as Response);
-        }
-        if (url.startsWith("/api/github/branches")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              items: [{ value: "main", label: "main", source: "github" }],
-              defaultBranch: "main",
-              error: null,
-            }),
-          } as Response);
-        }
-        if (url.startsWith("/api/task-step-templates?scope=personal")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ items: [] }),
-          } as Response);
-        }
-        if (url.startsWith("/api/task-step-templates?scope=global")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              items: [
-                {
-                  slug: "mm-578-preset",
-                  scope: "global",
-                  title: "MM-578 Preset",
-                  description: "Preview and apply Preset steps.",
-                  latestVersion: "1.0.0",
-                  version: "1.0.0",
-                },
-              ],
-            }),
-          } as Response);
-        }
-        if (
-          url.startsWith("/api/task-step-templates/mm-578-preset?scope=global")
-        ) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
+  function mockMm578PresetFetch(input: RequestInfo | URL): Promise<Response> {
+    const url = String(input);
+    if (url.startsWith("/api/tasks/skills")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: { worker: ["moonspec-orchestrate"] },
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/github/branches")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [{ value: "main", label: "main", source: "github" }],
+          defaultBranch: "main",
+          error: null,
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates?scope=personal")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
               slug: "mm-578-preset",
               scope: "global",
               title: "MM-578 Preset",
               description: "Preview and apply Preset steps.",
               latestVersion: "1.0.0",
               version: "1.0.0",
-              inputs: [
-                {
-                  name: "issue_key",
-                  label: "Jira Issue Key",
-                  type: "text",
-                  required: true,
-                },
-              ],
-            }),
-          } as Response);
-        }
-        if (
-          url.startsWith(
-            "/api/task-step-templates/mm-578-preset:expand?scope=global",
-          )
-        ) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              steps: [
-                {
-                  id: "tpl:mm-578-preset:1.0.0:01",
-                  title: "Fetch Jira issue",
-                  instructions: "Fetch MM-578.",
-                  tool: {
-                    type: "tool",
-                    id: "jira.get_issue",
-                    inputs: { issueKey: "MM-578" },
-                  },
-                  source: {
-                    kind: "preset-derived",
-                    presetId: "mm-578-preset",
-                  },
-                },
-                {
-                  id: "tpl:mm-578-preset:1.0.0:02",
-                  title: "Implement preset story",
-                  instructions: "Implement MM-578.",
-                  skill: {
-                    id: "moonspec-orchestrate",
-                    args: { issueKey: "MM-578" },
-                  },
-                },
-              ],
-              appliedTemplate: {
-                slug: "mm-578-preset",
-                version: "1.0.0",
+            },
+          ],
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates/mm-578-preset?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          slug: "mm-578-preset",
+          scope: "global",
+          title: "MM-578 Preset",
+          description: "Preview and apply Preset steps.",
+          latestVersion: "1.0.0",
+          version: "1.0.0",
+          inputs: [
+            {
+              name: "issue_key",
+              label: "Jira Issue Key",
+              type: "text",
+              required: true,
+            },
+          ],
+        }),
+      } as Response);
+    }
+    if (
+      url.startsWith(
+        "/api/task-step-templates/mm-578-preset:expand?scope=global",
+      )
+    ) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          steps: [
+            {
+              id: "tpl:mm-578-preset:1.0.0:01",
+              title: "Fetch Jira issue",
+              instructions: "Fetch MM-578.",
+              tool: {
+                type: "tool",
+                id: "jira.get_issue",
+                inputs: { issueKey: "MM-578" },
               },
-              warnings: ["Generated steps should be reviewed before apply."],
-            }),
-          } as Response);
-        }
-        if (url.startsWith("/api/v1/provider-profiles")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => [
-              {
-                profile_id: "profile:codex-default",
-                account_label: "Codex Default",
-                is_default: true,
+              source: {
+                kind: "preset-derived",
+                presetId: "mm-578-preset",
               },
-            ],
-          } as Response);
-        }
-        if (url.startsWith("/api/executions?")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ items: [] }),
-          } as Response);
-        }
-        if (url === "/api/executions") {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ workflowId: "mm:workflow-578" }),
-          } as Response);
-        }
-        return Promise.resolve({
-          ok: false,
-          status: 404,
-          text: async () => `Unhandled fetch ${url}`,
-        } as Response);
-      });
+            },
+            {
+              id: "tpl:mm-578-preset:1.0.0:02",
+              title: "Implement preset story",
+              instructions: "Implement MM-578.",
+              skill: {
+                id: "moonspec-orchestrate",
+                args: { issueKey: "MM-578" },
+              },
+            },
+          ],
+          appliedTemplate: {
+            slug: "mm-578-preset",
+            version: "1.0.0",
+          },
+          warnings: ["Generated steps should be reviewed before apply."],
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/v1/provider-profiles")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => [
+          {
+            profile_id: "profile:codex-default",
+            account_label: "Codex Default",
+            is_default: true,
+          },
+        ],
+      } as Response);
+    }
+    if (url.startsWith("/api/executions?")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as Response);
+    }
+    if (url === "/api/executions") {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ workflowId: "mm:workflow-578" }),
+      } as Response);
+    }
+    return Promise.resolve({
+      ok: false,
+      status: 404,
+      text: async () => `Unhandled fetch ${url}`,
+    } as Response);
+  }
+
+  beforeEach(() => {
+    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    vi.mocked(navigateTo).mockReset();
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation(mockMm578PresetFetch);
   });
 
   afterEach(() => {
@@ -12544,79 +12542,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
           text: async () => "Generated step validation failed.",
         } as Response);
       }
-      if (url.startsWith("/api/task-step-templates?scope=personal")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ items: [] }),
-        } as Response);
-      }
-      if (url.startsWith("/api/task-step-templates?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "mm-578-preset",
-                scope: "global",
-                title: "MM-578 Preset",
-                description: "Preview and apply Preset steps.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (
-        url.startsWith("/api/task-step-templates/mm-578-preset?scope=global")
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            slug: "mm-578-preset",
-            scope: "global",
-            title: "MM-578 Preset",
-            latestVersion: "1.0.0",
-            version: "1.0.0",
-            inputs: [],
-          }),
-        } as Response);
-      }
-      if (url.startsWith("/api/tasks/skills")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ items: { worker: [] } }),
-        } as Response);
-      }
-      if (url.startsWith("/api/github/branches")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ items: [], defaultBranch: "main", error: null }),
-        } as Response);
-      }
-      if (url.startsWith("/api/v1/provider-profiles")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [
-            {
-              profile_id: "profile:codex-default",
-              account_label: "Codex Default",
-              is_default: true,
-            },
-          ],
-        } as Response);
-      }
-      if (url.startsWith("/api/executions?")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ items: [] }),
-        } as Response);
-      }
-      return Promise.resolve({
-        ok: false,
-        status: 404,
-        text: async () => `Unhandled fetch ${url}`,
-      } as Response);
+      return mockMm578PresetFetch(input);
     });
 
     renderWithClient(<TaskCreatePage payload={mockPayload} />);

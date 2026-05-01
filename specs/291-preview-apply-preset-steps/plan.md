@@ -35,7 +35,7 @@ MM-578 requires Preset steps to be selected from the step editor, configured, pr
 **Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 remains present but is not expected to change for this story  
 **Primary Dependencies**: React, TanStack Query, existing task-template catalog/detail/expand endpoints, Vitest and Testing Library  
 **Storage**: Existing task draft state only; no new persistent storage  
-**Unit Testing**: `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx` for the managed frontend unit path; `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` for focused direct Vitest iteration in managed workspaces whose paths may break npm's PATH-based binary lookup
+**Unit Testing**: `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx` for the managed frontend unit path; `npm run ui:test:task-create` for focused direct Vitest iteration
 **Integration Testing**: Create page Vitest render/submission coverage is the story integration boundary because it exercises UI state, mocked task-template API calls, and submit payload construction; run it through the same focused Vitest command and the managed dashboard-only wrapper
 **Target Platform**: Mission Control web UI  
 **Project Type**: Web application frontend in the existing repository  
