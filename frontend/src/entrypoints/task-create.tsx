@@ -3041,6 +3041,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isDeletingPreset, setIsDeletingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitRippleKey, setSubmitRippleKey] = useState(0);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
   const prevRuntimeRef = useRef(runtime);
   const prevProviderProfileRef = useRef(providerProfile);
@@ -7015,7 +7016,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
             {steps.map((step, index) => {
               const isPrimaryStep = index === 0;
-              const stepLabel = isPrimaryStep ? " (Primary)" : "";
               const showSkillArgsField = showAdvancedStepOptions;
               const visiblePresetInputs = step.presetDetail
                 ? (step.presetDetail.inputs || []).filter(
@@ -7046,7 +7046,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   data-step-index={index}
                 >
                   <div className="queue-step-header">
-                    <strong>{`Step ${index + 1}${stepLabel}`}</strong>
+                    <strong>{`Step ${index + 1}`}</strong>
                     <div
                       className="queue-step-controls"
                       role="group"
@@ -7121,7 +7121,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                             <span className="queue-step-type-option-icon">
                               <Icon />
                             </span>
-                            <span className="sr-only">Step Type </span>
                             <span className="queue-step-type-option-label">
                               {option.label}
                             </span>
@@ -7201,7 +7200,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         <p className="small">No trusted Tools match this search.</p>
                       ) : null}
                       <label>
-                        Tool
+                        Tool ID
                         <input
                           data-step-field="toolId"
                           data-step-index={String(index)}
@@ -7357,8 +7356,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       aria-label="Step Preset"
                     >
                       <label>
-                        Preset
+                        Preset Template
                         <select
+                          data-step-field="presetKey"
+                          data-step-index={String(index)}
                           value={step.presetKey}
                           disabled={isApplyingPreset}
                           aria-disabled={isApplyingPreset}
@@ -8274,6 +8275,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               aria-busy={isSubmitting}
               aria-label={primaryCta}
               title={primaryCtaTooltip}
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                if (isTemporalFormBlocked) return;
+                setSubmitRippleKey((value) => value + 1);
+              }}
             >
               {showPrimaryCtaArrow ? (
                 <span
@@ -8286,6 +8292,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               ) : (
                 <span>{primaryCta}</span>
               )}
+              {showPrimaryCtaArrow && submitRippleKey > 0 ? (
+                <span
+                  key={submitRippleKey}
+                  aria-hidden="true"
+                  className="queue-submit-primary-ripple"
+                  onAnimationEnd={() => setSubmitRippleKey(0)}
+                />
+              ) : null}
             </button>
           </div>
         </div>

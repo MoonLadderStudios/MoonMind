@@ -68,7 +68,7 @@ const mockPayload: BootPayload = {
 
 function getStepTypeRadio(step: HTMLElement, label: "Skill" | "Tool" | "Preset") {
   return within(step).getByRole("radio", {
-    name: new RegExp(`(?:Step Type\\s+)?${label}$`),
+    name: label,
   }) as HTMLInputElement;
 }
 
@@ -190,14 +190,14 @@ describe("Task Create Step Type authoring", () => {
   it("shows one Step Type selector and visibly discards incompatible Skill state", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
 
     const stepType = within(primaryStep).getByRole("group", { name: "Step Type" });
     expect(
       Array.from(stepType.querySelectorAll("label")).map((option) =>
-        option.textContent?.replace("Step Type ", "").trim(),
+        option.textContent?.trim(),
       ),
     ).toEqual(["Skill", "Tool", "Preset"]);
 
@@ -219,7 +219,7 @@ describe("Task Create Step Type authoring", () => {
       (within(primaryStep).getByLabelText("Step 1 Instructions") as HTMLTextAreaElement)
         .value,
     ).toBe("Keep these shared instructions.");
-    expect(within(primaryStep).getByLabelText("Tool")).toBeTruthy();
+    expect(within(primaryStep).getByLabelText("Tool ID")).toBeTruthy();
     expect(within(primaryStep).queryByLabelText(/Skill \(optional\)/)).toBeNull();
     expect(
       within(primaryStep).getByText(
@@ -249,7 +249,7 @@ describe("Task Create Step Type authoring", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Add Step" }));
     fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
 
-    const firstStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const firstStep = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     const secondStep = (await screen.findByText("Step 2")).closest(
@@ -274,7 +274,7 @@ describe("Task Create Step Type authoring", () => {
     );
 
     const presetSelect = within(secondStep).getByLabelText(
-      "Preset",
+      "Preset Template",
     ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
@@ -323,11 +323,11 @@ describe("Task Create Step Type authoring", () => {
   it("expands a preset using the latest preset instructions", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -375,11 +375,11 @@ describe("Task Create Step Type authoring", () => {
 
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });

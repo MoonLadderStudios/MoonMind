@@ -131,7 +131,7 @@ async function clickApplyButton() {
 
 function getStepTypeRadio(step: HTMLElement, label: "Skill" | "Tool" | "Preset") {
   return within(step).getByRole("radio", {
-    name: new RegExp(`(?:Step Type\\s+)?${label}$`),
+    name: label,
   }) as HTMLInputElement;
 }
 
@@ -2481,7 +2481,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("shows the primary step requirement only after submit validation fails", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(await screen.findByText("Step 1")).toBeTruthy();
     expect(
       screen.queryByText("Primary step must include instructions or an explicit skill."),
     ).toBeNull();
@@ -3353,7 +3353,7 @@ describe.skip("Task Create Entrypoint", () => {
         "Patch the edit reconstruction path.",
         "Run the focused task-create tests.",
       ]);
-      expect(screen.getByText("Step 1 (Primary)")).toBeTruthy();
+      expect(screen.getByText("Step 1")).toBeTruthy();
       expect(screen.getByText("Step 2")).toBeTruthy();
       expect(screen.getByText("Step 3")).toBeTruthy();
     });
@@ -3362,13 +3362,13 @@ describe.skip("Task Create Entrypoint", () => {
   it("preserves reconstructed preset inputs when expanding an edit draft", async () => {
     renderForEdit("mm:preset-step-input-edit");
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     await waitFor(() => {
       expect(getStepTypeRadio(step, "Preset").checked).toBe(true);
       expect(
-        (within(step).getByLabelText("Preset") as HTMLSelectElement).value,
+        (within(step).getByLabelText("Preset Template") as HTMLSelectElement).value,
       ).toBe("global::::speckit-demo");
     });
 
@@ -4505,7 +4505,7 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).not.toBeNull();
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -4650,7 +4650,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("submits a selected repository option without changing unrelated draft fields", async () => {
     renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -4695,7 +4695,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("submits an authored MM-564 Skill step with agentic controls", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -4777,7 +4777,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("reveals per-step advanced skill options from the bottom toggle", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -4858,7 +4858,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("preserves and validates advanced skill fields after toggling advanced mode off and on", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -4935,7 +4935,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("does not submit hidden advanced step capabilities after toggling advanced mode off", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -5443,7 +5443,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { files: [secondFile] },
     });
 
-    const stepOne = screen.getByText("Step 1 (Primary)").closest("section");
+    const stepOne = screen.getByText("Step 1").closest("section");
     expect(stepOne).not.toBeNull();
     fireEvent.click(
       within(stepOne as HTMLElement).getByRole("button", {
@@ -5785,7 +5785,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<TaskCreatePage payload={payload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -6520,7 +6520,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("submits publish mode none when the selected primary skill is pr-resolver", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -6652,7 +6652,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("omits merge automation when a resolver skill is selected", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -6741,7 +6741,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("submits deferred pr-resolver tasks with object-shaped skill selectors", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -6963,7 +6963,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("adds hover tooltips to Create page buttons", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    await screen.findByText("Step 1 (Primary)");
+    await screen.findByText("Step 1");
 
     expectAllButtonsHaveTitles();
     expect(
@@ -7043,7 +7043,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("exposes the canonical Create page section order in create mode", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    await screen.findByText("Step 1 (Primary)");
+    await screen.findByText("Step 1");
 
     expect(canonicalCreateSections()).toEqual([
       "Header",
@@ -7091,7 +7091,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("offers one Step Type control with Tool Skill and Preset choices", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -7102,7 +7102,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     expect(
       Array.from(stepType.querySelectorAll("label")).map((option) =>
-        option.textContent?.replace("Step Type ", "").trim(),
+        option.textContent?.trim(),
       ),
     ).toEqual(["Skill", "Tool", "Preset"]);
     expect(getStepTypeRadio(step, "Skill").checked).toBe(true);
@@ -7116,7 +7116,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("presents concise Step Type helper copy for Tool Skill and Preset", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -7146,7 +7146,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("switches Step Type configuration areas while preserving instructions", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -7159,27 +7159,27 @@ describe.skip("Task Create Entrypoint", () => {
     selectStepType(step, "Tool");
 
     expect(instructions.value).toBe("Keep this Step Type instruction.");
-    expect(within(step).getByLabelText("Tool")).toBeTruthy();
+    expect(within(step).getByLabelText("Tool ID")).toBeTruthy();
     expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
-    expect(within(step).queryByLabelText("Preset")).toBeNull();
+    expect(within(step).queryByLabelText("Preset Template")).toBeNull();
 
     selectStepType(step, "Preset");
 
     expect(instructions.value).toBe("Keep this Step Type instruction.");
-    expect(within(step).getByLabelText("Preset")).toBeTruthy();
+    expect(within(step).getByLabelText("Preset Template")).toBeTruthy();
     expect(within(step).queryByRole("button", { name: "Preview" })).toBeNull();
     expect(
       within(step).getByRole("button", { name: "Expand" }),
     ).toBeTruthy();
     expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
-    expect(within(step).queryByLabelText("Tool")).toBeNull();
+    expect(within(step).queryByLabelText("Tool ID")).toBeNull();
   });
 
   it("keeps Preset selections scoped to each step", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Add Step" }));
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     const secondStep = (await screen.findByText("Step 2")).closest(
@@ -7282,11 +7282,11 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(2);
     });
@@ -7322,11 +7322,11 @@ describe.skip("Task Create Entrypoint", () => {
   it("expands a step preset by replacing the selected preset step with editable generated steps", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -7340,7 +7340,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(screen.getByDisplayValue("Write a plan for the task builder recovery.")).toBeTruthy();
     expect(screen.queryByLabelText("Step Preset")).toBeNull();
 
-    const firstGeneratedStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const firstGeneratedStep = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     fireEvent.change(within(firstGeneratedStep).getByLabelText("Instructions"), {
@@ -7395,11 +7395,11 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -7455,14 +7455,14 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Keep authored preset step." },
     });
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -7484,7 +7484,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("blocks submission while unresolved preset steps remain", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     fireEvent.change(within(step).getByLabelText("Instructions"), {
@@ -7514,11 +7514,11 @@ describe.skip("Task Create Entrypoint", () => {
       within(presetManagementSection).queryByRole("button", { name: "Apply" }),
     ).toBeNull();
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -7541,7 +7541,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("visibly discards incompatible Skill fields after changing Step Type", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -7610,7 +7610,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("submits a manually authored Tool step with governed tool inputs", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
 
@@ -7618,7 +7618,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Fetch MM-563 through the trusted Jira tool." },
     });
     selectStepType(step, "Tool");
-    fireEvent.change(within(step).getByLabelText("Tool"), {
+    fireEvent.change(within(step).getByLabelText("Tool ID"), {
       target: { value: "jira.get_issue" },
     });
     fireEvent.change(within(step).getByLabelText("Tool Version (optional)"), {
@@ -7657,7 +7657,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("blocks manually authored Tool steps with invalid input JSON", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
 
@@ -7665,7 +7665,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Do not submit invalid tool inputs." },
     });
     selectStepType(step, "Tool");
-    fireEvent.change(within(step).getByLabelText("Tool"), {
+    fireEvent.change(within(step).getByLabelText("Tool ID"), {
       target: { value: "jira.get_issue" },
     });
     fireEvent.change(within(step).getByLabelText("Tool Inputs (JSON object)"), {
@@ -7687,9 +7687,9 @@ describe.skip("Task Create Entrypoint", () => {
       <TaskCreatePage payload={withoutOptionalAuthoringIntegrations()} />,
     );
 
-    expect(await screen.findByText("Step 1 (Primary)")).not.toBeNull();
+    expect(await screen.findByText("Step 1")).not.toBeNull();
     expect(await screen.findByLabelText("Instructions")).not.toBeNull();
-    expect(screen.queryByLabelText("Preset")).toBeNull();
+    expect(screen.queryByLabelText("Preset Template")).toBeNull();
     expect(screen.queryByText("Browse Jira issue")).toBeNull();
     expect(screen.queryByLabelText(/attachments/i)).toBeNull();
     expect(screen.getByRole("button", { name: "Create" })).not.toBeNull();
@@ -7771,7 +7771,7 @@ describe.skip("Task Create Entrypoint", () => {
       expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
     });
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -7851,7 +7851,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("keeps step authoring inside Steps and submission controls in one Submit floating bar", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStepLabel = await screen.findByText("Step 1 (Primary)");
+    const primaryStepLabel = await screen.findByText("Step 1");
 
     const stepsSection = document.querySelector<HTMLElement>(
       '[data-canonical-create-section="Steps"]',
@@ -9420,7 +9420,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -9480,7 +9480,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const primaryStep = (await screen.findByText("Step 1")).closest(
       "section",
     );
     expect(primaryStep).not.toBeNull();
@@ -9706,7 +9706,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("hides Jira browser controls when the runtime config does not enable Jira", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(await screen.findByText("Step 1")).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: /Browse Jira issue/ }),
     ).toBeNull();
@@ -10125,7 +10125,7 @@ describe.skip("Task Create Entrypoint", () => {
       />,
     );
 
-    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(await screen.findByText("Step 1")).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: /Browse Jira issue/ }),
     ).toBeNull();
@@ -10162,7 +10162,7 @@ describe.skip("Task Create Entrypoint", () => {
       />,
     );
 
-    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(await screen.findByText("Step 1")).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: /Browse Jira issue/ }),
     ).toBeNull();
@@ -10199,7 +10199,7 @@ describe.skip("Task Create Entrypoint", () => {
       />,
     );
 
-    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(await screen.findByText("Step 1")).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: /Browse Jira issue/ }),
     ).toBeNull();
@@ -12366,14 +12366,14 @@ describe("Task Create MM-578 Preset expansion", () => {
       within(presetManagementSection).queryByRole("button", { name: "Apply" }),
     ).toBeNull();
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
       target: { value: "Keep authored MM-578 preset placeholder." },
     });
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -12397,7 +12397,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     ).toBeTruthy();
     expect(screen.queryByLabelText("Step Preset")).toBeNull();
 
-    const firstGeneratedStep = (await screen.findByText("Step 1 (Primary)")).closest(
+    const firstGeneratedStep = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     fireEvent.change(within(firstGeneratedStep).getByLabelText("Step 1 Instructions"), {
@@ -12409,11 +12409,11 @@ describe("Task Create MM-578 Preset expansion", () => {
   it("submits applied preset-generated Tool and Skill steps with executable binding and provenance", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -12492,14 +12492,14 @@ describe("Task Create MM-578 Preset expansion", () => {
 
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
       target: { value: "Keep authored MM-578 preset step." },
     });
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -12659,7 +12659,7 @@ describe("Task Create governed Tool authoring", () => {
   it("groups and filters trusted Tool choices", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     selectStepType(step, "Tool");
@@ -12679,14 +12679,14 @@ describe("Task Create governed Tool authoring", () => {
         name: /github.create_pull_request/,
       }),
     );
-    expect((within(step).getByLabelText("Tool") as HTMLInputElement).value)
+    expect((within(step).getByLabelText("Tool ID") as HTMLInputElement).value)
       .toBe("github.create_pull_request");
   });
 
   it("submits an authored MM-577 Skill step with agentic controls", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     selectStepType(step, "Skill");
@@ -12759,7 +12759,7 @@ describe("Task Create governed Tool authoring", () => {
   it("loads trusted Jira transition statuses into submitted Tool inputs", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
@@ -12825,7 +12825,7 @@ describe("Task Create governed Tool authoring", () => {
 
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     selectStepType(step, "Tool");
@@ -12835,10 +12835,10 @@ describe("Task Create governed Tool authoring", () => {
         "Trusted Tool discovery is unavailable. Manual Tool authoring remains available.",
       ),
     ).toBeTruthy();
-    fireEvent.change(within(step).getByLabelText("Tool"), {
+    fireEvent.change(within(step).getByLabelText("Tool ID"), {
       target: { value: "jira.get_issue" },
     });
-    expect((within(step).getByLabelText("Tool") as HTMLInputElement).value)
+    expect((within(step).getByLabelText("Tool ID") as HTMLInputElement).value)
       .toBe("jira.get_issue");
   });
 });
