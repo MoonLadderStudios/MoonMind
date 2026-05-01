@@ -320,7 +320,7 @@ describe("Task Create Step Type authoring", () => {
     ).toBe("Keep trailing skill.");
   });
 
-  it("regenerates a preset preview after preset instructions change", async () => {
+  it("expands a preset using the latest preset instructions", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
@@ -339,18 +339,6 @@ describe("Task Create Step Type authoring", () => {
     );
     fireEvent.change(instructions, { target: { value: "old issue" } });
 
-    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
-    await waitFor(() => {
-      const previewCall = fetchSpy.mock.calls.find(([url]) =>
-        String(url).startsWith(
-          "/api/task-step-templates/jira-orchestrate:expand?scope=global",
-        ),
-      );
-      expect(previewCall).toBeTruthy();
-      const body = JSON.parse(String(previewCall?.[1]?.body || "{}"));
-      expect(body.inputs.feature_request).toBe("old issue");
-    });
-
     fireEvent.change(instructions, { target: { value: "new issue" } });
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
@@ -363,7 +351,9 @@ describe("Task Create Step Type authoring", () => {
         "/api/task-step-templates/jira-orchestrate:expand?scope=global",
       ),
     );
-    expect(expandCalls).toHaveLength(2);
+    expect(expandCalls).toHaveLength(1);
+    const body = JSON.parse(String(expandCalls[0]?.[1]?.body || "{}"));
+    expect(body.inputs.feature_request).toBe("new issue");
   });
 
   it("ignores async preset expansion results after the preset step changes", async () => {

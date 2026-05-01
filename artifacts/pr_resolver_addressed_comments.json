@@ -1,32 +1,22 @@
 [
   {
-    "id": 4361443001,
+    "id": 4361831919,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice is informational and contains no actionable code feedback."
+    "rationale": "Qodo free-tier notice is informational and does not request a code change."
   },
   {
-    "id": 4213218170,
+    "id": 3175382898,
     "disposition": "addressed",
-    "rationale": "Removed the duplicate-label ambiguity by making Jira preset targets context-specific and non-preset instruction labels step-specific."
+    "rationale": "Preset expansion now preserves backend warnings and surfaces them in the applied preset status message, with UI test coverage."
   },
   {
-    "id": 3175033901,
+    "id": 3175382900,
     "disposition": "addressed",
-    "rationale": "Jira preset import target labels now render as Instructions (Preset) and Instructions attachments (Preset)."
+    "rationale": "Removed the dead per-step presetReapplyNeeded state and all related writes/checks from StepState."
   },
   {
-    "id": 3175033931,
-    "disposition": "addressed",
-    "rationale": "Non-preset step instruction fields now use Step N Instructions while preset steps keep Instructions."
-  },
-  {
-    "id": 3175033942,
-    "disposition": "addressed",
-    "rationale": "Reviewed Jira import tests now query Step 1 Instructions for step fields instead of the ambiguous Instructions label."
-  },
-  {
-    "id": 3175033948,
-    "disposition": "addressed",
-    "rationale": "Preset and step assertions now use distinct accessible labels: Instructions for preset and Step 1 Instructions for step text."
+    "id": 4213593099,
+    "disposition": "not-applicable",
+    "rationale": "Summary review comment duplicates the two actionable review comments, both of which were addressed separately."
   }
 ]
