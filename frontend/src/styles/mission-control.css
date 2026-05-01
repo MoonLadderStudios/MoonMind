@@ -10,6 +10,7 @@
   --mm-muted: 95 102 122;
   --mm-border: 214 220 235;
   --mm-accent: 130 72 246;
+  --mm-accent-contrast: 255 255 255;
   --mm-accent-2: 34 211 238;
   --mm-accent-warm: 244 114 182;
   --mm-ok: 34 197 94;
@@ -68,6 +69,7 @@
   --mm-muted: 174 170 204;
   --mm-border: 92 84 136;
   --mm-accent: 130 72 246;
+  --mm-accent-contrast: 255 255 255;
   --mm-accent-2: 125 249 255;
   --mm-accent-warm: 249 115 22;
   --mm-ok: 74 222 128;
@@ -2549,7 +2551,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   border: 1px solid rgb(var(--mm-border));
   border-radius: 10px;
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .queue-step-type-option {
@@ -2572,6 +2574,13 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
 .queue-step-type-option:first-child {
   border-left: 0;
+  border-bottom-left-radius: 9px;
+  border-top-left-radius: 9px;
+}
+
+.queue-step-type-option:last-child {
+  border-bottom-right-radius: 9px;
+  border-top-right-radius: 9px;
 }
 
 .queue-step-type-option:hover:not(:has(input:checked)) {
@@ -2582,7 +2591,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 .queue-step-type-option:has(input:checked) {
   background: rgb(var(--mm-accent));
   border-left-color: transparent;
-  color: #fff;
+  color: rgb(var(--mm-accent-contrast));
 }
 
 .queue-step-type-option:has(input:checked) + .queue-step-type-option {
