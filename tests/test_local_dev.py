@@ -77,30 +77,10 @@ def test_api_service_mounts_agent_runtime_workspace_volume():
         api_service, dict
     ), "api service is missing from docker-compose.yaml"
 
-    volumes = api_service.get("volumes", [])
-    assert isinstance(volumes, list), "api service volumes must be a list"
-
-    found_mount = False
-    for v in volumes:
-        if isinstance(v, str):
-            parts = v.split(":")
-            if (
-                len(parts) >= 2
-                and parts[0] == "agent_workspaces"
-                and parts[1] == "/work/agent_jobs"
-            ):
-                found_mount = True
-                break
-        elif isinstance(v, dict):
-            if (
-                v.get("source") == "agent_workspaces"
-                and v.get("target") == "/work/agent_jobs"
-            ):
-                found_mount = True
-                break
-
-    assert (
-        found_mount
+    assert _has_volume_mount(
+        api_service,
+        "agent_workspaces",
+        "/work/agent_jobs",
     ), "api service must mount agent_workspaces at /work/agent_jobs so observability APIs can read managed-run records"
 
 

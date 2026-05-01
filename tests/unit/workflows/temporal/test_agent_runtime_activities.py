@@ -2855,7 +2855,8 @@ async def test_publish_path_filter_excludes_generated_skill_projection_symlink(
     )
 
 
-async def test_publish_path_filter_accepts_workspace_string_for_skill_projection(
+async def test_publish_path_filter_normalizes_relative_workspace_path(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "repo"
@@ -2864,11 +2865,46 @@ async def test_publish_path_filter_accepts_workspace_string_for_skill_projection
     projection = workspace / ".agents" / "skills"
     projection.parent.mkdir(parents=True)
     projection.symlink_to(backing, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
 
     assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
         ".agents/skills/pr-resolver/SKILL.md",
-        workspace=str(workspace),
+        workspace=Path("repo"),
     )
+
+
+async def test_commit_workspace_changes_filters_skill_projection_from_string_workspace(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    backing = tmp_path / "runtime" / "skills_active"
+    backing.mkdir(parents=True)
+    projection = workspace / ".agents" / "skills"
+    projection.parent.mkdir(parents=True)
+    projection.symlink_to(backing, target_is_directory=True)
+    activities = TemporalAgentRuntimeActivities()
+    recorded_calls: list[tuple[object, ...]] = []
+
+    async def _mock_exec(*args, **kwargs):
+        recorded_calls.append(args)
+        proc = AsyncMock()
+        proc.communicate = AsyncMock(
+            return_value=(b" D .agents/skills/pr-resolver/SKILL.md\0", b"")
+        )
+        proc.returncode = 0
+        return proc
+
+    original_env = dict()
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(asyncio, "create_subprocess_exec", _mock_exec)
+        result = await activities._commit_workspace_changes_if_needed(
+            str(workspace),
+            run_id="run-1",
+            env=original_env,
+        )
+
+    assert result == {}
+    assert len(recorded_calls) == 1
 
 
 async def test_publish_path_filter_allows_checked_in_skill_directory(
