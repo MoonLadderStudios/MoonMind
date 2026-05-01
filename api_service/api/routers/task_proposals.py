@@ -80,6 +80,7 @@ def _build_task_preview(
     raw_steps = task.get("steps")
     steps = raw_steps if isinstance(raw_steps, list) else []
     step_source_kinds: list[str] = []
+    preset_source_metadata: list[dict[str, object]] = []
     for step in steps:
         if not isinstance(step, dict):
             continue
@@ -89,6 +90,22 @@ def _build_task_preview(
         kind = str(source_node.get("kind") or "").strip()
         if kind:
             step_source_kinds.append(kind)
+        if kind in _PRESET_SOURCE_KINDS:
+            metadata: dict[str, object] = {"kind": kind}
+            for key in (
+                "presetId",
+                "presetSlug",
+                "presetVersion",
+                "includePath",
+                "originalStepId",
+            ):
+                value = source_node.get(key)
+                if value is None or value == "":
+                    continue
+                if key == "includePath" and not isinstance(value, list):
+                    continue
+                metadata[key] = value
+            preset_source_metadata.append(metadata)
     preset_provenance = "manual"
     if authored_preset_count > 0:
         preset_provenance = "preserved-binding"
@@ -124,6 +141,7 @@ def _build_task_preview(
         presetProvenance=preset_provenance,
         authoredPresetCount=authored_preset_count,
         stepSourceKinds=step_source_kinds,
+        presetSourceMetadata=preset_source_metadata,
     )
 
 def _serialize_similar(similar: list[TaskProposal] | None) -> list[dict[str, object]]:

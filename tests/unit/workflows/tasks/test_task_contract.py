@@ -101,6 +101,9 @@ def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
                     "source": {
                         "kind": "preset-derived",
                         "presetId": "jira-flow",
+                        "presetVersion": "2026-04-24",
+                        "includePath": ["root", "fetch"],
+                        "originalStepId": "fetch-jira-issue",
                     },
                 },
                 {
@@ -116,12 +119,63 @@ def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
         }
     )
 
-    dumped_steps = [step.model_dump(by_alias=True) for step in spec.steps]
+    dumped_steps = [
+        step.model_dump(by_alias=True, exclude_none=True) for step in spec.steps
+    ]
     assert dumped_steps[0]["type"] == "tool"
     assert dumped_steps[0]["tool"]["id"] == "jira.get_issue"
-    assert dumped_steps[0]["source"]["presetId"] == "jira-flow"
+    assert dumped_steps[0]["source"] == {
+        "kind": "preset-derived",
+        "presetId": "jira-flow",
+        "presetVersion": "2026-04-24",
+        "includePath": ["root", "fetch"],
+        "originalStepId": "fetch-jira-issue",
+    }
     assert dumped_steps[1]["type"] == "skill"
     assert dumped_steps[1]["skill"]["id"] == "moonspec-implement"
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        None,
+        {"kind": "detached"},
+        {
+            "kind": "preset-derived",
+            "presetId": "stale-preset",
+            "presetVersion": "missing-from-catalog",
+        },
+        {
+            "kind": "preset-include",
+            "presetSlug": "parent-flow",
+            "presetVersion": "2026-04-24",
+            "includePath": ["root", "child"],
+            "originalStepId": "child-step",
+        },
+    ],
+)
+def test_task_steps_validate_without_resolving_source_provenance(
+    source: dict[str, object] | None,
+) -> None:
+    step: dict[str, object] = {
+        "id": "fetch-issue",
+        "type": "tool",
+        "instructions": "Fetch issue.",
+        "tool": {"id": "jira.get_issue", "inputs": {"issueKey": "MM-579"}},
+    }
+    if source is not None:
+        step["source"] = source
+
+    spec = TaskExecutionSpec.model_validate(
+        {"instructions": "Run explicit steps.", "steps": [step]}
+    )
+
+    dumped = spec.model_dump(by_alias=True, exclude_none=True)["steps"][0]
+    assert dumped["type"] == "tool"
+    assert dumped["tool"]["id"] == "jira.get_issue"
+    if source is None:
+        assert "source" not in dumped or dumped["source"] is None
+    else:
+        assert dumped["source"] == source
 
 @pytest.mark.parametrize("step_type", ["preset", "activity", "Activity"])
 def test_task_steps_reject_non_executable_step_types(step_type: str) -> None:

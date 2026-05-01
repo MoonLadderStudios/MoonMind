@@ -885,7 +885,7 @@ class TaskStepSource(BaseModel):
     )
     preset_id: str | None = Field(None, alias="presetId")
     preset_slug: str | None = Field(None, alias="presetSlug")
-    version: str | None = Field(None, alias="version")
+    preset_version: str | None = Field(None, alias="presetVersion")
     include_path: list[str] | None = Field(None, alias="includePath")
     original_step_id: str | None = Field(None, alias="originalStepId")
 
@@ -893,7 +893,7 @@ class TaskStepSource(BaseModel):
         "kind",
         "preset_id",
         "preset_slug",
-        "version",
+        "preset_version",
         "original_step_id",
         mode="before",
     )
@@ -922,7 +922,7 @@ class AuthoredPresetBinding(BaseModel):
 
     preset_id: str | None = Field(None, alias="presetId")
     preset_slug: str | None = Field(None, alias="presetSlug")
-    version: str | None = Field(None, alias="version")
+    preset_version: str | None = Field(None, alias="presetVersion")
     alias: str | None = Field(None, alias="alias")
     include_path: list[str] | None = Field(None, alias="includePath")
     input_mapping: dict[str, Any] | None = Field(None, alias="inputMapping")
@@ -931,7 +931,7 @@ class AuthoredPresetBinding(BaseModel):
     @field_validator(
         "preset_id",
         "preset_slug",
-        "version",
+        "preset_version",
         "alias",
         "scope",
         mode="before",

@@ -36,6 +36,7 @@ _PROPOSALS_WRITE_CAPABILITY = "proposals_write"
 _LEGACY_TASK_WORKER_RUNTIME_CAPABILITIES = frozenset(
     {"codex", "gemini_cli", "claude", "jules"}
 )
+_PRESET_SOURCE_KINDS = frozenset({"preset-derived", "preset-include", "detached"})
 _NOTIFICATION_CATEGORIES = {"security", "tests"}
 _DEDUP_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 _MOONMIND_SIGNAL_TAGS = frozenset(
@@ -315,6 +316,33 @@ class TaskProposalService:
         task["publish"] = publish
         normalized_payload["task"] = task
         return normalized_payload
+
+    @staticmethod
+    def _enforce_flat_preset_derived_steps(payload: Mapping[str, Any]) -> None:
+        task = payload.get("task")
+        if not isinstance(task, Mapping):
+            return
+        steps = task.get("steps")
+        if not isinstance(steps, Sequence) or isinstance(steps, (str, bytes)):
+            return
+        for index, raw_step in enumerate(steps):
+            if not isinstance(raw_step, Mapping):
+                continue
+            source = raw_step.get("source")
+            source_kind = ""
+            if isinstance(source, Mapping):
+                source_kind = str(source.get("kind") or "").strip()
+            if source_kind not in _PRESET_SOURCE_KINDS:
+                continue
+            step_type = str(raw_step.get("type") or "").strip().lower()
+            if step_type == "tool" and isinstance(raw_step.get("tool"), Mapping):
+                continue
+            if step_type == "skill" and isinstance(raw_step.get("skill"), Mapping):
+                continue
+            raise TaskProposalValidationError(
+                "stored task payload is invalid: preset-derived proposal steps "
+                f"must be flat executable Tool or Skill steps at task.steps[{index}]"
+            )
 
     @staticmethod
     def _proposal_has_explicit_skill(task: Mapping[str, Any]) -> bool:
@@ -750,6 +778,7 @@ class TaskProposalService:
             raise TaskProposalValidationError(
                 f"stored task payload is invalid: {exc}"
             ) from exc
+        self._enforce_flat_preset_derived_steps(payload)
         if runtime_mode_override is not None:
             normalized_runtime_mode = self._normalize_proposal_runtime_mode(
                 runtime_mode_override
@@ -769,6 +798,7 @@ class TaskProposalService:
                 raise TaskProposalValidationError(
                     f"runtimeMode override is invalid: {exc}"
                 ) from exc
+            self._enforce_flat_preset_derived_steps(payload)
         payload = self._enforce_proposal_pr_publish_mode(payload)
         request["payload"] = payload
 
