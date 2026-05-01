@@ -2855,6 +2855,22 @@ async def test_publish_path_filter_excludes_generated_skill_projection_symlink(
     )
 
 
+async def test_publish_path_filter_accepts_workspace_string_for_skill_projection(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    backing = tmp_path / "runtime" / "skills_active"
+    backing.mkdir(parents=True)
+    projection = workspace / ".agents" / "skills"
+    projection.parent.mkdir(parents=True)
+    projection.symlink_to(backing, target_is_directory=True)
+
+    assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
+        ".agents/skills/pr-resolver/SKILL.md",
+        workspace=str(workspace),
+    )
+
+
 async def test_publish_path_filter_allows_checked_in_skill_directory(
     tmp_path: Path,
 ) -> None:

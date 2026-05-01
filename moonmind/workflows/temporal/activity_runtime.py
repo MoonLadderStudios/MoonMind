@@ -5182,7 +5182,7 @@ class TemporalAgentRuntimeActivities:
     def _should_exclude_publish_path(
         path_text: str,
         *,
-        workspace: Path | None = None,
+        workspace: str | Path | None = None,
     ) -> bool:
         """Skip runtime scaffolding paths that should never be published."""
         normalized = str(path_text or "").strip().rstrip("/")
@@ -5195,7 +5195,7 @@ class TemporalAgentRuntimeActivities:
             normalized == ".agents/skills"
             or normalized.startswith(".agents/skills/")
         ):
-            projection = workspace / ".agents" / "skills"
+            projection = Path(workspace) / ".agents" / "skills"
             if projection.is_symlink():
                 return True
         return False
