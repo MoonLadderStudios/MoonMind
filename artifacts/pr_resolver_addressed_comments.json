@@ -1,27 +1,37 @@
 [
   {
-    "id": 4361162624,
+    "id": 4361302204,
     "disposition": "not-applicable",
-    "rationale": "Qodo quota notice is informational and contains no requested code change."
+    "rationale": "Qodo free-tier notice only; no code action requested."
   },
   {
-    "id": 3174796895,
+    "id": 3174920141,
     "disposition": "addressed",
-    "rationale": "Added explicit detection for GitHub REST mergeable=false conflict responses."
+    "rationale": "The router now defines _PRESET_SOURCE_KINDS locally before use."
   },
   {
-    "id": 4212956261,
+    "id": 3174920149,
+    "disposition": "addressed",
+    "rationale": "Imported Sequence from collections.abc for the runtime isinstance check."
+  },
+  {
+    "id": 3174920155,
+    "disposition": "addressed",
+    "rationale": "Imported Mapping from collections.abc for the runtime isinstance checks."
+  },
+  {
+    "id": 4213092169,
     "disposition": "not-applicable",
-    "rationale": "Broad review summary; its actionable points are tracked by the line comments."
+    "rationale": "General review summary; specific actionable import findings are tracked separately."
   },
   {
-    "id": 3174796906,
+    "id": 3174930124,
     "disposition": "addressed",
-    "rationale": "Conflict readiness now includes a non-retryable merge_conflict blocker with GitHub source evidence."
+    "rationale": "Canonical task payload validation now accepts stored preset provenance version keys and serializes canonical presetVersion."
   },
   {
-    "id": 3174796910,
-    "disposition": "addressed",
-    "rationale": "Updated readiness tests to assert the merge_conflict blocker and added boolean mergeable=false coverage."
+    "id": 4213103269,
+    "disposition": "not-applicable",
+    "rationale": "Codex review overview; the actionable child comment is tracked separately."
   }
 ]

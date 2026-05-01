@@ -448,7 +448,7 @@ async def test_promote_proposal_applies_runtime_override() -> None:
                     "authoredPresets": [
                         {
                             "presetId": "runtime-quality-followup",
-                            "version": "2026-04-17",
+                            "presetVersion": "2026-04-17",
                         }
                     ],
                     "steps": [
@@ -459,6 +459,7 @@ async def test_promote_proposal_applies_runtime_override() -> None:
                             "source": {
                                 "kind": "preset-derived",
                                 "presetId": "runtime-quality-followup",
+                                "presetVersion": "2026-04-17",
                             },
                         }
                     ],
@@ -483,12 +484,13 @@ async def test_promote_proposal_applies_runtime_override() -> None:
     assert final_request["payload"]["task"]["authoredPresets"] == [
         {
             "presetId": "runtime-quality-followup",
-            "version": "2026-04-17",
+            "presetVersion": "2026-04-17",
         }
     ]
     assert final_request["payload"]["task"]["steps"][0]["source"] == {
         "kind": "preset-derived",
         "presetId": "runtime-quality-followup",
+        "presetVersion": "2026-04-17",
     }
     assert (
         updated_proposal.task_create_request["payload"]["task"]["runtime"]["mode"]
@@ -516,17 +518,23 @@ async def test_promote_proposal_preserves_preset_provenance() -> None:
                     "authoredPresets": [
                         {
                             "presetId": "runtime-quality-followup",
-                            "version": "2026-04-17",
+                            "presetVersion": "2026-04-17",
                             "includePath": ["root", "regression-coverage"],
                         }
                     ],
                     "steps": [
                         {
+                            "type": "skill",
                             "title": "Add regression coverage",
                             "instructions": "Write the regression test.",
+                            "skill": {
+                                "id": "moonspec-implement",
+                                "args": {"issueKey": "MM-579"},
+                            },
                             "source": {
                                 "kind": "preset-derived",
                                 "presetId": "runtime-quality-followup",
+                                "presetVersion": "2026-04-17",
                                 "includePath": ["root", "regression-coverage"],
                                 "originalStepId": "add-regression-test",
                             },
@@ -550,16 +558,59 @@ async def test_promote_proposal_preserves_preset_provenance() -> None:
     assert task["authoredPresets"] == [
         {
             "presetId": "runtime-quality-followup",
-            "version": "2026-04-17",
+            "presetVersion": "2026-04-17",
             "includePath": ["root", "regression-coverage"],
         }
     ]
     assert task["steps"][0]["source"] == {
         "kind": "preset-derived",
         "presetId": "runtime-quality-followup",
+        "presetVersion": "2026-04-17",
         "includePath": ["root", "regression-coverage"],
         "originalStepId": "add-regression-test",
     }
+
+@pytest.mark.asyncio
+async def test_promote_proposal_rejects_preset_derived_steps_without_flat_type() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        repository="Moon/Repo",
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        task_create_request={
+            "payload": {
+                "repository": "Moon/Repo",
+                "task": {
+                    "instructions": "Add regression coverage",
+                    "steps": [
+                        {
+                            "title": "Add regression coverage",
+                            "instructions": "Write the regression test.",
+                            "source": {
+                                "kind": "preset-derived",
+                                "presetId": "runtime-quality-followup",
+                                "presetVersion": "2026-04-17",
+                            },
+                        }
+                    ],
+                },
+            }
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(TaskProposalValidationError, match="flat executable"):
+        await service.promote_proposal(
+            proposal_id=proposal.id,
+            promoted_by_user_id=uuid4(),
+        )
+
+    repo.commit.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_promote_proposal_rejects_unresolved_preset_steps() -> None:
