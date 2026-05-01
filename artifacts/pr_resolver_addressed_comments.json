@@ -1,22 +1,22 @@
 [
   {
-    "id": 4358603238,
+    "id": 4360936262,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice; no code or documentation action requested."
+    "rationale": "Qodo free-tier notification is informational and does not request a code or documentation change."
   },
   {
-    "id": 3172687498,
+    "id": 3174592231,
     "disposition": "addressed",
-    "rationale": "Added an assertion that the submitted top-level payload requiredCapabilities includes codex_cli, git, gh, and jira."
+    "rationale": "Extracted the MM-578 success fetch mock into mockMm578PresetFetch and made the preview-failure test override only the failing expand endpoint while delegating all other requests."
   },
   {
-    "id": 3172687502,
+    "id": 3174592234,
     "disposition": "addressed",
-    "rationale": "Added an acceptance scenario covering CSV trimming and malformed required capability validation."
+    "rationale": "Added npm run ui:test:task-create and updated the MM-578 plan to use the shorter focused test command."
   },
   {
-    "id": 4210649445,
+    "id": 4212720212,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary duplicates the two inline actionable comments, both of which are addressed separately."
+    "rationale": "Broad review summary duplicated the two actionable comments, which were handled individually."
   }
 ]
