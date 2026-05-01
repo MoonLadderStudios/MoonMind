@@ -225,7 +225,15 @@ describe("useLiquidGL", () => {
     vi.useFakeTimers();
     const destroy = vi.fn();
     const liquidGL = Object.assign(
-      vi.fn(() => ({ el: document.createElement("div"), destroy })),
+      vi.fn(() => {
+        const element = document.querySelector<HTMLElement>(".liquid-glass-panel");
+        if (element) {
+          element.style.opacity = "0";
+          element.style.visibility = "hidden";
+          element.style.pointerEvents = "none";
+        }
+        return { el: document.createElement("div"), destroy };
+      }),
       {
         registerDynamic: vi.fn(),
         syncWith: vi.fn(),
@@ -252,9 +260,60 @@ describe("useLiquidGL", () => {
 
     expect(liquidGL).toHaveBeenCalledTimes(1);
     expect(destroy).not.toHaveBeenCalled();
-    expect(document.querySelector(".liquid-glass-panel")?.getAttribute("data-liquid-gl-initialized")).toBe(
+    const element = document.querySelector<HTMLElement>(".liquid-glass-panel");
+    expect(element?.getAttribute("data-liquid-gl-initialized")).toBe(
       "true",
     );
+    expect(element?.style.opacity).toBe("1");
+    expect(element?.style.visibility).toBe("visible");
+    expect(element?.style.pointerEvents).toBe("auto");
+  });
+
+  it("keeps non-revealing targets visible after failed liquidGL initialization", async () => {
+    vi.useFakeTimers();
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const liquidGL = Object.assign(
+      vi.fn(() => {
+        const element = document.querySelector<HTMLElement>(".liquid-glass-panel");
+        if (element) {
+          element.style.opacity = "0";
+          element.style.visibility = "hidden";
+          element.style.pointerEvents = "none";
+        }
+        throw new Error("liquidGL initialization failed");
+      }),
+      {
+        registerDynamic: vi.fn(),
+        syncWith: vi.fn(),
+      },
+    );
+    vi.mocked(getLiquidGL).mockReturnValue(liquidGL);
+
+    function NoRevealHarness() {
+      useLiquidGL({
+        options: {
+          target: ".liquid-glass-panel",
+          reveal: false,
+        },
+      });
+
+      return <div className="liquid-glass-panel" />;
+    }
+
+    render(<NoRevealHarness />);
+
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+    });
+
+    const element = document.querySelector<HTMLElement>(".liquid-glass-panel");
+    expect(liquidGL).toHaveBeenCalled();
+    expect(element?.hasAttribute("data-liquid-gl-initialized")).toBe(false);
+    expect(element?.style.opacity).toBe("1");
+    expect(element?.style.visibility).toBe("visible");
+    expect(element?.style.pointerEvents).toBe("auto");
+
+    consoleWarn.mockRestore();
   });
 
   it("adapts HTMLElement targets into a selector before calling liquidGL", async () => {
