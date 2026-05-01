@@ -525,6 +525,33 @@ interface StepAttachmentRef {
 
 type StepType = "tool" | "skill" | "preset";
 
+interface ToolMetadata {
+  name: string;
+  description?: string | null;
+  inputSchema?: {
+    properties?: Record<string, unknown>;
+    required?: string[];
+  } | null;
+}
+
+interface ToolOption extends ToolMetadata {
+  group: string;
+  fieldNames: string[];
+  searchText: string;
+}
+
+interface DynamicToolOption {
+  value: string;
+  label: string;
+}
+
+interface ToolDynamicOptionsState {
+  status: "idle" | "loading" | "ready" | "error";
+  issueKey: string;
+  options: DynamicToolOption[];
+  error: string | null;
+}
+
 const STEP_TYPE_HELP_TEXT: Record<StepType, string> = {
   skill: "Skill asks an agent to perform work using reusable behavior.",
   tool: "Tool runs a typed integration or system operation directly.",
@@ -1515,6 +1542,46 @@ function parseToolInputsText(
   } catch {
     return { ok: false };
   }
+}
+
+function titleCaseToolGroup(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    return "Other";
+  }
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function toolOptionFromMetadata(item: ToolMetadata): ToolOption | null {
+  const name = String(item.name || "").trim();
+  if (!name) {
+    return null;
+  }
+  const properties =
+    item.inputSchema?.properties &&
+    typeof item.inputSchema.properties === "object" &&
+    !Array.isArray(item.inputSchema.properties)
+      ? item.inputSchema.properties
+      : {};
+  const fieldNames = Object.keys(properties);
+  const group = titleCaseToolGroup(name.split(".")[0] || "");
+  const description = String(item.description || "").trim();
+  return {
+    ...item,
+    name,
+    description,
+    group,
+    fieldNames,
+    searchText: [name, description, group, ...fieldNames]
+      .join(" ")
+      .toLowerCase(),
+  };
+}
+
+function requiredToolFields(tool: ToolOption | null | undefined): string[] {
+  return Array.isArray(tool?.inputSchema?.required)
+    ? tool.inputSchema.required.filter((item) => typeof item === "string")
+    : [];
 }
 
 function validatePrimaryStepSubmission(
@@ -3300,6 +3367,55 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     },
   });
 
+
+  const toolsQuery = useQuery({
+    queryKey: ["task-create", "trusted-tools"],
+    queryFn: async (): Promise<ToolOption[]> => {
+      const response = await fetch("/api/mcp/tools", {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load tools."),
+        );
+      }
+      const data = (await response.json()) as { tools?: ToolMetadata[] };
+      return (data.tools || [])
+        .map(toolOptionFromMetadata)
+        .filter((item): item is ToolOption => item !== null)
+        .sort((left, right) => left.name.localeCompare(right.name));
+    },
+  });
+  const toolOptions = toolsQuery.data || [];
+  const toolOptionsByName = useMemo(() => {
+    const next = new Map<string, ToolOption>();
+    toolOptions.forEach((item) => {
+      next.set(item.name, item);
+    });
+    return next;
+  }, [toolOptions]);
+  const [toolSearch, setToolSearch] = useState("");
+  const filteredToolOptions = useMemo(() => {
+    const query = toolSearch.trim().toLowerCase();
+    return query
+      ? toolOptions.filter((item) => item.searchText.includes(query))
+      : toolOptions;
+  }, [toolOptions, toolSearch]);
+  const groupedToolOptions = useMemo(() => {
+    const groups = new Map<string, ToolOption[]>();
+    filteredToolOptions.forEach((item) => {
+      const current = groups.get(item.group) || [];
+      current.push(item);
+      groups.set(item.group, current);
+    });
+    return Array.from(groups.entries()).sort(([left], [right]) =>
+      left.localeCompare(right),
+    );
+  }, [filteredToolOptions]);
+  const [toolDynamicOptions, setToolDynamicOptions] = useState<
+    Record<string, ToolDynamicOptionsState>
+  >({});
+
   const templateOptionsQuery = useQuery({
     queryKey: [
       "task-create",
@@ -3344,6 +3460,121 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       };
     },
   });
+
+  useEffect(() => {
+    steps.forEach((step) => {
+      if (step.stepType !== "tool" || step.toolId.trim() !== "jira.transition_issue") {
+        return;
+      }
+      const parsedInputs = parseToolInputsText(step.toolInputs);
+      if (!parsedInputs.ok) {
+        return;
+      }
+      const issueKey = String(parsedInputs.value.issueKey || "").trim();
+      if (!issueKey) {
+        setToolDynamicOptions((current) => {
+          const previous = current[step.localId];
+          if (!previous || previous.status === "idle") {
+            return current;
+          }
+          return {
+            ...current,
+            [step.localId]: {
+              status: "idle",
+              issueKey: "",
+              options: [],
+              error: null,
+            },
+          };
+        });
+        return;
+      }
+      const previous = toolDynamicOptions[step.localId];
+      if (
+        previous &&
+        previous.issueKey === issueKey &&
+        (previous.status === "loading" ||
+          previous.status === "ready" ||
+          previous.status === "error")
+      ) {
+        return;
+      }
+      setToolDynamicOptions((current) => ({
+        ...current,
+        [step.localId]: {
+          status: "loading",
+          issueKey,
+          options: [],
+          error: null,
+        },
+      }));
+      void fetch("/api/mcp/tools/call", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          tool: "jira.get_transitions",
+          arguments: { issueKey, expandFields: true },
+        }),
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(
+              await responseErrorMessage(
+                response,
+                "Failed to load Jira target statuses.",
+              ),
+            );
+          }
+          return (await response.json()) as {
+            result?: {
+              transitions?: Array<{
+                id?: string | number | null;
+                name?: string | null;
+                to?: { name?: string | null } | null;
+              }>;
+            };
+          };
+        })
+        .then((data) => {
+          const options = (data.result?.transitions || [])
+            .map((transition) => {
+              const value = String(transition.id || "").trim();
+              const label = String(
+                transition.to?.name || transition.name || value,
+              ).trim();
+              return value && label ? { value, label } : null;
+            })
+            .filter((item): item is DynamicToolOption => item !== null);
+          setToolDynamicOptions((current) => ({
+            ...current,
+            [step.localId]: {
+              status: "ready",
+              issueKey,
+              options,
+              error: null,
+            },
+          }));
+        })
+        .catch((error) => {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Failed to load Jira target statuses.";
+          setToolDynamicOptions((current) => ({
+            ...current,
+            [step.localId]: {
+              status: "error",
+              issueKey,
+              options: [],
+              error: message,
+            },
+          }));
+        });
+    });
+  }, [steps, toolDynamicOptions]);
 
   const jiraProjectsQuery = useQuery({
     queryKey: ["task-create", "jira", "projects", jiraIntegration?.endpoints.projects],
@@ -5468,6 +5699,46 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }
 
+  function validateGovernedToolStep(
+    step: StepState,
+    stepNumber: number,
+    inputs: Record<string, unknown>,
+  ): string | null {
+    const toolId = step.toolId.trim();
+    const metadata = toolOptionsByName.get(toolId);
+    if (toolsQuery.isSuccess && !metadata) {
+      return "Select a trusted Tool from the catalog before submitting.";
+    }
+    const missingFields = requiredToolFields(metadata).filter((field) => {
+      const value = inputs[field];
+      return value === undefined || value === null || String(value).trim() === "";
+    });
+    if (missingFields.length > 0) {
+      return `Step ${stepNumber} Tool Inputs are missing required fields: ${missingFields.join(", ")}.`;
+    }
+    if (toolId === "jira.transition_issue") {
+      const issueKey = String(inputs.issueKey || "").trim();
+      const transitionId = String(inputs.transitionId || "").trim();
+      if (!issueKey) {
+        return `Step ${stepNumber} Jira transition Tool requires issueKey before target statuses can load.`;
+      }
+      const dynamic = toolDynamicOptions[step.localId];
+      if (!dynamic || dynamic.status === "idle" || dynamic.status === "loading") {
+        return "Load a trusted target status before submitting this Tool step.";
+      }
+      if (dynamic.status === "error") {
+        return "Load a trusted target status before submitting this Tool step.";
+      }
+      if (dynamic.options.length === 0) {
+        return "Load a trusted target status before submitting this Tool step.";
+      }
+      if (!transitionId || !dynamic.options.some((item) => item.value === transitionId)) {
+        return "Select a trusted target status before submitting this Tool step.";
+      }
+    }
+    return null;
+  }
+
   async function handleTemporalTaskEditingSubmit({
     workflowId,
     updateName,
@@ -5685,6 +5956,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         return;
       }
       primaryToolInputs = parsedToolInputs.value;
+      const governedToolError = validateGovernedToolStep(
+        primaryStep,
+        1,
+        primaryToolInputs,
+      );
+      if (governedToolError) {
+        setSubmitMessage(governedToolError);
+        return;
+      }
     }
 
     const primaryStepTool = {
@@ -5770,6 +6050,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           return;
         }
         stepToolInputs = parsedToolInputs.value;
+        const governedToolError = validateGovernedToolStep(
+          step,
+          index + 1,
+          stepToolInputs,
+        );
+        if (governedToolError) {
+          setSubmitMessage(governedToolError);
+          return;
+        }
       }
       if (stepSkillArgsRaw) {
         try {
@@ -6837,6 +7126,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       !isFeatureRequestInputKey(definition.name),
                   )
                 : [];
+              const selectedTool = toolOptionsByName.get(step.toolId.trim()) || null;
+              const selectedToolRequiredFields = requiredToolFields(selectedTool);
+              const selectedToolDynamic = toolDynamicOptions[step.localId];
+              const parsedToolInputsForRender = parseToolInputsText(step.toolInputs);
+              const currentTransitionId = parsedToolInputsForRender.ok
+                ? String(parsedToolInputsForRender.value.transitionId || "")
+                : "";
               return (
                 <section
                   key={step.localId}
@@ -6927,19 +7223,58 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   {step.stepType === "tool" ? (
                     <div className="stack queue-step-type-panel">
                       <label>
-                        Tool
+                        Tool Search
                         <input
+                          data-step-field="toolSearch"
+                          data-step-index={String(index)}
+                          placeholder="Search by integration, tool, or field"
+                          value={toolSearch}
+                          onChange={(event) => setToolSearch(event.target.value)}
+                        />
+                      </label>
+                      <label>
+                        Tool
+                        <select
                           data-step-field="toolId"
                           data-step-index={String(index)}
-                          placeholder="jira.get_issue"
                           value={step.toolId}
                           onChange={(event) =>
                             updateStep(step.localId, {
                               toolId: event.target.value,
                             })
                           }
-                        />
+                        >
+                          <option value="">Select a trusted Tool</option>
+                          {groupedToolOptions.map(([group, items]) => (
+                            <optgroup key={group} label={group}>
+                              {items.map((item) => (
+                                <option key={item.name} value={item.name}>
+                                  {item.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ))}
+                        </select>
                       </label>
+                      {toolsQuery.isError ? (
+                        <p className="notice small">
+                          Trusted Tool metadata could not be loaded.
+                        </p>
+                      ) : null}
+                      {selectedTool ? (
+                        <div className="notice small">
+                          <strong>{selectedTool.group}</strong>
+                          {selectedTool.description
+                            ? ` - ${selectedTool.description}`
+                            : ""}
+                          {selectedTool.fieldNames.length > 0 ? (
+                            <span>{` Fields: ${selectedTool.fieldNames.join(", ")}`}</span>
+                          ) : null}
+                          {selectedToolRequiredFields.length > 0 ? (
+                            <span>{` Required inputs: ${selectedToolRequiredFields.join(", ")}`}</span>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <label>
                         Tool Version (optional)
                         <input
@@ -6954,12 +7289,56 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           }
                         />
                       </label>
+                      {step.toolId.trim() === "jira.transition_issue" ? (
+                        <label>
+                          Target status
+                          <select
+                            data-step-field="jiraTargetStatus"
+                            data-step-index={String(index)}
+                            value={currentTransitionId}
+                            disabled={selectedToolDynamic?.status !== "ready"}
+                            onChange={(event) => {
+                              const parsed = parseToolInputsText(step.toolInputs);
+                              const inputs = parsed.ok ? parsed.value : {};
+                              updateStep(step.localId, {
+                                toolInputs: JSON.stringify(
+                                  {
+                                    ...inputs,
+                                    transitionId: event.target.value,
+                                  },
+                                  null,
+                                  2,
+                                ),
+                              });
+                            }}
+                          >
+                            <option value="">
+                              {selectedToolDynamic?.status === "ready"
+                                ? "Select target status"
+                                : "Enter issueKey in Tool Inputs first"}
+                            </option>
+                            {(selectedToolDynamic?.options || []).map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                          {selectedToolDynamic?.status === "loading" ? (
+                            <span className="small">Loading target statuses...</span>
+                          ) : null}
+                          {selectedToolDynamic?.status === "error" ? (
+                            <span className="small">
+                              {`Failed to load target statuses.`}
+                            </span>
+                          ) : null}
+                        </label>
+                      ) : null}
                       <label>
                         Tool Inputs (JSON object)
                         <textarea
                           data-step-field="toolInputs"
                           data-step-index={String(index)}
-                          placeholder='{"issueKey":"MM-563"}'
+                          placeholder='{"issueKey":"MM-576"}'
                           value={step.toolInputs}
                           onChange={(event) =>
                             updateStep(step.localId, {

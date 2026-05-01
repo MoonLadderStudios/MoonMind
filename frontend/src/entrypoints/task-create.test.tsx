@@ -453,6 +453,58 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/mcp/tools") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              tools: [
+                {
+                  name: "jira.get_issue",
+                  description: "Fetch one Jira issue.",
+                  inputSchema: {
+                    type: "object",
+                    properties: { issueKey: { type: "string" } },
+                    required: ["issueKey"],
+                  },
+                },
+                {
+                  name: "jira.transition_issue",
+                  description: "Apply an explicit Jira workflow transition.",
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      issueKey: { type: "string" },
+                      transitionId: { type: "string" },
+                    },
+                    required: ["issueKey", "transitionId"],
+                  },
+                },
+                {
+                  name: "github.create_pull_request",
+                  description: "Create a GitHub pull request.",
+                  inputSchema: {
+                    type: "object",
+                    properties: { repository: { type: "string" } },
+                    required: ["repository"],
+                  },
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url === "/api/mcp/tools/call") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              result: {
+                transitions: [
+                  { id: "31", name: "In Progress", to: { name: "In Progress" } },
+                  { id: "41", name: "Done", to: { name: "Done" } },
+                ],
+              },
+            }),
+          } as Response);
+        }
         if (url.startsWith("/api/github/branches")) {
           return Promise.resolve({
             ok: true,
@@ -7758,6 +7810,101 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
+  it("shows trusted Tool grouping, search, and schema guidance", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Tool");
+
+    await within(step).findByRole("option", { name: "jira.get_issue" });
+    fireEvent.change(within(step).getByLabelText("Tool"), {
+      target: { value: "jira.get_issue" },
+    });
+    expect(await within(step).findByText(/Fetch one Jira issue/)).toBeTruthy();
+    expect(within(step).getByLabelText("Tool")).toBeTruthy();
+    expect(within(step).getByText(/Fields: issueKey/)).toBeTruthy();
+
+    fireEvent.change(within(step).getByLabelText("Tool Search"), {
+      target: { value: "github repository" },
+    });
+    expect(
+      await within(step).findByRole("option", {
+        name: "github.create_pull_request",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("uses trusted Jira target status options for transition Tool steps", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Move MM-576 through the trusted Jira tool." },
+    });
+    selectStepType(step, "Tool");
+    await within(step).findByText(/Apply an explicit Jira workflow transition/);
+    fireEvent.change(within(step).getByLabelText("Tool"), {
+      target: { value: "jira.transition_issue" },
+    });
+    fireEvent.change(within(step).getByLabelText("Tool Inputs (JSON object)"), {
+      target: { value: '{"issueKey":"MM-576"}' },
+    });
+
+    const statusSelect = await within(step).findByLabelText("Target status");
+    await waitFor(() => {
+      expect((statusSelect as HTMLSelectElement).disabled).toBe(false);
+    });
+    fireEvent.change(statusSelect, { target: { value: "31" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: { task: { steps: Array<Record<string, unknown>> } };
+    };
+    expect(request.payload.task.steps[0]).toEqual({
+      type: "tool",
+      instructions: "Move MM-576 through the trusted Jira tool.",
+      tool: {
+        type: "tool",
+        id: "jira.transition_issue",
+        inputs: { issueKey: "MM-576", transitionId: "31" },
+      },
+    });
+  });
+
+  it("blocks unknown Tool ids before execution", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Tool");
+    fireEvent.change(within(step).getByLabelText("Tool"), {
+      target: { value: "unknown.tool" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      await screen.findByText(
+        "Select a trusted Tool from the catalog before submitting.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
   it("keeps manual authoring available without optional presets Jira or image upload", async () => {
     renderWithClient(
       <TaskCreatePage payload={withoutOptionalAuthoringIntegrations()} />,
@@ -12258,4 +12405,5 @@ describe.skip("Task Create Entrypoint", () => {
       );
     });
   });
+
 });
