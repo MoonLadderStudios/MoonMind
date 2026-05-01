@@ -267,7 +267,7 @@ describe("Task Create Step Type authoring", () => {
     });
     selectStepType(secondStep, "Preset");
     fireEvent.change(
-      within(secondStep).getByLabelText("Feature Request / Initial Instructions"),
+      within(secondStep).getByLabelText("Instructions"),
       {
         target: { value: "the selected Jira issue" },
       },
@@ -335,7 +335,7 @@ describe("Task Create Step Type authoring", () => {
       target: { value: "global::::jira-orchestrate" },
     });
     const instructions = within(step).getByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.change(instructions, { target: { value: "old issue" } });
 
@@ -397,7 +397,7 @@ describe("Task Create Step Type authoring", () => {
       target: { value: "global::::jira-orchestrate" },
     });
     const instructions = within(step).getByLabelText(
-      "Feature Request / Initial Instructions",
+      "Instructions",
     );
     fireEvent.change(instructions, { target: { value: "old issue" } });
 
