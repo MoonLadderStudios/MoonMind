@@ -1,37 +1,27 @@
 [
   {
-    "id": 4361302204,
+    "id": 4361276169,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice only; no code action requested."
+    "rationale": "Qodo free-tier limit notice; informational bot message with no code action requested."
   },
   {
-    "id": 3174920141,
+    "id": 3174886044,
     "disposition": "addressed",
-    "rationale": "The router now defines _PRESET_SOURCE_KINDS locally before use."
+    "rationale": "Removed clipping from the Step Type segmented control so the existing focus ring remains visible."
   },
   {
-    "id": 3174920149,
-    "disposition": "addressed",
-    "rationale": "Imported Sequence from collections.abc for the runtime isinstance check."
-  },
-  {
-    "id": 3174920155,
-    "disposition": "addressed",
-    "rationale": "Imported Mapping from collections.abc for the runtime isinstance checks."
-  },
-  {
-    "id": 4213092169,
+    "id": 4213051744,
     "disposition": "not-applicable",
-    "rationale": "General review summary; specific actionable import findings are tracked separately."
+    "rationale": "Codex review summary wrapper; actionable inline feedback is tracked separately."
   },
   {
-    "id": 3174930124,
+    "id": 3174887989,
     "disposition": "addressed",
-    "rationale": "Canonical task payload validation now accepts stored preset provenance version keys and serializes canonical presetVersion."
+    "rationale": "Removed the redundant Step Type -webkit-backdrop-filter declaration while keeping the standard backdrop-filter."
   },
   {
-    "id": 4213103269,
+    "id": 4213053751,
     "disposition": "not-applicable",
-    "rationale": "Codex review overview; the actionable child comment is tracked separately."
+    "rationale": "Gemini review summary wrapper; actionable inline feedback is tracked separately."
   }
 ]

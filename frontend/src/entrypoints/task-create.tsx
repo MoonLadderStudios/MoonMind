@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import type { BootPayload } from "../boot/parseBootPayload";
@@ -559,10 +560,14 @@ const STEP_TYPE_HELP_TEXT: Record<StepType, string> = {
   preset: "Preset inserts a reusable set of configured steps.",
 };
 
-const STEP_TYPE_OPTIONS: Array<{ value: StepType; label: string }> = [
-  { value: "skill", label: "Skill" },
-  { value: "tool", label: "Tool" },
-  { value: "preset", label: "Preset" },
+const STEP_TYPE_OPTIONS: Array<{
+  value: StepType;
+  label: string;
+  Icon: () => ReactElement;
+}> = [
+  { value: "skill", label: "Skill", Icon: SkillSparkleIcon },
+  { value: "tool", label: "Tool", Icon: ToolWrenchIcon },
+  { value: "preset", label: "Preset", Icon: PresetLayersIcon },
 ];
 
 interface StepState {
@@ -2803,6 +2808,34 @@ function TrashIcon() {
       <path d="M14 11v6" />
       <path d="M6 7l1 13h10l1-13" />
       <path d="M9 7V4h6v3" />
+    </svg>
+  );
+}
+
+function SkillSparkleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 4l1.6 4.4L18 10l-4.4 1.6L12 16l-1.6-4.4L6 10l4.4-1.6L12 4z" />
+      <path d="M18.5 15l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8z" />
+    </svg>
+  );
+}
+
+function ToolWrenchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M14.7 6.3a4 4 0 0 1 5 5l-2.3-.6-1.4 1.4.6 2.3a4 4 0 0 1-5-5l2.3.6 1.4-1.4-.6-2.3z" />
+      <path d="M13 11l-7 7a1.8 1.8 0 1 0 2.5 2.5l7-7" />
+    </svg>
+  );
+}
+
+function PresetLayersIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 4l8 4-8 4-8-4 8-4z" />
+      <path d="M4 12l8 4 8-4" />
+      <path d="M4 16l8 4 8-4" />
     </svg>
   );
 }
@@ -7221,30 +7254,38 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <fieldset className="queue-step-type-field">
                     <legend>Step Type</legend>
                     <div className="queue-step-type-options">
-                      {STEP_TYPE_OPTIONS.map((option) => (
-                        <label
-                          key={option.value}
-                          className="queue-step-type-option"
-                          title={STEP_TYPE_HELP_TEXT[option.value]}
-                        >
-                          <input
-                            type="radio"
-                            name={`queue-step-type-${step.localId}`}
-                            value={option.value}
-                            checked={step.stepType === option.value}
-                            data-step-field="stepType"
-                            data-step-index={String(index)}
-                            onChange={(event) =>
-                              handleStepTypeChange(
-                                step.localId,
-                                event.target.value,
-                              )
-                            }
-                          />
-                          <span className="sr-only">Step Type </span>
-                          {option.label}
-                        </label>
-                      ))}
+                      {STEP_TYPE_OPTIONS.map((option) => {
+                        const Icon = option.Icon;
+                        return (
+                          <label
+                            key={option.value}
+                            className="queue-step-type-option"
+                            title={STEP_TYPE_HELP_TEXT[option.value]}
+                          >
+                            <input
+                              type="radio"
+                              name={`queue-step-type-${step.localId}`}
+                              value={option.value}
+                              checked={step.stepType === option.value}
+                              data-step-field="stepType"
+                              data-step-index={String(index)}
+                              onChange={(event) =>
+                                handleStepTypeChange(
+                                  step.localId,
+                                  event.target.value,
+                                )
+                              }
+                            />
+                            <span className="queue-step-type-option-icon">
+                              <Icon />
+                            </span>
+                            <span className="sr-only">Step Type </span>
+                            <span className="queue-step-type-option-label">
+                              {option.label}
+                            </span>
+                          </label>
+                        );
+                      })}
                     </div>
                   </fieldset>
                   {step.stepTypeMessage ? (
