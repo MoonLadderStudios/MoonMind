@@ -1,22 +1,27 @@
 [
   {
-    "id": 4360936262,
+    "id": 4360791766,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notification is informational and does not request a code or documentation change."
+    "rationale": "Qodo free-tier limit notice; no code action requested."
   },
   {
-    "id": 3174592231,
+    "id": 3174456211,
     "disposition": "addressed",
-    "rationale": "Extracted the MM-578 success fetch mock into mockMm578PresetFetch and made the preview-failure test override only the failing expand endpoint while delegating all other requests."
+    "rationale": "Updated the segmented-control overflow and edge radii so the keyboard focus box-shadow remains visible on the first and last Step Type options."
   },
   {
-    "id": 3174592234,
-    "disposition": "addressed",
-    "rationale": "Added npm run ui:test:task-create and updated the MM-578 plan to use the shorter focused test command."
-  },
-  {
-    "id": 4212720212,
+    "id": 4212560240,
     "disposition": "not-applicable",
-    "rationale": "Broad review summary duplicated the two actionable comments, which were handled individually."
+    "rationale": "Codex review wrapper comment; the actionable inline focus-ring feedback is tracked separately."
+  },
+  {
+    "id": 3174457616,
+    "disposition": "addressed",
+    "rationale": "Replaced the selected Step Type segment's hardcoded #fff text color with the theme variable rgb(var(--mm-accent-contrast))."
+  },
+  {
+    "id": 4212561724,
+    "disposition": "not-applicable",
+    "rationale": "Review summary only; the actionable hardcoded-color feedback is tracked separately."
   }
 ]
