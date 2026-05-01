@@ -595,6 +595,7 @@ interface StepState {
   templateAttachments: StepAttachmentRef[];
   generatedTool?: TaskTemplateStepSkill;
   generatedSkill?: TaskTemplateStepSkill;
+  source?: Record<string, unknown>;
   storyOutput?: Record<string, unknown>;
   jiraOrchestration?: Record<string, unknown>;
 }
@@ -1512,6 +1513,21 @@ function executableGeneratedToolPayload(
   return step.generatedTool;
 }
 
+function executableGeneratedSkillPayload(
+  step: StepState | null | undefined,
+): TaskTemplateStepSkill | null {
+  if (step?.stepType !== "skill" || !step.generatedSkill) {
+    return null;
+  }
+  const skillId = String(
+    step.generatedSkill.id || step.generatedSkill.name || "",
+  ).trim();
+  if (!skillId) {
+    return null;
+  }
+  return step.generatedSkill;
+}
+
 function manualToolPayload(
   step: StepState | null | undefined,
   inputs: Record<string, unknown>,
@@ -2044,6 +2060,18 @@ function mapExpandedStepToState(
   const jiraOrchestration =
     nonEmptyRecordValue(step.jiraOrchestration) ||
     nonEmptyRecordValue(step.jira_orchestration);
+  const source = nonEmptyRecordValue(step.source);
+  const normalizedSource = source
+    ? {
+        ...source,
+        ...(!source.presetVersion && source.version
+          ? { presetVersion: source.version }
+          : {}),
+      }
+    : undefined;
+  if (normalizedSource && "version" in normalizedSource) {
+    delete normalizedSource.version;
+  }
   const templateAttachments = Array.isArray(step.inputAttachments)
     ? step.inputAttachments
     : Array.isArray(step.attachments)
@@ -2062,6 +2090,7 @@ function mapExpandedStepToState(
     templateAttachments,
     ...(step.tool ? { generatedTool: step.tool } : {}),
     ...(step.skill ? { generatedSkill: step.skill } : {}),
+    ...(normalizedSource ? { source: normalizedSource } : {}),
     ...(storyOutput ? { storyOutput } : {}),
     ...(jiraOrchestration ? { jiraOrchestration } : {}),
   });
@@ -6037,6 +6066,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const stepIsSkill = step.stepType === "skill";
       const stepIsTool = step.stepType === "tool";
       const generatedToolPayload = executableGeneratedToolPayload(step);
+      const generatedSkillPayload = executableGeneratedSkillPayload(step);
       const stepSkillId = stepIsSkill ? step.skillId.trim() : "";
       const stepSkillArgsRaw = stepIsSkill && showAdvancedStepOptions
         ? step.skillArgs.trim()
@@ -6059,7 +6089,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         Boolean(stepSkillId) ||
         Boolean(stepSkillArgsRaw) ||
         stepSkillCaps.length > 0 ||
-        Boolean(generatedToolPayload);
+        Boolean(generatedToolPayload) ||
+        Boolean(generatedSkillPayload);
       let stepSkillArgs: Record<string, unknown> = {};
       let stepToolInputs: Record<string, unknown> = {};
       if (stepIsTool && !generatedToolPayload) {
@@ -6350,8 +6381,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         stepPayload.title = step.title.trim();
       }
       const generatedToolPayload = executableGeneratedToolPayload(step);
+      const generatedSkillPayload = executableGeneratedSkillPayload(step);
       if (generatedToolPayload) {
         stepPayload.tool = generatedToolPayload;
+      } else if (generatedSkillPayload) {
+        stepPayload.skill = generatedSkillPayload;
       } else if (step.stepType === "tool") {
         const toolPayload = manualToolPayload(step, stepToolInputs);
         if (toolPayload) {
@@ -6455,6 +6489,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             Boolean(sourceStep.title.trim()) ||
             Boolean(sourceStep.storyOutput) ||
             Boolean(
+              sourceStep.source && Object.keys(sourceStep.source).length > 0,
+            ) ||
+            Boolean(
               sourceStep.jiraOrchestration &&
                 Object.keys(sourceStep.jiraOrchestration).length > 0,
             );
@@ -6468,6 +6505,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             ...(hasSubmittedStepShape ? { type: submittedStepType } : {}),
             ...(sourceStep.storyOutput
               ? { storyOutput: sourceStep.storyOutput }
+              : {}),
+            ...(sourceStep.source && Object.keys(sourceStep.source).length > 0
+              ? { source: sourceStep.source }
               : {}),
             ...(sourceStep.jiraOrchestration &&
             Object.keys(sourceStep.jiraOrchestration).length > 0

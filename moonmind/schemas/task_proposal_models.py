@@ -39,6 +39,9 @@ class TaskProposalTaskPreview(BaseModel):
     preset_provenance: Optional[str] = Field(None, alias="presetProvenance")
     authored_preset_count: int = Field(0, alias="authoredPresetCount")
     step_source_kinds: list[str] = Field(default_factory=list, alias="stepSourceKinds")
+    preset_source_metadata: list[dict[str, Any]] = Field(
+        default_factory=list, alias="presetSourceMetadata"
+    )
 
 class TaskProposalModel(BaseModel):
     """Serialized proposal model."""
