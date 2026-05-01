@@ -5,29 +5,29 @@
 
 ## Summary
 
-Add governed Tool authoring affordances to the existing Create page Tool panel: trusted tool discovery, searchable grouped choices, visible contract metadata, and dynamic Jira target-status options sourced through the trusted MCP tool call surface. Existing manual Tool id/version/JSON authoring and backend executable-step contract validation remain the fallback and submission boundary. Unit contract coverage already exists for forbidden executable fields; this story requires focused frontend integration tests and implementation.
+Add governed Tool authoring affordances to the existing Create page Tool panel: trusted tool discovery, searchable grouped choices, visible contract metadata, and dynamic Jira target-status options sourced through the trusted MCP tool call surface. Existing manual Tool id/version/JSON authoring and backend executable-step contract validation remain the fallback and submission boundary. Current branch evidence shows the frontend authoring behavior and backend executable-step contract validation are implemented and covered by focused tests.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | missing | Tool panel currently uses manual id input only in `frontend/src/entrypoints/task-create.tsx` | fetch `/mcp/tools` and expose discovered tools | frontend integration |
-| FR-002 | implemented_unverified | manual fields and invalid JSON tests exist in `frontend/src/entrypoints/task-create.test.tsx` | preserve fallback and add discovery-failure test | frontend integration |
-| FR-003 | missing | no grouped/searchable tool choices found | add search and grouped choice rendering | frontend integration |
-| FR-004 | missing | no discovered tool selection flow found | selecting a tool populates id and preserves inputs | frontend integration |
-| FR-005 | missing | no dynamic target-status option flow found | call trusted `jira.get_transitions` via `/mcp/tools/call` for Jira transition tool | frontend integration |
-| FR-006 | missing | existing manual JSON updates only | update JSON inputs from selected trusted target status without transition IDs | frontend integration |
-| FR-007 | partial | Tool copy exists and Script is absent in existing tests | add contract metadata copy while preserving terminology | frontend integration |
-| FR-008 | implemented_verified | `task-create.test.tsx` validates Tool payload and `test_task_contract.py` rejects conflicting payloads | preserve with targeted and final tests | frontend + unit |
-| SC-001 | missing | no grouped/filter test | add test | frontend integration |
-| SC-002 | missing | no dynamic status submission test | add test | frontend integration |
-| SC-003 | missing | no discovery/transition failure fallback test | add test | frontend integration |
-| SC-004 | implemented_verified | `tests/unit/workflows/tasks/test_task_contract.py` rejects skill payload and shell-like fields | rerun focused unit test | unit |
-| SC-005 | missing | new spec artifacts needed | preserve traceability in artifacts and verification | artifact review |
-| DESIGN-REQ-007 | partial | manual Tool payload exists but contract metadata not visible | display trusted contract metadata | frontend integration |
-| DESIGN-REQ-008 | missing | no grouped search or dynamic options | implement grouped search and Jira status options | frontend integration |
-| DESIGN-REQ-019 | partial | Tool terminology exists | preserve Tool terminology in new UI | frontend integration |
-| DESIGN-REQ-020 | implemented_verified | shell-like fields rejected in task contract tests | rerun focused unit test | unit |
+| FR-001 | implemented_verified | `frontend/src/entrypoints/task-create.tsx` fetches `/mcp/tools`; `frontend/src/entrypoints/task-create.test.tsx` covers trusted discovery | no new implementation | frontend integration |
+| FR-002 | implemented_verified | discovery failure fallback test keeps manual Tool id/version/inputs available | no new implementation | frontend integration |
+| FR-003 | implemented_verified | grouped/searchable Tool choices implemented in `task-create.tsx` and covered by focused UI test | no new implementation | frontend integration |
+| FR-004 | implemented_verified | discovered Tool selection updates Tool id while preserving inputs; covered by focused UI test | no new implementation | frontend integration |
+| FR-005 | implemented_verified | `task-create.tsx` calls `/mcp/tools/call` with `jira.get_transitions`; dynamic status test covers the flow | no new implementation | frontend integration |
+| FR-006 | implemented_verified | target status selection updates Tool inputs JSON with `targetStatus`; dynamic status test verifies submitted payload | no new implementation | frontend integration |
+| FR-007 | implemented_verified | Tool contract metadata copy exists without introducing Script as a Step Type concept; covered by focused UI tests and artifact review | no new implementation | frontend integration |
+| FR-008 | implemented_verified | `task-create.test.tsx` validates Tool payload and `test_task_contract.py` rejects conflicting payloads | no new implementation | frontend + unit |
+| SC-001 | implemented_verified | focused Create-page test verifies grouped/filterable trusted Tool choices | no new implementation | frontend integration |
+| SC-002 | implemented_verified | focused Create-page test verifies Jira target status selection and submitted Tool payload | no new implementation | frontend integration |
+| SC-003 | implemented_verified | focused Create-page test verifies discovery and transition failure fallback | no new implementation | frontend integration |
+| SC-004 | implemented_verified | `tests/unit/workflows/tasks/test_task_contract.py` rejects skill payload and shell-like fields | no new implementation | unit |
+| SC-005 | implemented_verified | `spec.md`, `plan.md`, `tasks.md`, and `verification.md` preserve MM-576 and source design IDs | no new implementation | artifact review |
+| DESIGN-REQ-007 | implemented_verified | UI displays Tool contract metadata for schema-backed governed execution | no new implementation | frontend integration |
+| DESIGN-REQ-008 | implemented_verified | UI supports search/grouping and trusted Jira dynamic target-status options | no new implementation | frontend integration |
+| DESIGN-REQ-019 | implemented_verified | user-facing labels preserve Tool terminology and avoid Script Step Type language | no new implementation | frontend integration |
+| DESIGN-REQ-020 | implemented_verified | task contract rejects shell-like executable fields; Tool UI does not add arbitrary shell fields | no new implementation | unit |
 
 ## Technical Context
 

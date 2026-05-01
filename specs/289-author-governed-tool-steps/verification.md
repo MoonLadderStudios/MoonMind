@@ -37,5 +37,5 @@
 
 ## Notes
 
-- `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` was blocked by the managed branch name `change-jira-issue-mm-576-to-status-in-pr-bcf25195`, which does not match the script's `NNN-feature-name` branch convention. Artifact gates were checked manually.
+- `SPECIFY_FEATURE=289-author-governed-tool-steps .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` passes in this managed branch and confirms `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `tasks.md` are available.
 - The legacy `Task Create Entrypoint` describe block remains skipped as it was before this story; MM-576 adds a separate active describe block for governed Tool authoring coverage.

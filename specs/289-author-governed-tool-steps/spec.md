@@ -90,14 +90,14 @@ Inspect existing Moon Spec artifacts and resume from the first incomplete stage 
 
 **Goal**: Tool authoring moves beyond free-form id entry by exposing searchable grouped tool choices, visible contract metadata, and Jira transition target statuses derived from trusted tool data while preserving the typed Tool payload submitted for execution.
 
-**Independent Test**: Render the Create page, switch a step to Tool, search grouped Jira tools returned by the trusted tool discovery endpoint, select `jira.transition_issue`, enter an issue key, choose a target status loaded through the trusted transitions tool, submit the task, and verify the submitted Tool payload includes the selected tool id and schema-shaped inputs without arbitrary shell/script fields.
+**Independent Test**: Render the Create page, switch a step to Tool, search grouped Jira tools returned by the trusted tool discovery surface, select `jira.transition_issue`, enter an issue key, choose a target status loaded through trusted Jira transition data, submit the task, and verify the submitted Tool payload includes the selected tool id and schema-shaped inputs without arbitrary shell/script fields.
 
 **Acceptance Scenarios**:
 
 1. **Given** trusted tool discovery returns Jira, GitHub, and deployment tools, **When** a task author opens a Tool step, **Then** Tool choices are searchable and grouped by integration or domain.
 2. **Given** a Tool is selected, **When** the author inspects the Tool panel, **Then** visible contract metadata communicates schema-backed inputs and deterministic governed execution without using Script as the Step Type concept.
-3. **Given** `jira.transition_issue` is selected and the author provides an issue key, **When** trusted Jira transitions are available, **Then** the author can choose a target status from those dynamic options and the Tool inputs JSON is updated deterministically.
-4. **Given** dynamic options cannot be loaded, **When** the author continues editing, **Then** manual JSON object input remains available and the unavailable dynamic option is reported without bypassing validation.
+3. **Given** `jira.transition_issue` is selected and the author provides an issue key, **When** trusted Jira transitions are available, **Then** the author can choose a target status from those dynamic options and the Tool inputs are updated deterministically.
+4. **Given** dynamic options cannot be loaded, **When** the author continues editing, **Then** manual schema-shaped input remains available and the unavailable dynamic option is reported without bypassing validation.
 5. **Given** the author submits the Tool step, **When** the request is sent, **Then** the payload remains a `type: tool` step with a Tool payload and no Skill payload or shell/script fields.
 
 ### Edge Cases
@@ -105,11 +105,11 @@ Inspect existing Moon Spec artifacts and resume from the first incomplete stage 
 - Tool discovery can fail; manual governed Tool authoring must remain available.
 - Tool search with no matches shows an empty result state without clearing the current Tool id.
 - Jira transition options require a non-empty issue key and must not guess target statuses.
-- Dynamic status selection updates only the Tool inputs JSON object and preserves unrelated authored fields.
+- Dynamic status selection updates only the Tool inputs and preserves unrelated authored fields.
 
 ## Assumptions
 
-- The existing `/mcp/tools` and `/mcp/tools/call` trusted endpoints are the runtime source for Tool discovery and Jira transition options.
+- The existing governed tool discovery and tool call surfaces are the runtime source for Tool discovery and Jira transition options.
 - Tool grouping can use the namespace before the first dot in the tool id until richer catalog metadata is exposed.
 - Full schema-generated forms for every tool can be layered later; this story covers contract visibility and the Jira target-status dynamic option required by MM-576.
 
@@ -129,9 +129,9 @@ Inspect existing Moon Spec artifacts and resume from the first incomplete stage 
 - **FR-001**: The Tool step authoring panel MUST load available trusted tools from the governed tool discovery surface when available.
 - **FR-002**: The Tool step authoring panel MUST keep manual typed Tool authoring available when discovery or dynamic options are unavailable.
 - **FR-003**: Users MUST be able to search discovered Tool choices and see choices grouped by integration or domain.
-- **FR-004**: Selecting a discovered Tool MUST populate the Tool id while preserving the existing version and JSON object inputs unless the author edits them.
+- **FR-004**: Selecting a discovered Tool MUST populate the Tool id while preserving the existing version and schema-shaped inputs unless the author edits them.
 - **FR-005**: For `jira.transition_issue`, after the author provides an issue key, the UI MUST request available Jira transitions through the trusted tool call surface and offer returned target statuses as selectable options.
-- **FR-006**: Selecting a dynamic Jira target status MUST update the Tool inputs JSON object with the chosen status and MUST NOT guess statuses or transition IDs.
+- **FR-006**: Selecting a dynamic Jira target status MUST update the Tool inputs with the chosen status and MUST NOT guess statuses or transition IDs.
 - **FR-007**: User-facing Tool authoring copy MUST describe typed governed Tool execution and MUST NOT present Script as a Step Type concept.
 - **FR-008**: Submitted authored Tool steps MUST remain `type: tool` payloads with a Tool payload and no Skill payload.
 
@@ -145,8 +145,8 @@ Inspect existing Moon Spec artifacts and resume from the first incomplete stage 
 
 ### Measurable Outcomes
 
-- **SC-001**: Frontend tests verify discovered Tool choices are grouped and filterable by search text.
-- **SC-002**: Frontend tests verify selecting `jira.transition_issue` and choosing a trusted target status updates Tool inputs and submits the expected Tool payload.
-- **SC-003**: Frontend tests verify discovery or transition-option failures leave manual JSON Tool authoring available with a visible unavailable-state message.
+- **SC-001**: Authoring-surface tests verify discovered Tool choices are grouped and filterable by search text.
+- **SC-002**: Authoring-surface tests verify selecting `jira.transition_issue` and choosing a trusted target status updates Tool inputs and submits the expected Tool payload.
+- **SC-003**: Authoring-surface tests verify discovery or transition-option failures leave manual Tool authoring available with a visible unavailable-state message.
 - **SC-004**: Contract tests continue to verify Tool submissions do not include Skill payloads or shell/script fields.
 - **SC-005**: Traceability evidence preserves `MM-576` and DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-019, and DESIGN-REQ-020 in MoonSpec artifacts and verification output.
