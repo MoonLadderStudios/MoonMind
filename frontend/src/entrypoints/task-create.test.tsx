@@ -4741,12 +4741,19 @@ describe.skip("Task Create Entrypoint", () => {
 
     const request = latestCreateRequest() as {
       payload: {
+        requiredCapabilities?: string[];
         task: {
           tool: Record<string, unknown>;
           skill: Record<string, unknown>;
         };
       };
     };
+    expect(request.payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "git",
+      "gh",
+      "jira",
+    ]);
     expect(request.payload.task.tool).toEqual({
       type: "skill",
       name: "moonspec-orchestrate",
@@ -12257,5 +12264,636 @@ describe.skip("Task Create Entrypoint", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
+  });
+});
+
+describe("Task Create MM-578 Preset preview and apply", () => {
+  let fetchSpy: MockInstance;
+
+  function latestCreateRequest(): Record<string, unknown> {
+    const call = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    expect(call).toBeTruthy();
+    return JSON.parse(String(call?.[1]?.body || "{}")) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  function mockMm578PresetFetch(input: RequestInfo | URL): Promise<Response> {
+    const url = String(input);
+    if (url.startsWith("/api/tasks/skills")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: { worker: ["moonspec-orchestrate"] },
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/github/branches")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [{ value: "main", label: "main", source: "github" }],
+          defaultBranch: "main",
+          error: null,
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates?scope=personal")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              slug: "mm-578-preset",
+              scope: "global",
+              title: "MM-578 Preset",
+              description: "Preview and apply Preset steps.",
+              latestVersion: "1.0.0",
+              version: "1.0.0",
+            },
+          ],
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates/mm-578-preset?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          slug: "mm-578-preset",
+          scope: "global",
+          title: "MM-578 Preset",
+          description: "Preview and apply Preset steps.",
+          latestVersion: "1.0.0",
+          version: "1.0.0",
+          inputs: [
+            {
+              name: "issue_key",
+              label: "Jira Issue Key",
+              type: "text",
+              required: true,
+            },
+          ],
+        }),
+      } as Response);
+    }
+    if (
+      url.startsWith(
+        "/api/task-step-templates/mm-578-preset:expand?scope=global",
+      )
+    ) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          steps: [
+            {
+              id: "tpl:mm-578-preset:1.0.0:01",
+              title: "Fetch Jira issue",
+              instructions: "Fetch MM-578.",
+              tool: {
+                type: "tool",
+                id: "jira.get_issue",
+                inputs: { issueKey: "MM-578" },
+              },
+              source: {
+                kind: "preset-derived",
+                presetId: "mm-578-preset",
+              },
+            },
+            {
+              id: "tpl:mm-578-preset:1.0.0:02",
+              title: "Implement preset story",
+              instructions: "Implement MM-578.",
+              skill: {
+                id: "moonspec-orchestrate",
+                args: { issueKey: "MM-578" },
+              },
+            },
+          ],
+          appliedTemplate: {
+            slug: "mm-578-preset",
+            version: "1.0.0",
+          },
+          warnings: ["Generated steps should be reviewed before apply."],
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/v1/provider-profiles")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => [
+          {
+            profile_id: "profile:codex-default",
+            account_label: "Codex Default",
+            is_default: true,
+          },
+        ],
+      } as Response);
+    }
+    if (url.startsWith("/api/executions?")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as Response);
+    }
+    if (url === "/api/executions") {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ workflowId: "mm:workflow-578" }),
+      } as Response);
+    }
+    return Promise.resolve({
+      ok: false,
+      status: 404,
+      text: async () => `Unhandled fetch ${url}`,
+    } as Response);
+  }
+
+  beforeEach(() => {
+    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    vi.mocked(navigateTo).mockReset();
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation(mockMm578PresetFetch);
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("previews generated preset steps and warnings before applying editable executable steps", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetManagementSection = await screen.findByLabelText(
+      "Preset Management",
+    );
+    expect(
+      within(presetManagementSection).queryByRole("button", { name: "Apply" }),
+    ).toBeNull();
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Keep authored MM-578 preset placeholder." },
+    });
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::mm-578-preset" },
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+
+    expect(await within(step).findByText("Preset preview")).toBeTruthy();
+    expect(within(step).getByText("Fetch Jira issue")).toBeTruthy();
+    expect(within(step).getAllByText("Tool").length).toBeGreaterThan(0);
+    expect(within(step).getByText("Implement preset story")).toBeTruthy();
+    expect(within(step).getAllByText("Skill").length).toBeGreaterThan(0);
+    expect(
+      within(step).getByText("Generated steps should be reviewed before apply."),
+    ).toBeTruthy();
+    expect(
+      screen.getByDisplayValue("Keep authored MM-578 preset placeholder."),
+    ).toBeTruthy();
+    expect(screen.queryByDisplayValue("Fetch MM-578.")).toBeNull();
+
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+
+    expect(await screen.findByDisplayValue("Fetch MM-578.")).toBeTruthy();
+    expect(screen.getByDisplayValue("Implement MM-578.")).toBeTruthy();
+    expect(screen.queryByLabelText("Step Preset")).toBeNull();
+
+    const firstGeneratedStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(firstGeneratedStep).getByLabelText("Instructions"), {
+      target: { value: "Edited generated MM-578 step." },
+    });
+    expect(screen.getByDisplayValue("Edited generated MM-578 step.")).toBeTruthy();
+  });
+
+  it("submits applied preset-generated Tool steps with executable binding", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::mm-578-preset" },
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+    expect(await within(step).findByText("Fetch Jira issue")).toBeTruthy();
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    expect(await screen.findByDisplayValue("Fetch MM-578.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: { task: { steps: Array<Record<string, unknown>> } };
+    };
+    expect(request.payload.task.steps[0]).toEqual({
+      id: "tpl:mm-578-preset:1.0.0:01",
+      title: "Fetch Jira issue",
+      type: "tool",
+      instructions: "Fetch MM-578.",
+      tool: {
+        type: "tool",
+        id: "jira.get_issue",
+        inputs: { issueKey: "MM-578" },
+      },
+    });
+    expect(request.payload.task.steps[0]?.["skill"]).toBeUndefined();
+  });
+
+  it("keeps drafts unchanged on preview failure and blocks unresolved Preset submission", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: false,
+          text: async () => "Generated step validation failed.",
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Keep authored MM-578 preset step." },
+    });
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::mm-578-preset" },
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+
+    expect(
+      await within(step).findByText(
+        "Failed to preview preset: Generated step validation failed.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByDisplayValue("Keep authored MM-578 preset step."),
+    ).toBeTruthy();
+    expect(screen.queryByDisplayValue("Fetch MM-578.")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      await screen.findByText(
+        "Preview and apply Preset steps before submitting.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+});
+
+describe("Task Create governed Tool authoring", () => {
+  let fetchSpy: MockInstance;
+  let toolDiscoveryResponse: Response;
+  let transitionResponse: Response;
+
+  function latestCreateRequest(): Record<string, unknown> {
+    const call = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    expect(call).toBeTruthy();
+    return JSON.parse(String(call?.[1]?.body || "{}")) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  beforeEach(() => {
+    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    vi.mocked(navigateTo).mockReset();
+    toolDiscoveryResponse = {
+      ok: true,
+      json: async () => ({
+        tools: [
+          {
+            name: "jira.get_issue",
+            description: "Fetch a Jira issue.",
+            inputSchema: { type: "object" },
+          },
+          {
+            name: "jira.transition_issue",
+            description: "Transition a Jira issue.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                issueKey: { type: "string" },
+                transitionId: { type: "string" },
+              },
+            },
+          },
+          {
+            name: "github.create_pull_request",
+            description: "Create a GitHub pull request.",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }),
+    } as Response;
+    transitionResponse = {
+      ok: true,
+      json: async () => ({
+        result: {
+          transitions: [
+            { id: "31", name: "In Progress", to: { name: "In Progress" } },
+            { id: "51", name: "Code Review", to: { name: "Code Review" } },
+          ],
+        },
+      }),
+    } as Response;
+    fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/mcp/tools") {
+          return Promise.resolve(toolDiscoveryResponse);
+        }
+        if (url === "/mcp/tools/call") {
+          return Promise.resolve(transitionResponse);
+        }
+        if (url.startsWith("/api/tasks/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: { worker: [] } }),
+          } as Response);
+        }
+        if (url.startsWith("/api/github/branches")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [], defaultBranch: "main", error: null }),
+          } as Response);
+        }
+        if (url.startsWith("/api/task-step-templates")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        if (url.startsWith("/api/v1/provider-profiles")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [
+              {
+                profile_id: "profile:codex-default",
+                account_label: "Codex Default",
+                is_default: true,
+              },
+            ],
+          } as Response);
+        }
+        if (url.startsWith("/api/executions?")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        if (url === "/api/executions") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ workflowId: "mm:workflow-123" }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: async () => `Unhandled fetch ${url} ${String(init?.method || "GET")}`,
+        } as Response);
+      });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("groups and filters trusted Tool choices", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Tool");
+
+    expect(await within(step).findByText("Jira")).toBeTruthy();
+    expect(within(step).getByText("GitHub")).toBeTruthy();
+    expect(within(step).getByRole("button", { name: /jira.get_issue/ }))
+      .toBeTruthy();
+    fireEvent.change(within(step).getByLabelText("Search Tools"), {
+      target: { value: "pull" },
+    });
+
+    expect(within(step).queryByRole("button", { name: /jira.get_issue/ }))
+      .toBeNull();
+    fireEvent.click(
+      within(step).getByRole("button", {
+        name: /github.create_pull_request/,
+      }),
+    );
+    expect((within(step).getByLabelText("Tool") as HTMLInputElement).value)
+      .toBe("github.create_pull_request");
+  });
+
+  it("submits an authored MM-577 Skill step with agentic controls", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Implement MM-577 with the agentic Skill workflow." },
+    });
+    fireEvent.change(within(step).getByLabelText(/Skill \(optional\)/), {
+      target: { value: "moonspec-orchestrate" },
+    });
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(
+      within(step).getByLabelText("Step 1 Skill Args (optional JSON object)"),
+      {
+        target: { value: '{"issueKey":"MM-577","mode":"runtime"}' },
+      },
+    );
+    fireEvent.change(
+      within(step).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
+      {
+        target: { value: "git, jira" },
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: {
+        requiredCapabilities?: string[];
+        task: {
+          tool: Record<string, unknown>;
+          skill: Record<string, unknown>;
+        };
+      };
+    };
+    expect(request.payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "git",
+      "gh",
+      "jira",
+    ]);
+    expect(request.payload.task.tool).toEqual({
+      type: "skill",
+      name: "moonspec-orchestrate",
+      version: "1.0",
+      inputs: {
+        issueKey: "MM-577",
+        mode: "runtime",
+      },
+      requiredCapabilities: ["git", "jira"],
+    });
+    expect(request.payload.task.skill).toEqual({
+      id: "moonspec-orchestrate",
+      args: {
+        issueKey: "MM-577",
+        mode: "runtime",
+      },
+      requiredCapabilities: ["git", "jira"],
+    });
+  });
+
+  it("loads trusted Jira transition statuses into submitted Tool inputs", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Transition MM-576 through trusted Jira." },
+    });
+    selectStepType(step, "Tool");
+    fireEvent.click(
+      await within(step).findByRole("button", { name: /jira.transition_issue/ }),
+    );
+    fireEvent.change(within(step).getByLabelText("Tool Inputs (JSON object)"), {
+      target: { value: '{"issueKey":"MM-576"}' },
+    });
+    fireEvent.click(
+      within(step).getByRole("button", { name: "Load Jira target statuses" }),
+    );
+
+    const statusSelect = await within(step).findByLabelText("Jira Target Status");
+    const transitionCall = fetchSpy.mock.calls.find(
+      ([url]) => String(url) === "/mcp/tools/call",
+    );
+    expect(JSON.parse(String(transitionCall?.[1]?.body))).toEqual({
+      tool: "jira.get_transitions",
+      arguments: { issueKey: "MM-576", expandFields: true },
+    });
+    fireEvent.change(statusSelect, { target: { value: "51" } });
+    expect(
+      (within(step).getByLabelText("Tool Inputs (JSON object)") as HTMLTextAreaElement)
+        .value,
+    ).toContain('"transitionId": "51"');
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: { task: { steps: Array<Record<string, unknown>> } };
+    };
+    expect(request.payload.task.steps[0]).toEqual({
+      type: "tool",
+      instructions: "Transition MM-576 through trusted Jira.",
+      tool: {
+        type: "tool",
+        id: "jira.transition_issue",
+        inputs: {
+          issueKey: "MM-576",
+          transitionId: "51",
+        },
+      },
+    });
+    expect(request.payload.task.steps[0]?.["skill"]).toBeUndefined();
+  });
+
+  it("keeps manual Tool authoring available when trusted discovery fails", async () => {
+    toolDiscoveryResponse = {
+      ok: false,
+      status: 503,
+      text: async () => "Tool discovery unavailable",
+    } as Response;
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Tool");
+
+    expect(
+      await within(step).findByText(
+        "Trusted Tool discovery is unavailable. Manual Tool authoring remains available.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(within(step).getByLabelText("Tool"), {
+      target: { value: "jira.get_issue" },
+    });
+    expect((within(step).getByLabelText("Tool") as HTMLInputElement).value)
+      .toBe("jira.get_issue");
   });
 });

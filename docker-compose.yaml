@@ -465,6 +465,7 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro
+      - ./.agents:/app/.agents:ro
       - moonmind_secrets:/app/var/secrets
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
@@ -552,6 +553,7 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro
+      - ./.agents:/app/.agents:ro
       - moonmind_secrets:/app/var/secrets
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
