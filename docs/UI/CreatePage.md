@@ -243,7 +243,7 @@ Rules:
   - an upload failure that has not yet been resolved
 - `AppliedPresetBinding` is the browser-side source of truth for applied composed preset authoring state
 - `StepDraft.source` records whether a step is local, preset-bound, preset-detached, or flat-reconstructed
-- preset binding state is draft metadata for authoring, preview, reapply, save-as-preset, edit, and rerun; runtime submission still uses flattened resolved steps
+- preset binding state is draft metadata for authoring, expansion, reapply, save-as-preset, edit, and rerun; runtime submission still uses flattened resolved steps
 - `branch` is the only authored branch field in the Create-page draft
 - `targetBranch` is not part of the browser-authored Create-page draft model; submit preparation maps the draft into the canonical `task.git.startingBranch` and `task.git.targetBranch` runtime contract where required
 - branch catalog state is fetched UI state, not task authoring state
@@ -807,9 +807,9 @@ The Create page test suite should cover:
 9. create submission uploads images before execution create
 10. edit reconstructs persisted attachments correctly
 11. rerun preserves untouched attachments by default
-12. preview failure or upload failure does not corrupt unrelated draft state
+12. expansion failure or upload failure does not corrupt unrelated draft state
 13. submit fails explicitly when attachments are invalid or incomplete
-14. preset preview renders grouped composition without mutating the draft
+14. preset expansion replaces the temporary Preset step with editable generated steps
 15. preset apply receives binding metadata, flattened steps, and per-step provenance
 16. reapply discloses still-bound updates and detached skips before confirmation
 17. save-as-preset preserves intact composition by default and uses explicit advanced flattening

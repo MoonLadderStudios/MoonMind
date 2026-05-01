@@ -763,9 +763,9 @@ Rollout order:
 * keep submit flows organized around task-shaped product language
 * let the backend decide the workflow type and execution routing
 * browser clients call MoonMind APIs only; Jira, GitHub, object storage, Temporal Server, and model providers remain behind MoonMind-controlled API surfaces
-* `/tasks/new` may preview composed presets and show preset grouping before submission
+* `/tasks/new` expands composed presets into editable executable steps before submission
 * unresolved preset includes must be rejected before runtime submission; they must not be sent as task work for a worker or adapter to resolve later
-* submit previews may explain preset provenance, but the submitted execution payload remains flat resolved steps plus durable task snapshot metadata
+* submit surfaces may explain preset provenance, but the submitted execution payload remains flat resolved steps plus durable task snapshot metadata
 * repository, branch, and publish controls live together in the Steps card: choose repo, fetch branch options through the MoonMind branch source, populate the Branch dropdown, then render Publish Mode alongside it
 * `Publish Mode` remains part of task submission semantics; this is a visual placement change, not removal from the contract
 

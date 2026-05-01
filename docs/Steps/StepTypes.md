@@ -46,7 +46,7 @@ Changing the Step Type changes the form below it.
 ```text
 Tool   -> choose a typed operation and configure its inputs
 Skill  -> choose agent behavior and configure its instructions/runtime context
-Preset -> choose a reusable template, configure preset inputs, preview expansion, apply
+Preset -> choose a reusable template, configure preset inputs, expand
 ```
 
 A **Tool** step and a **Skill** step are executable step types.
@@ -409,9 +409,10 @@ The Presets section is for management only:
 
 Using a preset belongs in the step editor.
 
-### 6.6 Preset preview and apply
+### 6.6 Preset expansion
 
-Before applying a preset, the UI should show a preview such as:
+Expanding a preset replaces the temporary Preset step with generated executable
+steps such as:
 
 ```text
 This preset will insert 7 steps:
@@ -424,7 +425,6 @@ This preset will insert 7 steps:
 7. Move Jira issue to Ready for Review
 ```
 
-Applying the preset replaces the temporary Preset step with the expanded steps.
 The user can then edit those steps like ordinary steps.
 
 The UI should support:
@@ -442,7 +442,7 @@ The UI should support:
 ### 7.1 Authoring payload
 
 Draft task authoring may temporarily contain `type: "preset"` while the user is
-configuring and previewing a preset.
+configuring a preset before expansion.
 
 Executable task submission should contain only executable steps by default:
 

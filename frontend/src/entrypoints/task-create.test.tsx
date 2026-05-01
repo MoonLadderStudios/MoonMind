@@ -910,7 +910,7 @@ describe.skip("Task Create Entrypoint", () => {
                       id: "preset-step",
                       title: "Preset",
                       stepType: "preset",
-                      instructions: "Preview the configured preset.",
+                      instructions: "Expand the configured preset.",
                       preset: {
                         id: "global::::speckit-demo",
                         slug: "speckit-demo",
@@ -3359,7 +3359,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
-  it("preserves reconstructed preset inputs when previewing an edit draft", async () => {
+  it("preserves reconstructed preset inputs when expanding an edit draft", async () => {
     renderForEdit("mm:preset-step-input-edit");
 
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
@@ -3372,7 +3372,7 @@ describe.skip("Task Create Entrypoint", () => {
       ).toBe("global::::speckit-demo");
     });
 
-    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     await waitFor(() => {
       expect(
@@ -7167,7 +7167,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(instructions.value).toBe("Keep this Step Type instruction.");
     expect(within(step).getByLabelText("Preset")).toBeTruthy();
-    expect(within(step).getByRole("button", { name: "Preview" })).toBeTruthy();
+    expect(within(step).queryByRole("button", { name: "Preview" })).toBeNull();
     expect(
       within(step).getByRole("button", { name: "Expand" }),
     ).toBeTruthy();
@@ -7319,84 +7319,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
-  it("previews step preset generated steps and warnings without mutating the draft", async () => {
-    const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (
-        url.startsWith(
-          "/api/task-step-templates/speckit-demo:expand?scope=global",
-        )
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            steps: [
-              {
-                id: "tpl:speckit-demo:1.2.3:01",
-                title: "Fetch Jira issue",
-                instructions: "Fetch MM-558.",
-                tool: {
-                  type: "tool",
-                  id: "jira.get_issue",
-                  inputs: { issueKey: "MM-558" },
-                },
-                source: {
-                  kind: "preset-derived",
-                  presetId: "speckit-demo",
-                },
-              },
-              {
-                id: "tpl:speckit-demo:1.2.3:02",
-                title: "Implement issue",
-                instructions: "Implement MM-558.",
-                skill: {
-                  id: "moonspec-orchestrate",
-                  args: { issueKey: "MM-558" },
-                },
-              },
-            ],
-            appliedTemplate: {
-              slug: "speckit-demo",
-              version: "1.2.3",
-            },
-            warnings: ["Auto-filled Feature Name."],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
-
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
-
-    const step = (await screen.findByText("Step 1 (Primary)")).closest(
-      "section",
-    ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Instructions"), {
-      target: { value: "Keep authored placeholder." },
-    });
-    selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset") as HTMLSelectElement;
-    await waitFor(() => {
-      expect(presetSelect.options.length).toBeGreaterThan(1);
-    });
-    fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
-    });
-
-    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
-
-    expect(await within(step).findByText("Preset preview")).toBeTruthy();
-    expect(within(step).getByText("Fetch Jira issue")).toBeTruthy();
-    expect(within(step).getAllByText("Tool").length).toBeGreaterThan(0);
-    expect(within(step).getByText("Implement issue")).toBeTruthy();
-    expect(within(step).getAllByText("Skill").length).toBeGreaterThan(0);
-    expect(within(step).getByText("Auto-filled Feature Name.")).toBeTruthy();
-    expect(screen.getByDisplayValue("Keep authored placeholder.")).toBeTruthy();
-    expect(screen.queryByDisplayValue("Fetch MM-558.")).toBeNull();
-  });
-
-  it("applies a step preset preview by replacing the selected preset step with editable generated steps", async () => {
+  it("expands a step preset by replacing the selected preset step with editable generated steps", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1 (Primary)")).closest(
@@ -7411,8 +7334,6 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
 
-    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
-    expect(await within(step).findByText("Clarify spec")).toBeTruthy();
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(await screen.findByDisplayValue("Clarify the {{ inputs.feature_name }} scope.")).toBeTruthy();
@@ -7486,8 +7407,6 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
 
-    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
-    expect(await within(step).findByText("Fetch Jira issue")).toBeTruthy();
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(await screen.findByDisplayValue("Fetch MM-558.")).toBeTruthy();
@@ -7517,7 +7436,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(request.payload.task.steps[0]?.["skill"]).toBeUndefined();
   });
 
-  it("keeps the draft unchanged when step preset preview expansion fails", async () => {
+  it("keeps the draft unchanged when step preset expansion fails", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -7551,11 +7470,11 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
 
-    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(
       await within(step).findByText(
-        "Failed to preview preset: Generated step validation failed.",
+        "Failed to expand preset: Generated step validation failed.",
       ),
     ).toBeTruthy();
     expect(screen.getByDisplayValue("Keep authored preset step.")).toBeTruthy();
@@ -7577,7 +7496,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        "Preview and apply Preset steps before submitting.",
+        "Expand Preset steps before submitting.",
       ),
     ).toBeTruthy();
     expect(
@@ -7585,7 +7504,7 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
-  it("previews and applies a step preset from the step editor without using Task Presets", async () => {
+  it("expands a step preset from the step editor without using Task Presets", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const presetManagementSection = await screen.findByLabelText(
@@ -7607,8 +7526,6 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
 
-    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
-    expect(await within(step).findByText("Clarify spec")).toBeTruthy();
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(await screen.findByDisplayValue("Clarify the {{ inputs.feature_name }} scope.")).toBeTruthy();
@@ -12267,7 +12184,7 @@ describe.skip("Task Create Entrypoint", () => {
   });
 });
 
-describe("Task Create MM-578 Preset preview and apply", () => {
+describe("Task Create MM-578 Preset expansion", () => {
   let fetchSpy: MockInstance;
 
   function latestCreateRequest(): Record<string, unknown> {
@@ -12316,7 +12233,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
               slug: "mm-578-preset",
               scope: "global",
               title: "MM-578 Preset",
-              description: "Preview and apply Preset steps.",
+              description: "Expand Preset steps.",
               latestVersion: "1.0.0",
               version: "1.0.0",
             },
@@ -12331,7 +12248,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
           slug: "mm-578-preset",
           scope: "global",
           title: "MM-578 Preset",
-          description: "Preview and apply Preset steps.",
+          description: "Expand Preset steps.",
           latestVersion: "1.0.0",
           version: "1.0.0",
           inputs: [
@@ -12439,7 +12356,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
     fetchSpy.mockRestore();
   });
 
-  it("previews generated preset steps and warnings before applying editable executable steps", async () => {
+  it("expands generated preset steps into editable executable steps", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const presetManagementSection = await screen.findByLabelText(
@@ -12464,16 +12381,6 @@ describe("Task Create MM-578 Preset preview and apply", () => {
       target: { value: "global::::mm-578-preset" },
     });
 
-    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
-
-    expect(await within(step).findByText("Preset preview")).toBeTruthy();
-    expect(within(step).getByText("Fetch Jira issue")).toBeTruthy();
-    expect(within(step).getAllByText("Tool").length).toBeGreaterThan(0);
-    expect(within(step).getByText("Implement preset story")).toBeTruthy();
-    expect(within(step).getAllByText("Skill").length).toBeGreaterThan(0);
-    expect(
-      within(step).getByText("Generated steps should be reviewed before apply."),
-    ).toBeTruthy();
     expect(
       screen.getByDisplayValue("Keep authored MM-578 preset placeholder."),
     ).toBeTruthy();
@@ -12509,8 +12416,6 @@ describe("Task Create MM-578 Preset preview and apply", () => {
       target: { value: "global::::mm-578-preset" },
     });
 
-    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
-    expect(await within(step).findByText("Fetch Jira issue")).toBeTruthy();
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
     expect(await screen.findByDisplayValue("Fetch MM-578.")).toBeTruthy();
 
@@ -12564,7 +12469,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
     expect(request.payload.task.steps[1]?.["tool"]).toBeUndefined();
   });
 
-  it("keeps drafts unchanged on preview failure and blocks unresolved Preset submission", async () => {
+  it("keeps drafts unchanged on expansion failure and blocks unresolved Preset submission", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (
@@ -12597,11 +12502,11 @@ describe("Task Create MM-578 Preset preview and apply", () => {
       target: { value: "global::::mm-578-preset" },
     });
 
-    fireEvent.click(within(step).getByRole("button", { name: "Preview" }));
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(
       await within(step).findByText(
-        "Failed to preview preset: Generated step validation failed.",
+        "Failed to expand preset: Generated step validation failed.",
       ),
     ).toBeTruthy();
     expect(
@@ -12613,7 +12518,7 @@ describe("Task Create MM-578 Preset preview and apply", () => {
 
     expect(
       await screen.findByText(
-        "Preview and apply Preset steps before submitting.",
+        "Expand Preset steps before submitting.",
       ),
     ).toBeTruthy();
     expect(

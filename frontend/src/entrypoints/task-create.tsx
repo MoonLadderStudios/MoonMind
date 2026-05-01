@@ -587,7 +587,6 @@ interface StepState {
   presetDetail: TaskTemplateDetail | null;
   presetMessage: string | null;
   presetReapplyNeeded: boolean;
-  presetPreview: PresetPreviewState | null;
   stepTypeMessage: string | null;
   templateStepId: string;
   templateInstructions: string;
@@ -600,19 +599,11 @@ interface StepState {
   jiraOrchestration?: Record<string, unknown>;
 }
 
-interface PresetPreviewStep {
-  title: string;
-  stepType: StepType;
-  sourceLabel: string;
-}
-
-interface PresetPreviewState {
+interface PresetExpansionState {
   presetKey: string;
   presetTitle: string;
   version: string;
   expandedSteps: ExpandedStepPayload[];
-  previewSteps: PresetPreviewStep[];
-  warnings: string[];
   inputs: Record<string, unknown>;
   assumptions: string[];
   capabilities: string[];
@@ -1197,7 +1188,6 @@ function createStepStateEntry(
     presetDetail: null,
     presetMessage: null,
     presetReapplyNeeded: false,
-    presetPreview: null,
     stepTypeMessage: null,
     templateStepId: "",
     templateInstructions: "",
@@ -1299,10 +1289,6 @@ function createStepStateEntriesFromTemporalDraft(
           ? presetInputValuesFromPayload(presetPayload.inputs)
           : {},
       presetDetail: null,
-      presetPreview:
-        step.stepType === "preset"
-          ? presetPreviewStateFromDraftPayload(presetKey, presetPayload)
-          : null,
       templateStepId: step.templateStepId,
       templateInstructions: step.templateInstructions,
       inputAttachments: (step.inputAttachments || []).map(
@@ -1343,34 +1329,6 @@ function stepAttachmentRefFromTemporal(
 function hasExplicitSkillSelection(skillId: string): boolean {
   const normalized = skillId.trim().toLowerCase();
   return normalized !== "" && normalized !== "auto";
-}
-
-function presetPreviewStateFromDraftPayload(
-  presetKey: string,
-  presetPayload: Record<string, unknown>,
-): PresetPreviewState | null {
-  const inputs = presetPayload.inputs;
-  if (!inputs || typeof inputs !== "object" || Array.isArray(inputs)) {
-    return null;
-  }
-  const version = String(presetPayload.version || "").trim();
-  return {
-    presetKey,
-    presetTitle: String(
-      presetPayload.title ||
-        presetPayload.name ||
-        presetPayload.slug ||
-        presetPayload.id ||
-        "",
-    ).trim(),
-    version,
-    expandedSteps: [],
-    previewSteps: [],
-    warnings: [],
-    inputs: inputs as Record<string, unknown>,
-    assumptions: [],
-    capabilities: [],
-  };
 }
 
 function isResolverSkill(skillId: string): boolean {
@@ -1674,7 +1632,7 @@ function validatePrimaryStepSubmission(
   if (primaryStep.stepType === "preset") {
     return {
       ok: false,
-      error: "Preview and apply Preset steps before submitting.",
+      error: "Expand Preset steps before submitting.",
     };
   }
   const instructions = primaryStep.instructions.trim();
@@ -4748,7 +4706,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       presetDetail,
       presetMessage: null,
       presetReapplyNeeded: false,
-      presetPreview: null,
     });
   }
 
@@ -4836,14 +4793,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           !showAdvancedStepOptions
         ) {
           nextStep.skillArgs = "";
-        }
-        if (
-          Object.prototype.hasOwnProperty.call(updates, "instructions") &&
-          nextStep.stepType === "preset" &&
-          nextStep.instructions !== step.instructions
-        ) {
-          nextStep.presetReapplyNeeded = Boolean(step.presetPreview);
-          nextStep.presetPreview = null;
         }
         return nextStep;
       }),
@@ -4998,7 +4947,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         const nextStep: StepState = {
           ...step,
           stepType: nextType,
-          presetPreview: null,
           stepTypeMessage: null,
         };
 
@@ -5029,8 +4977,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         if (
           step.stepType === "preset" &&
           (step.presetKey ||
-            Object.keys(step.presetInputValues).length > 0 ||
-            step.presetPreview)
+            Object.keys(step.presetInputValues).length > 0)
         ) {
           discardedLabels.push("Preset configuration");
           nextStep.presetKey = "";
@@ -5038,7 +4985,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           nextStep.presetDetail = null;
           nextStep.presetMessage = null;
           nextStep.presetReapplyNeeded = false;
-          nextStep.presetPreview = null;
         }
 
         if (discardedLabels.length > 0) {
@@ -5068,8 +5014,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             ...step.presetInputValues,
             [definition.name]: value,
           },
-          presetPreview: null,
-          presetReapplyNeeded: Boolean(step.presetPreview),
+          presetReapplyNeeded: false,
         };
       }),
     );
@@ -5324,33 +5269,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     return (await response.json()) as TaskTemplateDetail;
   }
 
-  function previewStepType(step: ExpandedStepPayload): StepType {
-    const rawType = String(step.type || "").trim().toLowerCase();
-    if (
-      rawType === "tool" ||
-      Boolean(step.tool && !step.skill) ||
-      String(step.tool?.type || "").trim().toLowerCase() === "tool"
-    ) {
-      return "tool";
-    }
-    return "skill";
-  }
-
-  function previewSourceLabel(step: ExpandedStepPayload): string {
-    const source = step.source;
-    if (!source || typeof source !== "object") {
-      return "";
-    }
-    const presetId = String(source.presetId || source.presetSlug || "").trim();
-    const originalStepId = String(source.originalStepId || "").trim();
-    return [
-      presetId ? `origin ${presetId}` : "",
-      originalStepId ? `step ${originalStepId}` : "",
-    ]
-      .filter(Boolean)
-      .join(" / ");
-  }
-
   async function expandPresetForDraft({
     preset,
     detail,
@@ -5359,7 +5277,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     preset: TemplateOption;
     detail: TaskTemplateDetail;
     inputValues: Record<string, unknown>;
-  }): Promise<PresetPreviewState> {
+  }): Promise<PresetExpansionState> {
     const scopeParams = {
       scope: preset.scope,
       scopeRef: preset.scopeRef || undefined,
@@ -5398,7 +5316,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     );
     if (!expandResponse.ok) {
       throw new Error(
-        await responseErrorMessage(expandResponse, "Failed to preview preset."),
+        await responseErrorMessage(expandResponse, "Failed to expand preset."),
       );
     }
     const expanded = (await expandResponse.json()) as TaskTemplateExpandResponse;
@@ -5408,14 +5326,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       presetTitle: preset.title,
       version,
       expandedSteps,
-      previewSteps: expandedSteps.map((step, index) => ({
-        title: String(step.title || step.id || `Step ${index + 1}`).trim(),
-        stepType: previewStepType(step),
-        sourceLabel: previewSourceLabel(step),
-      })),
-      warnings: Array.isArray(expanded.warnings)
-        ? expanded.warnings.map((warning) => String(warning)).filter(Boolean)
-        : [],
       inputs,
       assumptions,
       capabilities: Array.isArray(expanded.capabilities)
@@ -5428,13 +5338,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   function recordAppliedPreset(
     preset: TemplateOption,
     detail: TaskTemplateDetail,
-    preview: PresetPreviewState,
+    expansion: PresetExpansionState,
     expandedSteps: StepState[],
   ) {
     if (expandedSteps.length === 0) {
       return;
     }
-    const appliedTemplate = preview.appliedTemplate || {};
+    const appliedTemplate = expansion.appliedTemplate || {};
     setAppliedTemplates((current) => [
       ...current,
       {
@@ -5449,32 +5359,32 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           appliedTemplate.inputs &&
           typeof appliedTemplate.inputs === "object"
             ? appliedTemplate.inputs
-            : preview.inputs,
+            : expansion.inputs,
         stepIds: Array.isArray(appliedTemplate.stepIds)
           ? appliedTemplate.stepIds
           : expandedSteps.map((step) => step.id).filter(Boolean),
         appliedAt:
           String(appliedTemplate.appliedAt || "").trim() ||
           new Date().toISOString(),
-        capabilities: preview.capabilities,
+        capabilities: expansion.capabilities,
       },
     ]);
   }
 
-  function applyPresetPreviewToDraft({
+  function applyPresetExpansionToDraft({
     preset,
     detail,
-    preview,
+    expansion,
     setMessage,
     replaceLocalId,
   }: {
     preset: TemplateOption;
     detail: TaskTemplateDetail;
-    preview: PresetPreviewState;
+    expansion: PresetExpansionState;
     setMessage: (message: string) => void;
     replaceLocalId?: string;
   }) {
-    const expandedSteps = preview.expandedSteps.map((step, index) =>
+    const expandedSteps = expansion.expandedSteps.map((step, index) =>
       mapExpandedStepToState(nextStepNumber + index, step),
     );
     if (hasAdvancedStepOptionValues(expandedSteps)) {
@@ -5506,80 +5416,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     setAppliedTemplateObjectiveAttachmentSignature(
       attachmentSignature(selectedObjectiveAttachmentFiles),
     );
-    recordAppliedPreset(preset, detail, preview, expandedSteps);
+    recordAppliedPreset(preset, detail, expansion, expandedSteps);
     const autoFillSuffix =
-      preview.assumptions.length > 0
-        ? ` Auto-filled ${preview.assumptions.length} input(s): ${preview.assumptions.join(", ")}.`
+      expansion.assumptions.length > 0
+        ? ` Auto-filled ${expansion.assumptions.length} input(s): ${expansion.assumptions.join(", ")}.`
         : "";
     setMessage(
       `Applied preset '${preset.title}' (${expandedSteps.length} steps).${autoFillSuffix}`,
     );
-  }
-
-  async function handlePreviewStepPreset(localId: string) {
-    if (isApplyingPreset) return;
-    const step = steps.find((candidate) => candidate.localId === localId);
-    const preset = templateItems.find((item) => item.key === step?.presetKey);
-    if (!step || !preset) {
-      updateStep(localId, { presetMessage: "Choose a preset first." });
-      return;
-    }
-    const requestedInstructions = step.instructions;
-    const requestedInputValues = { ...step.presetInputValues };
-    setIsApplyingPreset(true);
-    updateStep(localId, {
-      presetMessage: "Previewing preset...",
-      presetReapplyNeeded: false,
-      presetPreview: null,
-    });
-    try {
-      const detail =
-        step.presetDetail && step.presetKey === preset.key
-          ? step.presetDetail
-          : await loadPresetDetail(preset);
-      const preview = await expandPresetForDraft({
-        preset,
-        detail,
-        inputValues: resolveTemplateInputs(
-          detail.inputs || [],
-          step.presetInputValues,
-          step.instructions,
-        ).values,
-      });
-      if (
-        !currentStepPresetMatches(
-          localId,
-          preset.key,
-          requestedInstructions,
-          requestedInputValues,
-        )
-      ) {
-        return;
-      }
-      updateStepPresetIfCurrent(localId, preset.key, {
-        presetDetail: detail,
-        presetPreview: preview,
-        presetMessage: `Previewed preset '${preset.title}' (${preview.previewSteps.length} steps).`,
-      });
-    } catch (error) {
-      const failure =
-        error instanceof Error ? error : new Error("Failed to preview preset.");
-      if (
-        currentStepPresetMatches(
-          localId,
-          preset.key,
-          requestedInstructions,
-          requestedInputValues,
-        )
-      ) {
-        updateStepPresetIfCurrent(localId, preset.key, {
-          presetMessage: `Failed to preview preset: ${failure.message}`,
-          presetPreview: null,
-        });
-      }
-    } finally {
-      setIsApplyingPreset(false);
-    }
   }
 
   async function handleExpandStepPreset(localId: string) {
@@ -5602,18 +5446,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         step.presetDetail && step.presetKey === preset.key
           ? step.presetDetail
           : await loadPresetDetail(preset);
-      const preview =
-        step.presetPreview && step.presetPreview.presetKey === preset.key
-          ? step.presetPreview
-          : await expandPresetForDraft({
-              preset,
-              detail,
-              inputValues: resolveTemplateInputs(
-                detail.inputs || [],
-                step.presetInputValues,
-                step.instructions,
-              ).values,
-            });
+      const expansion = await expandPresetForDraft({
+        preset,
+        detail,
+        inputValues: resolveTemplateInputs(
+          detail.inputs || [],
+          step.presetInputValues,
+          step.instructions,
+        ).values,
+      });
       if (
         !currentStepPresetMatches(
           localId,
@@ -5624,10 +5465,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       ) {
         return;
       }
-      applyPresetPreviewToDraft({
+      applyPresetExpansionToDraft({
         preset,
         detail,
-        preview,
+        expansion,
         replaceLocalId: localId,
         setMessage: (message) => setTemplateMessage(message),
       });
@@ -6060,7 +5901,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         continue;
       }
       if (step.stepType === "preset") {
-        setSubmitMessage("Preview and apply Preset steps before submitting.");
+        setSubmitMessage("Expand Preset steps before submitting.");
         return;
       }
       const stepIsSkill = step.stepType === "skill";
@@ -7889,17 +7730,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       <button
                         type="button"
                         className="secondary"
-                        aria-disabled={isApplyingPreset || !step.presetKey}
-                        aria-busy={isApplyingPreset}
-                        title="Preview the selected preset expansion"
-                        disabled={isApplyingPreset || !step.presetKey}
-                        onClick={() => handlePreviewStepPreset(step.localId)}
-                      >
-                        Preview
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
                         aria-disabled={
                           isApplyingPreset ||
                           !step.presetKey
@@ -7914,49 +7744,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       >
                         Expand
                       </button>
-                      {step.presetPreview ? (
-                        <div
-                          className="queue-step-preset-preview"
-                          aria-label="Preset preview"
-                        >
-                          <strong>Preset preview</strong>
-                          <ol>
-                            {step.presetPreview.previewSteps.map(
-                              (previewStep, previewIndex) => (
-                                <li
-                                  key={`${step.localId}-preview-${previewIndex}`}
-                                >
-                                  <span>{previewStep.title}</span>{" "}
-                                  <span className="queue-step-preview-type">
-                                    {previewStep.stepType === "tool"
-                                      ? "Tool"
-                                      : "Skill"}
-                                  </span>
-                                  {previewStep.sourceLabel ? (
-                                    <span className="small">
-                                      {` ${previewStep.sourceLabel}`}
-                                    </span>
-                                  ) : null}
-                                </li>
-                              ),
-                            )}
-                          </ol>
-                          {step.presetPreview.warnings.length > 0 ? (
-                            <ul className="list">
-                              {step.presetPreview.warnings.map(
-                                (warning, warningIndex) => (
-                                  <li
-                                    key={`${step.localId}-warning-${warningIndex}`}
-                                    className="notice warning"
-                                  >
-                                    {warning}
-                                  </li>
-                                ),
-                              )}
-                            </ul>
-                          ) : null}
-                        </div>
-                      ) : null}
                       {stepPresetStatusText(step) ? (
                         <p className="small">{stepPresetStatusText(step)}</p>
                       ) : null}
