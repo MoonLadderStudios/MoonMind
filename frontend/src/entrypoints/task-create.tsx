@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import type { BootPayload } from "../boot/parseBootPayload";
@@ -3042,6 +3043,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [isDeletingPreset, setIsDeletingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitRippleKey, setSubmitRippleKey] = useState(0);
+  const [submitRippleRect, setSubmitRippleRect] = useState<DOMRect | null>(null);
+  const submitButtonRef = useRef<HTMLButtonElement | null>(null);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
   const prevRuntimeRef = useRef(runtime);
   const prevProviderProfileRef = useRef(providerProfile);
@@ -8264,6 +8267,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             </div>
             <button
               type="submit"
+              ref={submitButtonRef}
               className={
                 showPrimaryCtaArrow
                   ? "queue-submit-primary queue-submit-primary--icon"
@@ -8277,6 +8281,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 if (isTemporalFormBlocked) return;
+                const rect =
+                  submitButtonRef.current?.getBoundingClientRect() ?? null;
+                setSubmitRippleRect(rect);
                 setSubmitRippleKey((value) => value + 1);
               }}
             >
@@ -8291,15 +8298,34 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               ) : (
                 <span>{primaryCta}</span>
               )}
-              {showPrimaryCtaArrow && submitRippleKey > 0 ? (
-                <span
-                  key={submitRippleKey}
-                  aria-hidden="true"
-                  className="queue-submit-primary-ripple"
-                  onAnimationEnd={() => setSubmitRippleKey(0)}
-                />
-              ) : null}
             </button>
+            {showPrimaryCtaArrow &&
+            submitRippleKey > 0 &&
+            submitRippleRect &&
+            typeof document !== "undefined"
+              ? createPortal(
+                  <span
+                    key={submitRippleKey}
+                    aria-hidden="true"
+                    style={{
+                      position: "fixed",
+                      top: submitRippleRect.top,
+                      left: submitRippleRect.left,
+                      width: submitRippleRect.width,
+                      height: submitRippleRect.height,
+                      pointerEvents: "none",
+                      borderRadius: 999,
+                      zIndex: 41,
+                    }}
+                  >
+                    <span
+                      className="queue-submit-primary-ripple"
+                      onAnimationEnd={() => setSubmitRippleKey(0)}
+                    />
+                  </span>,
+                  document.body,
+                )
+              : null}
           </div>
         </div>
         </section>
