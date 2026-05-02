@@ -12193,6 +12193,26 @@ describe.skip("Task Create Entrypoint", () => {
   });
 });
 
+describe("Task Create submit arrow animation", () => {
+  it("cycles the create arrow out right and back in from the left on hover", async () => {
+    const { readFileSync } = await import("node:fs");
+    const css = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      "utf8",
+    );
+
+    expect(css).toMatch(
+      /\.queue-submit-primary--icon:not\(:disabled\):not\(\[aria-disabled="true"\]\):hover\s*\.queue-submit-primary-arrow\s*svg\s*\{[^}]*animation:\s*queue-submit-primary-arrow-cycle\s+460ms\s+cubic-bezier\(0\.33,\s*0,\s*0\.2,\s*1\)\s+both;/s,
+    );
+    expect(css).toMatch(
+      /@keyframes queue-submit-primary-arrow-cycle\s*\{[\s\S]*38%\s*\{[\s\S]*transform:\s*translateX\(145%\);[\s\S]*39%\s*\{[\s\S]*opacity:\s*0;[\s\S]*40%\s*\{[\s\S]*transform:\s*translateX\(-145%\);[\s\S]*100%\s*\{[\s\S]*transform:\s*translateX\(0\);/,
+    );
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.queue-submit-primary--icon \.queue-submit-primary-arrow svg\s*\{[\s\S]*animation:\s*none !important;[\s\S]*transform:\s*none !important;/,
+    );
+  });
+});
+
 describe("Task Create MM-578 Preset expansion", () => {
   let fetchSpy: MockInstance;
 

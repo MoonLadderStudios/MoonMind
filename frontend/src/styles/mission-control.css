@@ -1977,6 +1977,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   flex: 0 0 auto;
   width: 1.05rem;
   height: 1.05rem;
+  overflow: hidden;
 }
 
 .queue-submit-primary-arrow svg {
@@ -1987,6 +1988,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
+  will-change: transform, opacity;
 }
 
 .queue-action:hover,
@@ -3044,6 +3046,12 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   stroke-width: 3;
 }
 
+.queue-submit-primary--icon:not(:disabled):not([aria-disabled="true"]):hover
+  .queue-submit-primary-arrow
+  svg {
+  animation: queue-submit-primary-arrow-cycle 460ms cubic-bezier(0.33, 0, 0.2, 1) both;
+}
+
 .queue-submit-primary--icon:hover {
   border-color: color-mix(in srgb, rgb(var(--mm-action-primary)) 48%, white);
   box-shadow:
@@ -3066,6 +3074,33 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
     0 0 0 4px color-mix(in srgb, rgb(var(--mm-action-primary)) 38%, white),
     0 0 46px 10px color-mix(in srgb, rgb(var(--mm-action-primary)) 56%, white),
     0 0 76px 18px rgb(var(--mm-accent-2) / 0.44);
+}
+
+@keyframes queue-submit-primary-arrow-cycle {
+  0% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  38% {
+    opacity: 1;
+    transform: translateX(145%);
+  }
+  39% {
+    opacity: 0;
+    transform: translateX(145%);
+  }
+  40% {
+    opacity: 0;
+    transform: translateX(-145%);
+  }
+  54% {
+    opacity: 1;
+    transform: translateX(-145%);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .queue-submit-primary-ripple {
@@ -3102,6 +3137,12 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .queue-submit-primary--icon .queue-submit-primary-arrow svg {
+    animation: none !important;
+    opacity: 1;
+    transform: none !important;
+  }
+
   .queue-submit-primary-ripple {
     animation: none !important;
     opacity: 0;
