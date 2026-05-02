@@ -495,6 +495,51 @@ class MoonMindMergeAutomationWorkflow:
             return False
         return True
 
+    async def _evaluate_readiness_once(self) -> tuple[Any, Any]:
+        if self._input is None:
+            evaluation: dict[str, Any] = {}
+            return evaluation, classify_readiness(evaluation, tracked_head_sha="")
+        evaluation = await workflow.execute_activity(
+            "merge_automation.evaluate_readiness",
+            self._input.model_dump(by_alias=True, mode="json"),
+            start_to_close_timeout=timedelta(minutes=2),
+            task_queue=INTEGRATIONS_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        evidence = classify_readiness(
+            evaluation if isinstance(evaluation, Mapping) else {},
+            tracked_head_sha=self._input.pull_request.head_sha,
+        )
+        return evaluation, evidence
+
+    async def _finish_if_pr_merged_after_resolver_issue(self) -> dict[str, Any] | None:
+        if self._input is None:
+            return None
+        if not workflow.patched("merge-automation-post-resolver-merged-recovery-v1"):
+            return None
+        evaluation, evidence = await self._evaluate_readiness_once()
+        if self._refresh_tracked_head_sha(evaluation):
+            evidence = classify_readiness(
+                evaluation if isinstance(evaluation, Mapping) else {},
+                tracked_head_sha=self._input.pull_request.head_sha,
+            )
+        self._blockers = list(evidence.blockers)
+        await self._write_gate_snapshot(evidence_ready=evidence.ready)
+        if not evidence.pull_request_merged:
+            return None
+        self._summary = (
+            "Pull request is already merged; recovered after resolver "
+            "disposition validation failed."
+        )
+        if not await self._complete_post_merge_jira(
+            resolver_disposition=DISPOSITION_ALREADY_MERGED
+        ):
+            return await self._finish()
+        self._status = STATE_ALREADY_MERGED
+        self._publish_visibility()
+        return await self._finish()
+
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._input = MergeAutomationStartInput.model_validate(payload)
@@ -508,18 +553,7 @@ class MoonMindMergeAutomationWorkflow:
                 self._publish_visibility()
                 return await self._finish()
 
-            evaluation = await workflow.execute_activity(
-                "merge_automation.evaluate_readiness",
-                self._input.model_dump(by_alias=True, mode="json"),
-                start_to_close_timeout=timedelta(minutes=2),
-                task_queue=INTEGRATIONS_TASK_QUEUE,
-                retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
-                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-            )
-            evidence = classify_readiness(
-                evaluation if isinstance(evaluation, Mapping) else {},
-                tracked_head_sha=self._input.pull_request.head_sha,
-            )
+            evaluation, evidence = await self._evaluate_readiness_once()
             if self._refresh_tracked_head_sha_on_next_evaluation:
                 self._refresh_tracked_head_sha_on_next_evaluation = False
                 if self._refresh_tracked_head_sha(evaluation):
@@ -614,11 +648,17 @@ class MoonMindMergeAutomationWorkflow:
                 ).strip()
                 resolver_disposition = self._resolver_disposition(resolver_result)
                 if resolver_status != "success":
+                    recovered = await self._finish_if_pr_merged_after_resolver_issue()
+                    if recovered is not None:
+                        return recovered
                     return await self._failed_resolver_summary(
                         summary="pr-resolver child run did not complete successfully.",
                         blocker_kind=DISPOSITION_FAILED,
                     )
                 if not resolver_disposition:
+                    recovered = await self._finish_if_pr_merged_after_resolver_issue()
+                    if recovered is not None:
+                        return recovered
                     return await self._failed_resolver_summary(
                         summary=(
                             "pr-resolver child result missing "
@@ -627,6 +667,9 @@ class MoonMindMergeAutomationWorkflow:
                         blocker_kind="resolver_disposition_invalid",
                     )
                 if resolver_disposition not in ALLOWED_DISPOSITIONS:
+                    recovered = await self._finish_if_pr_merged_after_resolver_issue()
+                    if recovered is not None:
+                        return recovered
                     return await self._failed_resolver_summary(
                         summary=(
                             "pr-resolver child result has unsupported "
@@ -661,11 +704,17 @@ class MoonMindMergeAutomationWorkflow:
                     self._publish_visibility()
                     return await self._finish()
                 if resolver_disposition == DISPOSITION_MANUAL_REVIEW:
+                    recovered = await self._finish_if_pr_merged_after_resolver_issue()
+                    if recovered is not None:
+                        return recovered
                     return await self._failed_resolver_summary(
                         summary="pr-resolver requested manual review.",
                         blocker_kind=DISPOSITION_MANUAL_REVIEW,
                     )
                 if resolver_disposition == DISPOSITION_FAILED:
+                    recovered = await self._finish_if_pr_merged_after_resolver_issue()
+                    if recovered is not None:
+                        return recovered
                     return await self._failed_resolver_summary(
                         summary="pr-resolver reported failure.",
                         blocker_kind=DISPOSITION_FAILED,
