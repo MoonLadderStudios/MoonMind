@@ -413,8 +413,16 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
         "execute_child_workflow",
         fake_execute_child_workflow,
     )
-    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
-    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
     monkeypatch.setattr(
         merge_automation_module.workflow,
         "upsert_search_attributes",
@@ -1311,6 +1319,97 @@ async def test_merge_automation_invalid_dispositions_fail_deterministically(
     assert result["summary"] == expected_summary
     assert result["blockers"]
     assert result["blockers"][0]["kind"] == "resolver_disposition_invalid"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolver_result",
+    [
+        {"status": "success"},
+        {"status": "success", "mergeAutomationDisposition": "manual_review"},
+        {"status": "failed"},
+    ],
+)
+async def test_merge_automation_recovers_resolver_contract_issue_when_pr_is_merged(
+    monkeypatch: pytest.MonkeyPatch,
+    resolver_result: dict[str, Any],
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    readiness_calls = 0
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        nonlocal readiness_calls
+        if activity_type != "merge_automation.evaluate_readiness":
+            return {}
+        readiness_calls += 1
+        if readiness_calls == 1:
+            return {
+                "headSha": "abc123",
+                "ready": True,
+                "pullRequestOpen": True,
+                "policyAllowed": True,
+                "checksComplete": True,
+                "checksPassing": True,
+                "automatedReviewComplete": True,
+                "jiraStatusAllowed": True,
+            }
+        return {
+            "headSha": "def456",
+            "ready": False,
+            "pullRequestOpen": False,
+            "pullRequestMerged": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.Run"
+        return resolver_result
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    assert readiness_calls == 2
+    assert result["status"] == "already_merged"
+    assert result["latestHeadSha"] == "def456"
+    expected_resolver_id = deterministic_resolver_idempotency_key(
+        parent_workflow_id="wf-parent",
+        repo="MoonLadderStudios/MoonMind",
+        pr_number=350,
+        head_sha="abc123",
+    )
+    assert result["resolverChildWorkflowIds"] == [f"{expected_resolver_id}:1"]
+    assert result["summary"] == (
+        "Pull request is already merged; recovered after resolver "
+        "disposition validation failed."
+    )
 
 @pytest.mark.asyncio
 async def test_merge_automation_ignores_wait_condition_timeout_only(
