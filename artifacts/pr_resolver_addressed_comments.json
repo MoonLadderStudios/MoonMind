@@ -1,32 +1,17 @@
 [
   {
-    "id": 4362680134,
+    "id": 4363278826,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice is informational and does not request a code change."
+    "rationale": "Qodo free-tier notice is informational and contains no actionable code feedback."
   },
   {
-    "id": 3175936226,
+    "id": 3176313686,
     "disposition": "addressed",
-    "rationale": "Removed the unnecessary will-change performance hint from the submit arrow SVG styling."
+    "rationale": "Restored flex centering and overflow clipping for the absolute-positioned icon submit arrow, with CSS test coverage."
   },
   {
-    "id": 3175936232,
+    "id": 4214662171,
     "disposition": "addressed",
-    "rationale": "Simplified the arrow-cycle keyframes to transform-only movement using overflow clipping instead of opacity and stationary hidden frames."
-  },
-  {
-    "id": 3175936234,
-    "disposition": "addressed",
-    "rationale": "Removed the redundant opacity reset from the reduced-motion override."
-  },
-  {
-    "id": 3175936235,
-    "disposition": "addressed",
-    "rationale": "Updated the submit arrow animation test regex to match the simplified transform-only keyframes."
-  },
-  {
-    "id": 4214213268,
-    "disposition": "addressed",
-    "rationale": "Applied the review summary recommendations for will-change removal, keyframe simplification, reduced-motion cleanup, and matching test coverage."
+    "rationale": "Review summary duplicates the submit-arrow centering and clipping concern addressed in the inline CSS change."
   }
 ]
