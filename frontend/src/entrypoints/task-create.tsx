@@ -7094,7 +7094,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   </div>
 
                   <fieldset className="queue-step-type-field">
-                    <legend>Step Type</legend>
+                    <legend className="sr-only">Step Type</legend>
                     <div className="queue-step-type-options">
                       {STEP_TYPE_OPTIONS.map((option) => {
                         const Icon = option.Icon;

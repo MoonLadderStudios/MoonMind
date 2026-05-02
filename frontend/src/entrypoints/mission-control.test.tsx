@@ -219,7 +219,7 @@ describe('Mission Control shared entry', () => {
       /\.panel\s*\{[^}]*background:\s*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-panel\);/s,
     );
     expect(missionControlCss).toMatch(
-      /\.queue-floating-bar\s*\{[^}]*background:\s*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-floating\);/s,
+      /\.queue-floating-bar\s*\{[^}]*background:[^}]*linear-gradient\([^}]*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-floating\);/s,
     );
     expect(missionControlCss).toMatch(
       /\.queue-floating-bar \.queue-inline-selector select,\s*\.queue-floating-bar \.queue-inline-selector input\s*\{[^}]*background:\s*var\(--mm-input-well\);[^}]*border-color:\s*var\(--mm-glass-edge\);/s,
