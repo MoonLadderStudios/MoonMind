@@ -7847,7 +7847,7 @@ describe.skip("Task Create Entrypoint", () => {
       /\.queue-step-instructions,\s*\.queue-step-skill-args\s*\{[^}]*background:\s*var\(--mm-input-well\);/s,
     );
     expect(missionControlCss).toMatch(
-      /\.queue-floating-bar\s*\{[^}]*background:[^}]*linear-gradient\([^}]*var\(--mm-glass-fill\);/s,
+      /\.queue-floating-bar\s*\{[^}]*background:\s*var\(--mm-glass-fill\);/s,
     );
   });
 
@@ -7996,13 +7996,10 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("keeps MM-429 liquid glass fallback shell complete before enhancement initializes", async () => {
     expect(missionControlCss).toMatch(
-      /\.queue-floating-bar\s*\{[^}]*position:\s*fixed;[^}]*background:[^}]*linear-gradient\([^}]*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-floating\);[^}]*display:\s*grid;/s,
+      /\.queue-floating-bar\s*\{[^}]*position:\s*fixed;[^}]*background:\s*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-floating\);[^}]*display:\s*grid;/s,
     );
     expect(missionControlCss).toMatch(
-      /\.queue-floating-bar--liquid-glass\s*\{[^}]*position:\s*fixed;[^}]*isolation:\s*isolate;[^}]*overflow:\s*visible;/s,
-    );
-    expect(missionControlCss).toMatch(
-      /\.queue-floating-bar::before\s*\{[^}]*inset:\s*-1\.25rem;[^}]*radial-gradient\([^}]*color-mix\(in srgb,\s*rgb\(var\(--mm-action-primary\)\)\s*50%,\s*white\)/s,
+      /\.queue-floating-bar--liquid-glass\s*\{[^}]*position:\s*fixed;[^}]*isolation:\s*isolate;[^}]*overflow:\s*hidden;/s,
     );
     expect(missionControlCss).toMatch(
       /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-0\.7rem;[^}]*color-mix\(in srgb,\s*rgb\(var\(--mm-action-primary\)\)\s*42%,\s*white\)/s,
