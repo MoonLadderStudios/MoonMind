@@ -1988,7 +1988,6 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
-  will-change: transform, opacity;
 }
 
 .queue-action:hover,
@@ -3078,27 +3077,15 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
 @keyframes queue-submit-primary-arrow-cycle {
   0% {
-    opacity: 1;
     transform: translateX(0);
   }
   38% {
-    opacity: 1;
     transform: translateX(145%);
   }
   39% {
-    opacity: 0;
-    transform: translateX(145%);
-  }
-  40% {
-    opacity: 0;
-    transform: translateX(-145%);
-  }
-  54% {
-    opacity: 1;
     transform: translateX(-145%);
   }
   100% {
-    opacity: 1;
     transform: translateX(0);
   }
 }
@@ -3139,7 +3126,6 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 @media (prefers-reduced-motion: reduce) {
   .queue-submit-primary--icon .queue-submit-primary-arrow svg {
     animation: none !important;
-    opacity: 1;
     transform: none !important;
   }
 

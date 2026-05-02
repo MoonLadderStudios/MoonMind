@@ -1,32 +1,32 @@
 [
   {
-    "id": 4361984817,
+    "id": 4362680134,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier limit notice is informational and contains no requested code change."
+    "rationale": "Qodo free-tier notice is informational and does not request a code change."
   },
   {
-    "id": 4213692380,
-    "disposition": "not-applicable",
-    "rationale": "Broad review summary only; the actionable CSS delay and unused variable items are tracked in the line comments below."
-  },
-  {
-    "id": 3175475110,
+    "id": 3175936226,
     "disposition": "addressed",
-    "rationale": "Adjusted glyph animation-delay to subtract the 0.22 keyframe peak offset and added CSS contract coverage."
+    "rationale": "Removed the unnecessary will-change performance hint from the submit arrow SVG styling."
   },
   {
-    "id": 3175475111,
+    "id": 3175936232,
     "disposition": "addressed",
-    "rationale": "Removed the unused --mm-executing-letter-pulse-duration-ratio custom property from the stylesheet."
+    "rationale": "Simplified the arrow-cycle keyframes to transform-only movement using overflow clipping instead of opacity and stationary hidden frames."
   },
   {
-    "id": 3175475113,
+    "id": 3175936234,
     "disposition": "addressed",
-    "rationale": "Removed the matching test expectation for the unused custom property."
+    "rationale": "Removed the redundant opacity reset from the reduced-motion override."
   },
   {
-    "id": 4362115950,
-    "disposition": "not-applicable",
-    "rationale": "Review trigger comment only; it does not request a code change."
+    "id": 3175936235,
+    "disposition": "addressed",
+    "rationale": "Updated the submit arrow animation test regex to match the simplified transform-only keyframes."
+  },
+  {
+    "id": 4214213268,
+    "disposition": "addressed",
+    "rationale": "Applied the review summary recommendations for will-change removal, keyframe simplification, reduced-motion cleanup, and matching test coverage."
   }
 ]
