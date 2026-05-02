@@ -7731,7 +7731,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       ) : null}
                       <button
                         type="button"
-                        className="secondary"
                         aria-disabled={
                           isApplyingPreset ||
                           !step.presetKey

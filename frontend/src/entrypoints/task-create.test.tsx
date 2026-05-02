@@ -12415,7 +12415,9 @@ describe("Task Create MM-578 Preset expansion", () => {
     ).toBeTruthy();
     expect(screen.queryByDisplayValue("Fetch MM-578.")).toBeNull();
 
-    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    const expandButton = within(step).getByRole("button", { name: "Expand" });
+    expect(expandButton.classList.contains("secondary")).toBe(false);
+    fireEvent.click(expandButton);
 
     expect(await screen.findByDisplayValue("Fetch MM-578.")).toBeTruthy();
     expect(screen.getByDisplayValue("Implement MM-578.")).toBeTruthy();
