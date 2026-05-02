@@ -12199,6 +12199,9 @@ describe("Task Create submit arrow animation", () => {
     );
 
     expect(css).toMatch(
+      /\.queue-submit-primary--icon \.queue-submit-primary-arrow\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*overflow:\s*hidden;/s,
+    );
+    expect(css).toMatch(
       /\.queue-submit-primary--icon:not\(:disabled\):not\(\[aria-disabled="true"\]\):hover\s*\.queue-submit-primary-arrow\s*svg\s*\{[^}]*animation:\s*queue-submit-primary-arrow-cycle\s+460ms\s+cubic-bezier\(0\.33,\s*0,\s*0\.2,\s*1\)\s+both;/s,
     );
     expect(css).toMatch(

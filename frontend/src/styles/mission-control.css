@@ -2991,6 +2991,10 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 .queue-submit-primary--icon .queue-submit-primary-arrow {
   position: absolute;
   inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
   width: auto;
   height: auto;
   border-radius: inherit;
