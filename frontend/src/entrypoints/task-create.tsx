@@ -1335,10 +1335,6 @@ function hasExplicitSkillSelection(skillId: string): boolean {
   return normalized !== "" && normalized !== "auto";
 }
 
-function isResolverSkill(skillId: string): boolean {
-  return PR_RESOLVER_SKILLS.has(skillId.trim().toLowerCase());
-}
-
 function isSelfManagedPublishSkill(skillId: string): boolean {
   return SELF_MANAGED_PUBLISH_SKILLS.has(skillId.trim().toLowerCase());
 }
