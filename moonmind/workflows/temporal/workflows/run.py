@@ -41,6 +41,10 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.agent_skills.selection import selected_agent_skill
     from moonmind.config.settings import settings
     from moonmind.utils.logging import scrub_github_tokens
+    from moonmind.workflows.temporal.jira_agent_skills import (
+        JIRA_AGENT_SKILLS,
+        JIRA_BACKED_AGENT_SKILLS,
+    )
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
     from moonmind.workflows.tasks.task_contract import (
         build_effective_task_skill_selectors,
@@ -99,17 +103,9 @@ DEPENDENCY_RECONCILE_INTERVAL = timedelta(seconds=30)
 _TERMINAL_LAST_ERROR_UNSET = object()
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
-_PR_OPTIONAL_AGENT_SKILLS = frozenset({"jira-issue-creator", "jira-pr-verify", "jira-verify"})
+_PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
-_JIRA_BACKED_AGENT_SKILLS = frozenset(
-    {
-        "jira-orchestrate",
-        "jira-issue-updater",
-        "jira-issue-creator",
-        "jira-pr-verify",
-        "jira-verify",
-    }
-)
+_JIRA_BACKED_AGENT_SKILLS = JIRA_BACKED_AGENT_SKILLS
 
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.Run workflow."""

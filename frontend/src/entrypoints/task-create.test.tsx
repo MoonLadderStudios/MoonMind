@@ -5967,7 +5967,9 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/task-step-templates/jira-orchestrate?scope=global")) {
+      if (
+        url.startsWith("/api/task-step-templates/jira-orchestrate?scope=global")
+      ) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -6020,6 +6022,121 @@ describe.skip("Task Create Entrypoint", () => {
     expect(within(presetSection).queryByLabelText("Orchestration Mode")).toBeNull();
     expect(within(presetSection).queryByLabelText("Source Design Path")).toBeNull();
     expect(within(presetSection).queryByLabelText("Constraints")).toBeNull();
+    expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe(
+      "none",
+    );
+  });
+
+  it("submits Jira Orchestrate preset runs without automatic publishing", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "jira-orchestrate",
+                scope: "global",
+                title: "Jira Orchestrate",
+                description: "Run MoonSpec from a Jira issue.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/task-step-templates/jira-orchestrate?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "jira-orchestrate",
+            scope: "global",
+            title: "Jira Orchestrate",
+            description: "Run MoonSpec from a Jira issue.",
+            latestVersion: "1.0.0",
+            version: "1.0.0",
+            inputs: [
+              {
+                name: "jira_issue_key",
+                label: "Jira Issue Key",
+                type: "text",
+                required: true,
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/task-step-templates/jira-orchestrate:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:jira-orchestrate:1",
+                title: "Move Jira issue",
+                instructions: "Transition THOR-352 to In Progress.",
+                tool: { type: "skill", name: "jira-issue-updater" },
+              },
+            ],
+            appliedTemplate: {
+              slug: "jira-orchestrate",
+              version: "1.0.0",
+              inputs: { jira_issue_key: "THOR-352" },
+              stepIds: ["tpl:jira-orchestrate:1"],
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetSection = screen.getByLabelText("Task Presets");
+    await within(presetSection).findByLabelText("Jira Issue Key");
+    expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe(
+      "none",
+    );
+
+    fireEvent.change(within(presetSection).getByLabelText("Jira Issue Key"), {
+      target: { value: "THOR-352" },
+    });
+    await clickApplyButton();
+    await screen.findByDisplayValue("Transition THOR-352 to In Progress.");
+
+    const publishSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    expect(publishSelect.value).toBe("none");
+    expect(
+      Array.from(publishSelect.options).some(
+        (option) => option.value === "pr_with_merge_automation",
+      ),
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(payload.publishMode).toBe("none");
+    expect(task.publish).toMatchObject({ mode: "none" });
+    expect(payload).not.toHaveProperty("mergeAutomation");
+    expect(task.skills).toEqual({ include: [{ name: "jira-orchestrate" }] });
   });
 
   it("shows only PR publish choices for the Jira Breakdown and Orchestrate preset inputs", async () => {

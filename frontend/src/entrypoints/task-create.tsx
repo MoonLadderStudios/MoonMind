@@ -29,6 +29,10 @@ const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
 const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
+const SELF_MANAGED_PUBLISH_SKILLS = new Set([
+  ...PR_RESOLVER_SKILLS,
+  JIRA_ORCHESTRATE_PRESET_SLUG,
+]);
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
 const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
   [JIRA_ORCHESTRATE_PRESET_SLUG]: new Set([
@@ -1331,8 +1335,8 @@ function hasExplicitSkillSelection(skillId: string): boolean {
   return normalized !== "" && normalized !== "auto";
 }
 
-function isResolverSkill(skillId: string): boolean {
-  return PR_RESOLVER_SKILLS.has(skillId.trim().toLowerCase());
+function isSelfManagedPublishSkill(skillId: string): boolean {
+  return SELF_MANAGED_PUBLISH_SKILLS.has(skillId.trim().toLowerCase());
 }
 
 function resolveEffectiveSkillId(
@@ -3306,7 +3310,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const primarySkill = String(steps[0]?.skillId || "")
       .trim()
       .toLowerCase();
-    if (isResolverSkill(primarySkill)) {
+    if (isSelfManagedPublishSkill(primarySkill)) {
       setPublishMode("none");
     }
   }, [steps[0]?.skillId]);
@@ -3826,17 +3830,20 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (
       pageMode.mode === "create" &&
       (selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG ||
-        selectedPreset?.slug === JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG)
+        selectedPreset?.slug === JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG ||
+        selectedPreset?.slug === JIRA_ORCHESTRATE_PRESET_SLUG)
     ) {
       setPublishMode("none");
     }
   }, [pageMode.mode, selectedPreset?.slug]);
 
-  const mergeAutomationAvailable = !isResolverSkill(effectiveSkillId);
+  const mergeAutomationAvailable = !isSelfManagedPublishSkill(effectiveSkillId);
 
   useEffect(() => {
     if (!mergeAutomationAvailable && isMergeAutomationPublishMode(publishMode)) {
-      setPublishMode(isResolverSkill(effectiveSkillId) ? "none" : "pr");
+      setPublishMode(
+        isSelfManagedPublishSkill(effectiveSkillId) ? "none" : "pr",
+      );
     }
   }, [effectiveSkillId, mergeAutomationAvailable, publishMode]);
 
@@ -5828,7 +5835,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       appliedTemplates,
     );
     const effectivePublishMode =
-      isResolverSkill(effectiveSubmissionSkillId) && isMergeAutomationPublishMode(publishMode)
+      isSelfManagedPublishSkill(effectiveSubmissionSkillId)
         ? "none"
         : normalizedPublishMode;
     const primarySkillArgsRaw = primaryStepIsSkill && showAdvancedStepOptions
@@ -6444,7 +6451,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const shouldSubmitMergeAutomation =
       isMergeAutomationPublishMode(publishMode) &&
       effectivePublishMode === "pr" &&
-      !isResolverSkill(effectiveSubmissionSkillId);
+      !isSelfManagedPublishSkill(effectiveSubmissionSkillId);
 
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsForSubmit,

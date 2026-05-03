@@ -14,7 +14,7 @@ Update an existing Jira task, story, bug, subtask, or other issue type. Use this
 - Optional: replacement or appended description text.
 - Optional: issue type context, for example `Task`, `Story`, `Bug`, `Sub-task`, or a project-specific Jira issue type.
 - Optional: field/update payload details from the user or Jira edit metadata, including labels, priority, assignee, components, due dates, or project-specific custom fields.
-- Optional: MoonMind API base URL and authenticated session/token, only when calling the HTTP MCP endpoint directly.
+- Optional: `MOONMIND_URL` and authenticated runtime session/token, only when calling the HTTP MCP endpoint directly.
 
 ## Outputs
 
@@ -129,7 +129,7 @@ Example tool payload:
 When no native Jira tool is exposed but an authenticated MoonMind API endpoint is available, call:
 
 ```bash
-curl -sS -X POST "$MOONMIND_API_BASE/mcp/tools/call" \
+curl -sS -X POST "$MOONMIND_URL/mcp/tools/call" \
   -H "Content-Type: application/json" \
   -d '{
     "tool": "jira.get_transitions",

@@ -1096,6 +1096,38 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():
     assert "targetBranch" not in node["inputs"]
     assert "commit your work" not in node["inputs"]["instructions"]
 
+def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_updater():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Transition THOR-352 to In Progress.",
+                "tool": {"type": "skill", "name": "jira-issue-updater"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node = plan["nodes"][0]
+    assert node["tool"] == {
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
+    }
+    assert node["inputs"]["selectedSkill"] == "jira-issue-updater"
+    assert node["inputs"]["publishMode"] == "none"
+    assert node["inputs"]["instructions"].startswith("Use $jira-issue-updater.")
+    assert "targetBranch" not in node["inputs"]
+    assert "commit your work" not in node["inputs"]["instructions"]
+
 def test_runtime_planner_does_not_require_pr_branch_for_jira_verify():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
