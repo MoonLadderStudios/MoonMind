@@ -1,17 +1,22 @@
 [
   {
-    "id": 4363278826,
+    "id": 4365347415,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice is informational and contains no actionable code feedback."
+    "rationale": "Qodo free-tier notice; no actionable code feedback."
   },
   {
-    "id": 3176313686,
+    "id": 3177603333,
     "disposition": "addressed",
-    "rationale": "Restored flex centering and overflow clipping for the absolute-positioned icon submit arrow, with CSS test coverage."
+    "rationale": "Refactored _is_non_blocking_blocker to accept the normalized blocker kind directly."
   },
   {
-    "id": 4214662171,
+    "id": 3177603335,
     "disposition": "addressed",
-    "rationale": "Review summary duplicates the submit-arrow centering and clipping concern addressed in the inline CSS change."
+    "rationale": "Updated the blocker classification loop to normalize each blocker kind once and pass it to helper functions."
+  },
+  {
+    "id": 4215859538,
+    "disposition": "not-applicable",
+    "rationale": "Review summary describes the inline Gemini suggestions already tracked separately."
   }
 ]

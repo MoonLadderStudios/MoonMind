@@ -97,7 +97,7 @@ Operator-visible reason that a gate remains waiting or blocked.
 
 Fields:
 
-- `kind`: bounded value such as `checks_running`, `checks_failed`, `automated_review_pending`, `jira_status_pending`, `pull_request_closed`, `stale_revision`, `policy_denied`, `external_state_unavailable`.
+- `kind`: bounded value such as `checks_running`, `checks_failed`, `merge_conflict`, `automated_review_pending`, `jira_status_pending`, `pull_request_closed`, `stale_revision`, `policy_denied`, `external_state_unavailable`.
 - `summary`: sanitized human-readable explanation.
 - `retryable`: boolean.
 - `source`: optional bounded source label such as `github`, `jira`, or `policy`.

@@ -605,6 +605,77 @@ async def test_merge_automation_launches_resolver_when_checks_are_failing_but_co
     assert result["blockers"] == []
 
 @pytest.mark.asyncio
+async def test_merge_automation_launches_resolver_for_merge_conflicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    child_calls = 0
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert activity_type == "merge_automation.evaluate_readiness"
+        return {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": None,
+            "checksPassing": None,
+            "automatedReviewComplete": None,
+            "jiraStatusAllowed": True,
+            "blockers": [
+                {
+                    "kind": "merge_conflict",
+                    "summary": "Pull request has merge conflicts.",
+                    "retryable": False,
+                    "source": "github",
+                }
+            ],
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        nonlocal child_calls
+        assert workflow_type == "MoonMind.Run"
+        assert payload["initial_parameters"]["task"]["tool"]["name"] == "pr-resolver"
+        child_calls += 1
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    assert child_calls == 1
+    assert result["status"] == "merged"
+    assert result["blockers"] == []
+
+@pytest.mark.asyncio
 async def test_merge_automation_adopts_initial_waiting_head_sha_before_resolver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

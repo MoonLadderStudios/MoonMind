@@ -121,6 +121,75 @@ def test_classify_readiness_allows_resolver_launch_when_checks_failed_but_are_co
     assert evidence.ready is True
     assert evidence.blockers == []
 
+def test_classify_readiness_allows_resolver_launch_for_merge_conflicts() -> None:
+    evidence = classify_readiness(
+        {
+            "headSha": "abc123",
+            "ready": False,
+            "pullRequestOpen": True,
+            "checksComplete": None,
+            "checksPassing": None,
+            "automatedReviewComplete": None,
+            "jiraStatusAllowed": True,
+            "policyAllowed": True,
+            "blockers": [
+                {
+                    "kind": "merge_conflict",
+                    "summary": "Pull request has merge conflicts.",
+                    "retryable": False,
+                    "source": "github",
+                }
+            ],
+        },
+        tracked_head_sha="abc123",
+    )
+
+    assert evidence.ready is True
+    assert evidence.blockers == []
+
+def test_classify_readiness_normalizes_plural_merge_conflict_blocker() -> None:
+    evidence = classify_readiness(
+        {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "blockers": [
+                {
+                    "kind": "merge_conflicts",
+                    "summary": "Pull request has merge conflicts.",
+                    "retryable": False,
+                    "source": "github",
+                }
+            ],
+        },
+        tracked_head_sha="abc123",
+    )
+
+    assert evidence.ready is True
+    assert evidence.blockers == []
+
+def test_classify_readiness_preserves_pre_patch_merge_conflict_wait_behavior() -> None:
+    evidence = classify_readiness(
+        {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "blockers": [
+                {
+                    "kind": "merge_conflict",
+                    "summary": "Pull request has merge conflicts.",
+                    "retryable": False,
+                    "source": "github",
+                }
+            ],
+        },
+        tracked_head_sha="abc123",
+        actionable_merge_conflicts=False,
+    )
+
+    assert evidence.ready is False
+    assert evidence.blockers[0].kind == "external_state_unavailable"
+
 def test_classify_readiness_maps_unknown_blocker_kind_to_external_unavailable() -> None:
     evidence = classify_readiness(
         {
