@@ -569,7 +569,9 @@ def _normalize_runtime_mode(raw_mode: Any) -> str:
         return str(settings.workflow.default_task_runtime or "gemini_cli").strip().lower()
     return normalized
 
-_JIRA_AGENT_SKILLS = frozenset({"jira-issue-creator", "jira-pr-verify", "jira-verify"})
+_JIRA_AGENT_SKILLS = frozenset(
+    {"jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"}
+)
 _JIRA_STORY_OUTPUT_TOOLS = frozenset(
     {"story.create_jira_issues", "story.create_jira_orchestrate_tasks"}
 )

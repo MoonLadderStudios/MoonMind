@@ -2557,6 +2557,39 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_verify_tool_hin
     assert "Verify KANDY-3607 against this branch." in result
     assert "Managed Codex CLI note:" in result
 
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_adds_jira_issue_updater_tool_hint() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "parameters": {
+                    "instructions": "Transition THOR-352 to In Progress.",
+                    "publishMode": "none",
+                    "metadata": {
+                        "moonmind": {
+                            "selectedSkill": "jira-issue-updater",
+                        },
+                    },
+                },
+            },
+        }
+    )
+
+    assert "MoonMind trusted Jira tools:" in result
+    assert "`$MOONMIND_URL`" in result
+    assert "POST $MOONMIND_URL/mcp/tools/call" in result
+    assert "jira.get_issue" in result
+    assert "jira.get_transitions" in result
+    assert "jira.transition_issue" in result
+    assert "Transition THOR-352 to In Progress." in result
+    assert "Managed Codex CLI note:" in result
+
 
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_materializes_selected_skill_snapshot(

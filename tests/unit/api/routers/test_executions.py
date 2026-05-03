@@ -820,6 +820,38 @@ def test_create_task_shaped_execution_applies_default_publish_mode(
     assert initial_parameters["publishMode"] == "pr"
     assert initial_parameters["task"]["publish"]["mode"] == "pr"
 
+def test_create_task_shaped_execution_forces_jira_orchestrate_publish_none(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publishMode": "pr",
+                "task": {
+                    "instructions": "Run Jira Orchestrate for THOR-352.",
+                    "tool": {"type": "skill", "name": "jira-orchestrate"},
+                    "skill": {"id": "jira-orchestrate"},
+                    "runtime": {"mode": "codex"},
+                    "publish": {"mode": "pr"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.call_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["publishMode"] == "none"
+    assert initial_parameters["task"]["publish"]["mode"] == "none"
+    assert initial_parameters["requiredCapabilities"] == []
+
 def test_create_task_shaped_execution_preserves_report_output_contract(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

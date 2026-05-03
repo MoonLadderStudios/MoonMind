@@ -4181,7 +4181,12 @@ class TemporalAgentRuntimeActivities:
     ) -> str:
         params = parameters if isinstance(parameters, Mapping) else {}
         selected_skill = selected_agent_skill(params)
-        if selected_skill not in {"jira-issue-creator", "jira-pr-verify", "jira-verify"}:
+        if selected_skill not in {
+            "jira-issue-creator",
+            "jira-issue-updater",
+            "jira-pr-verify",
+            "jira-verify",
+        }:
             return instructions
         if "MoonMind trusted Jira tools" in instructions:
             return instructions
@@ -4209,6 +4214,27 @@ class TemporalAgentRuntimeActivities:
                     "`jira.create_issue`.",
                     "- Treat the task as blocked if Jira tool calls are unavailable "
                     "or no Jira issue key is returned.",
+                ]
+            )
+        elif selected_skill == "jira-issue-updater":
+            tool_lines.extend(
+                [
+                    "- Fetch the Jira issue through `jira.get_issue` when current "
+                    "fields or status are needed.",
+                    "- For status changes, call `jira.get_transitions`, match the "
+                    "target status against transition names or target statuses, "
+                    "then call `jira.transition_issue` with Jira's returned ID.",
+                    "- Example transitions call: "
+                    + '`{"tool":"jira.get_transitions",'
+                    + '"arguments":{"issueKey":"<ISSUE_KEY>",'
+                    + '"expandFields":true}}`.',
+                    "- Example transition call: "
+                    + '`{"tool":"jira.transition_issue",'
+                    + '"arguments":{"issueKey":"<ISSUE_KEY>",'
+                    + '"transitionId":"<TRANSITION_ID>"}}`.',
+                    "- Treat the task as blocked if trusted Jira tool calls are "
+                    "unavailable, the transition is denied, or no matching "
+                    "transition exists.",
                 ]
             )
         elif selected_skill == "jira-pr-verify":
