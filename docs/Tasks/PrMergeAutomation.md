@@ -410,6 +410,9 @@ Completed-but-failing checks do not keep the gate closed by themselves. Once
 required checks have reported and are no longer running, the gate may launch
 `pr-resolver` so resolver-owned CI remediation can proceed.
 
+Detected merge conflicts are also resolver-actionable. They should open the
+gate for `pr-resolver` instead of leaving merge automation in external wait.
+
 ### 12.2 Gate semantics
 
 The gate opens when the configured external merge-readiness signal is complete for the **current head SHA**.

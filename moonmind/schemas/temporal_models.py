@@ -226,6 +226,7 @@ class MergeAutomationConfigModel(BaseModel):
 ReadinessBlockerKind = Literal[
     "checks_running",
     "checks_failed",
+    "merge_conflict",
     "automated_review_pending",
     "jira_status_pending",
     "pull_request_closed",

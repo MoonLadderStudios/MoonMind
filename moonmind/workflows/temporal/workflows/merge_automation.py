@@ -364,6 +364,7 @@ class MoonMindMergeAutomationWorkflow:
         return classify_readiness(
             evaluation,
             tracked_head_sha=self._input.pull_request.head_sha,
+            actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
         )
 
     def _should_refresh_pre_resolver_head(
@@ -384,6 +385,10 @@ class MoonMindMergeAutomationWorkflow:
         if observed_head_sha == self._input.pull_request.head_sha:
             return False
         return any(blocker.kind == "stale_revision" for blocker in blockers)
+
+    @staticmethod
+    def _actionable_merge_conflicts_enabled() -> bool:
+        return workflow.patched("merge-automation-actionable-merge-conflict-v1")
 
     async def _failed_resolver_summary(
         self,
@@ -498,7 +503,11 @@ class MoonMindMergeAutomationWorkflow:
     async def _evaluate_readiness_once(self) -> tuple[Any, Any]:
         if self._input is None:
             evaluation: dict[str, Any] = {}
-            return evaluation, classify_readiness(evaluation, tracked_head_sha="")
+            return evaluation, classify_readiness(
+                evaluation,
+                tracked_head_sha="",
+                actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
+            )
         evaluation = await workflow.execute_activity(
             "merge_automation.evaluate_readiness",
             self._input.model_dump(by_alias=True, mode="json"),
@@ -510,6 +519,7 @@ class MoonMindMergeAutomationWorkflow:
         evidence = classify_readiness(
             evaluation if isinstance(evaluation, Mapping) else {},
             tracked_head_sha=self._input.pull_request.head_sha,
+            actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
         )
         return evaluation, evidence
 
@@ -523,6 +533,7 @@ class MoonMindMergeAutomationWorkflow:
             evidence = classify_readiness(
                 evaluation if isinstance(evaluation, Mapping) else {},
                 tracked_head_sha=self._input.pull_request.head_sha,
+                actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
             )
         self._blockers = list(evidence.blockers)
         await self._write_gate_snapshot(evidence_ready=evidence.ready)
@@ -560,6 +571,9 @@ class MoonMindMergeAutomationWorkflow:
                     evidence = classify_readiness(
                         evaluation if isinstance(evaluation, Mapping) else {},
                         tracked_head_sha=self._input.pull_request.head_sha,
+                        actionable_merge_conflicts=(
+                            self._actionable_merge_conflicts_enabled()
+                        ),
                     )
             if workflow.patched("merge-automation-refresh-stale-current-head"):
                 evidence = self._refresh_current_head_for_stale_wait(
@@ -576,6 +590,7 @@ class MoonMindMergeAutomationWorkflow:
                 evidence = classify_readiness(
                     evaluation if isinstance(evaluation, Mapping) else {},
                     tracked_head_sha=self._input.pull_request.head_sha,
+                    actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
                 )
             self._blockers = list(evidence.blockers)
             await self._write_gate_snapshot(evidence_ready=evidence.ready)

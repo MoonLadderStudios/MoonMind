@@ -26,8 +26,7 @@ TERMINAL_BLOCKER_KINDS = {
     "stale_revision",
     "policy_denied",
 }
-NON_BLOCKING_BLOCKER_KINDS = {"checks_failed"}
-KNOWN_BLOCKER_KINDS = {
+BASE_KNOWN_BLOCKER_KINDS = {
     "checks_running",
     "checks_failed",
     "automated_review_pending",
@@ -36,6 +35,14 @@ KNOWN_BLOCKER_KINDS = {
     "stale_revision",
     "policy_denied",
     "external_state_unavailable",
+}
+ACTIONABLE_MERGE_CONFLICT_BLOCKER_KINDS = {"merge_conflict"}
+NON_BLOCKING_BLOCKER_KINDS = {
+    "checks_failed",
+    *ACTIONABLE_MERGE_CONFLICT_BLOCKER_KINDS,
+}
+BLOCKER_KIND_ALIASES = {
+    "merge_conflicts": "merge_conflict",
 }
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
@@ -59,9 +66,29 @@ def sanitize_blocker_summary(value: str | None) -> str:
     text = _TOKEN_ASSIGNMENT_PATTERN.sub(r"\1:<redacted>", text)
     return (text or "External readiness is blocked.")[:500]
 
-def _blocker_from_mapping(payload: Mapping[str, Any]) -> ReadinessBlockerModel:
-    kind = str(payload.get("kind") or "external_state_unavailable").strip()
-    if kind not in KNOWN_BLOCKER_KINDS:
+def _normalize_blocker_kind(
+    value: object,
+    *,
+    actionable_merge_conflicts: bool,
+) -> str:
+    kind = str(value or "external_state_unavailable").strip()
+    if actionable_merge_conflicts:
+        return BLOCKER_KIND_ALIASES.get(kind, kind)
+    return kind
+
+def _blocker_from_mapping(
+    payload: Mapping[str, Any],
+    *,
+    actionable_merge_conflicts: bool,
+) -> ReadinessBlockerModel:
+    kind = _normalize_blocker_kind(
+        payload.get("kind"),
+        actionable_merge_conflicts=actionable_merge_conflicts,
+    )
+    known_kinds = set(BASE_KNOWN_BLOCKER_KINDS)
+    if actionable_merge_conflicts:
+        known_kinds.update(ACTIONABLE_MERGE_CONFLICT_BLOCKER_KINDS)
+    if kind not in known_kinds:
         kind = "external_state_unavailable"
     return ReadinessBlockerModel.model_validate(
         {
@@ -72,8 +99,17 @@ def _blocker_from_mapping(payload: Mapping[str, Any]) -> ReadinessBlockerModel:
         }
     )
 
-def _is_non_blocking_blocker(payload: Mapping[str, Any]) -> bool:
-    kind = str(payload.get("kind") or "").strip()
+def _is_non_blocking_blocker(
+    payload: Mapping[str, Any],
+    *,
+    actionable_merge_conflicts: bool,
+) -> bool:
+    kind = _normalize_blocker_kind(
+        payload.get("kind"),
+        actionable_merge_conflicts=actionable_merge_conflicts,
+    )
+    if kind in ACTIONABLE_MERGE_CONFLICT_BLOCKER_KINDS and not actionable_merge_conflicts:
+        return False
     return kind in NON_BLOCKING_BLOCKER_KINDS
 
 def _default_blocker(kind: str, summary: str, *, retryable: bool, source: str) -> dict[str, Any]:
@@ -88,6 +124,7 @@ def classify_readiness(
     payload: Mapping[str, Any],
     *,
     tracked_head_sha: str,
+    actionable_merge_conflicts: bool = True,
 ) -> ReadinessEvidenceModel:
     """Normalize provider readiness evidence into bounded merge-gate evidence."""
 
@@ -97,6 +134,7 @@ def classify_readiness(
         or payload.get("pull_request_merged") is True
     )
     blockers: list[ReadinessBlockerModel] = []
+    actionable_merge_conflict_seen = False
     if not pull_request_merged and head_sha != str(tracked_head_sha).strip():
         blockers.append(
             ReadinessBlockerModel(
@@ -109,9 +147,23 @@ def classify_readiness(
 
     for raw in payload.get("blockers") or []:
         if isinstance(raw, Mapping):
-            if _is_non_blocking_blocker(raw):
+            raw_kind = _normalize_blocker_kind(
+                raw.get("kind"),
+                actionable_merge_conflicts=actionable_merge_conflicts,
+            )
+            if _is_non_blocking_blocker(
+                raw,
+                actionable_merge_conflicts=actionable_merge_conflicts,
+            ):
+                if raw_kind in ACTIONABLE_MERGE_CONFLICT_BLOCKER_KINDS:
+                    actionable_merge_conflict_seen = True
                 continue
-            blockers.append(_blocker_from_mapping(raw))
+            blockers.append(
+                _blocker_from_mapping(
+                    raw,
+                    actionable_merge_conflicts=actionable_merge_conflicts,
+                )
+            )
 
     if not pull_request_merged and (
         payload.get("pullRequestOpen") is False
@@ -196,7 +248,9 @@ def classify_readiness(
     checks_failed_but_actionable = (
         not pull_request_merged and checks_are_failing and checks_are_complete
     )
-    ready = (explicit_ready or checks_failed_but_actionable) and not deduped
+    ready = (
+        explicit_ready or checks_failed_but_actionable or actionable_merge_conflict_seen
+    ) and not deduped
     return ReadinessEvidenceModel.model_validate(
         {
             **dict(payload),
