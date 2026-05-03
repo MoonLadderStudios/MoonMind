@@ -78,13 +78,10 @@ def _normalize_blocker_kind(
 
 def _blocker_from_mapping(
     payload: Mapping[str, Any],
+    kind: str,
     *,
     actionable_merge_conflicts: bool,
 ) -> ReadinessBlockerModel:
-    kind = _normalize_blocker_kind(
-        payload.get("kind"),
-        actionable_merge_conflicts=actionable_merge_conflicts,
-    )
     known_kinds = set(BASE_KNOWN_BLOCKER_KINDS)
     if actionable_merge_conflicts:
         known_kinds.update(ACTIONABLE_MERGE_CONFLICT_BLOCKER_KINDS)
@@ -100,14 +97,10 @@ def _blocker_from_mapping(
     )
 
 def _is_non_blocking_blocker(
-    payload: Mapping[str, Any],
+    kind: str,
     *,
     actionable_merge_conflicts: bool,
 ) -> bool:
-    kind = _normalize_blocker_kind(
-        payload.get("kind"),
-        actionable_merge_conflicts=actionable_merge_conflicts,
-    )
     if kind in ACTIONABLE_MERGE_CONFLICT_BLOCKER_KINDS and not actionable_merge_conflicts:
         return False
     return kind in NON_BLOCKING_BLOCKER_KINDS
@@ -147,20 +140,21 @@ def classify_readiness(
 
     for raw in payload.get("blockers") or []:
         if isinstance(raw, Mapping):
-            raw_kind = _normalize_blocker_kind(
+            kind = _normalize_blocker_kind(
                 raw.get("kind"),
                 actionable_merge_conflicts=actionable_merge_conflicts,
             )
             if _is_non_blocking_blocker(
-                raw,
+                kind,
                 actionable_merge_conflicts=actionable_merge_conflicts,
             ):
-                if raw_kind in ACTIONABLE_MERGE_CONFLICT_BLOCKER_KINDS:
+                if kind in ACTIONABLE_MERGE_CONFLICT_BLOCKER_KINDS:
                     actionable_merge_conflict_seen = True
                 continue
             blockers.append(
                 _blocker_from_mapping(
                     raw,
+                    kind,
                     actionable_merge_conflicts=actionable_merge_conflicts,
                 )
             )
