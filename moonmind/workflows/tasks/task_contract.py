@@ -33,8 +33,9 @@ _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
 _PROPOSAL_POLICY_TARGETS = ("project", "moonmind")
 _PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
-_SELF_MANAGED_PUBLISH_SKILLS = frozenset({"pr-resolver", "batch-pr-resolver"})
-_FORCED_NONE_PUBLISH_SKILLS = frozenset({"jira-orchestrate"})
+_SELF_MANAGED_PUBLISH_SKILLS = frozenset(
+    {"pr-resolver", "batch-pr-resolver", "jira-orchestrate"}
+)
 _RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
     r"\bresolve(?:d|s|ing)?\s+(?:an?\s+|the\s+)?(?:pr|pull\s+request)\b",
     re.IGNORECASE,
@@ -254,17 +255,10 @@ def is_self_managed_publish_skill(skill_id: object) -> bool:
 
     return _normalize_skill_id(skill_id) in _SELF_MANAGED_PUBLISH_SKILLS
 
-def is_forced_none_publish_skill(skill_id: object) -> bool:
-    """Return True when the selected skill must run without automatic publishing."""
-
-    return _normalize_skill_id(skill_id) in _FORCED_NONE_PUBLISH_SKILLS
-
 def resolve_publish_mode_for_skill(skill_id: object, requested_mode: object) -> str:
     """Resolve publish mode for a skill while enforcing self-managed constraints."""
 
     publish_mode = _normalize_publish_mode(requested_mode)
-    if is_forced_none_publish_skill(skill_id):
-        return "none"
     if is_self_managed_publish_skill(skill_id):
         if publish_mode != "none":
             raise TaskContractError(
@@ -1836,7 +1830,6 @@ __all__ = [
     "build_task_stage_plan",
     "build_canonical_task_view",
     "has_attachment_mutation_fields",
-    "is_forced_none_publish_skill",
     "is_self_managed_publish_skill",
     "normalize_queue_job_payload",
     "resolve_publish_mode_for_skill",

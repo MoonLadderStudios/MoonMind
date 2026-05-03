@@ -76,6 +76,7 @@ from moonmind.workflows.temporal.workflows.manifest_ingest import (
     MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
 )
 from moonmind.workflows.temporal.jules_bundle import JULES_AGENT_IDS
+from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow as MoonMindRun
 from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_server
 from moonmind.workflows.temporal.workflows.agent_session import (
@@ -569,9 +570,7 @@ def _normalize_runtime_mode(raw_mode: Any) -> str:
         return str(settings.workflow.default_task_runtime or "gemini_cli").strip().lower()
     return normalized
 
-_JIRA_AGENT_SKILLS = frozenset(
-    {"jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"}
-)
+_JIRA_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _JIRA_STORY_OUTPUT_TOOLS = frozenset(
     {"story.create_jira_issues", "story.create_jira_orchestrate_tasks"}
 )

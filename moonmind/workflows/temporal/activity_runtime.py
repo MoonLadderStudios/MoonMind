@@ -66,6 +66,7 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillSet,
     RuntimeMaterializationMode,
 )
+from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
 from moonmind.services.skill_materialization import AgentSkillMaterializer
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
@@ -1101,7 +1102,7 @@ def _iter_requested_registry_tools(
         ).strip()
         if not tool_name:
             continue
-        if tool_name.lower() in {"jira-issue-creator", "jira-pr-verify", "jira-verify"}:
+        if tool_name.lower() in JIRA_AGENT_SKILLS:
             continue
         tool_version = str(selected_payload.get("version") or "").strip() or "1.0"
         key = (tool_name, tool_version)
@@ -4181,12 +4182,7 @@ class TemporalAgentRuntimeActivities:
     ) -> str:
         params = parameters if isinstance(parameters, Mapping) else {}
         selected_skill = selected_agent_skill(params)
-        if selected_skill not in {
-            "jira-issue-creator",
-            "jira-issue-updater",
-            "jira-pr-verify",
-            "jira-verify",
-        }:
+        if selected_skill not in JIRA_AGENT_SKILLS:
             return instructions
         if "MoonMind trusted Jira tools" in instructions:
             return instructions
@@ -4220,10 +4216,10 @@ class TemporalAgentRuntimeActivities:
             tool_lines.extend(
                 [
                     "- Fetch the Jira issue through `jira.get_issue` when current "
-                    "fields or status are needed.",
+                    + "fields or status are needed.",
                     "- For status changes, call `jira.get_transitions`, match the "
-                    "target status against transition names or target statuses, "
-                    "then call `jira.transition_issue` with Jira's returned ID.",
+                    + "target status against transition names or target statuses, "
+                    + "then call `jira.transition_issue` with Jira's returned ID.",
                     "- Example transitions call: "
                     + '`{"tool":"jira.get_transitions",'
                     + '"arguments":{"issueKey":"<ISSUE_KEY>",'
@@ -4233,8 +4229,8 @@ class TemporalAgentRuntimeActivities:
                     + '"arguments":{"issueKey":"<ISSUE_KEY>",'
                     + '"transitionId":"<TRANSITION_ID>"}}`.',
                     "- Treat the task as blocked if trusted Jira tool calls are "
-                    "unavailable, the transition is denied, or no matching "
-                    "transition exists.",
+                    + "unavailable, the transition is denied, or no matching "
+                    + "transition exists.",
                 ]
             )
         elif selected_skill == "jira-pr-verify":
