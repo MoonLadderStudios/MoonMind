@@ -6122,11 +6122,12 @@ describe.skip("Task Create Entrypoint", () => {
     expect(publishSelect.getAttribute("title")).toBe(
       "Publishing is forced to None because the selected preset or resolver manages its own publish flow",
     );
-    expect(
-      Array.from(publishSelect.options).some(
-        (option) => option.value === "pr_with_merge_automation",
-      ),
-    ).toBe(false);
+    expect(publishSelect.disabled).toBe(true);
+    const mergeAutomationOption = Array.from(publishSelect.options).find(
+      (option) => option.value === "pr_with_merge_automation",
+    );
+    expect(mergeAutomationOption).toBeTruthy();
+    expect(mergeAutomationOption?.disabled).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -6793,6 +6794,9 @@ describe.skip("Task Create Entrypoint", () => {
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
       ).toBe("none");
     });
+    expect(
+      (screen.getByLabelText("Publish Mode") as HTMLSelectElement).disabled,
+    ).toBe(true);
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText("Instructions"),
       {
@@ -6814,7 +6818,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(payload).not.toHaveProperty("mergeAutomation");
   });
 
-  it("hides merge automation when the effective template skill is a resolver", async () => {
+  it("disables merge automation when the effective template skill is a resolver", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Publish Mode"), {
@@ -6843,6 +6847,15 @@ describe.skip("Task Create Entrypoint", () => {
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
       ).toBe("none");
     });
+    const publishModeAfterPreset = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    expect(publishModeAfterPreset.disabled).toBe(true);
+    expect(
+      Array.from(publishModeAfterPreset.options).find(
+        (option) => option.value === "pr_with_merge_automation",
+      )?.disabled,
+    ).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 

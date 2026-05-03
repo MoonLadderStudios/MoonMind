@@ -1,62 +1,22 @@
 [
   {
-    "id": 4366838058,
+    "id": 4367289597,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice is informational and contains no code feedback."
+    "rationale": "Qodo quota notice; no code action requested."
   },
   {
-    "id": 3178553694,
+    "id": 3178846598,
     "disposition": "addressed",
-    "rationale": "Moved jira-orchestrate into the self-managed publish set so non-none publish modes fail fast instead of being silently coerced."
+    "rationale": "Self-managed publish skills now force any selected publish mode to none and disable the Publish Mode selector."
   },
   {
-    "id": 3178553698,
+    "id": 3178846599,
     "disposition": "addressed",
-    "rationale": "Removed the forced-none publish helper in favor of consolidated self-managed publish enforcement."
+    "rationale": "The PR with Merge Automation option remains visible and disabled when merge automation is unavailable."
   },
   {
-    "id": 3178553699,
+    "id": 4216908391,
     "disposition": "addressed",
-    "rationale": "Removed the hidden publish-mode override path; invalid jira-orchestrate publish modes now raise TaskContractError."
-  },
-  {
-    "id": 3178553700,
-    "disposition": "addressed",
-    "rationale": "Removed is_forced_none_publish_skill from the module exports."
-  },
-  {
-    "id": 3178553701,
-    "disposition": "addressed",
-    "rationale": "Added shared Jira agent skill constants and reused them in activity, worker, and workflow runtime paths."
-  },
-  {
-    "id": 4216664516,
-    "disposition": "not-applicable",
-    "rationale": "Review summary comment; individual actionable findings were handled separately."
-  },
-  {
-    "id": 3178555326,
-    "disposition": "addressed",
-    "rationale": "Replaced the first jira-issue-updater hint's implicit string literal concatenation with explicit concatenation."
-  },
-  {
-    "id": 3178555328,
-    "disposition": "addressed",
-    "rationale": "Replaced the status-change hint's implicit string literal concatenation with explicit concatenation."
-  },
-  {
-    "id": 3178555329,
-    "disposition": "addressed",
-    "rationale": "Replaced the blocked-state hint's implicit string literal concatenation with explicit concatenation."
-  },
-  {
-    "id": 3178561208,
-    "disposition": "addressed",
-    "rationale": "Classified jira-issue-updater as PR-optional in MoonMindRunWorkflow plan analysis and added regression coverage."
-  },
-  {
-    "id": 4216669780,
-    "disposition": "not-applicable",
-    "rationale": "Codex review wrapper comment; the actionable inline finding was handled separately."
+    "rationale": "Summary review concerns are covered by the self-managed forced-none enforcement and disabled merge automation option."
   }
 ]
