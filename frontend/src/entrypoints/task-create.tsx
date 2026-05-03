@@ -5434,8 +5434,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       expansion.warnings.length > 0
         ? ` ${expansion.warnings.join(" ")}`
         : "";
+    const publishConstraintSuffix = isSelfManagedPublishSkill(
+      String(expansion.appliedTemplate?.slug || preset.slug),
+    )
+      ? ` ${preset.title} manages its own PR/publish flow, so Publish Mode is forced to None and merge automation is unavailable.`
+      : "";
     setMessage(
-      `Applied preset '${preset.title}' (${expandedSteps.length} steps).${autoFillSuffix}${warningSuffix}`,
+      `Applied preset '${preset.title}' (${expandedSteps.length} steps).${autoFillSuffix}${warningSuffix}${publishConstraintSuffix}`,
     );
   }
 
@@ -6712,7 +6717,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       ? branchStatusMessage ||
         "Choose a valid GitHub repository before selecting a branch"
       : "Select the branch to check out before the task starts";
-  const publishModeTooltip = "Select how MoonMind publishes task changes";
+  const publishModeTooltip = !mergeAutomationAvailable
+    ? "Publishing is forced to None because the selected preset or resolver manages its own publish flow"
+    : "Select how MoonMind publishes task changes";
   const expandStepPresetTooltip =
     "Expand the selected preset into editable steps at this position";
   const modeLoadError =

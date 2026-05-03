@@ -392,7 +392,7 @@ Rules:
 8. Raw JSON remains available as an advanced fallback for unsupported schemas, descriptor failures, and power users.
 9. Skill schemas must not be treated as a place to store secrets.
 10. Runtime adapters must not broaden the selected Skill set during execution. Runtime materialization uses the resolved Skill snapshot.
-11. Resolver-style Skills such as `pr-resolver` or `batch-pr-resolver` may enforce publish constraints. When a Skill owns commit/push/merge behavior, the Create page must require or force `publishMode = "none"` and must not also submit ordinary merge automation.
+11. Resolver-style Skills such as `pr-resolver` or `batch-pr-resolver`, and self-managed publish presets such as Jira Orchestrate, may enforce publish constraints. When a Skill or expanded Preset owns commit/push/merge behavior, the Create page must require or force `publishMode = "none"`, explain that constraint in the publish control or apply feedback, and must not also submit ordinary merge automation.
 
 Representative Skill payload:
 
@@ -624,7 +624,7 @@ Rules:
 9. The Create page does not author a separate target branch.
 10. Cross-branch publishing remains a broader task-publishing capability, not an ordinary Create-page control.
 11. Merge automation is available only for applicable `publishMode = "pr"` tasks.
-12. Merge automation is hidden or disabled when the selected Skill owns merge/publish behavior, such as `pr-resolver` or `batch-pr-resolver`.
+12. Merge automation is hidden or disabled when the selected Skill or expanded Preset owns merge/publish behavior, such as `pr-resolver`, `batch-pr-resolver`, or Jira Orchestrate. The Publish Mode control should make the forced-None reason discoverable instead of silently removing the PR-with-merge choice.
 13. Merge automation copy must explain that MoonMind waits for readiness and uses resolver behavior. It must not imply unsafe direct auto-merge.
 
 ---

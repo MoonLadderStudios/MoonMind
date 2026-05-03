@@ -6111,11 +6111,17 @@ describe.skip("Task Create Entrypoint", () => {
     });
     await clickApplyButton();
     await screen.findByDisplayValue("Transition THOR-352 to In Progress.");
+    await screen.findByText(
+      /Jira Orchestrate manages its own PR\/publish flow, so Publish Mode is forced to None and merge automation is unavailable\./,
+    );
 
     const publishSelect = screen.getByLabelText(
       "Publish Mode",
     ) as HTMLSelectElement;
     expect(publishSelect.value).toBe("none");
+    expect(publishSelect.getAttribute("title")).toBe(
+      "Publishing is forced to None because the selected preset or resolver manages its own publish flow",
+    );
     expect(
       Array.from(publishSelect.options).some(
         (option) => option.value === "pr_with_merge_automation",
