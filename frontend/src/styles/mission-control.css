@@ -2922,7 +2922,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   isolation: isolate;
 }
 
-.queue-floating-bar::before {
+.queue-floating-bar:not([data-liquid-gl-renderer="canvas"])::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -2939,7 +2939,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   z-index: 0;
 }
 
-.queue-floating-bar::after {
+.queue-floating-bar:not([data-liquid-gl-renderer="canvas"])::after {
   content: "";
   position: absolute;
   inset: 0;

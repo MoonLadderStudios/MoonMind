@@ -3,12 +3,14 @@ import { useEffect } from "react";
 import { getLiquidGL, type LiquidGLOptions } from "./index";
 
 const INITIALIZED_ATTR = "data-liquid-gl-initialized";
+const RENDERER_ATTR = "data-liquid-gl-renderer";
 const TARGET_ATTR = "data-liquid-gl-target-id";
 const INIT_RETRY_DELAY_MS = 120;
 const INIT_STALL_TIMEOUT_MS = 1800;
 const MAX_INIT_ATTEMPTS = 20;
 
 type LiquidGLInstance = { destroy?: () => void } | HTMLElement;
+type LiquidGLRendererMode = "canvas" | "css-fallback";
 
 type UseLiquidGLArgs = {
   enabled?: boolean;
@@ -57,6 +59,7 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
       });
       liquidGLInstances = [];
       initializedElement?.removeAttribute(INITIALIZED_ATTR);
+      initializedElement?.removeAttribute(RENDERER_ATTR);
       initializedElement = null;
       attributedTargetElement?.removeAttribute(TARGET_ATTR);
       attributedTargetElement = null;
@@ -89,10 +92,14 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
       return `[${TARGET_ATTR}="${targetId}"]`;
     };
 
-    const markInitialized = (element: HTMLElement) => {
+    const markInitialized = (
+      element: HTMLElement,
+      rendererMode: LiquidGLRendererMode,
+    ) => {
       initializedElement = element;
       showFallback(element);
       element.setAttribute(INITIALIZED_ATTR, "true");
+      element.setAttribute(RENDERER_ATTR, rendererMode);
       if (stallTimerId !== null) {
         window.clearTimeout(stallTimerId);
         stallTimerId = null;
@@ -148,7 +155,7 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
                 return;
               }
               didInitialize = true;
-              markInitialized(element);
+              markInitialized(element, "canvas");
               options.on?.init?.(lens);
             },
           },
@@ -176,8 +183,13 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
       const isFallbackResult = liquidGLInstances.every(
         (instance) => instance instanceof HTMLElement,
       );
-      if (isFallbackResult || options.reveal === false) {
-        markInitialized(element);
+      if (isFallbackResult) {
+        markInitialized(element, "css-fallback");
+        return;
+      }
+
+      if (options.reveal === false) {
+        markInitialized(element, "canvas");
         return;
       }
 

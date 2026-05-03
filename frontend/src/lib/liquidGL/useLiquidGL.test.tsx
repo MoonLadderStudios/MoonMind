@@ -55,6 +55,7 @@ describe("useLiquidGL", () => {
 
     const element = document.querySelector(".liquid-glass-panel");
     expect(element?.getAttribute("data-liquid-gl-initialized")).toBe("true");
+    expect(element?.getAttribute("data-liquid-gl-renderer")).toBe("canvas");
 
     unmount();
 
@@ -90,6 +91,7 @@ describe("useLiquidGL", () => {
 
     const element = document.querySelector<HTMLElement>(".liquid-glass-panel");
     expect(element?.getAttribute("data-liquid-gl-initialized")).toBe("true");
+    expect(element?.getAttribute("data-liquid-gl-renderer")).toBe("canvas");
     expect(element?.style.opacity).toBe("1");
     expect(element?.style.visibility).toBe("visible");
     expect(element?.style.pointerEvents).toBe("auto");
@@ -137,6 +139,7 @@ describe("useLiquidGL", () => {
 
     const element = document.querySelector(".liquid-glass-panel");
     expect(element?.hasAttribute("data-liquid-gl-initialized")).toBe(false);
+    expect(element?.hasAttribute("data-liquid-gl-renderer")).toBe(false);
   });
 
   it("shows the CSS fallback shell when liquidGL initialization fails", async () => {
@@ -166,6 +169,7 @@ describe("useLiquidGL", () => {
 
     const element = document.querySelector(".liquid-glass-panel");
     expect(element?.hasAttribute("data-liquid-gl-initialized")).toBe(false);
+    expect(element?.hasAttribute("data-liquid-gl-renderer")).toBe(false);
     expect((element as HTMLElement | null)?.style.opacity).toBe("1");
     expect((element as HTMLElement | null)?.style.visibility).toBe("visible");
     expect((element as HTMLElement | null)?.style.pointerEvents).toBe("auto");
@@ -261,6 +265,7 @@ describe("useLiquidGL", () => {
     const element = document.querySelector<HTMLElement>(".liquid-glass-panel");
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(element?.getAttribute("data-liquid-gl-initialized")).toBe("true");
+    expect(element?.getAttribute("data-liquid-gl-renderer")).toBe("canvas");
     expect(element?.style.opacity).toBe("1");
   });
 
@@ -307,6 +312,7 @@ describe("useLiquidGL", () => {
     expect(element?.getAttribute("data-liquid-gl-initialized")).toBe(
       "true",
     );
+    expect(element?.getAttribute("data-liquid-gl-renderer")).toBe("canvas");
     expect(element?.style.opacity).toBe("1");
     expect(element?.style.visibility).toBe("visible");
     expect(element?.style.pointerEvents).toBe("auto");
@@ -352,6 +358,7 @@ describe("useLiquidGL", () => {
     const element = document.querySelector<HTMLElement>(".liquid-glass-panel");
     expect(liquidGL).toHaveBeenCalled();
     expect(element?.hasAttribute("data-liquid-gl-initialized")).toBe(false);
+    expect(element?.hasAttribute("data-liquid-gl-renderer")).toBe(false);
     expect(element?.style.opacity).toBe("1");
     expect(element?.style.visibility).toBe("visible");
     expect(element?.style.pointerEvents).toBe("auto");
@@ -398,11 +405,13 @@ describe("useLiquidGL", () => {
       on: expect.objectContaining({ init: expect.any(Function) }),
     });
     expect(target.getAttribute("data-liquid-gl-initialized")).toBe("true");
+    expect(target.getAttribute("data-liquid-gl-renderer")).toBe("canvas");
 
     unmount();
 
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(target.hasAttribute("data-liquid-gl-target-id")).toBe(false);
+    expect(target.hasAttribute("data-liquid-gl-renderer")).toBe(false);
     target.remove();
   });
 
@@ -424,8 +433,10 @@ describe("useLiquidGL", () => {
     });
 
     expect(liquidGL).toHaveBeenCalledTimes(1);
-    expect(document.querySelector(".liquid-glass-panel")?.getAttribute("data-liquid-gl-initialized")).toBe(
+    const element = document.querySelector(".liquid-glass-panel");
+    expect(element?.getAttribute("data-liquid-gl-initialized")).toBe(
       "true",
     );
+    expect(element?.getAttribute("data-liquid-gl-renderer")).toBe("css-fallback");
   });
 });
