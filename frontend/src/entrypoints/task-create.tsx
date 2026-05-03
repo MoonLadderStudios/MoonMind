@@ -3840,12 +3840,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const mergeAutomationAvailable = !isSelfManagedPublishSkill(effectiveSkillId);
 
   useEffect(() => {
-    if (!mergeAutomationAvailable && isMergeAutomationPublishMode(publishMode)) {
-      setPublishMode(
-        isSelfManagedPublishSkill(effectiveSkillId) ? "none" : "pr",
-      );
+    if (!mergeAutomationAvailable && publishMode !== "none") {
+      setPublishMode("none");
     }
-  }, [effectiveSkillId, mergeAutomationAvailable, publishMode]);
+  }, [mergeAutomationAvailable, publishMode]);
 
   const availableDependencyOptions = useMemo(
     () =>
@@ -5434,8 +5432,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       expansion.warnings.length > 0
         ? ` ${expansion.warnings.join(" ")}`
         : "";
+    const publishConstraintSuffix = isSelfManagedPublishSkill(
+      String(expansion.appliedTemplate?.slug || preset.slug),
+    )
+      ? ` ${preset.title} manages its own PR/publish flow, so Publish Mode is forced to None and merge automation is unavailable.`
+      : "";
     setMessage(
-      `Applied preset '${preset.title}' (${expandedSteps.length} steps).${autoFillSuffix}${warningSuffix}`,
+      `Applied preset '${preset.title}' (${expandedSteps.length} steps).${autoFillSuffix}${warningSuffix}${publishConstraintSuffix}`,
     );
   }
 
@@ -6712,7 +6715,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       ? branchStatusMessage ||
         "Choose a valid GitHub repository before selecting a branch"
       : "Select the branch to check out before the task starts";
-  const publishModeTooltip = "Select how MoonMind publishes task changes";
+  const publishModeTooltip = !mergeAutomationAvailable
+    ? "Publishing is forced to None because the selected preset or resolver manages its own publish flow"
+    : "Select how MoonMind publishes task changes";
   const expandStepPresetTooltip =
     "Expand the selected preset into editable steps at this position";
   const modeLoadError =
@@ -8261,15 +8266,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 title={publishModeTooltip}
                 value={publishMode}
                 onChange={(event) => setPublishMode(event.target.value)}
+                disabled={!mergeAutomationAvailable}
               >
                 <option value="none">None</option>
                 <option value="branch">Branch</option>
                 <option value="pr">PR</option>
-                {mergeAutomationAvailable ? (
-                  <option value={PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}>
-                    PR with Merge Automation
-                  </option>
-                ) : null}
+                <option
+                  value={PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}
+                  disabled={!mergeAutomationAvailable}
+                >
+                  PR with Merge Automation
+                </option>
               </select>
             </div>
             <button
