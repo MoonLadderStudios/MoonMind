@@ -1518,6 +1518,9 @@ async def test_handler_resolves_relative_workdir_for_clone_destination() -> None
 async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> None:
     """Publish mode `pr` should invoke gh PR creation command."""
 
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("WORKFLOW_GITHUB_TOKEN", raising=False)
     handler = CodexExecHandler(workdir_root=tmp_path)
     calls: list[dict[str, object]] = []
     job_id = uuid4()

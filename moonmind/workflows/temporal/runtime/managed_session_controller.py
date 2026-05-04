@@ -441,7 +441,6 @@ class DockerCodexManagedSessionController:
         socket_path = self._build_github_socket_path(
             run_id=request.session_id,
             support_root=str(support_root),
-            socket_root=str(Path(self._workspace_root) / ".mm-gh"),
         )
         socket_dir = Path(socket_path).parent
         socket_dir.mkdir(parents=True, exist_ok=True)

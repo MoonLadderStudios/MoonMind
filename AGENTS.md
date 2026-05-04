@@ -211,6 +211,8 @@ Key diagnostics:
 - No new persistent storage; reuse existing retrieval settings, runtime metadata, provider-profile rows, and artifact-backed retrieval outputs (256-retrieval-transport-separation)
 - Python 3.12 + Pydantic v2, FastAPI, existing MoonMind RAG services, Temporal runtime launcher and managed-session helpers, pytest (257-retrieval-evidence-guardrails)
 - Existing artifact-backed retrieval outputs and runtime metadata only; no new persistent storage planned (257-retrieval-evidence-guardrails)
+- Python 3.12 + Pydantic v2, FastAPI, Temporal Python SDK, SQLAlchemy async ORM, `httpx`, PyGithub/LlamaIndex GitHub reader, existing managed secret resolver and publish services (294-github-token-permissions)
+- Existing settings, managed secret, workflow history, and artifact stores only; no new persistent tables planned (294-github-token-permissions)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

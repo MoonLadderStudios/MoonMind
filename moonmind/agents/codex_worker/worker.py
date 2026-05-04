@@ -62,6 +62,7 @@ from moonmind.workflows.temporal.runtime.self_heal import (
     StepTimeoutExceeded,
     is_failure_retryable,
 )
+from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.config.settings import settings
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
@@ -5919,26 +5920,44 @@ class CodexWorker:
                         pr_body=pr_body,
                         skip_reason=preflight_result.verification_skip_reason,
                     )
-                pr_result = await self._run_stage_command(
-                    [
-                        self._resolve_gh_binary(),
-                        "pr",
-                        "create",
-                        "--base",
-                        pr_base,
-                        "--head",
-                        prepared.working_branch,
-                        "--title",
-                        pr_title,
-                        "--body",
-                        pr_body,
-                    ],
-                    cwd=prepared.repo_dir,
-                    log_path=prepared.publish_log_path,
-                    env=prepared.publish_command_env,
-                    redaction_values=(pr_title, pr_body),
-                )
-                pr_url = self._extract_pr_url(pr_result.stdout)
+                publish_env = prepared.publish_command_env or {}
+                github_token = str(publish_env.get("GITHUB_TOKEN") or "").strip()
+                repository = str(canonical_payload.get("repository") or "").strip()
+                if repository and github_token:
+                    pr_result = await GitHubService().create_pull_request(
+                        repo=repository,
+                        head=prepared.working_branch,
+                        base=pr_base,
+                        title=pr_title,
+                        body=pr_body,
+                        github_token=github_token,
+                    )
+                    if not pr_result.created:
+                        raise RuntimeError(pr_result.summary)
+                    pr_url = pr_result.url
+                else:
+                    pr_result = await self._run_stage_command(
+                        [
+                            self._resolve_gh_binary(),
+                            "pr",
+                            "create",
+                            "--base",
+                            pr_base,
+                            "--head",
+                            prepared.working_branch,
+                            "--title",
+                            pr_title,
+                            "--body",
+                            pr_body,
+                        ],
+                        cwd=prepared.repo_dir,
+                        log_path=prepared.publish_log_path,
+                        env=prepared.publish_command_env,
+                        redaction_values=tuple(
+                            value for value in (pr_title, pr_body, github_token) if value
+                        ),
+                    )
+                    pr_url = self._extract_pr_url(pr_result.stdout)
                 publish_note = (
                     f"published PR from {prepared.working_branch}"
                     if pr_url is None
@@ -11084,6 +11103,7 @@ class CodexWorker:
         repo_token, repo_source = await self._resolve_github_token(
             auth_ref=repo_auth_ref,
             purpose="repository",
+            repo=str(canonical_payload.get("repository") or "").strip() or None,
         )
         repo_env = self._build_command_env(
             repo_token,
@@ -11098,6 +11118,7 @@ class CodexWorker:
             publish_token, publish_source = await self._resolve_github_token(
                 auth_ref=publish_ref,
                 purpose="publish",
+                repo=str(canonical_payload.get("repository") or "").strip() or None,
             )
             publish_env = self._build_command_env(
                 publish_token,
@@ -11122,6 +11143,7 @@ class CodexWorker:
         *,
         auth_ref: str | None,
         purpose: str,
+        repo: str | None = None,
     ) -> tuple[str | None, str]:
         """Resolve a GitHub token from Vault reference or env fallback."""
 
@@ -11139,10 +11161,13 @@ class CodexWorker:
             self._register_redaction_value(resolved.token)
             return (resolved.token, f"vault:{resolved.source_ref}")
 
-        env_token = str(environ.get("GITHUB_TOKEN", "")).strip() or None
-        if env_token:
-            self._register_redaction_value(env_token)
-            return (env_token, "env:GITHUB_TOKEN")
+        from moonmind.auth.github_credentials import resolve_github_credential
+
+        resolved = await resolve_github_credential(repo=repo)
+        if resolved.token:
+            self._register_redaction_value(resolved.token)
+            source_name = resolved.source_name or resolved.source.value
+            return (resolved.token, source_name)
         return (None, "none")
 
     @staticmethod
@@ -11179,6 +11204,7 @@ class CodexWorker:
 
         if token:
             command_env["GITHUB_TOKEN"] = token
+            command_env["GH_TOKEN"] = token
             command_env["GIT_TERMINAL_PROMPT"] = "0"
             configured = True
 
