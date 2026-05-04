@@ -8566,7 +8566,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   aria-hidden="true"
                   className="queue-submit-primary-arrow"
                   data-submit-arrow="right"
-                  onAnimationCancel={clearSubmitArrowExit}
                   onAnimationEnd={clearSubmitArrowExit}
                 >
                   <ArrowRightIcon />
