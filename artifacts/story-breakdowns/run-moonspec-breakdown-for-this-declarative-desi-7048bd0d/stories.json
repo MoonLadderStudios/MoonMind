@@ -1,0 +1,590 @@
+{
+  "outputMode": "jira",
+  "source": {
+    "title": "Tasks List Page",
+    "path": "docs/UI/TasksListPage.md",
+    "referencePath": "docs/UI/TasksListPage.md",
+    "originalDesignText": "# Tasks List Page\n\nStatus: Proposed desired-state contract  \nOwners: MoonMind Engineering  \nLast updated: 2026-05-04  \nCanonical for: Mission Control tasks list route, execution-list controls, table sorting, column filters, filter URL state, and Google Sheets-like list filtering behavior\n\n**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs, or other local-only files. This document defines the product and UI contract for the page.\n\n---\n\n## 1. Purpose\n\nThis document defines the canonical design for the MoonMind **Tasks List** page.\n\nThe page helps operators inspect Temporal-backed MoonMind task executions in a task-oriented table. It must support fast scanning, stable pagination, clear status visibility, accessible sorting, and column-level filtering that can replace the current top-of-page filter dropdowns.\n\nThe desired column filtering model is intentionally similar to Google Sheets filters: each column header owns both sorting and a filter popover where users can search values, select or deselect values, include blanks, clear the column filter, and apply or cancel changes.\n\n---\n\n## 2. Related docs and implementation surfaces\n\nUse this document for Tasks List page behavior.\n\nUse related docs for system-level contracts:\n\n- `docs/Api/ExecutionsApiContract.md` — `/api/executions` list contract, execution lifecycle fields, filters, count, and pagination semantics.\n- `docs/Temporal/VisibilityAndUiQueryModel.md` — Temporal Visibility and UI query model.\n- `docs/UI/MissionControlArchitecture.md` — Mission Control shell and shared frontend architecture.\n- `docs/UI/MissionControlDesignSystem.md` — shared Mission Control visual language.\n- `docs/UI/CreatePage.md` — task authoring surface that creates many rows shown on this page.\n\nRepresentative current implementation surfaces:\n\n```text\napi_service/api/routers/task_dashboard.py\napi_service/api/routers/executions.py\nfrontend/src/entrypoints/tasks-list.tsx\nfrontend/src/entrypoints/tasks-list.test.tsx\nfrontend/src/styles/mission-control.css\n```\n\n---\n\n## 3. Route and hosting model\n\nThe canonical Tasks List route is:\n\n```text\n/tasks/list\n```\n\nRules:\n\n1. `/tasks/list` is the canonical Tasks List route.\n2. `/tasks` redirects to `/tasks/list`.\n3. `/tasks/tasks-list` is a legacy alias and redirects to `/tasks/list`.\n4. The page is server-hosted by FastAPI and rendered by the shared Mission Control React/Vite frontend.\n5. The server renders the `tasks-list` page key into the boot payload.\n6. The route uses a wide data-panel layout because the primary surface is a multi-column execution table.\n7. Runtime dashboard configuration is generated server-side and passed through the boot payload.\n8. The browser calls MoonMind APIs only. It must not call Temporal, GitHub, Jira, object storage, or runtime providers directly.\n\n---\n\n## 4. Product stance\n\nThe Tasks List page is an operator scanning surface, not a generic Temporal namespace browser.\n\nCore rules:\n\n1. The default view is task-oriented and shows ordinary user-created task executions.\n2. The normal Tasks List page is not a workflow-kind browser. It does not need a `Kind` column.\n3. System workflows are hidden from ordinary Tasks List users. Provider-profile managers, internal monitors, maintenance workflows, and other platform-owned executions belong in an admin diagnostics surface instead of the main task table.\n4. Manifest-ingest workflows belong on the Manifests page or a future user-workflow diagnostics view. They should not force a `Kind`, `Workflow Type`, or `Entry` column into the default task list.\n5. Sorting and filtering are table behaviors and should be expressed on the relevant task columns instead of as detached dropdowns above the table.\n6. The page should make the active query obvious through column filter indicators and active filter chips.\n7. URL state must be shareable and reloadable.\n8. Pagination, sorting, and filtering must be deterministic across refreshes.\n9. Live updates are valuable, but they must not corrupt an in-progress filter selection.\n\n---\n\n## 5. Current page behavior\n\nThis section describes the current Tasks List page before the proposed column-filter redesign.\n\n### 5.1 Page shell\n\nThe current page renders a single vertical stack with two major surfaces:\n\n1. a **control deck** at the top;\n2. a **data slab** containing results, pagination, desktop table, and mobile cards.\n\nThe control deck contains:\n\n- page title: `Tasks List`;\n- `Live updates` checkbox;\n- polling status copy;\n- disabled-state notice when the Temporal list feature is disabled;\n- a filter form;\n- active filter chips;\n- `Clear filters` action.\n\nThe page reads `dashboardConfig.pollIntervalsMs.list` from the boot payload and falls back to a five-second polling interval. The list is disabled when `dashboardConfig.features.temporalDashboard.listEnabled === false`.\n\n### 5.2 Current top filters\n\nThe current filter form exposes these controls:\n\n| Control | Current behavior |\n| --- | --- |\n| Scope | Selects `tasks`, `user`, `system`, or `all`. Defaults to `tasks` unless an explicit workflow type or entry query is present. |\n| Workflow Type | Disabled while `scope = tasks`; otherwise offers user, system, or all workflow types according to the selected scope. |\n| Status | Filters by canonical MoonMind lifecycle state. |\n| Entry | Filters by `run` or `manifest`. |\n| Repository | Text input for an `owner/repo` value. Trimmed value is used for the request and query key. |\n\nCurrent workflow type groups:\n\n| Group | Workflow types |\n| --- | --- |\n| User workflows | `MoonMind.Run`, `MoonMind.ManifestIngest` |\n| System workflows | `MoonMind.ProviderProfileManager` |\n| All workflows | User workflows plus system workflows |\n\nCurrent canonical status options:\n\n```text\nscheduled\ninitializing\nwaiting_on_dependencies\nplanning\nawaiting_slot\nexecuting\nproposals\nawaiting_external\nfinalizing\ncompleted\nfailed\ncanceled\n```\n\nCurrent entry options:\n\n```text\nrun\nmanifest\n```\n\n### 5.3 Current URL state\n\nThe current page stores list state in the URL query string.\n\nCurrent URL parameters:\n\n| URL parameter | Meaning |\n| --- | --- |\n| `scope` | Current list scope when non-default or when needed to preserve entry/workflow filters. |\n| `workflowType` | Selected workflow type. |\n| `state` | Selected lifecycle state. |\n| `entry` | Selected entry value. |\n| `repo` | Repository filter. |\n| `limit` | Page size. |\n| `nextPageToken` | Current opaque pagination cursor. |\n| `sort` | Selected table sort field when non-default. |\n| `sortDir` | `asc` or `desc` when non-default. |\n\nRules:\n\n1. Query-string state is synchronized with `history.replaceState`.\n2. Filter changes reset pagination to the first page.\n3. Page-size changes reset pagination to the first page.\n4. Sort state is persisted in the URL.\n5. The current list request does not send sort parameters to the API; rows are sorted in the browser after the current page is fetched.\n\n### 5.4 Current API request\n\nThe current page queries:\n\n```text\nGET /api/executions?source=temporal&pageSize=<pageSize>&scope=<scope>\n```\n\nOptional query parameters are appended when active:\n\n```text\nnextPageToken\nworkflowType\nstate\nentry\nrepo\n```\n\nThe response is parsed as an execution list response with:\n\n| Field | Meaning |\n| --- | --- |\n| `items` | Current page of rows. |\n| `nextPageToken` | Opaque cursor for the next page. |\n| `count` | Current filtered count when available. |\n| `countMode` | Count confidence, such as `exact`. |\n\n### 5.5 Current row model\n\nThe current table row model includes these display fields:\n\n| Field | Meaning |\n| --- | --- |\n| `taskId` | Task-oriented execution identifier; linked to detail view. |\n| `source` | Execution source, currently Temporal for this page. |\n| `workflowType` | Root workflow type when returned. |\n| `repository` | Repository display value, if available. |\n| `integration` | Integration display value, if available. |\n| `targetRuntime` | Runtime identifier, displayed through a human-readable runtime formatter. |\n| `targetSkill` | Primary skill identifier, when available. |\n| `taskSkills` | Skill list, when available. |\n| `title` | Display title. |\n| `status` | Coarse dashboard status. |\n| `state` | MoonMind lifecycle state. |\n| `rawState` | Raw lifecycle state preferred for status pill display. |\n| `temporalStatus` | Simplified Temporal status when available. |\n| `scheduledFor` | Scheduled timestamp. |\n| `createdAt` | Created timestamp. |\n| `closedAt` | Finished timestamp. |\n| `entry` | Entry kind, such as `run` or `manifest`. |\n| `dependsOn` | Dependency identifiers. |\n| `blockedOnDependencies` | Whether dependency blocking should be summarized. |\n\n### 5.6 Current desktop table\n\nThe current desktop table columns are:\n\n| Order | Column | Sort field |\n| --- | --- | --- |\n| 1 | ID | `taskId` |\n| 2 | Runtime | `targetRuntime` |\n| 3 | Skill | `targetSkill` |\n| 4 | Repository | `repository` |\n| 5 | Status | `status` |\n| 6 | Title | `title` |\n| 7 | Scheduled | `scheduledFor` |\n| 8 | Created | `createdAt` |\n| 9 | Finished | `closedAt` |\n\nRules:\n\n1. Header buttons sort the current page.\n2. The default sort is `scheduledFor` descending.\n3. Timestamp columns sort by parsed timestamp. `scheduledFor` falls back to `createdAt` when no scheduled timestamp exists.\n4. Status sorting uses `rawState` or `state` when available.\n5. Non-timestamp columns sort as lowercase strings.\n6. Ties sort by `taskId` descending.\n7. Each status cell renders an `ExecutionStatusPill` using `rawState || state || status`.\n8. The `Started` timestamp is intentionally not shown in the list presentation.\n9. Rows blocked on dependencies show a compact dependency summary under the title.\n\n### 5.7 Current mobile cards\n\nThe current mobile layout renders a card list with:\n\n- title link;\n- task ID;\n- runtime, skill, and workflow type metadata;\n- status pill;\n- field grid for ID, Runtime, Skill, Repository, Scheduled, Created, and Finished;\n- dependency summary when applicable;\n- full-width `View details` card action.\n\n### 5.8 Current empty, loading, error, and pagination states\n\nRules:\n\n1. Loading state shows `Loading tasks...`.\n2. API errors render a visible error notice.\n3. Empty first pages show `No tasks found for the current filters.`\n4. Empty later pages keep the previous-page button enabled.\n5. Pagination uses an opaque `nextPageToken` plus a client-side cursor stack for previous-page navigation.\n6. The results toolbar shows `Page N`, row range, and count when available.\n7. Page size is controlled through the shared `PageSizeSelector`.\n\n---\n\n## 6. Desired page layout after column filters\n\nThe desired state removes the current top filter form once equivalent column filters are available.\n\nThe page should render these surfaces:\n\n| Surface | Desired contents |\n| --- | --- |\n| Header control deck | Page title, Live updates toggle, polling copy, feature-disabled notice. |\n| Active query row | Active filter chips, clear-all action, optional saved-view chip. No Scope, Workflow Type, Status, Entry, or Repository dropdown/input controls. |\n| Results toolbar | Page summary, page size, pagination, optional column visibility control. |\n| Desktop table | Sortable and filterable column headers. |\n| Mobile filter sheet | Same column filters as the table, adapted for cards. |\n| Mobile cards | Existing card presentation, with filter affordances available through the mobile filter sheet. |\n\nRules:\n\n1. The top filter dropdowns are replaced by column header filters.\n2. Repository filtering moves from the top text input to the Repository column filter.\n3. Status filtering moves from the top Status dropdown to the Status column filter.\n4. Runtime filtering is added to the Runtime column filter.\n5. Scope, workflow type, and entry controls are removed from the normal Tasks List page instead of being represented by a `Kind` column.\n6. The normal page always queries the user-visible task scope; system workflows are not available from the ordinary task table.\n7. Active filters are still summarized in a row of chips so users do not have to inspect every header.\n8. Filter chips must be clickable and reopen the corresponding column filter.\n9. `Clear filters` remains available when any filter is active.\n10. Live updates remain in the header because they are page behavior, not table filtering.\n11. Page size and pagination remain in the results toolbar because they are result-window controls, not filters.\n\n---\n\n## 7. Column set in the desired design\n\nThe desired desktop table uses this default column model:\n\n| Default visibility | Column | Primary field | Sort | Filter |\n| --- | --- | --- | --- | --- |\n| Visible | ID | `taskId` | Yes | Text contains / exact IDs |\n| Visible | Runtime | `targetRuntime` | Yes | Value checklist, blanks |\n| Visible | Skill | `targetSkill` plus `taskSkills` | Yes | Value checklist, blanks |\n| Visible | Repository | `repository` | Yes | Value checklist, text search, blanks |\n| Visible | Status | `rawState || state || status` | Yes | Canonical status checklist |\n| Visible | Title | `title` | Yes | Text contains |\n| Visible | Scheduled | `scheduledFor` | Yes | Date range, relative dates, blanks |\n| Visible | Created | `createdAt` | Yes | Date range, relative dates |\n| Visible | Finished | `closedAt` | Yes | Date range, relative dates, blanks |\n| Optional | Integration | `integration` | Yes | Value checklist, blanks |\n\nRules:\n\n1. The normal Tasks List table does not include a `Kind` column.\n2. The normal table does not include `Workflow Type` or `Entry` columns by default.\n3. The default query is the task-run list. In current API terms, this is equivalent to `scope=tasks`, which is `WorkflowType=MoonMind.Run` and `mm_entry=run`.\n4. System workflow rows must not appear in the normal task table, even through column filters or old URL parameters.\n5. Manifest ingest rows should stay on the Manifests page unless a separate user-workflow diagnostics view is explicitly designed.\n6. The table may hide optional columns by default to preserve width, but optional columns must not reintroduce ordinary access to system workflow browsing.\n7. The mobile filter sheet must expose the same filterable task columns as the desktop table.\n8. The table must not expose raw Temporal Visibility query syntax to ordinary users.\n\n### 7.1 Admin diagnostics escape hatch\n\nSystem and all-workflow browsing is useful for debugging, but it is not part of the normal Tasks List UX.\n\nRules:\n\n1. System workflows belong in an admin diagnostics surface such as Settings -> Operations -> Workflow Diagnostics, `/tasks/diagnostics`, or a similarly explicit route.\n2. A diagnostics surface may expose workflow type, entry, owner, namespace, run ID, raw Temporal status, and system workflow filters because its purpose is platform debugging.\n3. Diagnostics access must be permission-gated. Ordinary users cannot widen `/tasks/list` into system workflow visibility by editing URL parameters.\n4. If compatibility routes or query parameters such as `scope=system` are still accepted, the normal Tasks List page must either ignore them safely, redirect authorized admins to diagnostics, or show a recoverable message explaining that system workflows moved to diagnostics.\n5. The product contract for `/tasks/list` remains task-oriented even if the underlying `/api/executions` endpoint can list broader workflow scopes.\n\n---\n\n## 8. Column header interaction model\n\nEach sortable/filterable header is a compound control with two distinct targets:\n\n1. **Sort button** — the column label area.\n2. **Filter button** — a funnel icon area.\n\nExample conceptual header:\n\n```text\nRuntime ▲  [filter icon]\n```\n\nRules:\n\n1. Activating the label toggles sorting for that column.\n2. Activating the filter icon opens the column filter popover.\n3. Sorting must not clear filters.\n4. Filtering must not clear the current sort unless the sorted column becomes unavailable.\n5. A sorted column shows `▲` for ascending or `▼` for descending.\n6. A filtered column shows an active filter icon, visually distinct from an unfiltered icon.\n7. A column with both sort and filter active shows both indicators.\n8. Header controls must preserve the existing `aria-sort` behavior for the sort target.\n9. The filter target must expose accessible state such as `Filter Runtime. No filter applied.` or `Filter Status. Filter active: excluding canceled.`\n\n### 8.1 Sort behavior\n\nThe initial desired sort remains:\n\n```text\nsort = scheduledFor\nsortDir = desc\n```\n\nRules:\n\n1. Clicking an unsorted timestamp column defaults to descending.\n2. Clicking an unsorted non-timestamp column defaults to ascending.\n3. Clicking the currently sorted column toggles ascending and descending.\n4. Only one primary sort is required for this page.\n5. Multi-column sorting is out of scope for the first version.\n6. Desired long-term behavior is server-authoritative sorting so sort order remains stable across pages.\n7. While the API does not support server-side sort for every column, the UI may keep client-side current-page sorting as a compatibility behavior, but it must not present current-page sorting as a global result ordering guarantee.\n\n---\n\n## 9. Filter popover design\n\nThe filter popover is an anchored, keyboard-accessible panel. It is not a native `select` dropdown.\n\n### 9.1 Common popover structure\n\nEach value-list filter popover contains:\n\n1. column title;\n2. current filter summary;\n3. sort commands;\n4. value search input;\n5. `Select all` checkbox;\n6. scrollable value checklist;\n7. blank-value row when the field can be blank;\n8. `Clear` action;\n9. `Cancel` action;\n10. `Apply` action.\n\nRepresentative layout:\n\n```text\nRuntime\nAll values selected\n\nSort A to Z\nSort Z to A\n\nSearch values...\n[✓] Select all\n[✓] Codex CLI (18)\n[✓] Claude Code (11)\n[✓] Local Agent (3)\n[✓] Blanks (2)\n\nClear     Cancel     Apply\n```\n\nRules:\n\n1. Checkbox changes are staged locally until `Apply` is activated.\n2. `Cancel`, `Escape`, or outside click closes the popover without applying staged changes.\n3. `Clear` removes the filter for that column and applies immediately or stages a clear state that `Apply` confirms; the chosen behavior must be consistent across columns.\n4. Search filters the available checklist values inside the popover; it does not filter table rows until the user applies a value selection or text filter.\n5. Value rows show display labels and counts when count data is available.\n6. The popover must support an `Only` quick action on value hover/focus for power users, but the row checkbox remains the primary interaction.\n7. The menu should show status pills for Status values and human-readable runtime labels for Runtime values.\n8. Long value lists must be virtualized or paginated.\n9. Value labels must never render untrusted HTML.\n\n### 9.2 Status filter popover\n\nThe Status filter is a value-list popover backed by canonical lifecycle states.\n\nRules:\n\n1. The checklist uses the canonical status order from the current page contract.\n2. Each row shows the same display text and pill styling used in table rows where possible.\n3. Filtering by Status maps to the MoonMind lifecycle state, not the coarse dashboard status.\n4. The filter must tolerate historical rows where `rawState`, `state`, and `status` differ by using the same display precedence as the table: `rawState || state || status`.\n\n### 9.3 Runtime filter popover\n\nThe Runtime filter is a value-list popover backed by runtime identifiers.\n\nRules:\n\n1. The checklist stores raw runtime identifiers such as `codex_cli`.\n2. The checklist displays human-readable labels such as `Codex CLI`.\n3. Blanks are represented as `—` and can be included or excluded.\n4. Runtime filtering must be available even though the current top filter form does not expose runtime filtering.\n\n### 9.4 Repository filter popover\n\nThe Repository filter combines value selection and text filtering.\n\nRules:\n\n1. The default mode is value checklist for repositories present in the filtered result universe.\n2. The popover search input filters repository values in the checklist.\n3. A secondary text mode may support `contains` or exact text when a repository is not present in the loaded facet list.\n4. Existing top-level repository text input behavior maps to an exact Repository column filter.\n5. Blanks can be included or excluded.\n\n### 9.5 Date filter popovers\n\nScheduled, Created, and Finished use date filter popovers.\n\nRequired controls:\n\n| Control | Purpose |\n| --- | --- |\n| Sort newest first | Sets descending sort. |\n| Sort oldest first | Sets ascending sort. |\n| From | Inclusive lower bound. |\n| To | Inclusive upper bound. |\n| Relative presets | Optional shortcuts such as today, last 24 hours, last 7 days. |\n| Blanks | Available for Scheduled and Finished. |\n\nRules:\n\n1. Dates use local display formatting, but URL/API filter values use ISO 8601 timestamps or date-only values with documented inclusive behavior.\n2. `Finished` blanks represent active or unfinished work.\n3. `Scheduled` blanks represent unscheduled immediate work.\n\n### 9.6 Text filter popovers\n\nID and Title use text-oriented popovers.\n\nRules:\n\n1. ID supports exact ID matching and contains matching.\n2. Title supports contains matching.\n3. Text filtering should be debounced for preview counts if preview counts are shown.\n4. Applying a text filter resets pagination to the first page.\n5. Text filters must trim leading/trailing whitespace for query behavior while preserving the user-entered text in the input until apply/cancel.\n\n---\n\n## 10. Selection semantics\n\nColumn filters use AND semantics across columns and OR semantics within a column.\n\nExamples:\n\n| User selection | Meaning |\n| --- | --- |\n| Status = `executing` and `planning` | Show rows whose state is executing OR planning. |\n| Runtime = `codex_cli`; Status = `failed` | Show rows whose runtime is Codex CLI AND state is failed. |\n| Repository excludes `owner/archived` | Show all repositories except `owner/archived`, subject to other filters. |\n\n### 10.1 Include mode and exclude mode\n\nThe UI must distinguish two cases:\n\n| Mode | How the user gets there | Desired URL/API meaning |\n| --- | --- | --- |\n| Include mode | User selects a subset from none, uses `Only`, or unchecks many values until a small positive set remains. | Include only the selected values. |\n| Exclude mode | User starts from all values and deselects one or more unwanted values. | Include all current and future values except the deselected values. |\n\nRules:\n\n1. Deselecting one status such as `canceled` from an otherwise-all checklist should create an exclude filter: `not canceled`.\n2. Exclude mode allows new values that arrive through live updates to appear automatically.\n3. Include mode hides new values until the user explicitly selects them.\n4. `Select all` clears the column filter.\n5. Deselecting all values is allowed only when the user confirms that the result will be empty, or the UI prevents the impossible state and suggests clearing the filter instead.\n\n---\n\n## 11. Active filter chips\n\nActive filters are summarized above the results table.\n\nRepresentative chips:\n\n```text\nStatus: not canceled\nRuntime: Codex CLI +1\nRepository: MoonLadderStudios/MoonMind\nFinished: blank\n```\n\nRules:\n\n1. Every active column filter has a chip.\n2. Clicking a chip opens the corresponding column filter popover.\n3. Each chip has a remove action that clears only that column filter.\n4. `Clear filters` clears every column filter and restores the default task-run view.\n5. Chips use product labels, not raw API parameter names.\n6. Chips must remain visible on mobile through a horizontally scrollable row or compact filter summary button.\n\n---\n\n## 12. URL state in the desired design\n\nThe URL remains the shareable source of client-visible query state.\n\nRequired URL state:\n\n| URL state | Purpose |\n| --- | --- |\n| `limit` | Page size. |\n| `nextPageToken` | Current pagination cursor. |\n| `sort` | Current sort field. |\n| `sortDir` | `asc` or `desc`. |\n| column filter params | Active column filters. |\n\n### 12.1 Backward compatibility\n\nExisting URLs must continue to fail safe:\n\n| Existing parameter | Desired mapping |\n| --- | --- |\n| `scope=tasks` | Default task-run view. No visible column filter is required. |\n| `scope=user` | Prefer the default task-run view on `/tasks/list`; manifest ingest belongs on the Manifests page or diagnostics. |\n| `scope=system` | Not honored by the normal Tasks List page. Authorized admins may be redirected to diagnostics; ordinary users stay in the default task-run view or see a recoverable message. |\n| `scope=all` | Not honored by the normal Tasks List page. Authorized admins may be redirected to diagnostics; ordinary users stay in the default task-run view or see a recoverable message. |\n| `workflowType=MoonMind.Run` | Default task-run view when paired with `entry=run` or no entry. |\n| `workflowType=MoonMind.ManifestIngest` | Redirect to the Manifests page or show a recoverable message; do not add a `Workflow Type` column to the task table. |\n| `workflowType=<system value>` | Not honored by the normal Tasks List page; use admin diagnostics when authorized. |\n| `state=<value>` | Status column include filter for one value. |\n| `entry=run` | Default task-run view. No visible column filter is required. |\n| `entry=manifest` | Redirect to the Manifests page or show a recoverable message. |\n| `repo=<value>` | Repository exact include filter for one value. |\n\nRules:\n\n1. Existing query parameters remain accepted on load so old shared links do not break.\n2. Compatibility handling must never reveal system workflows in the ordinary Tasks List page.\n3. After the user changes filters in the new UI, the URL should rewrite to the new canonical task-column filter encoding.\n4. Shared old links should either preserve meaning inside the task-focused page, redirect to the more appropriate page, or explain why the old workflow scope moved.\n5. Filter changes reset `nextPageToken` and the previous-page cursor stack.\n\n### 12.2 Canonical filter encoding\n\nThe desired API and URL should support multi-value include and exclude filters.\n\nRecommended URL shape:\n\n```text\n/tasks/list?stateNotIn=canceled&targetRuntimeIn=codex_cli,claude_code&limit=50&sort=scheduledFor&sortDir=desc\n```\n\nRecommended parameters:\n\n| Parameter | Meaning |\n| --- | --- |\n| `stateIn` / `stateNotIn` | Canonical lifecycle state values. |\n| `targetRuntimeIn` / `targetRuntimeNotIn` | Runtime identifiers. |\n| `targetSkillIn` / `targetSkillNotIn` | Skill identifiers. |\n| `repoIn` / `repoNotIn` | Exact repository values. |\n| `repoContains` | Repository text contains search. |\n| `integrationIn` / `integrationNotIn` | Integration values. |\n| `taskId` / `taskIdContains` | ID exact or contains filter. |\n| `titleContains` | Title text filter. |\n| `scheduledFrom` / `scheduledTo` | Scheduled timestamp bounds. |\n| `createdFrom` / `createdTo` | Created timestamp bounds. |\n| `closedFrom` / `closedTo` | Finished timestamp bounds. |\n| `<field>Blank` | Include blanks for fields where blank is meaningful. |\n\nRules:\n\n1. Values in comma-separated lists must be URL-encoded.\n2. If a value can contain commas in the future, the client and API must support repeated parameters as an equivalent representation.\n3. The API must reject contradictory include and exclude filters on the same field with a clear validation error.\n4. The browser must normalize empty lists away rather than sending no-op filters.\n\n---\n\n## 13. API and data requirements for column filtering\n\nThe current `/api/executions` list endpoint supports a limited set of exact filters. The desired column filter experience needs broader list and facet support.\n\n### 13.1 List query requirements\n\nThe list endpoint should support:\n\n1. server-authoritative sort field and direction;\n2. multi-value include filters;\n3. multi-value exclude filters;\n4. text filters for ID, title, and repository;\n5. date range filters;\n6. blank/null filters where meaningful;\n7. deterministic pagination under active filters;\n8. count and count mode for the fully filtered result.\n\nRules:\n\n1. Filters across columns use AND semantics.\n2. Multiple values within one column use OR semantics.\n3. Exclude filters are evaluated after field normalization.\n4. Display labels are never sent as canonical filter values when raw values exist.\n5. The API remains the authority for access control; users cannot widen their visibility through filter params.\n6. The normal Tasks List query is always bounded to user-visible task executions. Backend list support for broader workflow scopes must not leak into this page.\n\n### 13.2 Facet query requirements\n\nThe UI needs facet data so a filter popover can show values and counts beyond the current page.\n\nRecommended endpoint:\n\n```text\nGET /api/executions/facets?source=temporal&facet=targetRuntime&<current filters except targetRuntime>\n```\n\nRepresentative response:\n\n```json\n{\n  \"facet\": \"targetRuntime\",\n  \"items\": [\n    { \"value\": \"codex_cli\", \"label\": \"Codex CLI\", \"count\": 18 },\n    { \"value\": \"claude_code\", \"label\": \"Claude Code\", \"count\": 11 }\n  ],\n  \"blankCount\": 2,\n  \"countMode\": \"exact\",\n  \"truncated\": false,\n  \"nextPageToken\": null\n}\n```\n\nRules:\n\n1. Facets are scoped by the current user and authorization model.\n2. Facet requests include all active filters except the filter for the facet being opened, unless the user asks to search within the currently selected subset.\n3. Static facets such as Status may come from the frontend enum plus server counts.\n4. Dynamic facets such as Runtime, Skill, Repository, and Integration should come from server data.\n5. Facet counts must reflect the current query context.\n6. If exact counts are expensive, the response may set `countMode` to an estimated or unknown mode; the UI must label those counts accordingly or omit counts.\n7. Large facets may be paginated and searched server-side.\n8. Facet failure must not break the table; the UI can fall back to values in the currently loaded page with a visible “current page values only” notice.\n9. Facet results must not include system-only workflow values or counts on the normal Tasks List page.\n\n---\n\n## 14. Live updates and filter stability\n\nLive updates continue to be useful after column filters, but they must not disrupt staged menu choices.\n\nRules:\n\n1. When no filter popover is open, live updates may refetch according to the configured polling interval.\n2. When a filter popover is open, the checklist snapshot should remain stable until the popover closes or the user explicitly refreshes values.\n3. New rows that match active filters may appear after polling.\n4. Rows that no longer match active filters may disappear after polling.\n5. Include-mode filters do not automatically include newly discovered values.\n6. Exclude-mode filters do include newly discovered values unless the value is excluded.\n7. The page may show subtle copy such as `Values updated after you opened this filter` when a facet changes while a popover is open.\n8. Live updates must not overwrite staged, unapplied filter changes.\n\n---\n\n## 15. Accessibility requirements\n\nRules:\n\n1. Sort and filter controls must be separately reachable by keyboard.\n2. Header sort state must continue using `aria-sort` on the `th` or equivalent table-header element.\n3. Filter buttons must expose `aria-haspopup`, `aria-expanded`, and a descriptive accessible name.\n4. Filter popovers with checkboxes and search should use dialog or popover semantics rather than pretending to be a simple menu.\n5. Focus moves into the popover when it opens and returns to the originating filter button when it closes.\n6. `Escape` cancels staged changes and closes the popover.\n7. `Enter` on `Apply` applies staged changes and closes the popover.\n8. Checkbox labels include value label and count when shown.\n9. Active filter chips expose remove buttons with names such as `Remove Status filter`.\n10. Mobile filter sheet controls must be equivalent to desktop controls for screen-reader and keyboard users.\n11. Color must not be the only indicator of active sort, active filter, or selected status.\n\n---\n\n## 16. Mobile behavior\n\nThe mobile card layout remains the primary narrow-screen presentation. Column header filters are adapted into a mobile filter sheet.\n\nRules:\n\n1. The mobile results toolbar includes a `Filters` button when the table header is not visible.\n2. The mobile filter sheet lists the same filterable columns as desktop.\n3. Each column row opens the same filter editor used by desktop, adapted to full-screen or bottom-sheet layout.\n4. Active filters appear as chips above the cards.\n5. Card fields may expose small contextual filter actions, such as filtering to a visible runtime or status, but those actions are optional.\n6. Mobile filter changes reset pagination to the first page just like desktop.\n7. Mobile users must not need the removed top dropdowns to reach status, runtime, skill, repository, title, ID, or date filters.\n8. Mobile users cannot reveal system workflows from the ordinary task-card view; diagnostics remains a separate admin surface.\n\n---\n\n## 17. Empty and error states after column filters\n\nRules:\n\n1. If no rows match active filters on the first page, show `No tasks found for the current filters.`\n2. The empty state should include `Clear filters` when filters are active.\n3. If a specific filter is likely too narrow, the empty state may summarize active chips but should not guess which filter is wrong.\n4. If a facet request fails, show an inline warning inside the popover and allow retry.\n5. If the list request rejects a filter parameter, show the API error and preserve the user's filter state so it can be edited.\n6. If an old URL contains unsupported filter combinations, the page should either map it to a valid task-list state, redirect to an appropriate page, or show a recoverable error with `Clear filters`.\n\n---\n\n## 18. Security and privacy\n\nRules:\n\n1. The browser calls only MoonMind APIs.\n2. Facet values are subject to the same authorization and owner scoping as list rows.\n3. Hidden or unauthorized values must not appear in facet lists or counts.\n4. Filter params must not bypass backend authorization.\n5. URL filter state must not include secrets.\n6. Repository, title, skill, runtime, status, and integration labels are rendered as text, never trusted HTML.\n7. The API should bound text filter lengths and value-list sizes.\n8. Invalid filter values should return structured validation errors rather than raw query failures.\n9. System workflow visibility is a backend authorization decision and is not exposed by `/tasks/list` column filters.\n\n---\n\n## 19. Testing contract\n\nThe implementation should add or preserve tests for the following behaviors:\n\n1. `/tasks/list` renders the Tasks List page with one control deck and one data slab.\n2. Existing `state` and `repo` URLs load into equivalent column filters.\n3. Existing `scope`, `workflowType`, and `entry` URLs fail safe: ordinary users are kept in the task-run view, routed to the appropriate page, or shown a recoverable message without revealing system workflows.\n4. The top Scope, Workflow Type, Status, Entry, and Repository controls are absent once column filters are enabled.\n5. The default desktop table has no `Kind`, `Workflow Type`, or `Entry` column.\n6. Header label activation toggles sort without opening the filter popover.\n7. Header filter icon activation opens the correct filter popover without changing sort.\n8. Sorted headers retain correct `aria-sort` values.\n9. Filtered headers expose active filter state in their accessible names.\n10. Status filter shows canonical lifecycle states in canonical order.\n11. Runtime filter displays human-readable labels while applying raw runtime identifiers.\n12. Deselecting `canceled` from an all-selected Status checklist applies an exclude filter and creates a chip such as `Status: not canceled`.\n13. Selecting only `Codex CLI` and `Claude Code` applies a Runtime include filter.\n14. Applying any filter resets `nextPageToken` and the previous-page cursor stack.\n15. `Clear filters` clears all column filters and returns to the default task-run view.\n16. Filter chips can clear individual filters.\n17. Old single-value query params still round-trip to active filters.\n18. Mobile filter sheet exposes the same filterable task columns as desktop.\n19. System/all workflow scopes remain absent from the normal Tasks List and are available only through an admin diagnostics surface when authorized.\n20. Facet failure falls back gracefully or shows a recoverable inline error.\n21. Live polling does not mutate staged filter popover selections.\n22. Empty later pages keep previous-page navigation available.\n23. The `Started` timestamp remains absent from the list presentation unless a separate design explicitly reintroduces it.\n\n---\n\n## 20. Non-goals\n\nThe column filter design does not require:\n\n1. spreadsheet-style cell editing;\n2. arbitrary pivot tables;\n3. multi-column sort in the first version;\n4. user-authored raw Temporal Visibility SQL;\n5. direct browser calls to Temporal;\n6. saving named filter views in the first version;\n7. replacing page size or pagination controls;\n8. removing the Live updates toggle;\n9. exposing system workflow browsing through the normal Tasks List page.\n\n---\n\n## 21. Desired implementation sequence\n\nThis section describes safe product sequencing without making this document a rollout checklist.\n\nRecommended order:\n\n1. Preserve the current page behavior and URL compatibility.\n2. Add the reusable column header sort/filter component behind a feature flag.\n3. Add column filter state, chips, and URL mapping while the old top filters still exist.\n4. Add API support for multi-value task filters and facets.\n5. Move Status and Repository behavior into column filters.\n6. Remove ordinary Scope, Workflow Type, and Entry controls from `/tasks/list`; keep a compatibility parser that fails safe and sends system/all workflow browsing to admin diagnostics when authorized.\n7. Add Runtime and Skill column filters.\n8. Remove the old top filter controls after parity tests pass.\n9. Keep old URL parameter parsing indefinitely or until a documented compatibility window ends.\n\nFinal desired state: the Tasks List page feels like a compact, operational spreadsheet for user-visible task executions, where each task column owns its own sort and filter behavior and the page no longer needs detached filter dropdowns above the table.\n"
+  },
+  "extractedAt": "2026-05-04T23:57:38Z",
+  "designSummary": "The design defines the desired-state Mission Control Tasks List page as a task-oriented, FastAPI-hosted React surface at /tasks/list. It replaces detached top filters with spreadsheet-like column filters while preserving stable pagination, shareable URL state, live polling, and accessible sorting. The normal page must remain bounded to user-visible task executions, with system and all-workflow browsing moved to a permission-gated diagnostics surface. The contract also defines canonical filter encoding, API list/facet requirements, live-update stability, mobile parity, security constraints, testing expectations, and explicit non-goals.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Task-oriented execution scanning surface",
+      "type": "requirement",
+      "source_section": "1. Purpose",
+      "explanation": "The page helps operators inspect Temporal-backed MoonMind task executions with fast scanning, stable pagination, status visibility, accessible sorting, and Google Sheets-like column filters."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Use related architecture and API contracts without direct external calls",
+      "type": "integration",
+      "source_section": "2. Related docs and implementation surfaces; 3. Route and hosting model",
+      "explanation": "The page uses existing API, Temporal visibility, Mission Control architecture, and design-system contracts, and the browser calls only MoonMind APIs."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Canonical Tasks List route and hosting model",
+      "type": "requirement",
+      "source_section": "3. Route and hosting model",
+      "explanation": "/tasks/list is canonical, /tasks and /tasks/tasks-list redirect to it, FastAPI server-hosts the page, emits the tasks-list boot key, uses a wide data-panel layout, and passes dashboard config in the boot payload."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Normal list is task-run focused and excludes system browsing",
+      "type": "security",
+      "source_section": "4. Product stance; 7. Column set in the desired design",
+      "explanation": "The default view shows ordinary user-created task executions, hides system workflows, does not expose Kind/Workflow Type/Entry columns, and remains scoped to task runs."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Preserve current behavior while migrating",
+      "type": "migration",
+      "source_section": "5. Current page behavior; 20. Non-goals; 21. Desired implementation sequence",
+      "explanation": "Existing shell, polling, list-disabled behavior, row fields, pagination, empty/error states, status options, and intentional omissions such as Started timestamp remain preserved unless explicitly replaced."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Column-filter layout replaces top filter controls",
+      "type": "requirement",
+      "source_section": "6. Desired page layout after column filters",
+      "explanation": "The page removes Scope, Workflow Type, Status, Entry, and Repository top controls once equivalent column filters exist, while keeping header behavior, active chips, results toolbar, pagination, page size, and live updates."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Default column model and mobile parity",
+      "type": "state-model",
+      "source_section": "7. Column set in the desired design; 16. Mobile behavior",
+      "explanation": "The default table exposes ID, Runtime, Skill, Repository, Status, Title, Scheduled, Created, and Finished with optional Integration, while mobile exposes equivalent filterable columns through a filter sheet."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Admin diagnostics escape hatch for broad workflow visibility",
+      "type": "security",
+      "source_section": "7.1 Admin diagnostics escape hatch",
+      "explanation": "System/all-workflow browsing belongs in a permission-gated diagnostics surface and old broad-scope URLs cannot widen /tasks/list visibility for ordinary users."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Compound sortable and filterable headers",
+      "type": "requirement",
+      "source_section": "8. Column header interaction model",
+      "explanation": "Each header has separate sort-label and filter-icon targets with independent indicators, accessible names, preserved aria-sort behavior, and no accidental clearing between sorting and filtering."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Deterministic sort behavior with server-authoritative direction",
+      "type": "requirement",
+      "source_section": "8.1 Sort behavior",
+      "explanation": "Initial sort is scheduledFor descending; timestamp columns default descending, other columns ascending, current sort toggles direction, only one primary sort is required, and current-page sort must not be misrepresented as global when the API lacks server sort."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Keyboard-accessible staged filter popovers",
+      "type": "requirement",
+      "source_section": "9. Filter popover design; 9.1 Common popover structure",
+      "explanation": "Filter popovers are anchored accessible panels with title, summary, sort commands, search, select all, checklist, blanks, clear/cancel/apply, staged changes, optional Only action, virtualization/pagination for long lists, and text-safe labels."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Specialized column filter editors",
+      "type": "requirement",
+      "source_section": "9.2-9.6 Status, Runtime, Repository, Date, and Text filter popovers",
+      "explanation": "Status, Runtime, Repository, date, ID, and Title filters each have specific raw values, display labels, blank handling, text/date semantics, canonical status order, and pagination-reset behavior."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "AND across columns, OR within columns, include/exclude modes",
+      "type": "state-model",
+      "source_section": "10. Selection semantics",
+      "explanation": "Column filters use AND semantics across columns, OR within a column, support include and exclude modes, allow new live values according to mode, clear on Select all, and handle all-values deselected safely."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Active filter chips summarize and control filters",
+      "type": "requirement",
+      "source_section": "11. Active filter chips",
+      "explanation": "Every active column filter has a product-labeled chip that reopens the filter, clears only its column through a remove action, and remains usable on mobile."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Shareable URL state and fail-safe compatibility mapping",
+      "type": "integration",
+      "source_section": "12. URL state in the desired design; 12.1 Backward compatibility; 12.2 Canonical filter encoding",
+      "explanation": "URL state stores pagination, sort, and column filters; old scope/workflowType/state/entry/repo links map, redirect, or explain safely; canonical include/exclude/text/date/blank filter params support shareable reloads."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Execution list API supports authoritative filtering and pagination",
+      "type": "integration",
+      "source_section": "13.1 List query requirements",
+      "explanation": "/api/executions should support server sort, multi-value include/exclude, text filters, date ranges, blank/null filters, deterministic pagination, filtered counts, normalized values, access control, and task-bounded normal queries."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Facet API supports filter popover values and counts",
+      "type": "integration",
+      "source_section": "13.2 Facet query requirements",
+      "explanation": "Facet requests return scoped values, labels, counts, blank counts, count mode, truncation, optional pagination/search, current-context counts, static status support, dynamic facet support, graceful fallback, and no system-only leakage."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Live updates do not disturb staged filtering",
+      "type": "requirement",
+      "source_section": "14. Live updates and filter stability",
+      "explanation": "Polling may refetch when no popover is open, but open popovers keep stable checklist snapshots, staged choices are not overwritten, and include/exclude behavior governs new matching values."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Accessible sort, filter, chip, and mobile controls",
+      "type": "constraint",
+      "source_section": "15. Accessibility requirements",
+      "explanation": "Sort and filter targets are keyboard reachable, expose correct ARIA state, manage focus on popover open/close, support Escape and Enter behavior, label checkboxes and chip removes, and avoid color-only state indicators."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Mobile card filtering remains equivalent to desktop",
+      "type": "requirement",
+      "source_section": "16. Mobile behavior",
+      "explanation": "Mobile retains cards, adds a Filters button and sheet, exposes the same filterable columns, shows active chips, resets pagination on filter changes, and cannot reveal system workflows."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Recoverable empty, error, facet, and old URL states",
+      "type": "observability",
+      "source_section": "17. Empty and error states after column filters",
+      "explanation": "No-match first pages show the standard empty message and Clear filters; facet/list errors preserve editable state; unsupported old URLs are mapped, redirected, or made recoverable; later empty pages keep previous navigation."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Security and privacy guardrails for filter data",
+      "type": "security",
+      "source_section": "18. Security and privacy",
+      "explanation": "Only MoonMind APIs are called; facets and list rows are authorization scoped; URL state has no secrets; labels render as text; filter lengths and value lists are bounded; validation errors are structured; system visibility remains backend-authorized."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "Behavioral testing contract for page, filters, URLs, facets, live updates, and omissions",
+      "type": "constraint",
+      "source_section": "19. Testing contract",
+      "explanation": "Implementation must preserve/add tests for route rendering, URL compatibility, removed top controls, absent Kind/Workflow Type/Entry columns, header interactions, accessibility state, filters, chips, pagination reset, mobile parity, facet failure, live polling stability, later-page empty navigation, and Started omission."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "Explicit non-goals keep scope bounded",
+      "type": "non-goal",
+      "source_section": "20. Non-goals",
+      "explanation": "The design excludes spreadsheet cell editing, pivot tables, first-version multi-column sort, raw Temporal SQL, direct Temporal browser calls, first-version saved views, replacing page size/pagination, removing live updates, and exposing system browsing through the normal list."
+    },
+    {
+      "id": "DESIGN-REQ-025",
+      "title": "Safe implementation sequence without turning docs into rollout backlog",
+      "type": "migration",
+      "source_section": "21. Desired implementation sequence",
+      "explanation": "The desired product sequence preserves current behavior, introduces reusable header filters behind a flag, maps state/chips/URLs, adds API filters/facets, migrates Status/Repository/Runtime/Skill, removes old top controls after parity tests, and keeps compatibility parsing until a documented window ends."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "shortName": "canonical-task-route",
+      "summary": "Canonical task-run list route with fail-safe workflow visibility",
+      "description": "As a Mission Control operator, I want /tasks/list to always load the task-oriented execution list and keep broad workflow browsing out of the ordinary page so that shared links and manual URL edits cannot expose system workflow rows.",
+      "sourceReference": {
+        "path": "docs/UI/TasksListPage.md",
+        "title": "Tasks List Page",
+        "sections": [
+          "3. Route and hosting model",
+          "4. Product stance",
+          "7. Column set in the desired design",
+          "7.1 Admin diagnostics escape hatch",
+          "12.1 Backward compatibility",
+          "18. Security and privacy"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-022"
+        ]
+      },
+      "independentTest": "Load /tasks, /tasks/tasks-list, /tasks/list, and old broad-scope URLs as an ordinary user; assert the boot payload renders tasks-list, the visible rows and requests remain task-run scoped, and system/all/manifest scopes are ignored, redirected, or explained without revealing system workflows.",
+      "acceptanceCriteria": [
+        "/tasks/list is the canonical route and /tasks plus /tasks/tasks-list redirect to it.",
+        "The server renders the tasks-list page key, wide data-panel layout configuration, and runtime dashboard config through the boot payload.",
+        "The browser calls MoonMind APIs only and never calls Temporal, GitHub, Jira, object storage, or runtime providers directly.",
+        "The normal page always requests user-visible task runs, equivalent to scope=tasks / WorkflowType=MoonMind.Run / mm_entry=run in current API terms.",
+        "System workflows, provider-profile managers, internal monitors, maintenance workflows, and manifest-ingest workflows do not appear in the ordinary task table.",
+        "Old scope=system, scope=all, system workflowType, and entry=manifest URLs fail safe by preserving task-run visibility, redirecting authorized admins to diagnostics, redirecting manifest links to the Manifests page, or showing a recoverable message.",
+        "No Kind, Workflow Type, or Entry column is introduced to make broad workflow browsing available from /tasks/list."
+      ],
+      "requirements": [
+        "Implement canonical route redirects and boot payload page-key behavior for the Tasks List page.",
+        "Bound normal list requests and compatibility parsing to user-visible task executions.",
+        "Route or message broad workflow and manifest compatibility URLs without leaking unauthorized rows.",
+        "Keep broad workflow diagnostics permission-gated and separate from the normal task table."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-002": "Owns MoonMind-only browser API calls and related surface boundaries for the route.",
+        "DESIGN-REQ-003": "Owns canonical route, redirects, server hosting, boot payload, dashboard config, and wide layout.",
+        "DESIGN-REQ-004": "Owns task-run default scope and removal of normal workflow-kind browsing.",
+        "DESIGN-REQ-008": "Owns diagnostics escape-hatch routing and permission gate expectations.",
+        "DESIGN-REQ-015": "Owns old scope/workflowType/entry fail-safe handling for visibility-sensitive URLs.",
+        "DESIGN-REQ-022": "Owns backend authorization as the final authority for visibility."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "An admin diagnostics destination may already exist or can be represented by a recoverable message until a dedicated diagnostics route is specified."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "shortName": "column-filter-layout",
+      "summary": "Column-filtered Tasks List layout with active chips and mobile sheet",
+      "description": "As an operator scanning task executions, I want filters to live on the task columns, with clear active filter chips and equivalent mobile controls, so that the page behaves like a compact operational spreadsheet instead of a form above a table.",
+      "sourceReference": {
+        "path": "docs/UI/TasksListPage.md",
+        "title": "Tasks List Page",
+        "sections": [
+          "5. Current page behavior",
+          "6. Desired page layout after column filters",
+          "7. Column set in the desired design",
+          "11. Active filter chips",
+          "16. Mobile behavior",
+          "20. Non-goals"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "independentTest": "Render the Tasks List page at desktop and mobile widths with column filters enabled; assert the old top filters are absent, the default columns and cards are present, active filters appear as actionable chips, mobile exposes the same filterable columns through a sheet, and page size, pagination, live updates, and omitted non-goals remain unchanged.",
+      "acceptanceCriteria": [
+        "The control deck contains page title, Live updates toggle, polling copy, and the feature-disabled notice when applicable.",
+        "Scope, Workflow Type, Status, Entry, and Repository top controls are absent after column filters are enabled.",
+        "Active filter chips and Clear filters are shown in an active query row when filters are active.",
+        "The results toolbar retains page summary, page size, pagination, and optional column visibility controls.",
+        "Default desktop columns are ID, Runtime, Skill, Repository, Status, Title, Scheduled, Created, and Finished; Integration may be optional.",
+        "The default table does not include Kind, Workflow Type, Entry, or Started columns.",
+        "Clicking a filter chip opens its column filter and the chip remove action clears only that column filter.",
+        "Clear filters clears all column filters and restores the default task-run view without removing page-size or live-update behavior.",
+        "Mobile keeps the card layout, shows active chips, and exposes ID, Runtime, Skill, Repository, Status, Title, Scheduled, Created, Finished, and optional Integration filters through a mobile filter sheet."
+      ],
+      "requirements": [
+        "Replace equivalent top filters with per-column filter affordances and active query chips.",
+        "Preserve current useful shell, row, card, disabled, polling, page-size, pagination, and dependency-summary behavior.",
+        "Define the desktop default column set and mobile filter-sheet parity.",
+        "Keep explicit non-goals out of this page version."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the operator scanning surface and spreadsheet-like column-filter presentation.",
+        "DESIGN-REQ-005": "Owns preservation of current shell/card/pagination behavior and the Started omission.",
+        "DESIGN-REQ-006": "Owns removal of detached filters and placement of chips, toolbar, table, and mobile sheet.",
+        "DESIGN-REQ-007": "Owns default column set and optional Integration handling.",
+        "DESIGN-REQ-014": "Owns active chip display, reopen, remove, and mobile visibility behavior.",
+        "DESIGN-REQ-020": "Owns mobile filter-sheet parity and card layout continuity.",
+        "DESIGN-REQ-024": "Owns exclusion of cell editing, pivots, saved views, pagination replacement, live-update removal, and normal system browsing."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Column visibility controls are optional in the first spec unless already present in the implementation surface."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "shortName": "filter-popover-semantics",
+      "summary": "Accessible sortable headers and staged column filter popovers",
+      "description": "As a keyboard and pointer user, I want each column header to separate sorting from filtering and each popover to stage changes predictably, so that sorting, value selection, include/exclude filtering, and specialized text/date filters are reliable and accessible.",
+      "sourceReference": {
+        "path": "docs/UI/TasksListPage.md",
+        "title": "Tasks List Page",
+        "sections": [
+          "8. Column header interaction model",
+          "8.1 Sort behavior",
+          "9. Filter popover design",
+          "9.1 Common popover structure",
+          "9.2 Status filter popover",
+          "9.3 Runtime filter popover",
+          "9.4 Repository filter popover",
+          "9.5 Date filter popovers",
+          "9.6 Text filter popovers",
+          "10. Selection semantics",
+          "15. Accessibility requirements"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-019"
+        ]
+      },
+      "independentTest": "Use keyboard and pointer interactions against representative headers and popovers; assert label clicks toggle sort only, filter icons open popovers only, staged checklist/text/date changes apply or cancel correctly, include/exclude modes encode the expected state, focus and ARIA behavior match the contract, and unsafe labels render as text.",
+      "acceptanceCriteria": [
+        "Each sortable/filterable header exposes a sort label target and a separate filter icon target.",
+        "Activating the label toggles sort without opening the popover; activating the icon opens the correct popover without changing sort.",
+        "The initial sort is scheduledFor descending; unsorted timestamp columns default descending, unsorted non-timestamp columns default ascending, and the current column toggles asc/desc.",
+        "Sorted and filtered columns show distinct indicators, preserve aria-sort behavior, and expose descriptive filter button state.",
+        "Filter popovers stage checkbox/text/date changes until Apply; Cancel, Escape, and outside click close without applying staged changes.",
+        "Clear behavior is consistent across columns and either applies immediately or stages a clear state for Apply confirmation.",
+        "Status uses canonical lifecycle order and filters by MoonMind lifecycle state using rawState || state || status display precedence.",
+        "Runtime stores raw identifiers while displaying human-readable labels and supports blanks.",
+        "Repository supports value checklist search, optional contains/exact text mode, old exact repo mapping, and blanks.",
+        "Scheduled, Created, and Finished support sort commands, inclusive From/To bounds, optional relative presets, and blank handling where meaningful.",
+        "ID supports exact and contains matching; Title supports contains matching; applied text filters trim query whitespace and reset pagination.",
+        "Filters use AND semantics across columns, OR semantics within a column, and distinguish include mode from exclude mode.",
+        "Deselecting one value from all-selected status creates an exclude filter such as not canceled, while selecting specific runtime values creates an include filter.",
+        "Focus moves into popovers and returns to the filter button, Escape cancels, Enter on Apply applies, checkbox labels include labels/counts, and color is not the only state indicator."
+      ],
+      "requirements": [
+        "Build compound table-header controls with independent sort and filter targets.",
+        "Implement staged accessible filter popovers for value-list, status, runtime, repository, date, ID, and title filters.",
+        "Represent include and exclude selection semantics explicitly and safely prevent or confirm impossible empty selections.",
+        "Maintain accessible names, focus management, and keyboard behavior for desktop and reusable mobile editors."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-009": "Owns compound header interaction and indicators.",
+        "DESIGN-REQ-010": "Owns sort defaults, toggling, single primary sort, and truthful global/current-page sort presentation.",
+        "DESIGN-REQ-011": "Owns popover structure, staging, clear/cancel/apply, search, Only action, virtualization/pagination, and safe text rendering.",
+        "DESIGN-REQ-012": "Owns specialized status, runtime, repository, date, ID, and title filter behavior.",
+        "DESIGN-REQ-013": "Owns AND/OR, include/exclude, Select all, new live values, and all-values deselected semantics.",
+        "DESIGN-REQ-019": "Owns sort/filter/chip/mobile accessibility behavior tied to the editor controls."
+      },
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [
+        "The same editor primitives can be reused by the mobile filter sheet with layout adaptation rather than separate semantics."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "shortName": "filter-api-url-contract",
+      "summary": "Canonical URL, list API, and facet contracts for task column filters",
+      "description": "As an operator sharing and reloading filtered task lists, I want URL parameters, list queries, and facet values to represent column filters canonically so that sorting, pagination, counts, and filter choices are deterministic beyond the current page.",
+      "sourceReference": {
+        "path": "docs/UI/TasksListPage.md",
+        "title": "Tasks List Page",
+        "sections": [
+          "12. URL state in the desired design",
+          "12.1 Backward compatibility",
+          "12.2 Canonical filter encoding",
+          "13. API and data requirements for column filtering",
+          "13.1 List query requirements",
+          "13.2 Facet query requirements",
+          "18. Security and privacy"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-022"
+        ]
+      },
+      "independentTest": "Exercise canonical and old query strings plus API request construction with mocked list and facet responses; assert canonical include/exclude/text/date/blank params round-trip through URL state, contradictory filters fail with structured validation errors, list requests use server-authoritative filtering/sort when available, and facet values/counts are scoped by current filters and authorization.",
+      "acceptanceCriteria": [
+        "URL state includes limit, nextPageToken, sort, sortDir, and active column filter params.",
+        "Canonical filter params support stateIn/stateNotIn, targetRuntimeIn/NotIn, targetSkillIn/NotIn, repoIn/NotIn, repoContains, integrationIn/NotIn, taskId/taskIdContains, titleContains, scheduledFrom/To, createdFrom/To, closedFrom/To, and meaningful blank flags.",
+        "Comma-separated values are URL-encoded and repeated parameters are supported for values that may contain commas.",
+        "The browser normalizes empty lists away and never sends no-op filters.",
+        "The API rejects contradictory include and exclude filters on the same field with a clear validation error.",
+        "Filter changes reset nextPageToken and the previous-page cursor stack.",
+        "List requests support server-authoritative sort, include/exclude filters, text filters, date ranges, blanks, deterministic pagination, and filtered count/countMode.",
+        "Display labels are never sent as canonical filter values when raw values exist.",
+        "Facet requests include all active filters except the opened facet, return scoped values, labels, counts, blankCount, countMode, truncation state, and optional pagination token.",
+        "Static status facets may come from frontend enums plus server counts; dynamic Runtime, Skill, Repository, and Integration facets come from server data.",
+        "Facet failure does not break the table and can fall back to current-page values with a visible current-page-only notice.",
+        "List and facet APIs remain authorization scoped and never expose hidden/system-only values or counts on /tasks/list."
+      ],
+      "requirements": [
+        "Define and parse canonical URL filter encoding for shareable column-filter state.",
+        "Map old state and repo params to equivalent column filters and rewrite to canonical encoding after user changes.",
+        "Extend or consume /api/executions list filtering with deterministic server-side semantics where available.",
+        "Add or consume /api/executions/facets for scoped facet values and counts.",
+        "Surface structured validation and facet failures without losing the user-editable filter state."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-015": "Owns URL state, canonical params, old state/repo compatibility, canonical rewrites, and pagination reset.",
+        "DESIGN-REQ-016": "Owns list API filtering, sorting, pagination, counts, normalized values, and access-control authority.",
+        "DESIGN-REQ-017": "Owns facet endpoint shape, scoping, counts, fallback, pagination/search, and no system leakage.",
+        "DESIGN-REQ-022": "Owns security and privacy for URL/API filter values, labels, bounds, validation errors, and authorization."
+      },
+      "dependencies": [
+        "STORY-001",
+        "STORY-003"
+      ],
+      "assumptions": [
+        "Server-side sort may be introduced incrementally, but the UI must label any current-page-only client sorting honestly until server support covers the active column."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "shortName": "live-state-verification",
+      "summary": "Live update stability, recoverable states, and regression coverage for filtered lists",
+      "description": "As an operator relying on a live task table, I want polling, empty states, errors, and tests to protect staged filter work and compatibility behavior so that the filtered list remains trustworthy under refreshes, API failures, and old shared links.",
+      "sourceReference": {
+        "path": "docs/UI/TasksListPage.md",
+        "title": "Tasks List Page",
+        "sections": [
+          "5.8 Current empty, loading, error, and pagination states",
+          "14. Live updates and filter stability",
+          "17. Empty and error states after column filters",
+          "19. Testing contract",
+          "21. Desired implementation sequence"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "independentTest": "Run focused frontend/API tests around polling and state handling: open a popover and stage changes while polling data/facets change, trigger empty first and later pages, force facet/list validation errors, load old URLs, and assert the testing contract behaviors remain covered before downstream implementation is considered complete.",
+      "acceptanceCriteria": [
+        "When no filter popover is open, live updates may refetch according to the configured polling interval.",
+        "When a filter popover is open, the checklist snapshot remains stable until close or explicit refresh, and staged selections are not overwritten.",
+        "New matching rows can appear and no-longer-matching rows can disappear after polling according to active filters.",
+        "Include-mode filters do not automatically include newly discovered values; exclude-mode filters include newly discovered values unless excluded.",
+        "Facet changes while a popover is open may show subtle copy such as Values updated after you opened this filter.",
+        "First-page no-match results show No tasks found for the current filters. and include Clear filters when filters are active.",
+        "Later empty pages keep previous-page navigation available.",
+        "Facet errors show inline warning and retry inside the popover; list filter validation errors preserve editable filter state.",
+        "Unsupported old URL combinations map, redirect, or show recoverable Clear filters behavior without revealing system workflows.",
+        "Regression tests cover route rendering, URL compatibility, removed top controls, absent Kind/Workflow Type/Entry columns, header sort/filter separation, aria-sort, active filter accessible names, canonical status order, raw/runtime label mapping, include/exclude examples, pagination reset, chip clearing, mobile parity, diagnostics-only system scopes, facet failure, live polling stability, later-page empty navigation, and Started omission.",
+        "The desired implementation sequence preserves existing behavior first, adds reusable components and URL/API support behind controlled rollout, removes old controls after parity tests, and keeps compatibility parsing for the documented window."
+      ],
+      "requirements": [
+        "Protect staged filter popover state from live polling and facet refreshes.",
+        "Handle empty, loading, API error, facet error, validation error, and old URL states recoverably.",
+        "Preserve previous-page navigation on empty later pages.",
+        "Codify the testing contract as focused regression coverage before completing downstream specs.",
+        "Treat the design sequence as product sequencing guidance while keeping rollout notes in MoonSpec artifacts."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-005": "Owns current loading/error/empty/pagination behavior and preservation of old useful behavior during migration.",
+        "DESIGN-REQ-018": "Owns polling and staged filter stability under live updates.",
+        "DESIGN-REQ-021": "Owns empty, facet error, list validation error, unsupported old URL, and later-page empty recovery.",
+        "DESIGN-REQ-023": "Owns the explicit behavioral test contract for route, filters, URLs, facets, live updates, mobile, and omissions.",
+        "DESIGN-REQ-025": "Owns safe sequencing and parity-test expectation without writing rollout checklists into canonical docs."
+      },
+      "dependencies": [
+        "STORY-002",
+        "STORY-003",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Detailed test file placement will be decided during /speckit.plan based on the implementation surfaces active at that time."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-002",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-025": [
+      "STORY-005"
+    ]
+  },
+  "recommendedFirstStory": "STORY-001",
+  "outOfScopeItems": [
+    "Spreadsheet-style cell editing.",
+    "Arbitrary pivot tables.",
+    "Multi-column sort in the first version.",
+    "User-authored raw Temporal Visibility SQL.",
+    "Direct browser calls to Temporal or other non-MoonMind services.",
+    "Saving named filter views in the first version.",
+    "Replacing page-size or pagination controls.",
+    "Removing the Live updates toggle.",
+    "Exposing system workflow browsing through the normal Tasks List page."
+  ]
+}
