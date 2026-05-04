@@ -8141,13 +8141,11 @@ describe.skip("Task Create Entrypoint", () => {
       /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-0\.7rem;[^}]*color-mix\(in srgb,\s*rgb\(var\(--mm-action-primary\)\)\s*42%,\s*white\)/s,
     );
     expect(missionControlCss).toMatch(
-      /\.queue-floating-bar:not\(\[data-liquid-gl-renderer="canvas"\]\)::before\s*\{[^}]*background:\s*linear-gradient/s,
+      /\.queue-floating-bar::before\s*\{[^}]*background:\s*linear-gradient/s,
     );
     expect(missionControlCss).toMatch(
-      /\.queue-floating-bar:not\(\[data-liquid-gl-renderer="canvas"\]\)::after\s*\{[^}]*box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.32\)/s,
+      /\.queue-floating-bar::after\s*\{[^}]*box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.32\)/s,
     );
-    expect(missionControlCss).not.toMatch(/\.queue-floating-bar::before\s*\{/);
-    expect(missionControlCss).not.toMatch(/\.queue-floating-bar::after\s*\{/);
     expect(missionControlCss).toMatch(
       /\.queue-floating-bar--liquid-glass\[data-liquid-gl-initialized="true"\]\s*>\s*\*\s*\{[^}]*pointer-events:\s*auto;/s,
     );
@@ -12335,7 +12333,7 @@ describe.skip("Task Create Entrypoint", () => {
 });
 
 describe("Task Create submit arrow animation", () => {
-  it("keeps fallback sheen off the active liquidGL canvas surface", async () => {
+  it("keeps the floating-bar sheen visible alongside the liquidGL canvas surface", async () => {
     const { readFileSync } = await import("node:fs");
     const css = readFileSync(
       `${process.cwd()}/frontend/src/styles/mission-control.css`,
@@ -12343,13 +12341,14 @@ describe("Task Create submit arrow animation", () => {
     );
 
     expect(css).toMatch(
-      /\.queue-floating-bar:not\(\[data-liquid-gl-renderer="canvas"\]\)::before\s*\{[^}]*background:\s*linear-gradient/s,
+      /\.queue-floating-bar::before\s*\{[^}]*background:\s*linear-gradient/s,
     );
     expect(css).toMatch(
-      /\.queue-floating-bar:not\(\[data-liquid-gl-renderer="canvas"\]\)::after\s*\{[^}]*box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.32\)/s,
+      /\.queue-floating-bar::after\s*\{[^}]*box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.32\)/s,
     );
-    expect(css).not.toMatch(/\.queue-floating-bar::before\s*\{/);
-    expect(css).not.toMatch(/\.queue-floating-bar::after\s*\{/);
+    expect(css).not.toMatch(
+      /\.queue-floating-bar:not\(\[data-liquid-gl-renderer="canvas"\]\)::before/,
+    );
   });
 
   it("cycles the create arrow out right and back in from the left on hover", async () => {
