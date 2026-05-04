@@ -209,7 +209,7 @@ describe("Task Create Step Type authoring", () => {
       within(primaryStep).getByLabelText("Step 1 Skill Args (optional JSON object)"),
       { target: { value: '{"issueKey":"MM-568"}' } },
     );
-    fireEvent.change(within(primaryStep).getByLabelText("Step 1 Instructions"), {
+    fireEvent.change(within(primaryStep).getByLabelText("Instructions"), {
       target: { value: "Keep these shared instructions." },
     });
 
@@ -259,10 +259,10 @@ describe("Task Create Step Type authoring", () => {
       "section",
     ) as HTMLElement;
 
-    fireEvent.change(within(firstStep).getByLabelText("Step 1 Instructions"), {
+    fireEvent.change(within(firstStep).getByLabelText("Instructions"), {
       target: { value: "Keep first manual skill." },
     });
-    fireEvent.change(within(thirdStep).getByLabelText("Step 3 Instructions"), {
+    fireEvent.change(within(thirdStep).getByLabelText("Instructions"), {
       target: { value: "Keep trailing skill." },
     });
     selectStepType(secondStep, "Preset");
@@ -303,19 +303,19 @@ describe("Task Create Step Type authoring", () => {
       throw new Error("Expected four rendered steps after preset expansion.");
     }
     expect(
-      (within(renderedFirst).getByLabelText("Step 1 Instructions") as HTMLTextAreaElement)
+      (within(renderedFirst).getByLabelText("Instructions") as HTMLTextAreaElement)
         .value,
     ).toBe("Keep first manual skill.");
     expect(
-      (within(renderedSecond).getByLabelText("Step 2 Instructions") as HTMLTextAreaElement)
+      (within(renderedSecond).getByLabelText("Instructions") as HTMLTextAreaElement)
         .value,
     ).toBe("Read the selected Jira issue.");
     expect(
-      (within(renderedThird).getByLabelText("Step 3 Instructions") as HTMLTextAreaElement)
+      (within(renderedThird).getByLabelText("Instructions") as HTMLTextAreaElement)
         .value,
     ).toBe("Implement the selected Jira issue.");
     expect(
-      (within(renderedFourth).getByLabelText("Step 4 Instructions") as HTMLTextAreaElement)
+      (within(renderedFourth).getByLabelText("Instructions") as HTMLTextAreaElement)
         .value,
     ).toBe("Keep trailing skill.");
   });

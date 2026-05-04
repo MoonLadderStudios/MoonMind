@@ -12733,7 +12733,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Keep authored MM-578 preset placeholder." },
     });
     selectStepType(step, "Preset");
@@ -12846,7 +12846,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Keep unresolved MM-578 preset placeholder." },
     });
     await chooseMm578Preset(step);
@@ -13002,7 +13002,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Create a regular task." },
     });
     const createButton = screen.getByRole("button", { name: "Create" });
@@ -13264,7 +13264,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Keep authored MM-578 preset step." },
     });
     selectStepType(step, "Preset");
@@ -13461,7 +13461,7 @@ describe("Task Create governed Tool authoring", () => {
       "section",
     ) as HTMLElement;
     selectStepType(step, "Skill");
-    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Implement MM-577 with the agentic Skill workflow." },
     });
     fireEvent.change(within(step).getByLabelText(/Skill \(optional\)/), {
@@ -13533,7 +13533,7 @@ describe("Task Create governed Tool authoring", () => {
     const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Transition MM-576 through trusted Jira." },
     });
     selectStepType(step, "Tool");

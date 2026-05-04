@@ -7654,7 +7654,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <div className="stack">
                     <div className="queue-field-heading">
                       <label htmlFor={`queue-step-instructions-${step.localId}`}>
-                        {step.stepType === "preset"
+                        {step.stepType === "preset" || step.stepType === "skill"
                           ? "Instructions"
                           : `Step ${index + 1} Instructions`}
                       </label>
