@@ -233,7 +233,7 @@ class JiraClient:
         """Disambiguate Jira 404s that are actually bad credentials.
 
         Jira Cloud commonly returns 404 for issue/project reads when the caller
-        is anonymous or unauthorized. Probe the authenticated profile endpoint
+        is anonymous or unauthorized. Probe a low-cost authenticated endpoint
         before surfacing a misleading "not found" error.
         """
 
@@ -244,10 +244,17 @@ class JiraClient:
         ):
             return None
         try:
-            auth_response = await self._client.request(
-                method="GET",
-                url=self._resolve_request_path("/myself"),
-            )
+            if self._connection.auth_mode == "service_account_scoped":
+                auth_response = await self._client.request(
+                    method="GET",
+                    url=self._resolve_request_path("/project/search"),
+                    params={"maxResults": 1},
+                )
+            else:
+                auth_response = await self._client.request(
+                    method="GET",
+                    url=self._resolve_request_path("/myself"),
+                )
         except (httpx.TransportError, httpx.TimeoutException):
             return None
         if auth_response.status_code in {401, 403}:
