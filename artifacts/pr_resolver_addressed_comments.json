@@ -1,17 +1,27 @@
 [
   {
-    "id": 4369054821,
+    "id": 4369902618,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier limit notice is informational and does not request a code change."
+    "rationale": "Qodo free-tier limit notice; no code feedback to address."
   },
   {
-    "id": 3179986518,
+    "id": 3180618838,
     "disposition": "addressed",
-    "rationale": "Updated sanitizeCloneForHtml2Canvas to iterate clonedDocument.querySelectorAll('*') directly and avoid redundant root processing and Array.from conversion."
+    "rationale": "Runtime-only orchestration mode normalization now checks raw submitted legacy input and injects runtime into resolved template variables when provided."
   },
   {
-    "id": 4218140747,
+    "id": 4218898821,
+    "disposition": "addressed",
+    "rationale": "Review summary covered the same legacy-input normalization issue addressed in catalog expansion code and tests."
+  },
+  {
+    "id": 3180626824,
+    "disposition": "addressed",
+    "rationale": "Include expansion now applies runtime-only orchestration mode normalization to child preset inputs, with regression coverage for included moonspec-orchestrate presets."
+  },
+  {
+    "id": 4218907772,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the actionable inline optimization comment from the same review was addressed."
+    "rationale": "Automated Codex review wrapper with no additional actionable feedback beyond the inline comments."
   }
 ]

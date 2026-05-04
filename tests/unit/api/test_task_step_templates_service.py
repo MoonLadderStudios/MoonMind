@@ -267,6 +267,83 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
         step["id"] for step in expanded["steps"]
     ]
 
+async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
+    tmp_path,
+):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="moonspec-orchestrate",
+                title="MoonSpec Orchestrate",
+                description="Runtime-only child preset",
+                scope="global",
+                scope_ref=None,
+                tags=["moonspec"],
+                inputs_schema=[
+                    {
+                        "name": "feature_request",
+                        "label": "Feature Request",
+                        "type": "markdown",
+                        "required": True,
+                    }
+                ],
+                steps=[
+                    {
+                        "title": "Specify",
+                        "instructions": "Selected mode: {{ inputs.orchestration_mode }}.",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+            await service.create_template(
+                slug="parent-flow",
+                title="Parent Flow",
+                description="Composed flow",
+                scope="global",
+                scope_ref=None,
+                tags=["composed"],
+                inputs_schema=[
+                    {
+                        "name": "feature_request",
+                        "label": "Feature Request",
+                        "type": "markdown",
+                        "required": True,
+                    }
+                ],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "moonspec-orchestrate",
+                        "version": "1.0.0",
+                        "alias": "orchestrate",
+                        "scope": "global",
+                        "inputMapping": {
+                            "feature_request": "{{ inputs.feature_request }}",
+                            "orchestration_mode": "docs",
+                        },
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+            expanded = await service.expand_template(
+                slug="parent-flow",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={"feature_request": "Implement MM-600"},
+                context={},
+                user_id=user_id,
+            )
+
+    assert "Selected mode: runtime." in expanded["steps"][0]["instructions"]
+
 async def test_create_template_rejects_templated_include_version(tmp_path):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -1586,7 +1663,10 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
             )
 
             assert len(expanded["steps"]) == 6
-            assert "orchestration_mode" not in expanded["appliedTemplate"]["inputs"]
+            assert (
+                expanded["appliedTemplate"]["inputs"]["orchestration_mode"]
+                == "runtime"
+            )
             assert "Selected mode" not in expanded["steps"][0]["instructions"]
             assert "runtime implementation workflow" in expanded["steps"][0][
                 "instructions"

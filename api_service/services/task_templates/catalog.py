@@ -497,7 +497,10 @@ def _normalize_runtime_orchestration_mode(
 ) -> dict[str, Any]:
     if slug not in _RUNTIME_ONLY_ORCHESTRATE_SLUGS:
         return resolved
-    if _ORCHESTRATION_MODE_INPUT not in resolved:
+    if (
+        _ORCHESTRATION_MODE_INPUT not in submitted
+        and _ORCHESTRATION_MODE_INPUT not in resolved
+    ):
         return resolved
     normalized = dict(resolved)
     normalized[_ORCHESTRATION_MODE_INPUT] = "runtime"
@@ -1243,14 +1246,20 @@ class TaskTemplateCatalogService:
                         inputs_schema=child_version.inputs_schema or [],
                         context=variables.get("context"),
                     )
+                    submitted_child_inputs = _apply_contextual_input_overrides(
+                        slug=child_template.slug,
+                        inputs_schema=child_schema,
+                        submitted=dict(input_mapping),
+                        context=variables.get("context"),
+                    )
                     child_inputs = self._resolve_inputs(
                         schema=child_schema,
-                        submitted=_apply_contextual_input_overrides(
-                            slug=child_template.slug,
-                            inputs_schema=child_schema,
-                            submitted=dict(input_mapping),
-                            context=variables.get("context"),
-                        ),
+                        submitted=submitted_child_inputs,
+                    )
+                    child_inputs = _normalize_runtime_orchestration_mode(
+                        slug=child_template.slug,
+                        submitted=submitted_child_inputs,
+                        resolved=child_inputs,
                     )
                 except TaskTemplateValidationError as exc:
                     raise TaskTemplateValidationError(
