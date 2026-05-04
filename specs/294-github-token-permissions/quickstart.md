@@ -35,6 +35,7 @@ Integration coverage should prove:
 - Publish mode branch/PR paths invoke explicit credential materialization without ambient `git` or `gh` auth.
 - PR readiness reports optional evidence unavailable when checks or issue-reaction permissions are missing.
 - Token probe output targets one selected repository and returns mode-specific permission checklist results.
+- Token probe request/response schemas are exercised through the MoonMind-owned API or service boundary.
 
 ## Test-First Scenarios
 

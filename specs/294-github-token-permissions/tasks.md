@@ -33,14 +33,14 @@
 
 | Traceability Item | Plan Status | Task Coverage |
 | --- | --- | --- |
-| DESIGN-REQ-001, FR-001, FR-002, FR-003, SCN-001, SC-001 | partial/missing | T004, T008, T014, T015, T022, T027, T028, T029, T030, T031, T045 |
-| DESIGN-REQ-002, FR-004, FR-005, FR-006, FR-007, SCN-002, SC-002, SC-003 | missing/partial | T005, T009, T016, T017, T023, T024, T032, T033, T034, T035, T045 |
-| DESIGN-REQ-003, FR-008, FR-009, FR-010, FR-016 | missing | T010, T018, T036, T037, T038, T046 |
-| DESIGN-REQ-004, FR-011, FR-012, SCN-004, SC-004 | partial/missing | T011, T019, T025, T039, T040, T045 |
-| DESIGN-REQ-005, FR-013, FR-014, SCN-003, SC-005 | partial/missing | T012, T020, T041, T042, T045 |
-| DESIGN-REQ-006, FR-015, FR-016, SCN-005, SC-006 | missing | T013, T021, T026, T043, T044, T045 |
-| DESIGN-REQ-007, FR-017, SCN-006, SC-007 | partial/missing | T046, T047, T051 |
-| FR-018 | missing | T004-T026, T045, T049, T052, T053 |
+| DESIGN-REQ-001, FR-001, FR-002, FR-003, SCN-001, SC-001 | partial/missing | T004, T008, T014, T015, T022, T026, T028, T029, T030, T031, T032, T033, T034, T046 |
+| DESIGN-REQ-002, FR-004, FR-005, FR-006, FR-007, SCN-002, SC-002, SC-003 | missing/partial | T005, T016, T017, T023, T024, T027, T028, T035, T036, T037, T044, T046, T047 |
+| DESIGN-REQ-003, FR-008, FR-009, FR-010, FR-016 | missing | T010, T018, T025, T038, T039, T046 |
+| DESIGN-REQ-004, FR-011, FR-012, SCN-004, SC-004 | partial/missing | T011, T019, T025, T043, T046, T047 |
+| DESIGN-REQ-005, FR-013, FR-014, SCN-003, SC-005 | partial/missing | T012, T020, T025, T042, T046, T047 |
+| DESIGN-REQ-006, FR-015, FR-016, SCN-005, SC-006 | missing | T013, T021, T028, T039, T040, T041, T046, T047 |
+| DESIGN-REQ-007, FR-017, SCN-006, SC-007 | partial/missing | T048, T049, T052 |
+| FR-018 | missing | T004-T026, T045, T051, T053, T054, T055 |
 
 ## Phase 1: Setup (Shared Infrastructure)
 
@@ -125,16 +125,17 @@
 - [ ] T037 Wire publish handler/runtime callers to provide repository context and resolved GitHub credential metadata for FR-004/FR-005/SCN-002 in moonmind/agents/codex_worker/handlers.py
 - [ ] T038 Add GitHub permission profile definitions for indexing, publish, readiness, and full PR automation for FR-008/FR-009/FR-010/DESIGN-REQ-003 in moonmind/workflows/adapters/github_service.py
 - [ ] T039 Implement targeted token probe service behavior for selected repository and mode-specific checklist output for FR-015/FR-016/DESIGN-REQ-006 in moonmind/workflows/adapters/github_service.py
-- [ ] T040 Expose a MoonMind-owned token probe API or internal service boundary for FR-015/FR-016/SCN-005 in api_service/api/routers/settings.py
-- [ ] T041 Implement sanitized GitHub permission diagnostic extraction for REST failures covering FR-013/FR-014/DESIGN-REQ-005 in moonmind/workflows/adapters/github_service.py
-- [ ] T042 Implement optional evidence degradation for checks and issue reactions covering FR-011/FR-012/DESIGN-REQ-004 in moonmind/workflows/adapters/github_service.py
-- [ ] T043 Ensure publish, probe, and GitHub API failure paths apply token-like redaction for FR-007/SC-003 in moonmind/publish/sanitization.py and moonmind/utils/logging.py
-- [ ] T044 Update or add runtime boundary wiring so Temporal-facing GitHub publish/readiness invocations preserve existing invocation compatibility for FR-018 in moonmind/workflows/temporal/activity_runtime.py
+- [ ] T040 Add token probe request and response schemas for FR-015/FR-016/SCN-005 in api_service/api/schemas.py
+- [ ] T041 Expose a MoonMind-owned token probe API or internal service boundary for FR-015/FR-016/SCN-005 in api_service/api/routers/settings.py
+- [ ] T042 Implement sanitized GitHub permission diagnostic extraction for REST failures covering FR-013/FR-014/DESIGN-REQ-005 in moonmind/workflows/adapters/github_service.py
+- [ ] T043 Implement optional evidence degradation for checks and issue reactions covering FR-011/FR-012/DESIGN-REQ-004 in moonmind/workflows/adapters/github_service.py
+- [ ] T044 Ensure publish, probe, and GitHub API failure paths apply token-like redaction for FR-007/SC-003 in moonmind/publish/sanitization.py and moonmind/utils/logging.py
+- [ ] T045 Update or add runtime boundary wiring so Temporal-facing GitHub publish/readiness invocations preserve existing invocation compatibility for FR-018 in moonmind/workflows/temporal/activity_runtime.py
 
 ### Story Validation
 
-- [ ] T045 Run focused unit tests `pytest tests/unit/auth/test_github_credentials.py tests/unit/workflows/adapters/test_github_service.py tests/unit/publish/test_publish_service_github_auth.py tests/unit/indexers/test_github_indexer.py tests/unit/workflows/temporal/runtime/test_managed_api_key_resolve.py -q` and fix failures in moonmind/auth/github_credentials.py, moonmind/workflows/adapters/github_service.py, moonmind/publish/service.py, moonmind/indexers/github_indexer.py, and moonmind/workflows/temporal/runtime/managed_api_key_resolve.py
-- [ ] T046 Run focused integration tests `pytest tests/integration/api/test_github_token_probe.py tests/integration/temporal/test_github_publish_readiness_boundaries.py -q` and fix failures in api_service/api/routers/settings.py, moonmind/workflows/adapters/github_service.py, moonmind/publish/service.py, and moonmind/workflows/temporal/activity_runtime.py
+- [ ] T046 Run focused unit tests `pytest tests/unit/auth/test_github_credentials.py tests/unit/workflows/adapters/test_github_service.py tests/unit/publish/test_publish_service_github_auth.py tests/unit/indexers/test_github_indexer.py tests/unit/workflows/temporal/runtime/test_managed_api_key_resolve.py -q` and fix failures in moonmind/auth/github_credentials.py, moonmind/workflows/adapters/github_service.py, moonmind/publish/service.py, moonmind/indexers/github_indexer.py, and moonmind/workflows/temporal/runtime/managed_api_key_resolve.py
+- [ ] T047 Run focused integration tests `pytest tests/integration/api/test_github_token_probe.py tests/integration/temporal/test_github_publish_readiness_boundaries.py -q` and fix failures in api_service/api/schemas.py, api_service/api/routers/settings.py, moonmind/workflows/adapters/github_service.py, moonmind/publish/service.py, and moonmind/workflows/temporal/activity_runtime.py
 
 **Checkpoint**: The story is fully functional, covered by unit and integration tests, and testable independently.
 
@@ -144,14 +145,14 @@
 
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
-- [ ] T047 [P] Update desired-state GitHub token profile guidance for FR-017/DESIGN-REQ-007/SC-007 in docs/Security/SettingsSystem.md
-- [ ] T048 [P] Update managed GitHub auth and publish semantics for FR-004/FR-005/FR-017 in docs/ManagedAgents/ManagedAgentsGit.md and docs/Tasks/TaskPublishing.md
-- [ ] T049 [P] Add edge-case unit coverage for wrong resource owner, excluded repository, pending org approval, SSH remote, and token-like provider body redaction covering edge cases from specs/294-github-token-permissions/spec.md in tests/unit/workflows/adapters/test_github_service.py
-- [ ] T050 [P] Add docs or comments for any Temporal-facing cutover or compatibility decision for FR-018 in specs/294-github-token-permissions/plan.md
-- [ ] T051 Run quickstart validation commands from specs/294-github-token-permissions/quickstart.md and record any deviations in specs/294-github-token-permissions/verification.md
-- [ ] T052 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and fix story-related failures in moonmind/ and api_service/
-- [ ] T053 Run `./tools/test_integration.sh` and fix story-related failures in moonmind/ and api_service/
-- [ ] T054 Run `/speckit.verify` to validate the final implementation against the original feature request in specs/294-github-token-permissions/spec.md
+- [ ] T048 [P] Update desired-state GitHub token profile guidance for FR-017/DESIGN-REQ-007/SC-007 in docs/Security/SettingsSystem.md
+- [ ] T049 [P] Update managed GitHub auth and publish semantics for FR-004/FR-005/FR-017 in docs/ManagedAgents/ManagedAgentsGit.md and docs/Tasks/TaskPublishing.md
+- [ ] T050 [P] Add edge-case unit coverage for wrong resource owner, excluded repository, pending org approval, SSH remote, and token-like provider body redaction covering edge cases from specs/294-github-token-permissions/spec.md in tests/unit/workflows/adapters/test_github_service.py
+- [ ] T051 [P] Add docs or comments for any Temporal-facing cutover or compatibility decision for FR-018 in specs/294-github-token-permissions/plan.md
+- [ ] T052 Run quickstart validation commands from specs/294-github-token-permissions/quickstart.md and record any deviations in specs/294-github-token-permissions/verification.md
+- [ ] T053 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and fix story-related failures in moonmind/ and api_service/
+- [ ] T054 Run `./tools/test_integration.sh` and fix story-related failures in moonmind/ and api_service/
+- [ ] T055 Run `/speckit.verify` to validate the final implementation against the original feature request in specs/294-github-token-permissions/spec.md
 
 ---
 
@@ -170,9 +171,9 @@
 - Integration tests T019-T024 must be written before implementation tasks T029-T044.
 - Red-first confirmation tasks T025-T028 must run before production code tasks T029-T044.
 - Resolver implementation T029-T034 should land before publish, indexer, and runtime migration tasks that consume it.
-- Publish implementation T035-T037 should land before publish boundary validation T045-T046.
-- Permission profiles and diagnostics T038-T042 should land before token probe and readiness validation T045-T046.
-- Story validation T045-T046 must pass before polish and full-suite tasks T047-T054.
+- Publish implementation T035-T037 should land before publish boundary validation T046-T047.
+- Permission profiles, diagnostics, readiness degradation, and token probe tasks T038-T043 should land before token probe and readiness validation T046-T047.
+- Story validation T046-T047 must pass before polish and full-suite tasks T048-T055.
 
 ### Parallel Opportunities
 
@@ -180,7 +181,7 @@
 - T004-T007 can run in parallel because they touch different test fixtures.
 - T008-T018 can run in parallel by test file ownership.
 - T019-T024 can run in parallel by integration boundary ownership.
-- T047-T050 can run in parallel after story validation because they touch docs, tests, and feature artifacts separately.
+- T048-T051 can run in parallel after story validation because they touch docs, tests, and feature artifacts separately.
 
 ---
 
@@ -209,10 +210,10 @@ Task: "T023 Add failing publish branch boundary test in tests/integration/tempor
 4. Implement canonical resolver and migrate consumers T029-T034.
 5. Implement publish credential handling T035-T037.
 6. Implement permission profiles, diagnostics, readiness degradation, and token probe T038-T044.
-7. Run focused validation T045-T046 until green.
-8. Update docs and edge-case coverage T047-T051.
-9. Run full unit and integration suites T052-T053.
-10. Run `/speckit.verify` in T054.
+7. Run focused validation T046-T047 until green.
+8. Update docs and edge-case coverage T048-T052.
+9. Run full unit and integration suites T053-T054.
+10. Run `/speckit.verify` in T055.
 
 ### Requirement Status Handling
 

@@ -101,6 +101,8 @@ specs/294-github-token-permissions/
 
 ```text
 moonmind/
+├── auth/
+│   └── github_credentials.py
 ├── config/settings.py
 ├── indexers/github_indexer.py
 ├── publish/
@@ -115,6 +117,9 @@ moonmind/
 └── workflows/temporal/activity_runtime.py
 
 api_service/
+├── api/
+│   ├── routers/settings.py
+│   └── schemas.py
 └── services/settings_catalog.py
 
 docs/
@@ -124,13 +129,16 @@ docs/
 
 tests/
 ├── unit/
+│   ├── auth/test_github_credentials.py
+│   ├── publish/test_publish_service_github_auth.py
 │   ├── indexers/test_github_indexer.py
 │   ├── agents/codex_worker/test_handlers.py
 │   ├── services/temporal/runtime/
 │   ├── workflows/adapters/test_github_service.py
 │   └── workflows/temporal/runtime/test_managed_api_key_resolve.py
 └── integration/
-    └── temporal/ or api/
+    ├── api/test_github_token_probe.py
+    └── temporal/test_github_publish_readiness_boundaries.py
 ```
 
 **Structure Decision**: Use the existing Python backend, Temporal runtime, GitHub adapter, settings catalog, publish service, and docs structure. No new project or persistent storage layer is required.
