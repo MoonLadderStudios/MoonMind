@@ -301,6 +301,36 @@ async def test_create_jira_issues_explains_protected_branch_handoff_failure():
         )
 
 @pytest.mark.asyncio
+async def test_create_jira_issues_explains_no_commit_handoff_failure():
+    async def fetcher(_repo: str, _ref: str, _path: str) -> str:
+        raise AssertionError("fetcher should not run for unpublished handoff")
+
+    with pytest.raises(ValueError, match="made no commits"):
+        await create_jira_issues_from_stories(
+            {
+                "repository": "MoonLadderStudios/Tactics",
+                "targetBranch": "breakdown-branch",
+                "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
+                "storyOutput": {
+                    "mode": "jira",
+                    "fallback": "fail",
+                    "jira": {
+                        "projectKey": "MM",
+                        "issueTypeId": "10001",
+                        "dependencyMode": "none",
+                    },
+                },
+            },
+            {
+                "previousOutputs": {
+                    "push_status": "no_commits",
+                    "push_branch": "breakdown-branch",
+                },
+            },
+            story_fetcher=fetcher,
+        )
+
+@pytest.mark.asyncio
 async def test_create_jira_issues_preserves_source_reference_when_description_truncates():
     service = _FakeJiraService()
     long_description = "x" * 40000

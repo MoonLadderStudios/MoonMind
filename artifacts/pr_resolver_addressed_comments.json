@@ -8,5 +8,25 @@
     "id": 4224002358,
     "disposition": "addressed",
     "rationale": "Review summary covers the same layout issue addressed by adding w-full to the navigation container."
+  },
+  {
+    "id": 3184882513,
+    "disposition": "addressed",
+    "rationale": "Removed the redundant unpublished handoff check from the exception block; the pre-try guard already covers unchanged previous_outputs/ref inputs."
+  },
+  {
+    "id": 4223961398,
+    "disposition": "not-applicable",
+    "rationale": "Review summary only; its actionable child comment 3184882513 was addressed."
+  },
+  {
+    "id": 3184895029,
+    "disposition": "addressed",
+    "rationale": "Scoped Jira auth diagnostics now require an authenticated signal: /myself is tried first, and the fallback project/search probe only succeeds when Jira returns x-aaccountid."
+  },
+  {
+    "id": 4223974897,
+    "disposition": "not-applicable",
+    "rationale": "Informational Codex review wrapper; its actionable child comment 3184895029 was addressed."
   }
 ]
