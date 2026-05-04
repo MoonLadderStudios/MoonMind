@@ -3049,6 +3049,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitRippleKey, setSubmitRippleKey] = useState(0);
   const [submitRippleRect, setSubmitRippleRect] = useState<DOMRect | null>(null);
+  const [isSubmitArrowExiting, setIsSubmitArrowExiting] = useState(false);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
   const prevRuntimeRef = useRef(runtime);
@@ -8284,7 +8285,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               ref={submitButtonRef}
               className={
                 showPrimaryCtaArrow
-                  ? "queue-submit-primary queue-submit-primary--icon"
+                  ? `queue-submit-primary queue-submit-primary--icon${
+                      isSubmitArrowExiting
+                        ? " queue-submit-primary--arrow-exit"
+                        : ""
+                    }`
                   : "queue-submit-primary queue-submit-primary--with-arrow"
               }
               disabled={isTemporalFormBlocked}
@@ -8299,6 +8304,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   submitButtonRef.current?.getBoundingClientRect() ?? null;
                 setSubmitRippleRect(rect);
                 setSubmitRippleKey((value) => value + 1);
+                setIsSubmitArrowExiting(true);
               }}
             >
               {showPrimaryCtaArrow ? (
@@ -8306,6 +8312,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   aria-hidden="true"
                   className="queue-submit-primary-arrow"
                   data-submit-arrow="right"
+                  onAnimationEnd={(event) => {
+                    if (event.animationName === "queue-submit-primary-arrow-exit") {
+                      setIsSubmitArrowExiting(false);
+                    }
+                  }}
                 >
                   <ArrowRightIcon />
                 </span>
