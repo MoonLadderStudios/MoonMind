@@ -3047,6 +3047,12 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   animation: queue-submit-primary-arrow-cycle 460ms cubic-bezier(0.33, 0, 0.2, 1) both;
 }
 
+.queue-submit-primary--icon.queue-submit-primary--arrow-exit
+  .queue-submit-primary-arrow
+  svg {
+  animation: queue-submit-primary-arrow-exit 230ms cubic-bezier(0.33, 0, 0.2, 1) both;
+}
+
 .queue-submit-primary--icon:hover {
   border-color: rgb(var(--mm-action-primary));
   box-shadow:
@@ -3082,6 +3088,15 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   }
   100% {
     transform: translateX(0);
+  }
+}
+
+@keyframes queue-submit-primary-arrow-exit {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(145%);
   }
 }
 

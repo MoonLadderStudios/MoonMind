@@ -12419,13 +12419,17 @@ describe.skip("Task Create Entrypoint", () => {
 });
 
 describe("Task Create submit arrow animation", () => {
-  it("keeps the floating-bar sheen visible alongside the liquidGL canvas surface", async () => {
+  let css: string;
+
+  beforeAll(async () => {
     const { readFileSync } = await import("node:fs");
-    const css = readFileSync(
+    css = readFileSync(
       `${process.cwd()}/frontend/src/styles/mission-control.css`,
       "utf8",
     );
+  });
 
+  it("keeps the floating-bar sheen visible alongside the liquidGL canvas surface", async () => {
     expect(css).toMatch(
       /\.queue-floating-bar::before\s*\{[^}]*background:\s*linear-gradient/s,
     );
@@ -12438,12 +12442,6 @@ describe("Task Create submit arrow animation", () => {
   });
 
   it("cycles the create arrow out right and back in from the left on hover", async () => {
-    const { readFileSync } = await import("node:fs");
-    const css = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
-      "utf8",
-    );
-
     expect(css).toMatch(
       /\.queue-submit-primary--icon \.queue-submit-primary-arrow\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*overflow:\s*hidden;/s,
     );
@@ -12455,6 +12453,21 @@ describe("Task Create submit arrow animation", () => {
     );
     expect(css).toMatch(
       /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.queue-submit-primary--icon \.queue-submit-primary-arrow svg\s*\{[\s\S]*animation:\s*none !important;[\s\S]*transform:\s*none !important;/,
+    );
+  });
+
+  it("exits the create arrow to the right on click while preserving the shockwave", async () => {
+    expect(css).toMatch(
+      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow\s*svg\s*\{[^}]*animation:\s*queue-submit-primary-arrow-exit\s+230ms\s+cubic-bezier\(0\.33,\s*0,\s*0\.2,\s*1\)\s+both;/s,
+    );
+    expect(css).not.toMatch(
+      /\.queue-submit-primary--icon[^{]*:active\s*\.queue-submit-primary-arrow\s*svg\s*\{[^}]*queue-submit-primary-arrow-exit/s,
+    );
+    expect(css).toMatch(
+      /@keyframes queue-submit-primary-arrow-exit\s*\{[\s\S]*0%\s*\{[\s\S]*transform:\s*translateX\(0\);[\s\S]*100%\s*\{[\s\S]*transform:\s*translateX\(145%\);/,
+    );
+    expect(css).toMatch(
+      /\.queue-submit-primary-ripple\s*\{[^}]*animation:\s*queue-submit-primary-ripple\s+620ms\s+cubic-bezier\(0\.22,\s*0\.61,\s*0\.36,\s*1\)\s+forwards;/s,
     );
   });
 });

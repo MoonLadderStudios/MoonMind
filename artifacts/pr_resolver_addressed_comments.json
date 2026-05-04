@@ -1,22 +1,27 @@
 [
   {
-    "id": 4373267875,
+    "id": 3183649166,
+    "disposition": "addressed",
+    "rationale": "Removed the CSS :active selector from the arrow-exit animation so click exit is driven only by React state."
+  },
+  {
+    "id": 3183649177,
+    "disposition": "addressed",
+    "rationale": "Updated the CSS test to reuse a suite-level CSS fixture and assert the state-driven selector without :active."
+  },
+  {
+    "id": 4222500444,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier informational notice; no code change requested."
+    "rationale": "Review summary only; its actionable :active selector and redundant test fixture items are covered by the linked review comments."
   },
   {
-    "id": 4222298205,
+    "id": 3183656357,
     "disposition": "addressed",
-    "rationale": "Addressed the summarized review feedback by guarding all submit attempts and fixing zero-step preset expansion ordering."
+    "rationale": "Cleared arrow-exit state when the exit animation is canceled and when submission or form-blocked state changes."
   },
   {
-    "id": 3183472671,
-    "disposition": "addressed",
-    "rationale": "Moved submit request identity, in-flight guard, and busy state setup to the start of handleSubmit, covering non-preset submissions too."
-  },
-  {
-    "id": 3183472688,
-    "disposition": "addressed",
-    "rationale": "Changed the splice loop adjustment to index += expandedSteps.length - 1 and added zero-step expansion regression coverage."
+    "id": 4222510205,
+    "disposition": "not-applicable",
+    "rationale": "Codex review wrapper text only; no standalone code change requested beyond the actionable review comment."
   }
 ]
