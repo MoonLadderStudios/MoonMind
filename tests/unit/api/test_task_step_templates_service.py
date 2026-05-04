@@ -107,6 +107,64 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
     assert expanded["appliedTemplate"]["slug"] == "pr-check"
     assert expanded["appliedTemplate"]["version"] == "1.0.0"
 
+@pytest.mark.parametrize("slug", ["jira-orchestrate", "moonspec-orchestrate"])
+async def test_expand_template_normalizes_legacy_orchestrate_mode_to_runtime(
+    tmp_path, slug: str
+):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug=slug,
+                title=slug,
+                description="Legacy orchestrate template",
+                scope="global",
+                scope_ref=None,
+                tags=["moonspec"],
+                inputs_schema=[
+                    {
+                        "name": "feature_request",
+                        "label": "Feature Request",
+                        "type": "markdown",
+                        "required": True,
+                    },
+                    {
+                        "name": "orchestration_mode",
+                        "label": "Orchestration Mode",
+                        "type": "enum",
+                        "required": True,
+                        "default": "runtime",
+                        "options": ["runtime", "docs"],
+                    },
+                ],
+                steps=[
+                    {
+                        "title": "Specify",
+                        "instructions": "Selected mode: {{ inputs.orchestration_mode }}.",
+                        "skill": {"id": "moonspec-specify", "args": {}},
+                    }
+                ],
+                annotations={},
+                required_capabilities=["git"],
+                created_by=user_id,
+            )
+
+            expanded = await service.expand_template(
+                slug=slug,
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": "Implement MM-600",
+                    "orchestration_mode": "docs",
+                },
+                context={},
+            )
+
+    assert expanded["appliedTemplate"]["inputs"]["orchestration_mode"] == "runtime"
+    assert "Selected mode: runtime." in expanded["steps"][0]["instructions"]
+
 async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path):
     user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
@@ -208,6 +266,83 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
     assert expanded["composition"]["includes"][0]["stepIds"] == [
         step["id"] for step in expanded["steps"]
     ]
+
+async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
+    tmp_path,
+):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="moonspec-orchestrate",
+                title="MoonSpec Orchestrate",
+                description="Runtime-only child preset",
+                scope="global",
+                scope_ref=None,
+                tags=["moonspec"],
+                inputs_schema=[
+                    {
+                        "name": "feature_request",
+                        "label": "Feature Request",
+                        "type": "markdown",
+                        "required": True,
+                    }
+                ],
+                steps=[
+                    {
+                        "title": "Specify",
+                        "instructions": "Selected mode: {{ inputs.orchestration_mode }}.",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+            await service.create_template(
+                slug="parent-flow",
+                title="Parent Flow",
+                description="Composed flow",
+                scope="global",
+                scope_ref=None,
+                tags=["composed"],
+                inputs_schema=[
+                    {
+                        "name": "feature_request",
+                        "label": "Feature Request",
+                        "type": "markdown",
+                        "required": True,
+                    }
+                ],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "moonspec-orchestrate",
+                        "version": "1.0.0",
+                        "alias": "orchestrate",
+                        "scope": "global",
+                        "inputMapping": {
+                            "feature_request": "{{ inputs.feature_request }}",
+                            "orchestration_mode": "docs",
+                        },
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+            expanded = await service.expand_template(
+                slug="parent-flow",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={"feature_request": "Implement MM-600"},
+                context={},
+                user_id=user_id,
+            )
+
+    assert "Selected mode: runtime." in expanded["steps"][0]["instructions"]
 
 async def test_create_template_rejects_templated_include_version(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -1462,7 +1597,6 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
                 "repository": "MoonLadderStudios/MoonMind",
                 "runtime": {"mode": "codex_cli"},
                 "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
-                "orchestrationMode": "runtime",
             }
             assert downstream["jiraOrchestration"]["traceability"]["sourceIssueKey"] == (
                 "MM-404"
@@ -1504,6 +1638,15 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 not in step_titles
             )
             assert step_titles[-1] == "Verify completion"
+            template_payload = await service.get_template(
+                slug="moonspec-orchestrate",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+            )
+            assert "orchestration_mode" not in {
+                item["name"] for item in template_payload["inputs"]
+            }
 
             expanded = await service.expand_template(
                 slug="moonspec-orchestrate",
@@ -1512,7 +1655,7 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 version="1.0.0",
                 inputs={
                     "feature_request": "MM-366: Simplify Orchestrate Summary",
-                    "orchestration_mode": "runtime",
+                    "orchestration_mode": "docs",
                     "source_design_path": "",
                     "constraints": "Keep the scope narrow.",
                 },
@@ -1520,6 +1663,14 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
             )
 
             assert len(expanded["steps"]) == 6
+            assert (
+                expanded["appliedTemplate"]["inputs"]["orchestration_mode"]
+                == "runtime"
+            )
+            assert "Selected mode" not in expanded["steps"][0]["instructions"]
+            assert "runtime implementation workflow" in expanded["steps"][0][
+                "instructions"
+            ]
             assert expanded["steps"][-1]["title"] == "Verify completion"
             assert "moonspec-verify" == expanded["steps"][-1]["skill"]["id"]
             assert all(

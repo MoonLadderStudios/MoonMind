@@ -823,7 +823,6 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
                     "mergeAutomation": {"enabled": True},
                     "merge_automation": {"enabled": False},
                 },
-                "orchestrationMode": "runtime",
             },
             "traceability": {
                 "sourceIssueKey": "MM-404",
@@ -888,7 +887,6 @@ async def test_create_jira_orchestrate_tasks_omits_disabled_merge_automation():
                     "mode": "pr",
                     "mergeAutomation": {"enabled": "False"},
                 },
-                "orchestrationMode": "runtime",
             },
         },
         execution_creator=creator,
@@ -922,7 +920,6 @@ async def test_create_jira_orchestrate_tasks_ignores_boolean_merge_automation():
                     "mode": "pr",
                     "mergeAutomation": True,
                 },
-                "orchestrationMode": "runtime",
             },
         },
         execution_creator=creator,
@@ -944,7 +941,6 @@ async def test_create_jira_orchestrate_tasks_uses_previous_step_mappings_and_own
                     "repository": "MoonLadderStudios/MoonMind",
                     "runtime": {"mode": "codex_cli"},
                     "publish": {"mode": "none"},
-                    "orchestrationMode": "docs",
                 },
                 "traceability": {"sourceIssueKey": "MM-404"},
             }
