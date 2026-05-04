@@ -36,9 +36,9 @@
 
 | Status | Count | Handling |
 | --- | ---: | --- |
-| missing | 12 | Add failing tests, confirm red, implement code, validate |
-| partial | 20 | Add tests for missing behavior, confirm red where behavior is absent, complete implementation |
-| implemented_unverified | 2 | Add verification tests first and conditional fallback implementation if those tests fail |
+| missing | 15 | Add failing tests, confirm red, implement code, validate |
+| partial | 23 | Add tests for missing behavior, confirm red where behavior is absent, complete implementation |
+| implemented_unverified | 3 | Add verification tests first and conditional fallback implementation if those tests fail |
 | implemented_verified | 2 | Preserve existing evidence and include final validation only |
 
 ## Phase 1: Setup
@@ -202,7 +202,7 @@ Task: "T028 run focused task-contract pytest validation"
 ### Status Handling
 
 - `missing` and `partial` rows receive failing tests plus implementation tasks.
-- `implemented_unverified` rows FR-003 and FR-007 receive verification tests plus conditional fallback task T019.
+- `implemented_unverified` rows FR-003, FR-007, and SCN-005 receive verification tests plus conditional fallback task T019.
 - `implemented_verified` rows FR-011 and FR-017 receive preservation/final validation tasks and no new implementation unless regressions appear.
 
 ---

@@ -32,6 +32,13 @@ Implement the Create-page submit-time Preset auto-expansion path described by `d
 | FR-017 | implemented_verified | `TaskStepSpec` rejects non-executable step types; `test_task_steps_reject_non_executable_step_types` covers `preset`. | Keep authoritative rejection intact. | final regression |
 | FR-018 | missing | No expansion-success/final-submit-failure path currently exists for unresolved Presets. | Preserve original draft and optionally expose expanded review state after final submission failure. | unit |
 | FR-019 | partial | Existing tests cover manual Expand/Apply, flat executable submission, and contract rejection. Missing submit-time scenarios. | Add focused frontend and task-contract tests for all listed cases. | unit + integration |
+| SCN-001 | missing | Submit currently blocks unresolved Presets before create/update/rerun payload construction. | Add auto-expansion create/update/rerun submit path. | integration |
+| SCN-002 | missing | No submit-time multi-Preset expansion exists. | Expand unresolved Presets in authored order and splice generated steps in relative position. | unit + integration |
+| SCN-003 | partial | Manual expansion preserves provenance and warnings; submit-time path missing. | Preserve provenance and non-blocking warnings in submit feedback. | unit + integration |
+| SCN-004 | partial | Manual expansion failure preserves draft; submit-time failure path missing. | Block side effects and show Preset-scoped error during submit-time failure. | integration |
+| SCN-005 | implemented_unverified | Non-submit interactions appear non-submitting, but no submit-auto-expansion regression covers them. | Add verification test and conditional fallback guardrail if it fails. | unit |
+| SCN-006 | partial | Existing attachment and publish/merge machinery exists; auto-expansion ambiguity handling missing. | Block ambiguous attachment retargeting and apply constraints before final validation. | unit + integration |
+| SCN-007 | missing | No expansion-success/final-submit-failure path exists for unresolved Presets. | Preserve original draft and optionally expose expanded review copy on final submission failure. | unit + integration |
 | SC-001 | missing | No successful unresolved-Preset submit path exists. | Verify successful submissions contain zero unresolved Presets. | integration |
 | SC-002 | partial | Manual expansion failure preserves draft; submit-time failure path missing. | Verify failed auto-expansion creates no side effect and preserves draft. | integration |
 | SC-003 | missing | No multi-Preset submit auto-expansion exists. | Verify three unresolved Presets preserve relative order after expansion. | unit |
