@@ -1503,10 +1503,16 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "Jira preset brief" in expanded["steps"][2]["instructions"]
             assert "Keep the scope narrow." in expanded["steps"][3]["instructions"]
             assert expanded["steps"][11]["title"] == "Create pull request"
+            assert expanded["steps"][11]["annotations"] == {
+                "jiraOrchestrateRole": "pull-request-handoff"
+            }
             assert "pull request title must include MM-328" in expanded["steps"][11][
                 "instructions"
             ]
-            assert "task.publish.mode=none" in expanded["steps"][11]["instructions"]
+            assert "parent workflow must use the pull request URL" in expanded["steps"][11][
+                "instructions"
+            ]
+            assert "merge automation" in expanded["steps"][11]["instructions"]
             assert "non-draft pull request" in expanded["steps"][11]["instructions"]
             assert "isDraft value is false" in expanded["steps"][11]["instructions"]
             assert "confirmed non-draft" in expanded["steps"][11]["instructions"]

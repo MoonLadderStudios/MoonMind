@@ -1,27 +1,22 @@
 [
   {
-    "id": 4372756673,
+    "id": 4369161565,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier limit notice is informational and does not request a code or documentation change."
+    "rationale": "Qodo free-tier limit notice; no code action requested."
   },
   {
-    "id": 3183027381,
-    "disposition": "addressed",
-    "rationale": "Clarified that the shared finalize endpoint owns the verifying and registering_profile transitions that callers render."
-  },
-  {
-    "id": 3183027390,
-    "disposition": "addressed",
-    "rationale": "Replaced ambiguous already-finalizing wording with explicit verifying, registering_profile, and succeeded statuses."
-  },
-  {
-    "id": 3183027406,
-    "disposition": "addressed",
-    "rationale": "Updated the operator workflow to state that finalize moves through verifying before entering registering_profile for provider-profile registration."
-  },
-  {
-    "id": 4221775105,
+    "id": 4218270513,
     "disposition": "not-applicable",
-    "rationale": "Top-level Gemini review summary only recaps the inline findings; the actionable inline comments are tracked separately."
+    "rationale": "Gemini review summary explicitly reported no feedback."
+  },
+  {
+    "id": 3180093229,
+    "disposition": "addressed",
+    "rationale": "Jira Orchestrate PR handoff detection now uses expanded step annotations and template step identity instead of the mutable step title."
+  },
+  {
+    "id": 4218275768,
+    "disposition": "not-applicable",
+    "rationale": "Codex review wrapper comment; actionable child review comment was handled separately."
   }
 ]

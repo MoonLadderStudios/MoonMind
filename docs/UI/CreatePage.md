@@ -392,7 +392,7 @@ Rules:
 8. Raw JSON remains available as an advanced fallback for unsupported schemas, descriptor failures, and power users.
 9. Skill schemas must not be treated as a place to store secrets.
 10. Runtime adapters must not broaden the selected Skill set during execution. Runtime materialization uses the resolved Skill snapshot.
-11. Resolver-style Skills such as `pr-resolver` or `batch-pr-resolver`, and self-managed publish presets such as Jira Orchestrate, may enforce publish constraints. When a Skill or expanded Preset owns commit/push/merge behavior, the Create page must require or force `publishMode = "none"`, explain that constraint in the publish control or apply feedback, and must not also submit ordinary merge automation.
+11. Resolver-style Skills such as `pr-resolver` or `batch-pr-resolver` may enforce publish constraints. When a Skill owns commit/push/merge behavior, the Create page must require or force `publishMode = "none"`, explain that constraint in the publish control or apply feedback, and must not also submit ordinary merge automation. Jira Orchestrate remains eligible for the normal publish selector, including PR with merge automation, because its PR handoff is used as the parent publish result.
 
 Representative Skill payload:
 
