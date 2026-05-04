@@ -637,7 +637,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     expect(screen.getByRole('button', { name: 'OAuth claude-anthropic' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'OAuth claude-anthropic' })).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'OAuth claude-anthropic' })).toHaveLength(1);
     expect(screen.getByText('Claude credentials not connected')).toBeTruthy();
   });
 
@@ -652,7 +652,7 @@ describe('ProviderProfilesManager form controls', () => {
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Validate OAuth claude-anthropic-connected' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Disconnect OAuth claude-anthropic-connected' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'OAuth claude-anthropic-connected' })).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'OAuth claude-anthropic-connected' })).toHaveLength(1);
     expect(screen.getByText('Claude OAuth ready')).toBeTruthy();
   });
 
