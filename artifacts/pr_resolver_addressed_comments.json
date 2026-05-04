@@ -1,22 +1,12 @@
 [
   {
-    "id": 3184504531,
+    "id": 3184919504,
     "disposition": "addressed",
-    "rationale": "Publish gating now considers only active applied template step IDs, so stale Jira Breakdown provenance no longer forces publish mode none. Covered by a Create page regression test."
+    "rationale": "Added w-full to queue-step-type-options container in settings.tsx to fix sliding thumb alignment with variable label widths."
   },
   {
-    "id": 4223507965,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary only; the actionable child review comment was addressed separately."
-  },
-  {
-    "id": 3184504777,
+    "id": 4224002358,
     "disposition": "addressed",
-    "rationale": "Jira Breakdown preset slugs were moved into SELF_MANAGED_PUBLISH_SKILLS so existing self-managed publish checks drive the UI and submit behavior consistently."
-  },
-  {
-    "id": 4223508343,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary only; the actionable child review comment was addressed separately."
+    "rationale": "Review summary covers the same layout issue addressed by adding w-full to the navigation container."
   }
 ]
