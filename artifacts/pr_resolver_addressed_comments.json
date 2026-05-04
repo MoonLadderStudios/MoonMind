@@ -1,22 +1,17 @@
 [
   {
-    "id": 4367289597,
+    "id": 4369054821,
     "disposition": "not-applicable",
-    "rationale": "Qodo quota notice; no code action requested."
+    "rationale": "Qodo free-tier limit notice is informational and does not request a code change."
   },
   {
-    "id": 3178846598,
+    "id": 3179986518,
     "disposition": "addressed",
-    "rationale": "Self-managed publish skills now force any selected publish mode to none and disable the Publish Mode selector."
+    "rationale": "Updated sanitizeCloneForHtml2Canvas to iterate clonedDocument.querySelectorAll('*') directly and avoid redundant root processing and Array.from conversion."
   },
   {
-    "id": 3178846599,
-    "disposition": "addressed",
-    "rationale": "The PR with Merge Automation option remains visible and disabled when merge automation is unavailable."
-  },
-  {
-    "id": 4216908391,
-    "disposition": "addressed",
-    "rationale": "Summary review concerns are covered by the self-managed forced-none enforcement and disabled merge automation option."
+    "id": 4218140747,
+    "disposition": "not-applicable",
+    "rationale": "Review summary only; the actionable inline optimization comment from the same review was addressed."
   }
 ]

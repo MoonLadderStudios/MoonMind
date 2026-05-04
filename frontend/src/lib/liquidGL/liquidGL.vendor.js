@@ -20,6 +20,110 @@
     };
   }
 
+  const HTML2CANVAS_COLOR_PROPS = [
+    ["color", "color"],
+    ["backgroundColor", "background-color"],
+    ["backgroundImage", "background-image"],
+    ["borderTopColor", "border-top-color"],
+    ["borderRightColor", "border-right-color"],
+    ["borderBottomColor", "border-bottom-color"],
+    ["borderLeftColor", "border-left-color"],
+    ["boxShadow", "box-shadow"],
+    ["textShadow", "text-shadow"],
+    ["outlineColor", "outline-color"],
+    ["textDecorationColor", "text-decoration-color"],
+    ["caretColor", "caret-color"],
+    ["columnRuleColor", "column-rule-color"],
+    ["fill", "fill"],
+    ["stroke", "stroke"],
+  ];
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function parseCssColorChannel(value) {
+    const text = String(value || "").trim();
+    if (!text || text === "none") return null;
+    if (text.endsWith("%")) {
+      const percent = Number.parseFloat(text);
+      return Number.isFinite(percent)
+        ? clamp(Math.round((percent / 100) * 255), 0, 255)
+        : null;
+    }
+    const number = Number.parseFloat(text);
+    if (!Number.isFinite(number)) return null;
+    return clamp(Math.round(number <= 1 ? number * 255 : number), 0, 255);
+  }
+
+  function parseCssAlphaChannel(value) {
+    const text = String(value || "").trim();
+    if (!text || text === "none") return 1;
+    if (text.endsWith("%")) {
+      const percent = Number.parseFloat(text);
+      return Number.isFinite(percent) ? clamp(percent / 100, 0, 1) : 1;
+    }
+    const number = Number.parseFloat(text);
+    return Number.isFinite(number) ? clamp(number, 0, 1) : 1;
+  }
+
+  function colorFunctionToRgba(_match, _space, body) {
+    const [channelText, alphaText] = String(body || "").split("/");
+    const channels = channelText.trim().split(/\s+/).filter(Boolean);
+    if (channels.length < 3) return "rgba(255, 255, 255, 1)";
+
+    const r = parseCssColorChannel(channels[0]);
+    const g = parseCssColorChannel(channels[1]);
+    const b = parseCssColorChannel(channels[2]);
+    if (r === null || g === null || b === null) {
+      return "rgba(255, 255, 255, 1)";
+    }
+
+    const alpha = parseCssAlphaChannel(alphaText);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function html2CanvasFallbackValue(propName, value) {
+    if (/backgroundImage|boxShadow|textShadow/.test(propName)) {
+      return "none";
+    }
+    if (/Color|color|fill|stroke|caretColor/.test(propName)) {
+      return value.includes("transparent")
+        ? "rgba(0, 0, 0, 0)"
+        : "rgba(255, 255, 255, 1)";
+    }
+    return value;
+  }
+
+  function sanitizeHtml2CanvasColorValue(propName, value) {
+    if (!value || typeof value !== "string") return value;
+    let sanitized = value.replace(
+      /color\(\s*([a-z0-9-]+)\s+([^)]*)\)/gi,
+      colorFunctionToRgba
+    );
+    if (/color-mix\(|oklch\(|oklab\(|lch\(|lab\(/i.test(sanitized)) {
+      sanitized = html2CanvasFallbackValue(propName, sanitized);
+    }
+    return sanitized;
+  }
+
+  function sanitizeCloneForHtml2Canvas(clonedDocument) {
+    const view = clonedDocument.defaultView;
+    if (!view) return;
+
+    clonedDocument.querySelectorAll("*").forEach((node) => {
+      if (!node || !node.style) return;
+      const style = view.getComputedStyle(node);
+      HTML2CANVAS_COLOR_PROPS.forEach(([propName, cssName]) => {
+        const value = style.getPropertyValue(cssName);
+        const sanitized = sanitizeHtml2CanvasColorValue(propName, value);
+        if (sanitized && sanitized !== value) {
+          node.style[propName] = sanitized;
+        }
+      });
+    });
+  }
+
   /* --------------------------------------------------
    *  Helper : Effective z-index (highest stacking context)
    * ------------------------------------------------*/
@@ -669,6 +773,7 @@
             scrollY: 0,
             scale: scale,
             ignoreElements: ignoreElementsFunc,
+            onclone: sanitizeCloneForHtml2Canvas,
           });
 
           this._uploadTexture(snapCanvas);
@@ -1118,6 +1223,7 @@
             logging: false,
             ignoreElements: (n) =>
               n.tagName === "CANVAS" || n.hasAttribute("data-liquid-ignore"),
+            onclone: sanitizeCloneForHtml2Canvas,
           })
             .then((cv) => {
               if (cv.width > 0 && cv.height > 0) {
