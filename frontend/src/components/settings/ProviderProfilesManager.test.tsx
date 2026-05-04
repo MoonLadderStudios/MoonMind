@@ -517,7 +517,7 @@ describe('ProviderProfilesManager form controls', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('starts a Codex OAuth session from the profile Auth action', async () => {
+  it('starts a Codex OAuth session from the profile OAuth action', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -532,7 +532,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([codexOauthProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Auth codex-oauth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'OAuth codex-oauth' }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -577,7 +577,7 @@ describe('ProviderProfilesManager form controls', () => {
     const { queryClient } = renderProviderProfilesManager([codexOauthProfile]);
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Auth codex-oauth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'OAuth codex-oauth' }));
 
     expect(await screen.findByText('OAuth: Awaiting User')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Finalize codex-oauth' }));
@@ -620,7 +620,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([codexOauthProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Auth codex-oauth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'OAuth codex-oauth' }));
 
     expect(await screen.findByText('OAuth: Failed')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Retry codex-oauth' }));
@@ -637,7 +637,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     expect(screen.getByRole('button', { name: 'OAuth claude-anthropic' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Auth claude-anthropic' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'OAuth claude-anthropic' })).toBeNull();
     expect(screen.getByText('Claude credentials not connected')).toBeTruthy();
   });
 
@@ -652,7 +652,7 @@ describe('ProviderProfilesManager form controls', () => {
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Validate OAuth claude-anthropic-connected' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Disconnect OAuth claude-anthropic-connected' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Auth claude-anthropic-connected' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'OAuth claude-anthropic-connected' })).toBeNull();
     expect(screen.getByText('Claude OAuth ready')).toBeTruthy();
   });
 
