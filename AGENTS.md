@@ -213,6 +213,8 @@ Key diagnostics:
 - Existing artifact-backed retrieval outputs and runtime metadata only; no new persistent storage planned (257-retrieval-evidence-guardrails)
 - Python 3.12 + Pydantic v2, FastAPI, Temporal Python SDK, SQLAlchemy async ORM, `httpx`, PyGithub/LlamaIndex GitHub reader, existing managed secret resolver and publish services (294-github-token-permissions)
 - Existing settings, managed secret, workflow history, and artifact stores only; no new persistent tables planned (294-github-token-permissions)
+- Python 3.12; TypeScript/React for Mission Control UI + React, TanStack Query, FastAPI, Pydantic v2, existing task-template expansion service, existing Temporal task contract models (295-submit-preset-auto-expansion)
+- Existing task input snapshots and artifact store only; no new persistent storage (295-submit-preset-auto-expansion)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

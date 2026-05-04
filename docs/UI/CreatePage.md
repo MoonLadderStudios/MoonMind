@@ -2,7 +2,7 @@
 
 Status: Active desired-state contract  
 Owners: MoonMind Engineering  
-Last updated: 2026-05-02  
+Last updated: 2026-05-04
 Canonical for: Mission Control task creation, edit, rerun, step authoring, schema-driven step configuration, and Create-page submission shaping
 
 ---
@@ -60,7 +60,7 @@ Core rules:
    - `Skill`
    - `Preset`
 5. Tool and Skill steps are executable step types.
-6. Preset steps are authoring-time placeholders that preview and apply into executable Tool and/or Skill steps before normal submission.
+6. Preset steps are authoring-time placeholders that preview and apply into executable Tool and/or Skill steps before normal submission. The primary submit action may also perform the same expansion/apply operation automatically for unresolved Preset steps so the user can submit without reviewing the expanded form first. This is a Create-page convenience only; the final submitted task remains executable-step-first.
 7. Schema-driven controls are the default way to configure typed step inputs.
 8. Freeform JSON is an advanced fallback, not the primary UX.
 9. Browser clients call only MoonMind APIs. They must not call Jira, GitHub, object storage, model providers, or agent runtimes directly.
@@ -74,6 +74,7 @@ Important distinctions:
 - **Skill** means agent-facing behavior, reusable instructions, runtime context, and optional allowed tools for open-ended work.
 - **Preset** means a reusable authoring template that expands into concrete executable steps.
 - **Preset provenance** is metadata for audit, grouping, review, reconstruction, and explicit refresh. It must not control runtime correctness.
+- **Submit-time Preset auto-expansion** means the Create page expands unresolved Preset steps during an explicit create, update, or rerun click, applies the generated Tool/Skill steps to a submission copy, and submits that executable copy. It is not linked-preset runtime execution and must not submit unresolved Preset payloads.
 - **Skill args** are typed configuration for a selected Skill step. They are not Skill content, not prompt body, and not a secret store.
 - **Tool inputs** are typed configuration for a selected Tool step. They are not arbitrary shell snippets.
 - **Branch** is the single authored branch value. The Create page does not expose a separate `Target Branch` control.
@@ -128,7 +129,7 @@ Canonical sections:
 | 6 | Execution controls | Configure priority, max attempts, proposal behavior, and related run controls. |
 | 7 | Schedule | Submit immediately or configure deferred/recurring execution. |
 | 8 | Preset management | Optional management-only surface for saving or managing presets. |
-| 9 | Submit | Validate, upload artifacts, create/update/rerun the task, and show submission status. |
+| 9 | Submit | Validate, auto-expand unresolved Preset steps when the user submits without applying them first, upload artifacts, create/update/rerun the task, and show submission status. |
 
 Rules:
 
@@ -140,6 +141,7 @@ Rules:
 6. There is no detached page-wide attachment bucket.
 7. Every attachment belongs to an explicit target: task objective, a specific step, or a generated field that stores an artifact reference.
 8. Manual authoring remains first-class when descriptor lookup, Jira import, branch lookup, tool discovery, or preset expansion is unavailable.
+9. The primary submit action may resolve unresolved Preset steps as part of submission, but only after an explicit user click on Create, Update, or Rerun. Selecting a Preset, loading descriptors, or importing external context never creates a task by itself.
 
 ---
 
@@ -189,12 +191,20 @@ interface SkillDraft {
   formMode: "schema" | "json";
 }
 
+interface PresetSubmitExpansionState {
+  status: "idle" | "queued" | "expanding" | "expanded" | "failed";
+  requestId?: string;
+  message?: string | null;
+  errorMessage?: string | null;
+}
+
 interface PresetDraft {
   key: string;
   version?: string;
   inputValues: Record<string, string | boolean | number | null>;
   detail?: PresetDescriptor | null;
   preview?: PresetPreviewState | null;
+  submitExpansion?: PresetSubmitExpansionState | null;
   message?: string | null;
 }
 
@@ -258,6 +268,7 @@ Rules:
 5. The UI must either clear incompatible values with visible feedback or require confirmation before discarding meaningful values.
 6. Draft reconstruction for edit/rerun must preserve explicit Tool, Skill, and Preset draft states where the task snapshot contains them.
 7. Legacy snapshots may be read through compatibility reconstruction, but new authoring must converge on explicit Step Type state.
+8. `submitExpansion` is transient UI state for the submit-time convenience path. It is not part of the final task snapshot and must not be required for edit/rerun reconstruction.
 
 ---
 
@@ -429,7 +440,8 @@ The Preset panel exposes:
 5. expansion preview;
 6. warnings and validation errors;
 7. apply action;
-8. explicit refresh or reapply when source inputs or catalog version change.
+8. explicit refresh or reapply when source inputs or catalog version change;
+9. submit-time auto-expansion status when the Preset has not been applied and the user clicks the primary submit action.
 
 Rules:
 
@@ -438,11 +450,26 @@ Rules:
 3. Applying a preview replaces the temporary Preset step with the generated executable steps.
 4. Generated steps must be editable after application.
 5. Generated steps must submit as flat executable Tool and/or Skill steps by default.
-6. The submitted task must not contain unresolved Preset steps unless a future linked-preset execution mode is explicitly selected and visibly distinct.
+6. The submitted task must not contain unresolved Preset steps.
 7. Preset-derived steps preserve provenance when the expansion source provides it: `source.kind = "preset-derived"`, `source.presetId`, `source.presetVersion`, `source.includePath` when applicable, and `source.originalStepId` when available.
 8. Provenance is metadata only. Runtime correctness depends on the generated Tool/Skill payload, not live preset lookup.
 9. Refreshing from the catalog requires explicit preview and validation before replacing reviewed generated steps.
 10. Preset expansion failure is non-mutating and must not corrupt unrelated draft state.
+11. Manual Preview and Apply remain first-class and are the preferred path when the user wants to inspect or edit generated steps before submission.
+12. Users may also click the primary Create, Update, or Rerun action while one or more Preset steps are still unresolved.
+13. Submit-time auto-expansion uses the same MoonMind preset expansion API and the same validation semantics as manual Preview/Apply.
+14. Auto-expansion uses the selected Preset key, selected or server-resolved version, current Preset input values, current task context, and the current user's catalog visibility and permissions. The browser must not infer a different Preset from objective text or hidden user data.
+15. If a version is not explicitly selected, the server resolves the latest active version visible to the current user or returns a validation error. The browser must not guess unavailable, inactive, or unauthorized versions.
+16. When multiple unresolved Preset steps exist, the Create page expands them in authored step order and replaces each Preset placeholder with its generated executable steps in that same relative position.
+17. Submit-time expansion applies to a frozen submission copy first. The visible draft is not silently overwritten before final submission succeeds or before the user explicitly applies the generated preview.
+18. Generated steps from submit-time auto-expansion must be contract-equivalent to generated steps from manual Apply: editable Tool/Skill steps with normal payloads and Preset provenance.
+19. Submit-time expansion failure is non-mutating and blocks task submission. The UI must show the returned validation error, warning, or authorization problem on the relevant Preset step.
+20. Non-blocking expansion warnings may be shown in submit progress and preserved in submission feedback. Warnings that require review or acknowledgement must block auto-submission and present the expanded preview or confirmation path instead.
+21. Preset-step attachments, generated-field attachment refs, and imported integration attachments may auto-expand only when the expansion response or descriptor provides an unambiguous target mapping. If attachment retargeting is ambiguous, auto-submission blocks and the user must review/apply the expanded preset manually.
+22. If the generated steps impose publish or merge constraints, such as forcing `publishMode = "none"`, submit-time auto-expansion must apply the same constraint handling and visible explanation used by manual Apply before final payload validation.
+23. The primary submit button must be disabled or guarded while submit-time expansion and final submission are in progress. Duplicate clicks and stale expansion responses must not create duplicate tasks or corrupt the draft.
+
+Desired UX affordances: when a valid unresolved Preset is present, the step can show compact copy such as “This Preset will expand when you create the task. Preview is optional.” During submission, the primary button may progress through labels such as “Expanding preset…” and “Creating task…”. If expansion fails, the user remains on the Create page with the failed Preset step focused and the rest of the draft preserved.
 
 Representative Preset draft before apply:
 
@@ -742,13 +769,72 @@ Rules:
 1. Local attachments upload before create, edit, or rerun submission.
 2. The browser submits structured attachment refs, not raw binary payloads.
 3. The browser submits only fields relevant to the selected Step Type.
-4. Unresolved Preset steps are rejected by default.
-5. Applied presets submit generated executable Tool and Skill steps.
-6. Preset provenance is preserved as metadata where available.
-7. Runtime correctness must not require live preset lookup.
-8. Oversized task input uses the artifact-backed task input fallback.
-9. Submit remains explicit. Uploading attachments, selecting Jira issues, previewing presets, or loading descriptors never creates a task by itself.
-10. The authoritative task input snapshot preserves enough information for edit and rerun reconstruction.
+4. The final submitted payload must not contain unresolved Preset steps.
+5. When the user explicitly submits a draft that still contains unresolved Preset steps, the Create page may auto-expand and apply those Presets into a frozen submission copy before final payload construction.
+6. If submit-time auto-expansion is unavailable, unauthorized, invalid, ambiguous, or fails, submission is blocked and no task is created, updated, or rerun.
+7. Applied and auto-expanded Presets submit generated executable Tool and/or Skill steps.
+8. Preset provenance is preserved as metadata where available.
+9. Runtime correctness must not require live preset lookup.
+10. Oversized task input uses the artifact-backed task input fallback.
+11. Submit remains explicit. Uploading attachments, selecting Jira issues, previewing presets, auto-expanding presets, or loading descriptors never creates a task by itself.
+12. The authoritative task input snapshot preserves enough information for edit and rerun reconstruction.
+
+### 18.1 Submit-time Preset auto-expansion
+
+Submit-time Preset auto-expansion is an authoring convenience for users who trust the selected Preset and do not need to inspect the expanded steps before creating the task.
+
+Canonical flow when the primary submit action is clicked:
+
+1. Freeze the current browser draft and enter a guarded submit state.
+2. Run ordinary client validation for task-level fields, executable steps, and required Preset inputs.
+3. Resolve local attachments to artifact refs when expansion or final submission needs those refs.
+4. For each unresolved Preset step in authored order, call the MoonMind preset expansion API with the selected Preset key, selected or server-resolved version, Preset input values, current task context, attachment refs when required, and submit intent.
+5. Replace each unresolved Preset step in the frozen submission copy with the generated executable Tool and/or Skill steps returned by expansion.
+6. Preserve Preset provenance on generated steps when the expansion response provides it.
+7. Apply expansion warnings, assumptions, required capabilities, attachment target mappings, and publish/merge constraints to the submission copy using the same rules as manual Apply.
+8. Validate that the final submission copy contains only executable Tool and/or Skill steps and no stale incompatible type-specific fields.
+9. Upload any remaining local artifacts required by the final executable payload.
+10. Submit the final task-shaped payload through the normal create, update, or rerun API.
+
+Rules:
+
+1. Auto-expansion is never triggered by Preset selection, descriptor loading, Jira import, attachment upload, preview, or navigation.
+2. Auto-expansion does not create a linked live Preset execution mode. It produces the same flat executable steps that manual Apply would produce.
+3. Expansion and submission are a single guarded user-initiated submit attempt from the user's perspective, but the final task payload is still executable-step-first.
+4. Backend task validation must still reject unresolved Preset steps. The frontend convenience path must not be the only enforcement boundary.
+5. If expansion succeeds but final submission fails, the UI may surface the expanded submission copy for review, but it must not silently discard the user's original Preset draft state.
+6. If the user cancels or navigates away during expansion, stale expansion results must be ignored.
+
+Representative expansion request intent:
+
+```json
+{
+  "preset": {
+    "id": "jira.implementation_flow",
+    "version": "2026-05-02",
+    "inputs": {
+      "issueKey": "MM-123",
+      "repository": "MoonLadderStudios/MoonMind"
+    }
+  },
+  "context": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "branch": "main",
+    "publishMode": "pr",
+    "runtime": "managed"
+  },
+  "options": {
+    "intent": "submit-auto-expand",
+    "preview": true
+  }
+}
+```
+
+Representative final payload property:
+
+```md
+The final create/update/rerun request contains the generated Tool/Skill steps and Preset provenance. It does not contain the unresolved Preset draft payload used to produce them.
+```
 
 Representative task-shaped payload:
 
@@ -863,7 +949,7 @@ Rules:
 8. If a Skill input schema is unsupported, the Skill panel shows why generated controls are unavailable and preserves raw JSON editing.
 9. If a dynamic option provider fails, existing authored values remain unchanged.
 10. If a Preset preview fails, the draft is not mutated.
-11. If a Preset has not been applied, submit blocks the unresolved Preset step.
+11. If a Preset has not been applied and submit-time auto-expansion cannot produce an executable submission copy, submit blocks the unresolved Preset step.
 12. If JSON input is invalid, submit is blocked and the specific step/field is identified.
 13. If Step Type switching clears incompatible data, a notice appears near the Step Type selector.
 14. If Jira is unavailable, manual authoring continues.
@@ -878,7 +964,7 @@ Failed to load branches for owner/repo. You can retry or continue with the repos
 Tool discovery is unavailable. Enter a typed Tool id and JSON inputs manually.
 This Skill's input form is unavailable. You can edit its args as JSON.
 Preset preview failed. Your draft was not changed.
-Apply this Preset before submitting. Runtime submissions cannot contain unresolved Preset steps.
+This Preset could not expand for submission. Preview and apply it manually, or update the Preset inputs before submitting.
 Step Type changed. Incompatible Skill settings were cleared; shared instructions were preserved.
 Image upload failed. Remove the image or retry before submitting.
 This runtime does not currently allow image inputs.
@@ -914,34 +1000,35 @@ The Create page test suite should cover:
 5. Switching Step Type clears or protects incompatible type-specific values and shows visible feedback.
 6. Hidden Skill fields are not submitted for Tool steps.
 7. Hidden Tool fields are not submitted for Skill steps.
-8. Unresolved Preset steps are blocked from ordinary submission.
+8. Unresolved Preset steps are auto-expanded on explicit submit when valid, and are blocked when expansion is unavailable, invalid, unauthorized, ambiguous, or failed.
 9. Preset preview failure is non-mutating.
 10. Applying a Preset replaces the Preset placeholder with generated Tool/Skill steps.
-11. Applied preset steps submit as flat executable Tool/Skill steps.
-12. Preset-derived steps preserve `source.kind`, `presetId`, `presetVersion`, `includePath` when provided, and `originalStepId`.
-13. Runtime materialization does not depend on preset provenance or live preset lookup.
-14. Tool discovery choices are searchable and grouped when discovery is available.
-15. Tool discovery failure leaves manual Tool authoring available.
-16. Tool inputs validate as JSON object text before submit.
-17. Dynamic Tool options such as Jira transitions load through MoonMind APIs and do not guess values.
-18. Skill selection renders schema-driven args when a schema is available.
-19. Skill args generated controls and raw JSON fallback round-trip to the same submitted object.
-20. Skill descriptor failure preserves selected Skill id and existing args.
-21. Unsupported Skill schema features degrade to JSON fallback without dropping data.
-22. Required schema fields block submit with field-specific errors.
-23. Branch lookup uses MoonMind APIs and never calls GitHub directly.
-24. Branch selection maps to `startingBranch` / `targetBranch` according to publish mode without exposing a Target Branch control.
-25. Resolver-style Skills force or require `publishMode = "none"` and disable incompatible merge automation.
-26. Attachment policy hides entry points when disabled.
-27. Attachment validation covers count, type, per-file size, total size, upload failure, and retry.
-28. Jira import targets the selected objective, step, attachment target, or generated field only.
-29. Edit reconstructs Tool, Skill, Preset, generated step, attachment, and provenance state.
-30. Rerun preserves untouched attachments, Step Types, type-specific payloads, branch, publish mode, and runtime context.
-31. Legacy snapshots reconstruct into explicit Step Type draft state where possible.
-32. Proposal or promotion surfaces reject unresolved Preset steps and preserve flat executable payloads.
-33. Explicit refresh/reapply is required before replacing reviewed preset-derived steps from the catalog.
-34. TypeScript checks cover the Step Type draft model and schema-form renderer contracts.
-35. Backend task-contract tests reject mixed Tool/Skill payloads, non-executable Step Types, and shell-shaped step overrides.
+11. Submit-time Preset auto-expansion uses the same expansion semantics as manual Apply, preserves the visible draft until guarded submission succeeds, and ignores stale expansion responses.
+12. Applied and auto-expanded preset steps submit as flat executable Tool/Skill steps.
+13. Preset-derived steps preserve `source.kind`, `presetId`, `presetVersion`, `includePath` when provided, and `originalStepId`.
+14. Runtime materialization does not depend on preset provenance or live preset lookup.
+15. Tool discovery choices are searchable and grouped when discovery is available.
+16. Tool discovery failure leaves manual Tool authoring available.
+17. Tool inputs validate as JSON object text before submit.
+18. Dynamic Tool options such as Jira transitions load through MoonMind APIs and do not guess values.
+19. Skill selection renders schema-driven args when a schema is available.
+20. Skill args generated controls and raw JSON fallback round-trip to the same submitted object.
+21. Skill descriptor failure preserves selected Skill id and existing args.
+22. Unsupported Skill schema features degrade to JSON fallback without dropping data.
+23. Required schema fields block submit with field-specific errors.
+24. Branch lookup uses MoonMind APIs and never calls GitHub directly.
+25. Branch selection maps to `startingBranch` / `targetBranch` according to publish mode without exposing a Target Branch control.
+26. Resolver-style Skills force or require `publishMode = "none"` and disable incompatible merge automation.
+27. Attachment policy hides entry points when disabled.
+28. Attachment validation covers count, type, per-file size, total size, upload failure, and retry.
+29. Jira import targets the selected objective, step, attachment target, or generated field only.
+30. Edit reconstructs Tool, Skill, Preset, generated step, attachment, and provenance state.
+31. Rerun preserves untouched attachments, Step Types, type-specific payloads, branch, publish mode, and runtime context.
+32. Legacy snapshots reconstruct into explicit Step Type draft state where possible.
+33. Proposal or promotion surfaces reject unresolved Preset steps and preserve flat executable payloads.
+34. Explicit refresh/reapply is required before replacing reviewed preset-derived steps from the catalog.
+35. TypeScript checks cover the Step Type draft model and schema-form renderer contracts.
+36. Backend task-contract tests reject mixed Tool/Skill payloads, non-executable Step Types, and shell-shaped step overrides.
 
 ---
 

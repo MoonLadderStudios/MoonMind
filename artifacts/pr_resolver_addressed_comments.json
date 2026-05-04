@@ -1,22 +1,22 @@
 [
   {
-    "id": 4369161565,
+    "id": 4373267875,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier limit notice; no code action requested."
+    "rationale": "Qodo free-tier informational notice; no code change requested."
   },
   {
-    "id": 4218270513,
-    "disposition": "not-applicable",
-    "rationale": "Gemini review summary explicitly reported no feedback."
-  },
-  {
-    "id": 3180093229,
+    "id": 4222298205,
     "disposition": "addressed",
-    "rationale": "Jira Orchestrate PR handoff detection now uses expanded step annotations and template step identity instead of the mutable step title."
+    "rationale": "Addressed the summarized review feedback by guarding all submit attempts and fixing zero-step preset expansion ordering."
   },
   {
-    "id": 4218275768,
-    "disposition": "not-applicable",
-    "rationale": "Codex review wrapper comment; actionable child review comment was handled separately."
+    "id": 3183472671,
+    "disposition": "addressed",
+    "rationale": "Moved submit request identity, in-flight guard, and busy state setup to the start of handleSubmit, covering non-preset submissions too."
+  },
+  {
+    "id": 3183472688,
+    "disposition": "addressed",
+    "rationale": "Changed the splice loop adjustment to index += expandedSteps.length - 1 and added zero-step expansion regression coverage."
   }
 ]
