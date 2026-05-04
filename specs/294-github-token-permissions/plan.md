@@ -63,6 +63,8 @@ Implement one explicit GitHub credential path for GitHub API calls, repository i
 **Constraints**: No raw tokens in logs, artifacts, workflow history, PR text, or persisted run metadata; no reliance on ambient `git`/`gh` credentials for publish; no new external service dependency; fail fast for unsupported credential values; preserve Temporal activity invocation compatibility or document cutover if signatures change  
 **Scale/Scope**: One GitHub repository target per token probe; existing GitHub indexing, publish, readiness, and managed runtime materialization flows
 
+**Temporal Cutover Note**: This story keeps existing workflow/activity payload shapes intact. Repository context is read from the existing canonical payload and publish credentials are materialized inside existing activity/worker boundaries, so in-flight Temporal runs do not require a schema migration.
+
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*

@@ -34,6 +34,16 @@ def _mock_get_response(status_code: int, json_body: dict | list) -> httpx.Respon
         request=httpx.Request("GET", "https://api.github.com/test"),
     )
 
+def _mock_get_response_with_headers(
+    status_code: int, json_body: dict | list, headers: dict[str, str]
+) -> httpx.Response:
+    return httpx.Response(
+        status_code,
+        json=json_body,
+        headers=headers,
+        request=httpx.Request("GET", "https://api.github.com/test"),
+    )
+
 # ---------------------------------------------------------------------------
 # create_pull_request
 # ---------------------------------------------------------------------------
@@ -146,6 +156,127 @@ async def test_create_pr_http_error(monkeypatch):
     assert result.created is False
     assert "422" in result.summary
 
+@pytest.mark.asyncio
+async def test_create_pr_http_error_includes_permission_diagnostic(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_resp = _mock_response(
+        403,
+        {
+            "message": "Resource not accessible by personal access token",
+            "documentation_url": "https://docs.github.com/rest/pulls/pulls",
+        },
+    )
+    mock_resp.headers["X-Accepted-GitHub-Permissions"] = "pull_requests=write"
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "403", request=mock_resp.request, response=mock_resp,
+        )
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().create_pull_request(
+            repo="o/r", head="feature", base="main", title="T", body="B",
+        )
+
+    assert result.created is False
+    assert "HTTP 403" in result.summary
+    assert "Resource not accessible by personal access token" in result.summary
+    assert "pull_requests=write" in result.summary
+    assert "https://docs.github.com/rest/pulls/pulls" in result.summary
+
+
+@pytest.mark.asyncio
+async def test_github_permission_diagnostic_redacts_token_like_provider_body(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    leaked = "github_pat_1234567890abcdefghijklmnopqrstuvwxyz"
+    mock_resp = _mock_response(
+        403,
+        {
+            "message": f"Resource not accessible for {leaked}",
+            "documentation_url": "https://docs.github.com/rest/pulls/pulls",
+        },
+    )
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "403", request=mock_resp.request, response=mock_resp,
+        )
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().create_pull_request(
+            repo="o/r", head="feature", base="main", title="T", body="B",
+        )
+
+    assert leaked not in result.summary
+    assert "[REDACTED]" in result.summary
+
+
+def test_github_permission_profiles_define_required_modes():
+    profiles = GitHubService.github_permission_profiles()
+
+    assert profiles["indexing"].required_permissions == {"Contents": "read"}
+    assert profiles["publish"].required_permissions["Contents"] == "write"
+    assert profiles["publish"].required_permissions["Pull requests"] == "write"
+    assert profiles["readiness"].required_permissions["Pull requests"] == "read"
+    assert profiles["readiness"].required_permissions["Checks"] == "read"
+    assert profiles["readiness"].required_permissions["Commit statuses"] == "read"
+    assert profiles["readiness"].required_permissions["Issues"] == "read"
+
+
+@pytest.mark.asyncio
+async def test_probe_github_token_targets_repo_and_reports_publish_checklist(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"full_name": "owner/repo"}),
+            _mock_get_response(200, {"name": "main"}),
+            _mock_get_response(200, []),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="owner/repo", mode="publish", base_branch="main"
+        )
+
+    assert result["repo"] == "owner/repo"
+    assert result["mode"] == "publish"
+    assert result["credentialSource"]["sourceName"] == "GITHUB_TOKEN"
+    assert [call.args[0] for call in mock_client.get.call_args_list] == [
+        "https://api.github.com/repos/owner/repo",
+        "https://api.github.com/repos/owner/repo/branches/main",
+        "https://api.github.com/repos/owner/repo/pulls?per_page=1",
+    ]
+    checklist = {
+        item["permission"]: item for item in result["permissionChecklist"]
+    }
+    assert checklist["Contents"]["level"] == "write"
+    assert checklist["Pull requests"]["level"] == "write"
+    assert any("resource owner" in item for item in result["limitations"])
+    assert any("GitHub App" in item for item in result["limitations"])
+
 # ---------------------------------------------------------------------------
 # merge_pull_request
 # ---------------------------------------------------------------------------
@@ -247,6 +378,40 @@ async def test_evaluate_pull_request_readiness_waits_for_running_checks(monkeypa
     assert result.ready is False
     assert result.checks_complete is False
     assert result.blockers[0]["kind"] == "checks_running"
+
+@pytest.mark.asyncio
+async def test_evaluate_pull_request_readiness_reports_checks_permission_missing(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"state": "open", "head": {"sha": "abc123"}}),
+            _mock_get_response(200, {"state": "success", "statuses": []}),
+            _mock_get_response_with_headers(
+                403,
+                {"message": "Resource not accessible by personal access token"},
+                {"X-Accepted-GitHub-Permissions": "checks=read"},
+            ),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={"checks": "required", "automatedReview": "disabled"},
+        )
+
+    assert result.checks_complete is None
+    assert result.blockers[0]["kind"] == "readiness_evidence_unavailable"
+    assert result.blockers[0]["missingPermission"] == "Checks: read"
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_opens_after_checks_and_review(monkeypatch):
@@ -718,6 +883,44 @@ async def test_evaluate_pull_request_readiness_waits_for_human_commented_review(
     assert result.ready is False
     assert result.automated_review_complete is False
     assert result.blockers[0]["kind"] == "automated_review_pending"
+
+@pytest.mark.asyncio
+async def test_evaluate_pull_request_readiness_reports_reaction_permission_missing(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"state": "open", "head": {"sha": "abc123"}}),
+            _mock_get_response(200, {"state": "success", "statuses": []}),
+            _mock_get_response(200, {"check_runs": []}),
+            _mock_get_response(200, []),
+            _mock_get_response_with_headers(
+                403,
+                {"message": "Resource not accessible by personal access token"},
+                {"X-Accepted-GitHub-Permissions": "issues=read"},
+            ),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={"checks": "required", "automatedReview": "required"},
+        )
+
+    assert result.automated_review_complete is None
+    assert result.blockers[0]["kind"] == "readiness_evidence_unavailable"
+    assert result.blockers[0]["missingPermission"] == "Issues: read"
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_reports_merged_closed_pr(monkeypatch):

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
-from typing import Awaitable, Callable, Protocol
+from typing import Any, Awaitable, Callable, Protocol
 from uuid import UUID
 
+from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.utils.cli import verify_cli_is_executable
 from moonmind.publish.sanitization import (
     sanitize_metadata_footer_value,
@@ -33,9 +35,11 @@ class PublishService:
         *,
         git_binary: str = "git",
         gh_binary: str = "gh",
+        github_create_pull_request: Callable[..., Awaitable[Any]] | None = None,
     ) -> None:
         self._git_binary = git_binary
         self._gh_binary = gh_binary
+        self._github_create_pull_request = github_create_pull_request
 
     @staticmethod
     def _extract_first_instruction_sentence(instruction: str) -> str | None:
@@ -113,6 +117,7 @@ class PublishService:
         runtime_mode: str,
         repo_dir: Path,
         run_command: CommandRunner,
+        repo: str | None = None,
     ) -> str | None:
         """Publish the changes to a branch or a pull request.
 
@@ -159,15 +164,26 @@ class PublishService:
             cwd=repo_dir,
             redaction_values=(commit_message,),
         )
+        token = ""
+        push_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        if repo:
+            from moonmind.auth.github_credentials import resolve_github_credential
+
+            resolved = await resolve_github_credential(repo=repo)
+            token = resolved.token or ""
+            if token:
+                push_env["GITHUB_TOKEN"] = token
+                push_env["GH_TOKEN"] = token
         await run_command(
             [self._git_binary, "push", "-u", "origin", branch_name],
             cwd=repo_dir,
+            env=push_env,
+            redaction_values=(token,) if token else (),
         )
 
         if publish_mode == "branch":
             return f"published branch {branch_name}"
 
-        verify_cli_is_executable(self._gh_binary)
         base_branch = publish_base_branch or "main"
         pr_title = self._derive_default_publish_subject(
             instruction=instruction,
@@ -179,6 +195,34 @@ class PublishService:
             base_branch=base_branch,
             head_branch=branch_name,
         )
+        if repo and token:
+            create_pull_request = (
+                self._github_create_pull_request
+                or GitHubService().create_pull_request
+            )
+            result = await create_pull_request(
+                repo=repo,
+                head=branch_name,
+                base=base_branch,
+                title=pr_title,
+                body=pr_body,
+                github_token=token,
+            )
+            if not getattr(result, "created", False):
+                summary = getattr(result, "summary", "GitHub create PR failed.")
+                raise RuntimeError(str(summary))
+            url = getattr(result, "url", None)
+            if url:
+                return f"published PR {url}"
+            return f"published PR from {branch_name}"
+
+        verify_cli_is_executable(self._gh_binary)
+        gh_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        if token:
+            gh_env["GITHUB_TOKEN"] = token
+            gh_env["GH_TOKEN"] = token
+        if repo:
+            gh_env["GH_REPO"] = repo
         await run_command(
             [
                 self._gh_binary,
@@ -194,6 +238,9 @@ class PublishService:
                 pr_body,
             ],
             cwd=repo_dir,
-            redaction_values=(pr_title, pr_body),
+            env=gh_env,
+            redaction_values=tuple(
+                value for value in (pr_title, pr_body, token) if value
+            ),
         )
         return f"published PR from {branch_name}"
