@@ -1,27 +1,12 @@
 [
   {
-    "id": 3183649166,
+    "id": 3184131746,
     "disposition": "addressed",
-    "rationale": "Removed the CSS :active selector from the arrow-exit animation so click exit is driven only by React state."
+    "rationale": "Extracted the preset/skill instruction-label decision into usesGenericInstructionsLabel(stepType)."
   },
   {
-    "id": 3183649177,
-    "disposition": "addressed",
-    "rationale": "Updated the CSS test to reuse a suite-level CSS fixture and assert the state-driven selector without :active."
-  },
-  {
-    "id": 4222500444,
+    "id": 4223053049,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; its actionable :active selector and redundant test fixture items are covered by the linked review comments."
-  },
-  {
-    "id": 3183656357,
-    "disposition": "addressed",
-    "rationale": "Cleared arrow-exit state when the exit animation is canceled and when submission or form-blocked state changes."
-  },
-  {
-    "id": 4222510205,
-    "disposition": "not-applicable",
-    "rationale": "Codex review wrapper text only; no standalone code change requested beyond the actionable review comment."
+    "rationale": "Top-level review summary only; its actionable suggestion is covered by review comment 3184131746."
   }
 ]

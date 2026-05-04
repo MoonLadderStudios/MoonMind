@@ -576,6 +576,10 @@ const STEP_TYPE_OPTIONS: Array<{
   { value: "preset", label: "Preset", Icon: PresetLayersIcon },
 ];
 
+function usesGenericInstructionsLabel(stepType: StepType): boolean {
+  return stepType === "preset" || stepType === "skill";
+}
+
 interface StepState {
   localId: string;
   id: string;
@@ -7654,7 +7658,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <div className="stack">
                     <div className="queue-field-heading">
                       <label htmlFor={`queue-step-instructions-${step.localId}`}>
-                        {step.stepType === "preset"
+                        {usesGenericInstructionsLabel(step.stepType)
                           ? "Instructions"
                           : `Step ${index + 1} Instructions`}
                       </label>
