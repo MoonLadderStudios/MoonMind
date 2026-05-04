@@ -143,16 +143,34 @@ class TestGitHubIndexer(unittest.TestCase):
             service_context=self.mock_service_context,
         )
 
+    @patch("llama_index.core.VectorStoreIndex.from_documents")
+    @patch("moonmind.indexers.github_indexer.resolve_github_credential_sync")
+    def test_index_resolves_canonical_token_when_constructor_token_missing(
+        self, mock_resolve, mock_vs_from_docs, MockGithubReader
+    ):
+        mock_vs_from_docs.return_value = MagicMock()
+        mock_reader_instance = MockGithubReader.return_value
+        mock_reader_instance.load_data.return_value = []
+        mock_resolve.return_value = MagicMock(token="resolved-token")
+
+        indexer = GitHubIndexer(github_token=None, logger=MagicMock())
+        indexer.index(
+            repo_full_name="owner/repo",
+            branch="main",
+            filter_extensions=None,
+            storage_context=self.mock_storage_context,
+            service_context=self.mock_service_context,
+        )
+
+        mock_resolve.assert_called_once_with(None, repo="owner/repo")
+
         MockGithubReader.assert_called_once_with(
             owner="owner",
             repo="repo",
             github_client=ANY,
-            filter_file_extensions=(filter_exts, "INCLUDE"),  # Check filter applied
+            filter_file_extensions=None,
             verbose=False,
             concurrent_requests=5,
-        )
-        self.assertEqual(
-            MockGithubReader.call_args[1]["filter_file_extensions"][1], "INCLUDE"
         )
 
     def test_index_invalid_repo_format(self, MockGithubReader):

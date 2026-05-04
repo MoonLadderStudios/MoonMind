@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
+from api_service.api.schemas import GitHubTokenProbeRequest
 from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
 from api_service.services.settings_catalog import (
@@ -47,6 +48,21 @@ class SettingsPatchRequest(BaseModel):
     changes: dict[str, Any] = Field(default_factory=dict)
     expected_versions: dict[str, int] = Field(default_factory=dict)
     reason: str | None = None
+
+
+async def probe_github_token(
+    *,
+    repo: str,
+    mode: str,
+    base_branch: str | None = None,
+) -> dict[str, Any]:
+    from moonmind.workflows.adapters.github_service import GitHubService
+
+    return await GitHubService().probe_token(
+        repo=repo,
+        mode=mode,
+        base_branch=base_branch,
+    )
 
 
 def _permission_denied_response(permission: str) -> JSONResponse:
@@ -358,6 +374,21 @@ async def get_settings_diagnostics(
                 scope=scope,
             ),
         )
+
+
+@router.post("/github/token-probe")
+async def github_token_probe(
+    payload: GitHubTokenProbeRequest,
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
+):
+    denied = _require_permission(user, "settings.effective.read")
+    if denied is not None:
+        return denied
+    return await probe_github_token(
+        repo=payload.repo,
+        mode=payload.mode,
+        base_branch=payload.base_branch,
+    )
 
 
 @router.get("/audit")

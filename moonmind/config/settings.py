@@ -1298,6 +1298,7 @@ class GitHubSettings(BaseSettings):
         validation_alias=AliasChoices(
             "GITHUB_TOKEN_SECRET_REF",
             "WORKFLOW_GITHUB_TOKEN_SECRET_REF",
+            "MOONMIND_GITHUB_TOKEN_REF",
         ),
     )
     github_repos: Optional[str] = Field(

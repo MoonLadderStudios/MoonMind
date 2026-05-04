@@ -251,7 +251,7 @@ function visibleReadinessChecks(readiness?: ProviderProfileReadiness | null): Pr
 }
 
 type ProviderAuthActionLabel =
-  | 'Connect with Claude OAuth'
+  | 'OAuth'
   | 'Use Anthropic API key'
   | 'Validate OAuth'
   | 'Disconnect OAuth';
@@ -308,7 +308,7 @@ interface ClaudeManualAuthResult {
 }
 
 const CLAUDE_AUTH_ACTION_LABELS: Record<string, ProviderAuthActionLabel> = {
-  connect_oauth: 'Connect with Claude OAuth',
+  connect_oauth: 'OAuth',
   use_api_key: 'Use Anthropic API key',
   validate_oauth: 'Validate OAuth',
   disconnect_oauth: 'Disconnect OAuth',
@@ -1390,9 +1390,9 @@ export function ProviderProfilesManager({
                           className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
                           onClick={() => startOAuthMutation.mutate(profile)}
                           disabled={startOAuthMutation.isPending}
-                          aria-label={`Auth ${profile.profile_id}`}
+                          aria-label={`OAuth ${profile.profile_id}`}
                         >
-                          Auth
+                          OAuth
                         </button>
                       ) : null}
                       {authModel.kind === 'claude_credentials'

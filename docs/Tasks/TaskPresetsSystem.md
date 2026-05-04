@@ -181,7 +181,7 @@ without an explicit `kind` are treated as `kind: step` for compatibility:
  Run moonspec-specify with the canonical feature request:
  {{ inputs.feature_request }}
 
- Selected mode: {{ inputs.orchestration_mode }}.
+ MoonSpec Orchestrate always runs as a runtime implementation workflow.
  skill:
  id: moonspec-specify
  args: {}
@@ -418,8 +418,7 @@ POST /api/task-step-templates/{slug}:expand
 {
  "version": "1.0.0",
  "inputs": {
- "feature_request": "Add caching to the API layer",
- "orchestration_mode": "runtime"
+ "feature_request": "Add caching to the API layer"
  },
  "context": {},
  "options": {
@@ -460,7 +459,7 @@ POST /api/task-step-templates/{slug}:expand
  "appliedPreset": {
  "slug": "moonspec-orchestrate",
  "version": "1.0.0",
- "inputs": { "feature_request": "Add caching...", "orchestration_mode": "runtime" },
+ "inputs": { "feature_request": "Add caching..." },
  "nodeIds": ["tpl:moonspec-orchestrate:1.0.0:01:a1b2c3d4"],
  "appliedAt": "2026-03-13T12:00:00Z"
  },

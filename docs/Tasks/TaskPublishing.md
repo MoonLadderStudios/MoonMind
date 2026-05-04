@@ -113,6 +113,11 @@ If no PR head branch can be resolved for `publishMode: pr`, the workflow raises 
 
 After a managed agent subprocess completes successfully, the infrastructure performs a deterministic `git push` of the work branch. This is **not** delegated to the agent via prompt instructions — it is an infrastructure guarantee.
 
+GitHub publishing resolves credentials through the canonical GitHub resolver
+before the push. The push command receives `GITHUB_TOKEN`, `GH_TOKEN`, and
+`GIT_TERMINAL_PROMPT=0` in its subprocess environment when a token is available,
+so managed publishing does not depend on machine-level git credential caches.
+
 ### Safety Guard
 
 Before pushing, the runtime resolves the current branch name (`git rev-parse --abbrev-ref HEAD`) and **refuses to push** if the branch is:
@@ -126,6 +131,30 @@ For `publishMode: pr`, the authored base branch remains protected because the wo
 For `publishMode: branch`, the authored `branch` is publishable only when it is not one of the hard-protected names above.
 
 If the branch is protected, the push is skipped with a warning log. This prevents accidental pushes to production branches if the agent switched branches or if branch creation failed.
+
+## Pull Request Creation
+
+For GitHub repositories, managed PR publishing uses the GitHub REST API when the
+runtime has a resolved repository credential. This keeps fine-grained PAT
+permission failures tied to the exact endpoint and exposes GitHub diagnostics
+such as the response message, documentation URL, and accepted-permissions
+header.
+
+If no repository-scoped token is available, the runtime may fall back to
+`gh pr create` with explicit `GH_TOKEN` / `GITHUB_TOKEN` environment injection.
+Ambient `gh auth` state is not a reliable managed-runtime contract.
+
+The minimum fine-grained PAT permissions for PR publishing are:
+
+- `Contents: Read and write`
+- `Pull requests: Read and write`
+- `Workflows: Write` only when changes include `.github/workflows/*`
+
+Readiness evaluation additionally needs:
+
+- `Commit statuses: Read`
+- `Checks: Read`
+- `Issues: Read` when reaction fallback is enabled
 
 ### Agent Instructions
 
