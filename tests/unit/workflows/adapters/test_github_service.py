@@ -273,9 +273,87 @@ async def test_probe_github_token_targets_repo_and_reports_publish_checklist(mon
         item["permission"]: item for item in result["permissionChecklist"]
     }
     assert checklist["Contents"]["level"] == "write"
+    assert checklist["Contents"]["status"] == "verified_read_access"
     assert checklist["Pull requests"]["level"] == "write"
+    assert checklist["Pull requests"]["status"] == "verified_read_access"
+    assert checklist["Checks"]["status"] == "not_checked"
     assert any("resource owner" in item for item in result["limitations"])
     assert any("GitHub App" in item for item in result["limitations"])
+
+
+@pytest.mark.asyncio
+async def test_probe_github_token_uses_indexing_mode_checks(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"full_name": "owner/repo"}),
+            _mock_get_response(200, {"name": "main"}),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="owner/repo", mode="indexing", base_branch="main"
+        )
+
+    assert [call.args[0] for call in mock_client.get.call_args_list] == [
+        "https://api.github.com/repos/owner/repo",
+        "https://api.github.com/repos/owner/repo/branches/main",
+    ]
+    assert result["pullRequestAccessible"] is None
+    checklist = {
+        item["permission"]: item for item in result["permissionChecklist"]
+    }
+    assert checklist["Contents"]["status"] == "passed"
+
+
+@pytest.mark.asyncio
+async def test_probe_github_token_uses_readiness_mode_checks(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"full_name": "owner/repo"}),
+            _mock_get_response(200, []),
+            _mock_get_response(200, {"state": "success"}),
+            _mock_get_response(200, {"check_runs": []}),
+            _mock_get_response(200, []),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="owner/repo", mode="readiness", base_branch="main"
+        )
+
+    assert [call.args[0] for call in mock_client.get.call_args_list] == [
+        "https://api.github.com/repos/owner/repo",
+        "https://api.github.com/repos/owner/repo/pulls?per_page=1",
+        "https://api.github.com/repos/owner/repo/commits/main/status",
+        "https://api.github.com/repos/owner/repo/commits/main/check-runs",
+        "https://api.github.com/repos/owner/repo/issues?per_page=1",
+    ]
+    assert result["defaultBranchAccessible"] is None
+    checklist = {
+        item["permission"]: item for item in result["permissionChecklist"]
+    }
+    assert checklist["Pull requests"]["status"] == "passed"
+    assert checklist["Commit statuses"]["status"] == "passed"
+    assert checklist["Checks"]["status"] == "passed"
+    assert checklist["Issues"]["status"] == "passed"
 
 # ---------------------------------------------------------------------------
 # merge_pull_request

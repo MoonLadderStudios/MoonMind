@@ -278,6 +278,95 @@ class GitHubService:
         )
         return items
 
+    @staticmethod
+    def _mark_probe_permission(
+        checklist: list[dict[str, Any]],
+        *,
+        permission: str,
+        success: bool,
+        verified_level: str = "read",
+    ) -> None:
+        for item in checklist:
+            if item["permission"] != permission or not item["required"]:
+                continue
+            if not success:
+                item["status"] = "failed"
+            elif item["level"] == verified_level:
+                item["status"] = "passed"
+            else:
+                item["status"] = f"verified_{verified_level}_access"
+
+    @classmethod
+    def _probe_checks_for_mode(
+        cls,
+        *,
+        repo: str,
+        mode: str,
+        base_branch: str | None,
+    ) -> list[dict[str, str | None]]:
+        profile = cls.github_permission_profiles().get(
+            mode,
+            cls.github_permission_profiles()["publish"],
+        )
+        required = profile.required_permissions
+        ref = base_branch or "main"
+        checks: list[dict[str, str | None]] = [
+            {
+                "field": "repositoryAccessible",
+                "url": f"https://api.github.com/repos/{repo}",
+                "operation": "repository",
+                "permission": None,
+            }
+        ]
+        if "Contents" in required:
+            checks.append(
+                {
+                    "field": "defaultBranchAccessible",
+                    "url": f"https://api.github.com/repos/{repo}/branches/{ref}",
+                    "operation": "branch",
+                    "permission": "Contents",
+                }
+            )
+        if "Pull requests" in required:
+            checks.append(
+                {
+                    "field": "pullRequestAccessible",
+                    "url": f"https://api.github.com/repos/{repo}/pulls?per_page=1",
+                    "operation": "pulls",
+                    "permission": "Pull requests",
+                }
+            )
+        if "Commit statuses" in required:
+            checks.append(
+                {
+                    "field": None,
+                    "url": f"https://api.github.com/repos/{repo}/commits/{ref}/status",
+                    "operation": "commit_statuses",
+                    "permission": "Commit statuses",
+                }
+            )
+        if "Checks" in required:
+            checks.append(
+                {
+                    "field": None,
+                    "url": (
+                        f"https://api.github.com/repos/{repo}/commits/{ref}/check-runs"
+                    ),
+                    "operation": "checks",
+                    "permission": "Checks",
+                }
+            )
+        if "Issues" in required:
+            checks.append(
+                {
+                    "field": None,
+                    "url": f"https://api.github.com/repos/{repo}/issues?per_page=1",
+                    "operation": "issues",
+                    "permission": "Issues",
+                }
+            )
+        return checks
+
     async def probe_token(
         self,
         *,
@@ -323,30 +412,36 @@ class GitHubService:
 
         headers = self._github_headers(resolved.token)
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            checks = [
-                (
-                    "repositoryAccessible",
-                    f"https://api.github.com/repos/{repo}",
-                    "repository",
-                ),
-                (
-                    "defaultBranchAccessible",
-                    f"https://api.github.com/repos/{repo}/branches/{base_branch or 'main'}",
-                    "branch",
-                ),
-                (
-                    "pullRequestAccessible",
-                    f"https://api.github.com/repos/{repo}/pulls?per_page=1",
-                    "pulls",
-                ),
-            ]
-            for field, url, operation in checks:
+            checks = self._probe_checks_for_mode(
+                repo=repo,
+                mode=mode,
+                base_branch=base_branch,
+            )
+            for check in checks:
+                field = check["field"]
+                url = str(check["url"])
+                operation = str(check["operation"])
+                permission = check["permission"]
                 try:
                     response = await client.get(url, headers=headers)
                     response.raise_for_status()
-                    result[field] = True
+                    if field:
+                        result[field] = True
+                    if permission:
+                        self._mark_probe_permission(
+                            result["permissionChecklist"],
+                            permission=str(permission),
+                            success=True,
+                        )
                 except httpx.HTTPStatusError as exc:
-                    result[field] = False
+                    if field:
+                        result[field] = False
+                    if permission:
+                        self._mark_probe_permission(
+                            result["permissionChecklist"],
+                            permission=str(permission),
+                            success=False,
+                        )
                     result["diagnostics"].append(
                         {
                             "operation": operation,
@@ -356,7 +451,14 @@ class GitHubService:
                         }
                     )
                 except (httpx.TransportError, httpx.TimeoutException) as exc:
-                    result[field] = False
+                    if field:
+                        result[field] = False
+                    if permission:
+                        self._mark_probe_permission(
+                            result["permissionChecklist"],
+                            permission=str(permission),
+                            success=False,
+                        )
                     result["diagnostics"].append(
                         {
                             "operation": operation,
@@ -364,10 +466,6 @@ class GitHubService:
                             "retryable": True,
                         }
                     )
-        if all(result.get(field) is True for field in ("repositoryAccessible", "defaultBranchAccessible", "pullRequestAccessible")):
-            for item in result["permissionChecklist"]:
-                if item["required"]:
-                    item["status"] = "passed"
         return result
 
     # -- PR operations ----------------------------------------------------

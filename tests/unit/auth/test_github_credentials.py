@@ -5,6 +5,7 @@ import pytest
 from moonmind.auth.github_credentials import (
     GitHubCredentialSource,
     resolve_github_credential,
+    resolve_github_credential_sync,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -92,3 +93,50 @@ async def test_missing_credential_returns_redaction_safe_diagnostic(monkeypatch)
     assert resolved.source == GitHubCredentialSource.MISSING
     assert "owner/repo" in resolved.safe_summary
     assert "token" in resolved.safe_summary.lower()
+
+
+async def test_sync_resolver_uses_all_direct_env_sources_inside_running_loop(monkeypatch):
+    for key in (
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "WORKFLOW_GITHUB_TOKEN",
+        "GITHUB_TOKEN_SECRET_REF",
+        "WORKFLOW_GITHUB_TOKEN_SECRET_REF",
+        "MOONMIND_GITHUB_TOKEN_REF",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("GH_TOKEN", "gh-env-token")
+
+    resolved = resolve_github_credential_sync(repo="owner/repo")
+
+    assert resolved.token == "gh-env-token"
+    assert resolved.source == GitHubCredentialSource.DIRECT_ENV
+    assert resolved.source_name == "GH_TOKEN"
+
+
+async def test_sync_resolver_resolves_secret_refs_inside_running_loop(monkeypatch):
+    for key in (
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "WORKFLOW_GITHUB_TOKEN",
+        "GITHUB_TOKEN_SECRET_REF",
+        "WORKFLOW_GITHUB_TOKEN_SECRET_REF",
+        "MOONMIND_GITHUB_TOKEN_REF",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WORKFLOW_GITHUB_TOKEN_SECRET_REF", "db://github-token")
+
+    async def _fake_secret_ref(ref: str) -> str:
+        assert ref == "db://github-token"
+        return "secret-ref-token"
+
+    monkeypatch.setattr(
+        "moonmind.auth.github_credentials._resolve_secret_ref",
+        _fake_secret_ref,
+    )
+
+    resolved = resolve_github_credential_sync(repo="owner/repo")
+
+    assert resolved.token == "secret-ref-token"
+    assert resolved.source == GitHubCredentialSource.SECRET_REF_ENV
+    assert resolved.source_name == "WORKFLOW_GITHUB_TOKEN_SECRET_REF"

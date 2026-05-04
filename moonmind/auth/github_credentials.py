@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from enum import StrEnum
 from typing import Any
 
@@ -198,23 +199,22 @@ def resolve_github_credential_sync(
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(resolve_github_credential(explicit_token, repo=repo))
-    if explicit_token:
-        return ResolvedGitHubCredential(
-            token=explicit_token,
-            source=GitHubCredentialSource.EXPLICIT,
-            sourceName="explicit",
-            repo=repo,
-        )
-    token = str(os.environ.get("GITHUB_TOKEN", "")).strip()
-    if token:
-        return ResolvedGitHubCredential(
-            token=token,
-            source=GitHubCredentialSource.DIRECT_ENV,
-            sourceName="GITHUB_TOKEN",
-            repo=repo,
-        )
-    return ResolvedGitHubCredential(
-        source=GitHubCredentialSource.MISSING,
-        repo=repo,
-        diagnostic="GitHub credential could not be resolved synchronously.",
-    )
+
+    result: list[ResolvedGitHubCredential] = []
+    errors: list[BaseException] = []
+
+    def _resolve_in_thread() -> None:
+        try:
+            result.append(
+                asyncio.run(resolve_github_credential(explicit_token, repo=repo))
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=_resolve_in_thread, daemon=True)
+    thread.start()
+    thread.join()
+
+    if errors:
+        raise errors[0]
+    return result[0]
