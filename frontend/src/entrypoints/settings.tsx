@@ -177,7 +177,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       <section className="rounded-[2rem] border border-mm-border/80 bg-transparent p-3 shadow-sm">
         <fieldset className="queue-step-type-field">
           <legend className="sr-only">Settings section</legend>
-          <div className="queue-step-type-options">
+          <div className="queue-step-type-options w-full">
             {SETTINGS_SECTIONS.map((candidate) => (
               <label
                 key={candidate.id}
