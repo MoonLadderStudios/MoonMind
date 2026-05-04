@@ -592,6 +592,7 @@ interface StepState {
   presetKey: string;
   presetInputValues: Record<string, string | boolean>;
   presetDetail: TaskTemplateDetail | null;
+  submitExpansion?: PresetSubmitExpansionState | null;
   presetMessage: string | null;
   stepTypeMessage: string | null;
   templateStepId: string;
@@ -603,6 +604,13 @@ interface StepState {
   source?: Record<string, unknown>;
   storyOutput?: Record<string, unknown>;
   jiraOrchestration?: Record<string, unknown>;
+}
+
+interface PresetSubmitExpansionState {
+  status: "idle" | "queued" | "expanding" | "expanded" | "failed";
+  requestId?: string;
+  message?: string | null;
+  errorMessage?: string | null;
 }
 
 interface PresetExpansionState {
@@ -1193,6 +1201,7 @@ function createStepStateEntry(
     presetKey: "",
     presetInputValues: {},
     presetDetail: null,
+    submitExpansion: null,
     presetMessage: null,
     stepTypeMessage: null,
     templateStepId: "",
@@ -3048,6 +3057,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isDeletingPreset, setIsDeletingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitExpansionInFlightRef = useRef(false);
+  const submitExpansionRequestIdRef = useRef(0);
   const [submitRippleKey, setSubmitRippleKey] = useState(0);
   const [submitRippleRect, setSubmitRippleRect] = useState<DOMRect | null>(null);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -5277,10 +5288,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     preset,
     detail,
     inputValues,
+    submitIntent,
   }: {
     preset: TemplateOption;
     detail: TaskTemplateDetail;
     inputValues: Record<string, unknown>;
+    submitIntent?: string;
   }): Promise<PresetExpansionState> {
     const scopeParams = {
       scope: preset.scope,
@@ -5312,9 +5325,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           context: {
             repository: repository.trim() || defaultRepository,
             repo: repository.trim() || defaultRepository,
+            branch: branch.trim() || undefined,
+            publishMode: normalizePublishModeForSubmit(publishMode),
             targetRuntime: presetRuntime,
+            ...(submitIntent ? { submitIntent } : {}),
           },
-          options: { enforceStepLimit: true },
+          options: {
+            enforceStepLimit: true,
+            ...(submitIntent ? { intent: "submit-auto-expand" } : {}),
+          },
         }),
       },
     );
@@ -5344,40 +5363,54 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     };
   }
 
+  function appliedPresetStateFromExpansion(
+    preset: TemplateOption,
+    detail: TaskTemplateDetail,
+    expansion: PresetExpansionState,
+    expandedSteps: StepState[],
+  ): AppliedTemplateState | null {
+    if (expandedSteps.length === 0) {
+      return null;
+    }
+    const appliedTemplate = expansion.appliedTemplate || {};
+    return {
+      slug: String(appliedTemplate.slug || preset.slug),
+      version: String(
+        appliedTemplate.version ||
+          detail.version ||
+          preset.latestVersion ||
+          "1.0.0",
+      ),
+      inputs:
+        appliedTemplate.inputs && typeof appliedTemplate.inputs === "object"
+          ? appliedTemplate.inputs
+          : expansion.inputs,
+      stepIds: Array.isArray(appliedTemplate.stepIds)
+        ? appliedTemplate.stepIds
+        : expandedSteps.map((step) => step.id).filter(Boolean),
+      appliedAt:
+        String(appliedTemplate.appliedAt || "").trim() ||
+        new Date().toISOString(),
+      capabilities: expansion.capabilities,
+    };
+  }
+
   function recordAppliedPreset(
     preset: TemplateOption,
     detail: TaskTemplateDetail,
     expansion: PresetExpansionState,
     expandedSteps: StepState[],
   ) {
-    if (expandedSteps.length === 0) {
+    const appliedTemplate = appliedPresetStateFromExpansion(
+      preset,
+      detail,
+      expansion,
+      expandedSteps,
+    );
+    if (!appliedTemplate) {
       return;
     }
-    const appliedTemplate = expansion.appliedTemplate || {};
-    setAppliedTemplates((current) => [
-      ...current,
-      {
-        slug: String(appliedTemplate.slug || preset.slug),
-        version: String(
-          appliedTemplate.version ||
-            detail.version ||
-            preset.latestVersion ||
-            "1.0.0",
-        ),
-        inputs:
-          appliedTemplate.inputs &&
-          typeof appliedTemplate.inputs === "object"
-            ? appliedTemplate.inputs
-            : expansion.inputs,
-        stepIds: Array.isArray(appliedTemplate.stepIds)
-          ? appliedTemplate.stepIds
-          : expandedSteps.map((step) => step.id).filter(Boolean),
-        appliedAt:
-          String(appliedTemplate.appliedAt || "").trim() ||
-          new Date().toISOString(),
-        capabilities: expansion.capabilities,
-      },
-    ]);
+    setAppliedTemplates((current) => [...current, appliedTemplate]);
   }
 
   function applyPresetExpansionToDraft({
@@ -5762,26 +5795,178 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }
 
+  function updatePresetSubmitExpansion(
+    localId: string,
+    updates: Pick<StepState, "presetMessage" | "submitExpansion">,
+  ) {
+    setSteps((current) =>
+      current.map((step) =>
+        step.localId === localId ? { ...step, ...updates } : step,
+      ),
+    );
+  }
+
+  async function expandUnresolvedPresetsForSubmit({
+    requestId,
+    submitIntent,
+  }: {
+    requestId: string;
+    submitIntent: string;
+  }): Promise<{
+    steps: StepState[];
+    appliedTemplates: AppliedTemplateState[];
+    warnings: string[];
+  }> {
+    let nextSubmissionSteps = steps.map((step) => ({ ...step }));
+    const nextAppliedTemplates = [...appliedTemplates];
+    const warnings: string[] = [];
+    let generatedStepIndex = nextStepNumber;
+
+    for (let index = 0; index < nextSubmissionSteps.length; index += 1) {
+      const step = nextSubmissionSteps[index];
+      if (!step || step.stepType !== "preset") {
+        continue;
+      }
+      const preset = templateItems.find((item) => item.key === step.presetKey);
+      if (!preset) {
+        const message = "Choose a preset first.";
+        updatePresetSubmitExpansion(step.localId, {
+          presetMessage: message,
+          submitExpansion: {
+            status: "failed",
+            requestId,
+            errorMessage: message,
+          },
+        });
+        throw new Error(message);
+      }
+
+      updatePresetSubmitExpansion(step.localId, {
+        presetMessage: "Expanding preset...",
+        submitExpansion: {
+          status: "expanding",
+          requestId,
+          message: "Expanding preset...",
+        },
+      });
+      setSubmitMessage("Expanding preset...");
+
+      try {
+        const detail =
+          step.presetDetail && step.presetKey === preset.key
+            ? step.presetDetail
+            : await loadPresetDetail(preset);
+        const hasPresetStepAttachments =
+          step.inputAttachments.length > 0 ||
+          step.templateAttachments.length > 0 ||
+          (selectedStepAttachmentFiles[step.localId] || []).length > 0;
+        if (hasPresetStepAttachments) {
+          throw new Error(
+            "Preset attachment retargeting requires manual review before submission.",
+          );
+        }
+        if (
+          submitExpansionRequestIdRef.current !== Number(requestId.split("-").at(-1))
+        ) {
+          throw new Error("Preset expansion was superseded by another submit attempt.");
+        }
+        const expansion = await expandPresetForDraft({
+          preset,
+          detail,
+          inputValues: resolveTemplateInputs(
+            detail.inputs || [],
+            step.presetInputValues,
+            step.instructions,
+          ).values,
+          submitIntent,
+        });
+        const blockingWarning = expansion.warnings.find((warning) =>
+          /requires? (manual )?review|requires? acknowledgement|must review/i.test(
+            warning,
+          ),
+        );
+        if (blockingWarning) {
+          throw new Error(blockingWarning);
+        }
+        if (
+          submitExpansionRequestIdRef.current !== Number(requestId.split("-").at(-1))
+        ) {
+          throw new Error("Preset expansion was superseded by another submit attempt.");
+        }
+        const expandedSteps = expansion.expandedSteps.map((expandedStep) => {
+          const mapped = mapExpandedStepToState(
+            generatedStepIndex,
+            expandedStep,
+          );
+          generatedStepIndex += 1;
+          return mapped;
+        });
+        const appliedTemplate = appliedPresetStateFromExpansion(
+          preset,
+          detail,
+          expansion,
+          expandedSteps,
+        );
+        if (appliedTemplate) {
+          nextAppliedTemplates.push(appliedTemplate);
+        }
+        warnings.push(...expansion.warnings);
+        nextSubmissionSteps = [
+          ...nextSubmissionSteps.slice(0, index),
+          ...expandedSteps,
+          ...nextSubmissionSteps.slice(index + 1),
+        ];
+        index += Math.max(expandedSteps.length - 1, 0);
+        updatePresetSubmitExpansion(step.localId, {
+          presetMessage:
+            expansion.warnings.length > 0
+              ? expansion.warnings.join(" ")
+              : "Preset will expand during submission.",
+          submitExpansion: {
+            status: "expanded",
+            requestId,
+            message: "Preset expanded for submission.",
+          },
+        });
+      } catch (error) {
+        const failure =
+          error instanceof Error ? error : new Error("Failed to expand preset.");
+        const message = `Failed to expand preset: ${failure.message}`;
+        updatePresetSubmitExpansion(step.localId, {
+          presetMessage: message,
+          submitExpansion: {
+            status: "failed",
+            requestId,
+            errorMessage: message,
+          },
+        });
+        throw new Error(message, { cause: error });
+      }
+    }
+
+    return {
+      steps: nextSubmissionSteps,
+      appliedTemplates: nextAppliedTemplates,
+      warnings,
+    };
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isSubmitting) {
+    if (isSubmitting || submitExpansionInFlightRef.current) {
       return;
     }
     setSubmitMessage(null);
 
-    const primaryStep = steps[0] || null;
-    const primaryValidation = validatePrimaryStepSubmission(primaryStep);
-    if (!primaryValidation.ok) {
-      setSubmitMessage(primaryValidation.error);
-      return;
-    }
-
-    const primaryInstructions = primaryValidation.value.instructions;
-    const objectiveInstructions = resolveObjectiveInstructions(
-      templateFeatureRequest,
-      primaryInstructions,
-      appliedTemplates,
-    );
+    let submissionSteps = steps;
+    let submissionAppliedTemplates = appliedTemplates;
+    let submitExpansionActivated = false;
+    const clearSubmitBusy = () => {
+      submitExpansionInFlightRef.current = false;
+      if (submitExpansionActivated) {
+        setIsSubmitting(false);
+      }
+    };
     const normalizedRepository = repository.trim() || defaultRepository;
     if (!normalizedRepository) {
       setSubmitMessage(
@@ -5831,13 +6016,61 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
 
+    const unresolvedPresetSteps = steps.filter(
+      (step) => step.stepType === "preset",
+    );
+    if (unresolvedPresetSteps.length > 0) {
+      submitExpansionActivated = true;
+      submitExpansionInFlightRef.current = true;
+      const requestSerial = submitExpansionRequestIdRef.current + 1;
+      submitExpansionRequestIdRef.current = requestSerial;
+      const requestId = `submit-${requestSerial}`;
+      setIsSubmitting(true);
+      try {
+        const expanded = await expandUnresolvedPresetsForSubmit({
+          requestId,
+          submitIntent: pageMode.mode,
+        });
+        submissionSteps = expanded.steps;
+        submissionAppliedTemplates = expanded.appliedTemplates;
+        if (expanded.warnings.length > 0) {
+          setSubmitMessage(expanded.warnings.join(" "));
+        } else {
+          setSubmitMessage("Creating task...");
+        }
+      } catch (error) {
+        const failure =
+          error instanceof Error ? error : new Error("Failed to expand preset.");
+        setSubmitMessage(failure.message);
+        clearSubmitBusy();
+        return;
+      } finally {
+        submitExpansionInFlightRef.current = false;
+      }
+    }
+
+    const primaryStep = submissionSteps[0] || null;
+    const primaryValidation = validatePrimaryStepSubmission(primaryStep);
+    if (!primaryValidation.ok) {
+      setSubmitMessage(primaryValidation.error);
+      clearSubmitBusy();
+      return;
+    }
+
+    const primaryInstructions = primaryValidation.value.instructions;
+    const objectiveInstructions = resolveObjectiveInstructions(
+      templateFeatureRequest,
+      primaryInstructions,
+      submissionAppliedTemplates,
+    );
+
     const primaryStepIsSkill = primaryStep?.stepType === "skill";
     const primarySkillId = primaryStepIsSkill
       ? primaryValidation.value.skillId.trim() || "auto"
       : "auto";
     const effectiveSubmissionSkillId = resolveEffectiveSkillId(
       primarySkillId,
-      appliedTemplates,
+      submissionAppliedTemplates,
     );
     const effectivePublishMode =
       isSelfManagedPublishSkill(effectiveSubmissionSkillId)
@@ -5862,6 +6095,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         setSubmitMessage(
           'Primary step Skill Args must be valid JSON object text (for example: {"featureKey":"..."}).',
         );
+        clearSubmitBusy();
         return;
       }
     }
@@ -5869,11 +6103,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (primaryStep?.stepType === "tool" && !executableGeneratedToolPayload(primaryStep)) {
       if (!primaryStep.toolId.trim()) {
         setSubmitMessage("Select a Tool before submitting a Tool step.");
+        clearSubmitBusy();
         return;
       }
       const parsedToolInputs = parseToolInputsText(primaryStep.toolInputs);
       if (!parsedToolInputs.ok) {
         setSubmitMessage("Step 1 Tool Inputs must be valid JSON object text.");
+        clearSubmitBusy();
         return;
       }
       primaryToolInputs = parsedToolInputs.value;
@@ -5912,13 +6148,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       toolInputs: Record<string, unknown>;
       hasStepContent: boolean;
     }> = [];
-    for (let index = 1; index < steps.length; index += 1) {
-      const step = steps[index];
+    for (let index = 1; index < submissionSteps.length; index += 1) {
+      const step = submissionSteps[index];
       if (!step) {
         continue;
       }
       if (step.stepType === "preset") {
         setSubmitMessage("Expand Preset steps before submitting.");
+        clearSubmitBusy();
         return;
       }
       const stepIsSkill = step.stepType === "skill";
@@ -5954,6 +6191,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (stepIsTool && !generatedToolPayload) {
         if (hasStepContent && !step.toolId.trim()) {
           setSubmitMessage(`Select a Tool before submitting Step ${index + 1}.`);
+          clearSubmitBusy();
           return;
         }
         const parsedToolInputs = parseToolInputsText(step.toolInputs);
@@ -5961,6 +6199,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           setSubmitMessage(
             `Step ${index + 1} Tool Inputs must be valid JSON object text.`,
           );
+          clearSubmitBusy();
           return;
         }
         stepToolInputs = parsedToolInputs.value;
@@ -5976,6 +6215,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           setSubmitMessage(
             `Step ${index + 1} Skill Args must be valid JSON object text.`,
           );
+          clearSubmitBusy();
           return;
         }
       }
@@ -6001,6 +6241,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     );
     if (!additionalStepValidation.ok) {
       setSubmitMessage(additionalStepValidation.error);
+      clearSubmitBusy();
       return;
     }
 
@@ -6008,11 +6249,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (scheduleMode === "once") {
       if (!scheduledFor.trim()) {
         setSubmitMessage("Scheduled time is required for deferred scheduling.");
+        clearSubmitBusy();
         return;
       }
       const scheduleDate = new Date(scheduledFor);
       if (Number.isNaN(scheduleDate.getTime()) || scheduleDate <= new Date()) {
         setSubmitMessage("Scheduled time must be a valid future date.");
+        clearSubmitBusy();
         return;
       }
       schedulePayload = {
@@ -6029,10 +6272,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         setSubmitMessage(
           "A valid positive whole number of minutes is required for deferred scheduling.",
         );
+        clearSubmitBusy();
         return;
       }
       if (deferredMinutes > 525600) {
         setSubmitMessage("Deferred minutes cannot exceed 525 600 (one year).");
+        clearSubmitBusy();
         return;
       }
       schedulePayload = {
@@ -6046,6 +6291,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         setSubmitMessage(
           "Cron expression is required for recurring scheduling.",
         );
+        clearSubmitBusy();
         return;
       }
       schedulePayload = {
@@ -6105,7 +6351,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             }
           });
 
-        for (const [index, step] of steps.entries()) {
+        for (const [index, step] of submissionSteps.entries()) {
           const files = selectedStepAttachmentFiles[step.localId] || [];
           const targetKey = attachmentTargetKey(step.localId);
           uploadPromises.push(
@@ -6164,7 +6410,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           uploadedStepAttachments[result.targetKey] = stepAttachmentRefs;
         }
 
-        for (const step of steps) {
+        for (const step of submissionSteps) {
           const targetKey = attachmentTargetKey(step.localId);
           if (uploadedStepAttachments[targetKey]) {
             uploadedStepAttachments[step.localId] =
@@ -6274,7 +6520,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const includePrimaryStepForObjectiveOverride =
       Boolean(primaryInstructionsForSubmit) &&
       objectiveInstructionsForSubmit !== primaryInstructionsForSubmit;
-    const hasTemplateBoundStep = steps.some((step) => Boolean(step.id.trim()));
+    const hasTemplateBoundStep = submissionSteps.some((step) =>
+      Boolean(step.id.trim()),
+    );
     const primaryGeneratedToolPayload =
       executableGeneratedToolPayload(primaryStep) ||
       manualToolPayload(primaryStep, primaryToolInputs);
@@ -6307,7 +6555,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           },
           ...additionalSteps,
         ].map((entry) => {
-          const sourceStep = steps[entry.sourceIndex];
+          const sourceStep = submissionSteps[entry.sourceIndex];
           if (!sourceStep) {
             return entry.payload;
           }
@@ -6397,7 +6645,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         })
       : [];
 
-    const templateCapabilities = appliedTemplates.flatMap(
+    const templateCapabilities = submissionAppliedTemplates.flatMap(
       (entry) => entry.capabilities || [],
     );
     const mergedCapabilities = deriveRequiredCapabilities({
@@ -6441,7 +6689,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
     // Only include task-level agent skill selectors when we have an explicit skill or a template slug.
     const taskSkillSelectors =
-      hasExplicitSkillSelection(primarySkillId) || appliedTemplates.length > 0
+      hasExplicitSkillSelection(primarySkillId) ||
+      submissionAppliedTemplates.length > 0
         ? { include: [{ name: effectiveSubmissionSkillId }] }
         : undefined;
 
@@ -6501,8 +6750,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           }
         : {}),
       ...(normalizedSteps.length > 0 ? { steps: normalizedSteps } : {}),
-      ...(appliedTemplates.length > 0
-        ? { appliedStepTemplates: appliedTemplates }
+      ...(submissionAppliedTemplates.length > 0
+        ? { appliedStepTemplates: submissionAppliedTemplates }
         : {}),
       ...(selectedDependencies.length > 0
         ? { dependsOn: selectedDependencies }

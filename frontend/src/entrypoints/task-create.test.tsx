@@ -12467,6 +12467,35 @@ describe("Task Create MM-578 Preset expansion", () => {
     >;
   }
 
+  async function chooseMm578Preset(step: HTMLElement) {
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::mm-578-preset" },
+    });
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) =>
+          String(url).startsWith(
+            "/api/task-step-templates/mm-578-preset?scope=global",
+          ),
+        ),
+      ).toBe(true);
+    });
+  }
+
+  function latestCreateTaskSteps(): Array<Record<string, unknown>> {
+    const request = latestCreateRequest() as {
+      payload?: { task?: { steps?: Array<Record<string, unknown>> } };
+    };
+    return request.payload?.task?.steps || [];
+  }
+
   function mockMm578PresetFetch(input: RequestInfo | URL): Promise<Response> {
     const url = String(input);
     if (url.startsWith("/api/tasks/skills")) {
@@ -12578,6 +12607,7 @@ describe("Task Create MM-578 Preset expansion", () => {
             slug: "mm-578-preset",
             version: "1.0.0",
           },
+          capabilities: ["jira"],
           warnings: ["Generated steps should be reviewed before apply."],
         }),
       } as Response);
@@ -12600,10 +12630,56 @@ describe("Task Create MM-578 Preset expansion", () => {
         json: async () => ({ items: [] }),
       } as Response);
     }
+    if (url === "/api/executions/mm%3Aauto-preset-edit?source=temporal") {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          workflowId: "mm:auto-preset-edit",
+          workflowType: "MoonMind.Run",
+          state: "executing",
+          targetRuntime: "codex_cli",
+          repository: "MoonLadderStudios/MoonMind",
+          publishMode: "pr",
+          inputParameters: {
+            targetRuntime: "codex_cli",
+            repository: "MoonLadderStudios/MoonMind",
+            task: {
+              instructions: "Edit a trusted preset draft.",
+              runtime: { mode: "codex_cli" },
+              publish: { mode: "pr" },
+              steps: [
+                {
+                  id: "preset-step",
+                  title: "Preset",
+                  stepType: "preset",
+                  instructions: "Expand MM-578 during update.",
+                  preset: {
+                    id: "global::::mm-578-preset",
+                    slug: "mm-578-preset",
+                    version: "1.0.0",
+                    inputs: { issue_key: "MM-578" },
+                  },
+                },
+              ],
+            },
+          },
+          actions: {
+            canUpdateInputs: true,
+            canRerun: false,
+          },
+        }),
+      } as Response);
+    }
     if (url === "/api/executions") {
       return Promise.resolve({
         ok: true,
         json: async () => ({ workflowId: "mm:workflow-578" }),
+      } as Response);
+    }
+    if (url === "/api/executions/mm%3Aauto-preset-edit/update") {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ execution: { workflowId: "mm:auto-preset-edit" } }),
       } as Response);
     }
     return Promise.resolve({
@@ -12745,6 +12821,314 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(request.payload.task.steps[1]?.["tool"]).toBeUndefined();
   });
 
+  it("auto-expands an unresolved Preset during Create submit without mutating the visible draft", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
+      target: { value: "Keep unresolved MM-578 preset placeholder." },
+    });
+    await chooseMm578Preset(step);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const steps = latestCreateTaskSteps();
+    expect(steps).toHaveLength(2);
+    expect(steps.map((entry) => entry.type)).toEqual(["tool", "skill"]);
+    expect(steps.some((entry) => entry.type === "preset")).toBe(false);
+    expect(steps[0]?.source).toEqual({
+      kind: "preset-derived",
+      presetId: "mm-578-preset",
+      presetVersion: "1.0.0",
+      includePath: ["root", "fetch"],
+      originalStepId: "fetch-jira-issue",
+    });
+    expect(
+      screen.getByDisplayValue("Keep unresolved MM-578 preset placeholder."),
+    ).toBeTruthy();
+    expect(screen.queryByDisplayValue("Fetch MM-578.")).toBeNull();
+    expect(
+      (
+        latestCreateRequest() as {
+          payload?: { requiredCapabilities?: string[] };
+        }
+      ).payload?.requiredCapabilities,
+    ).toContain("jira");
+  });
+
+  it("auto-expands multiple unresolved Presets in authored step order", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const firstStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(firstStep);
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const secondStep = (await screen.findByText("Step 2")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(secondStep);
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const thirdStep = (await screen.findByText("Step 3")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(thirdStep);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expect(
+      fetchSpy.mock.calls.filter(([url]) =>
+        String(url).startsWith(
+          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+        ),
+      ),
+    ).toHaveLength(3);
+    expect(
+      latestCreateTaskSteps().map((entry) => [
+        entry.id,
+        entry.type,
+        (entry.source as Record<string, unknown> | undefined)
+          ?.originalStepId,
+      ]),
+    ).toEqual([
+      ["tpl:mm-578-preset:1.0.0:01", "tool", "fetch-jira-issue"],
+      ["tpl:mm-578-preset:1.0.0:02", "skill", "implement-preset-story"],
+      ["tpl:mm-578-preset:1.0.0:01", "tool", "fetch-jira-issue"],
+      ["tpl:mm-578-preset:1.0.0:02", "skill", "implement-preset-story"],
+      ["tpl:mm-578-preset:1.0.0:01", "tool", "fetch-jira-issue"],
+      ["tpl:mm-578-preset:1.0.0:02", "skill", "implement-preset-story"],
+    ]);
+  });
+
+  it("uses the same submit-time expansion path for edit updates", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aauto-preset-edit",
+    );
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    await waitFor(() => {
+      expect(getStepTypeRadio(step, "Preset").checked).toBe(true);
+      expect(
+        (within(step).getByLabelText("Preset Template") as HTMLSelectElement)
+          .value,
+      ).toBe("global::::mm-578-preset");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Aauto-preset-edit/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) => String(url) === "/api/executions/mm%3Aauto-preset-edit/update",
+      )
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body || "{}")) as {
+      updateName?: string;
+      parametersPatch?: { task?: { steps?: Array<Record<string, unknown>> } };
+    };
+    expect(request.updateName).toBe("UpdateInputs");
+    expect(request.parametersPatch?.task?.steps?.map((entry) => entry.type)).toEqual([
+      "tool",
+      "skill",
+    ]);
+    expect(
+      request.parametersPatch?.task?.steps?.some(
+        (entry) => entry.type === "preset",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not auto-expand or submit on non-submit Preset interactions", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(step);
+
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url).startsWith(
+          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+        ),
+      ),
+    ).toBe(false);
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
+  it("blocks submit-time expansion warnings that require manual review", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:mm-578-preset:1.0.0:01",
+                title: "Fetch Jira issue",
+                instructions: "Fetch MM-578.",
+                tool: {
+                  type: "tool",
+                  id: "jira.get_issue",
+                  inputs: { issueKey: "MM-578" },
+                },
+              },
+            ],
+            warnings: ["Requires manual review before submission."],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(step);
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      (
+        await screen.findAllByText(
+          "Failed to expand preset: Requires manual review before submission.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
+  it("blocks ambiguous Preset-step attachment retargeting during submit-time expansion", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(step);
+    const file = new File(["image"], "evidence.png", { type: "image/png" });
+    fireEvent.change(within(step).getByLabelText("Step 1 attachment file picker"), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      (
+        await screen.findAllByText(
+          "Failed to expand preset: Preset attachment retargeting requires manual review before submission.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
+  it("guards duplicate submit clicks while auto-expansion is in progress", async () => {
+    const expansionResolvers: Array<(response: Response) => void> = [];
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+        )
+      ) {
+        return new Promise<Response>((resolve) => {
+          expansionResolvers.push(resolve);
+        });
+      }
+      return mockMm578PresetFetch(input);
+    });
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(step);
+    const createButton = screen.getByRole("button", { name: "Create" });
+    fireEvent.click(createButton);
+    fireEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(expansionResolvers).toHaveLength(1);
+    });
+    expect(
+      fetchSpy.mock.calls.filter(([url]) =>
+        String(url).startsWith(
+          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+        ),
+      ),
+    ).toHaveLength(1);
+    const completeExpansion = expansionResolvers[0];
+    if (!completeExpansion) {
+      throw new Error("Expansion promise was not captured.");
+    }
+    completeExpansion({
+      ok: true,
+      json: async () => ({
+        steps: [
+          {
+            id: "tpl:mm-578-preset:1.0.0:01",
+            title: "Fetch Jira issue",
+            instructions: "Fetch MM-578.",
+            tool: {
+              type: "tool",
+              id: "jira.get_issue",
+              inputs: { issueKey: "MM-578" },
+            },
+          },
+        ],
+        appliedTemplate: {
+          slug: "mm-578-preset",
+          version: "1.0.0",
+        },
+      }),
+    } as Response);
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expect(
+      fetchSpy.mock.calls.filter(([url]) => String(url) === "/api/executions"),
+    ).toHaveLength(1);
+  });
+
   it("keeps drafts unchanged on expansion failure and blocks unresolved Preset submission", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -12793,10 +13177,12 @@ describe("Task Create MM-578 Preset expansion", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     expect(
-      await screen.findByText(
-        "Expand Preset steps before submitting.",
-      ),
-    ).toBeTruthy();
+      (
+        await screen.findAllByText(
+          "Failed to expand preset: Generated step validation failed.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
     ).toBe(false);
