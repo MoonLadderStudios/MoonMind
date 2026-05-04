@@ -1,5 +1,15 @@
 [
   {
+    "id": 3184919504,
+    "disposition": "addressed",
+    "rationale": "Added w-full to queue-step-type-options container in settings.tsx to fix sliding thumb alignment with variable label widths."
+  },
+  {
+    "id": 4224002358,
+    "disposition": "addressed",
+    "rationale": "Review summary covers the same layout issue addressed by adding w-full to the navigation container."
+  },
+  {
     "id": 3184882513,
     "disposition": "addressed",
     "rationale": "Removed the redundant unpublished handoff check from the exception block; the pre-try guard already covers unchanged previous_outputs/ref inputs."
