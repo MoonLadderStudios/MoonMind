@@ -790,6 +790,39 @@ def _fallback_result(
         },
     )
 
+def _unpublished_handoff_reason(
+    *,
+    previous_outputs: Mapping[str, Any],
+    ref: str,
+) -> str:
+    push_status = _string(
+        previous_outputs.get("push_status")
+        or previous_outputs.get("pushStatus")
+    )
+    push_branch = _string(
+        previous_outputs.get("push_branch")
+        or previous_outputs.get("pushBranch")
+    )
+    if not push_branch or ref != push_branch:
+        return ""
+    if push_status == "protected_branch":
+        return (
+            "Unable to read story breakdown for Jira output because "
+            f"the previous step produced it on protected branch '{push_branch}' "
+            "and it was not published. Jira story creation requires inline "
+            "stories, storyBreakdownArtifactRef, or a readable repo/ref/path "
+            "from a published handoff branch."
+        )
+    if push_status == "no_commits":
+        return (
+            "Unable to read story breakdown for Jira output because "
+            f"the previous step made no commits on handoff branch '{push_branch}'. "
+            "The story breakdown was not produced or was not captured as an "
+            "inline story payload, storyBreakdownArtifactRef, or readable "
+            "repo/ref/path handoff."
+        )
+    return ""
+
 def _issue_mapping(
     *,
     story: Mapping[str, Any],
@@ -1045,6 +1078,12 @@ async def create_jira_issues_from_stories(
             or previous_story_output.get("storyBreakdownPath")
         )
         if repo and ref and path:
+            unpublished_reason = _unpublished_handoff_reason(
+                previous_outputs=previous_outputs,
+                ref=ref,
+            )
+            if unpublished_reason:
+                raise ValueError(unpublished_reason)
             try:
                 fetched = story_fetcher(repo, ref, path)
                 if inspect.isawaitable(fetched):
@@ -1058,26 +1097,6 @@ async def create_jira_issues_from_stories(
                 breakdown_source_path = _breakdown_source_path(fetched_payload)
                 stories = _coerce_story_payload(fetched)
             except Exception as exc:
-                push_status = _string(
-                    previous_outputs.get("push_status")
-                    or previous_outputs.get("pushStatus")
-                )
-                push_branch = _string(
-                    previous_outputs.get("push_branch")
-                    or previous_outputs.get("pushBranch")
-                )
-                if (
-                    push_status == "protected_branch"
-                    and push_branch
-                    and ref == push_branch
-                ):
-                    raise ValueError(
-                        "Unable to read story breakdown for Jira output because "
-                        f"the previous step produced it on protected branch '{push_branch}' "
-                        "and it was not published. Jira story creation requires inline "
-                        "stories, storyBreakdownArtifactRef, or a readable repo/ref/path "
-                        "from a published handoff branch."
-                    ) from exc
                 if fallback_for_missing_stories:
                     return _fallback_result(
                         reason=f"Unable to read story breakdown for Jira output: {exc}",
