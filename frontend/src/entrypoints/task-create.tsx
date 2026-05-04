@@ -29,6 +29,10 @@ const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
 const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
+const MAIN_TASK_NONE_PUBLISH_PRESET_SLUGS = new Set([
+  JIRA_BREAKDOWN_PRESET_SLUG,
+  JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG,
+]);
 const SELF_MANAGED_PUBLISH_SKILLS = new Set([
   ...PR_RESOLVER_SKILLS,
 ]);
@@ -1351,6 +1355,10 @@ function hasExplicitSkillSelection(skillId: string): boolean {
 
 function isSelfManagedPublishSkill(skillId: string): boolean {
   return SELF_MANAGED_PUBLISH_SKILLS.has(skillId.trim().toLowerCase());
+}
+
+function presetForcesMainTaskPublishNone(slug: string): boolean {
+  return MAIN_TASK_NONE_PUBLISH_PRESET_SLUGS.has(slug.trim().toLowerCase());
 }
 
 function resolveEffectiveSkillId(
@@ -3846,8 +3854,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   useEffect(() => {
     if (
       pageMode.mode === "create" &&
-      (selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG ||
-        selectedPreset?.slug === JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG)
+      selectedPreset &&
+      presetForcesMainTaskPublishNone(selectedPreset.slug)
     ) {
       setPublishMode("none");
     }
@@ -4773,6 +4781,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     updateStepPreset(localId, presetKey);
     if (!preset) {
       return;
+    }
+    if (
+      pageMode.mode === "create" &&
+      presetForcesMainTaskPublishNone(preset.slug)
+    ) {
+      setPublishMode("none");
     }
     updateStep(localId, { presetMessage: "Loading preset options..." });
     try {
@@ -6069,8 +6083,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       primarySkillId,
       submissionAppliedTemplates,
     );
+    const mainTaskPublishNoneFromPreset = submissionAppliedTemplates.some(
+      (entry) => presetForcesMainTaskPublishNone(entry.slug),
+    );
     const effectivePublishMode =
-      isSelfManagedPublishSkill(effectiveSubmissionSkillId)
+      isSelfManagedPublishSkill(effectiveSubmissionSkillId) ||
+      mainTaskPublishNoneFromPreset
         ? "none"
         : normalizedPublishMode;
     const primarySkillArgsRaw = primaryStepIsSkill && showAdvancedStepOptions
