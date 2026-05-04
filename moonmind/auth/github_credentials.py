@@ -201,14 +201,14 @@ def resolve_github_credential_sync(
         return asyncio.run(resolve_github_credential(explicit_token, repo=repo))
 
     result: list[ResolvedGitHubCredential] = []
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
 
     def _resolve_in_thread() -> None:
         try:
             result.append(
                 asyncio.run(resolve_github_credential(explicit_token, repo=repo))
             )
-        except BaseException as exc:
+        except Exception as exc:
             errors.append(exc)
 
     thread = threading.Thread(target=_resolve_in_thread, daemon=True)

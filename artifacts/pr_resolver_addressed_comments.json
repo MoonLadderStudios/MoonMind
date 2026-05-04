@@ -33,5 +33,10 @@
     "id": 4218973815,
     "disposition": "not-applicable",
     "rationale": "Codex review wrapper text only; its specific child findings are addressed separately."
+  },
+  {
+    "id": 3180817280,
+    "disposition": "addressed",
+    "rationale": "Narrowed the worker-thread exception capture in resolve_github_credential_sync from BaseException to Exception."
   }
 ]
