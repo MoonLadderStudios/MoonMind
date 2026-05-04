@@ -1622,6 +1622,55 @@ def test_runtime_planner_publish_pr_appends_gh_suffix_for_cli_runtimes():
     assert "Do NOT push or create a pull request" in text
     assert "gh pr create" not in text
 
+
+def test_runtime_planner_preserves_jira_orchestrate_pr_handoff_instructions():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Run Jira Orchestrate for THOR-352.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "appliedStepTemplates": [{"slug": "jira-orchestrate"}],
+                "steps": [
+                    {
+                        "id": "implement",
+                        "title": "Implement",
+                        "tool": {"type": "skill", "name": "moonspec-implement"},
+                        "instructions": "Implement the Jira issue.",
+                    },
+                    {
+                        "id": "create-pr",
+                        "title": "Create pull request",
+                        "instructions": (
+                            "Create a pull request and record pull_request_url."
+                        ),
+                    },
+                    {
+                        "id": "code-review",
+                        "title": "Move Jira issue to Code Review",
+                        "tool": {"type": "skill", "name": "jira-issue-updater"},
+                        "instructions": "Move the Jira issue to Code Review.",
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    pr_node = plan["nodes"][1]
+    assert pr_node["inputs"]["title"] == "Create pull request"
+    assert pr_node["inputs"]["publishMode"] == "pr"
+    assert "Create a pull request" in pr_node["inputs"]["instructions"]
+    assert (
+        "Do NOT push or create a pull request"
+        not in pr_node["inputs"]["instructions"]
+    )
+    assert "commit your work" not in pr_node["inputs"]["instructions"]
+
 def test_runtime_planner_publish_pr_skips_gh_suffix_for_jules():
     """Jules uses API automationMode AUTO_CREATE_PR; do not inject gh CLI text."""
     planner = _build_runtime_planner()

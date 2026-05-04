@@ -6023,11 +6023,14 @@ describe.skip("Task Create Entrypoint", () => {
     expect(within(presetSection).queryByLabelText("Source Design Path")).toBeNull();
     expect(within(presetSection).queryByLabelText("Constraints")).toBeNull();
     expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe(
-      "none",
+      "pr",
+    );
+    expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).disabled).toBe(
+      false,
     );
   });
 
-  it("submits Jira Orchestrate preset runs without automatic publishing", async () => {
+  it("allows Jira Orchestrate preset runs to use PR merge automation", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -6103,7 +6106,7 @@ describe.skip("Task Create Entrypoint", () => {
     const presetSection = screen.getByLabelText("Task Presets");
     await within(presetSection).findByLabelText("Jira Issue Key");
     expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe(
-      "none",
+      "pr",
     );
 
     fireEvent.change(within(presetSection).getByLabelText("Jira Issue Key"), {
@@ -6111,23 +6114,24 @@ describe.skip("Task Create Entrypoint", () => {
     });
     await clickApplyButton();
     await screen.findByDisplayValue("Transition THOR-352 to In Progress.");
-    await screen.findByText(
-      /Jira Orchestrate manages its own PR\/publish flow, so Publish Mode is forced to None and merge automation is unavailable\./,
-    );
+    await screen.findByText(/Applied preset 'Jira Orchestrate' \(1 steps\)\./);
 
     const publishSelect = screen.getByLabelText(
       "Publish Mode",
     ) as HTMLSelectElement;
-    expect(publishSelect.value).toBe("none");
+    expect(publishSelect.value).toBe("pr");
     expect(publishSelect.getAttribute("title")).toBe(
-      "Publishing is forced to None because the selected preset or resolver manages its own publish flow",
+      "Select how MoonMind publishes task changes",
     );
-    expect(publishSelect.disabled).toBe(true);
+    expect(publishSelect.disabled).toBe(false);
     const mergeAutomationOption = Array.from(publishSelect.options).find(
       (option) => option.value === "pr_with_merge_automation",
     );
     expect(mergeAutomationOption).toBeTruthy();
-    expect(mergeAutomationOption?.disabled).toBe(true);
+    expect(mergeAutomationOption?.disabled).toBe(false);
+    fireEvent.change(publishSelect, {
+      target: { value: "pr_with_merge_automation" },
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -6140,9 +6144,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     const payload = latestCreateRequest().payload as Record<string, unknown>;
     const task = payload.task as Record<string, unknown>;
-    expect(payload.publishMode).toBe("none");
-    expect(task.publish).toMatchObject({ mode: "none" });
-    expect(payload).not.toHaveProperty("mergeAutomation");
+    expect(payload.publishMode).toBe("pr");
+    expect(task.publish).toMatchObject({ mode: "pr" });
+    expect(payload.mergeAutomation).toEqual({ enabled: true });
     expect(task.skills).toEqual({ include: [{ name: "jira-orchestrate" }] });
   });
 

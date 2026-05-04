@@ -127,7 +127,8 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             if step["title"] == "Create pull request"
         )
         assert "pull request" in pr_step["instructions"]
-        assert "task.publish.mode=none" in pr_step["instructions"]
+        assert "parent workflow must use the pull request URL" in pr_step["instructions"]
+        assert "merge automation" in pr_step["instructions"]
         assert "artifacts/jira-orchestrate-pr.json" in pr_step["instructions"]
         code_review_step = next(
             step

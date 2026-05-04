@@ -700,6 +700,34 @@ def _plan_node_selected_skill(node: Mapping[str, Any]) -> str:
         return ""
     return str(inputs.get("selectedSkill") or "").strip()
 
+
+def _task_has_applied_template(task_payload: Mapping[str, Any], slug: str) -> bool:
+    applied = task_payload.get("appliedStepTemplates")
+    if not isinstance(applied, list):
+        return False
+    target = slug.strip().lower()
+    for entry in applied:
+        if not isinstance(entry, Mapping):
+            continue
+        if str(entry.get("slug") or "").strip().lower() == target:
+            return True
+    return False
+
+
+def _is_jira_orchestrate_pr_handoff_node(
+    node: Mapping[str, Any],
+    *,
+    task_payload: Mapping[str, Any],
+) -> bool:
+    if not _task_has_applied_template(task_payload, "jira-orchestrate"):
+        return False
+    inputs = node.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return False
+    title = str(inputs.get("title") or "").strip().lower()
+    return title == "create pull request"
+
+
 def _append_story_breakdown_instructions(
     instructions: str,
     *,
@@ -1256,6 +1284,10 @@ def _build_runtime_planner():
             if (
                 publish_tool not in _TOOLS_WITH_AUTO_PR_CREATION
                 and not _jira_agent_skill_selected(publish_selected_skill)
+                and not _is_jira_orchestrate_pr_handoff_node(
+                    publish_node,
+                    task_payload=task_payload,
+                )
             ):
                 publish_inputs = publish_node["inputs"]
                 if (

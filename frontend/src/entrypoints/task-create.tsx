@@ -31,7 +31,6 @@ const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
 const SELF_MANAGED_PUBLISH_SKILLS = new Set([
   ...PR_RESOLVER_SKILLS,
-  JIRA_ORCHESTRATE_PRESET_SLUG,
 ]);
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
 const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
@@ -3830,8 +3829,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (
       pageMode.mode === "create" &&
       (selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG ||
-        selectedPreset?.slug === JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG ||
-        selectedPreset?.slug === JIRA_ORCHESTRATE_PRESET_SLUG)
+        selectedPreset?.slug === JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG)
     ) {
       setPublishMode("none");
     }

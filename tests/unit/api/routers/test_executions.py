@@ -820,10 +820,11 @@ def test_create_task_shaped_execution_applies_default_publish_mode(
     assert initial_parameters["publishMode"] == "pr"
     assert initial_parameters["task"]["publish"]["mode"] == "pr"
 
-def test_create_task_shaped_execution_rejects_jira_orchestrate_auto_publish(
+def test_create_task_shaped_execution_allows_jira_orchestrate_pr_publish(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
 
     response = test_client.post(
         "/api/executions",
@@ -843,11 +844,14 @@ def test_create_task_shaped_execution_rejects_jira_orchestrate_auto_publish(
         },
     )
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["message"] == (
-        "task.publish.mode must be 'none' when using skill 'jira-orchestrate'"
-    )
-    service.create_execution.assert_not_awaited()
+    assert response.status_code == 201
+    service.create_execution.assert_awaited_once()
+    initial_parameters = service.create_execution.call_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["publishMode"] == "pr"
+    assert initial_parameters["task"]["publish"]["mode"] == "pr"
+
 
 def test_create_task_shaped_execution_allows_jira_orchestrate_publish_none(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
