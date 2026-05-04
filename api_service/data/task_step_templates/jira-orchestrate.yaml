@@ -138,6 +138,8 @@ steps:
       id: moonspec-verify
       args: {}
   - title: Create pull request
+    annotations:
+      jiraOrchestrateRole: pull-request-handoff
     instructions: |-
       Create a pull request for the completed work for Jira issue {{ inputs.jira_issue_key }}.
 

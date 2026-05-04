@@ -1,22 +1,22 @@
 [
   {
-    "id": 4367289597,
+    "id": 4369161565,
     "disposition": "not-applicable",
-    "rationale": "Qodo quota notice; no code action requested."
+    "rationale": "Qodo free-tier limit notice; no code action requested."
   },
   {
-    "id": 3178846598,
-    "disposition": "addressed",
-    "rationale": "Self-managed publish skills now force any selected publish mode to none and disable the Publish Mode selector."
+    "id": 4218270513,
+    "disposition": "not-applicable",
+    "rationale": "Gemini review summary explicitly reported no feedback."
   },
   {
-    "id": 3178846599,
+    "id": 3180093229,
     "disposition": "addressed",
-    "rationale": "The PR with Merge Automation option remains visible and disabled when merge automation is unavailable."
+    "rationale": "Jira Orchestrate PR handoff detection now uses expanded step annotations and template step identity instead of the mutable step title."
   },
   {
-    "id": 4216908391,
-    "disposition": "addressed",
-    "rationale": "Summary review concerns are covered by the self-managed forced-none enforcement and disabled merge automation option."
+    "id": 4218275768,
+    "disposition": "not-applicable",
+    "rationale": "Codex review wrapper comment; actionable child review comment was handled separately."
   }
 ]

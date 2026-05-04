@@ -1319,6 +1319,14 @@ class TaskTemplateCatalogService:
             title = str(rendered.get("title") or "").strip()
             if title:
                 step_payload["title"] = title
+            annotations = rendered.get("annotations")
+            if annotations is not None:
+                if not isinstance(annotations, dict):
+                    raise TaskTemplateValidationError(
+                        f"Expanded step annotations must be an object at "
+                        f"{_format_include_path(path)}."
+                    )
+                step_payload["annotations"] = dict(annotations)
             if step_type == _STEP_TYPE_TOOL:
                 if rendered.get("skill") is not None:
                     raise TaskTemplateValidationError(

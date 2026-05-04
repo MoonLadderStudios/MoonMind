@@ -714,6 +714,20 @@ def _task_has_applied_template(task_payload: Mapping[str, Any], slug: str) -> bo
     return False
 
 
+def _template_step_id_matches(
+    node: Mapping[str, Any],
+    *,
+    slug: str,
+    step_index: int,
+) -> bool:
+    node_id = str(node.get("id") or "").strip().lower()
+    target_prefix = f"tpl:{slug.strip().lower()}:"
+    if not node_id.startswith(target_prefix):
+        return False
+    parts = node_id.split(":")
+    return len(parts) >= 4 and parts[3] == f"{step_index:02d}"
+
+
 def _is_jira_orchestrate_pr_handoff_node(
     node: Mapping[str, Any],
     *,
@@ -724,8 +738,12 @@ def _is_jira_orchestrate_pr_handoff_node(
     inputs = node.get("inputs")
     if not isinstance(inputs, Mapping):
         return False
-    title = str(inputs.get("title") or "").strip().lower()
-    return title == "create pull request"
+    annotations = inputs.get("annotations")
+    if isinstance(annotations, Mapping):
+        role = str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
+        if role == "pull-request-handoff":
+            return True
+    return _template_step_id_matches(node, slug="jira-orchestrate", step_index=12)
 
 
 def _append_story_breakdown_instructions(

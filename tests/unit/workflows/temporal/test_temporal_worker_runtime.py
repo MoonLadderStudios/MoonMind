@@ -1643,7 +1643,10 @@ def test_runtime_planner_preserves_jira_orchestrate_pr_handoff_instructions():
                     },
                     {
                         "id": "create-pr",
-                        "title": "Create pull request",
+                        "title": "Open review request",
+                        "annotations": {
+                            "jiraOrchestrateRole": "pull-request-handoff",
+                        },
                         "instructions": (
                             "Create a pull request and record pull_request_url."
                         ),
@@ -1662,7 +1665,7 @@ def test_runtime_planner_preserves_jira_orchestrate_pr_handoff_instructions():
     )
 
     pr_node = plan["nodes"][1]
-    assert pr_node["inputs"]["title"] == "Create pull request"
+    assert pr_node["inputs"]["title"] == "Open review request"
     assert pr_node["inputs"]["publishMode"] == "pr"
     assert "Create a pull request" in pr_node["inputs"]["instructions"]
     assert (
