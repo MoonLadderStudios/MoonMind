@@ -29,12 +29,10 @@ const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
 const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
-const MAIN_TASK_NONE_PUBLISH_PRESET_SLUGS = new Set([
-  JIRA_BREAKDOWN_PRESET_SLUG,
-  JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG,
-]);
 const SELF_MANAGED_PUBLISH_SKILLS = new Set([
   ...PR_RESOLVER_SKILLS,
+  JIRA_BREAKDOWN_PRESET_SLUG,
+  JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG,
 ]);
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
 const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
@@ -1357,10 +1355,6 @@ function isSelfManagedPublishSkill(skillId: string): boolean {
   return SELF_MANAGED_PUBLISH_SKILLS.has(skillId.trim().toLowerCase());
 }
 
-function presetForcesMainTaskPublishNone(slug: string): boolean {
-  return MAIN_TASK_NONE_PUBLISH_PRESET_SLUGS.has(slug.trim().toLowerCase());
-}
-
 function resolveEffectiveSkillId(
   primarySkillId: string,
   appliedTemplates: AppliedTemplateState[],
@@ -1373,6 +1367,28 @@ function resolveEffectiveSkillId(
     return primarySkillId;
   }
   return primarySkillId;
+}
+
+function activeAppliedTemplatesForSteps(
+  appliedTemplates: AppliedTemplateState[],
+  steps: StepState[],
+): AppliedTemplateState[] {
+  const activeStepIds = new Set(
+    steps
+      .map((step) => step.id.trim())
+      .filter(Boolean),
+  );
+  return appliedTemplates.filter((template) => {
+    const stepIds = Array.isArray(template.stepIds)
+      ? template.stepIds
+          .map((stepId) => String(stepId || "").trim())
+          .filter(Boolean)
+      : [];
+    return (
+      stepIds.length === 0 ||
+      stepIds.some((stepId) => activeStepIds.has(stepId))
+    );
+  });
 }
 
 function parseCapabilitiesCsv(value: string): string[] {
@@ -3846,7 +3862,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     () =>
       resolveEffectiveSkillId(
         String(steps[0]?.skillId || "").trim() || "auto",
-        appliedTemplates,
+        activeAppliedTemplatesForSteps(appliedTemplates, steps),
       ),
     [appliedTemplates, steps],
   );
@@ -3855,7 +3871,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (
       pageMode.mode === "create" &&
       selectedPreset &&
-      presetForcesMainTaskPublishNone(selectedPreset.slug)
+      isSelfManagedPublishSkill(selectedPreset.slug)
     ) {
       setPublishMode("none");
     }
@@ -4784,7 +4800,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     if (
       pageMode.mode === "create" &&
-      presetForcesMainTaskPublishNone(preset.slug)
+      isSelfManagedPublishSkill(preset.slug)
     ) {
       setPublishMode("none");
     }
@@ -6079,16 +6095,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const primarySkillId = primaryStepIsSkill
       ? primaryValidation.value.skillId.trim() || "auto"
       : "auto";
+    const activeSubmissionAppliedTemplates = activeAppliedTemplatesForSteps(
+      submissionAppliedTemplates,
+      submissionSteps,
+    );
+    submissionAppliedTemplates = activeSubmissionAppliedTemplates;
     const effectiveSubmissionSkillId = resolveEffectiveSkillId(
       primarySkillId,
-      submissionAppliedTemplates,
-    );
-    const mainTaskPublishNoneFromPreset = submissionAppliedTemplates.some(
-      (entry) => presetForcesMainTaskPublishNone(entry.slug),
+      activeSubmissionAppliedTemplates,
     );
     const effectivePublishMode =
-      isSelfManagedPublishSkill(effectiveSubmissionSkillId) ||
-      mainTaskPublishNoneFromPreset
+      isSelfManagedPublishSkill(effectiveSubmissionSkillId)
         ? "none"
         : normalizedPublishMode;
     const primarySkillArgsRaw = primaryStepIsSkill && showAdvancedStepOptions
