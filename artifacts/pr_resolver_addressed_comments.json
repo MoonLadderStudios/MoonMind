@@ -1,22 +1,27 @@
 [
   {
-    "id": 4369161565,
-    "disposition": "not-applicable",
-    "rationale": "Qodo free-tier limit notice; no code action requested."
-  },
-  {
-    "id": 4218270513,
-    "disposition": "not-applicable",
-    "rationale": "Gemini review summary explicitly reported no feedback."
-  },
-  {
-    "id": 3180093229,
+    "id": 3183649166,
     "disposition": "addressed",
-    "rationale": "Jira Orchestrate PR handoff detection now uses expanded step annotations and template step identity instead of the mutable step title."
+    "rationale": "Removed the CSS :active selector from the arrow-exit animation so click exit is driven only by React state."
   },
   {
-    "id": 4218275768,
+    "id": 3183649177,
+    "disposition": "addressed",
+    "rationale": "Updated the CSS test to reuse a suite-level CSS fixture and assert the state-driven selector without :active."
+  },
+  {
+    "id": 4222500444,
     "disposition": "not-applicable",
-    "rationale": "Codex review wrapper comment; actionable child review comment was handled separately."
+    "rationale": "Review summary only; its actionable :active selector and redundant test fixture items are covered by the linked review comments."
+  },
+  {
+    "id": 3183656357,
+    "disposition": "addressed",
+    "rationale": "Cleared arrow-exit state when the exit animation is canceled and when submission or form-blocked state changes."
+  },
+  {
+    "id": 4222510205,
+    "disposition": "not-applicable",
+    "rationale": "Codex review wrapper text only; no standalone code change requested beyond the actionable review comment."
   }
 ]

@@ -6733,6 +6733,18 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     pageMode.mode !== "create" &&
     (temporalDraftQuery.isLoading || Boolean(modeLoadError));
 
+  useEffect(() => {
+    if (!showPrimaryCtaArrow || isSubmitting || isTemporalFormBlocked) {
+      setIsSubmitArrowExiting(false);
+    }
+  }, [isSubmitting, isTemporalFormBlocked, showPrimaryCtaArrow]);
+
+  function clearSubmitArrowExit(event: React.AnimationEvent<HTMLElement>) {
+    if (event.animationName === "queue-submit-primary-arrow-exit") {
+      setIsSubmitArrowExiting(false);
+    }
+  }
+
   return (
     <div className="stack task-create-page">
       <section data-canonical-create-section="Header" aria-label="Header">
@@ -8312,11 +8324,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   aria-hidden="true"
                   className="queue-submit-primary-arrow"
                   data-submit-arrow="right"
-                  onAnimationEnd={(event) => {
-                    if (event.animationName === "queue-submit-primary-arrow-exit") {
-                      setIsSubmitArrowExiting(false);
-                    }
-                  }}
+                  onAnimationCancel={clearSubmitArrowExit}
+                  onAnimationEnd={clearSubmitArrowExit}
                 >
                   <ArrowRightIcon />
                 </span>
