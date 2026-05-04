@@ -20,7 +20,7 @@ MoonMind is an open-source platform that orchestrates leading AI agents out of t
 5. Open [http://localhost:8000/tasks](http://localhost:8000/tasks)
 6. In Settings:
     - Add a GitHub personal access token
-    - Add an API key or click Auth to authenticate a provider profile
+    - Add an API key or click OAuth to authenticate a provider profile
     - Configure any other secrets or setting you want to adjust for your first task
 7. Click Create and submit a task!
 
@@ -30,7 +30,7 @@ MoonMind is an open-source platform that orchestrates leading AI agents out of t
 If you already have a subscription with a model provider:
 
 1. Go to Settings
-2. Click Auth next to the profile
+2. Click OAuth next to the profile
 3. Follow the instructions on the new tab
 4. Go back to Settings and click Finalize
 
