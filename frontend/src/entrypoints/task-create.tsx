@@ -6980,10 +6980,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     (temporalDraftQuery.isLoading || Boolean(modeLoadError));
 
   useEffect(() => {
-    if (!showPrimaryCtaArrow || isSubmitting || isTemporalFormBlocked) {
+    if (!showPrimaryCtaArrow || isTemporalFormBlocked) {
       setIsSubmitArrowExiting(false);
     }
-  }, [isSubmitting, isTemporalFormBlocked, showPrimaryCtaArrow]);
+  }, [isTemporalFormBlocked, showPrimaryCtaArrow]);
 
   function clearSubmitArrowExit(event: React.AnimationEvent<HTMLElement>) {
     if (event.animationName === "queue-submit-primary-arrow-exit") {
