@@ -12,6 +12,8 @@ describe("liquidGL vendor html2canvas integration", () => {
     expect(source).toContain("function sanitizeCloneForHtml2Canvas");
     expect(source).toContain("colorFunctionToRgba");
     expect(source).toContain("color-mix\\(");
+    expect(source).toContain('clonedDocument.querySelectorAll("*").forEach');
+    expect(source).not.toContain("Array.from(clonedDocument.querySelectorAll");
     expect(source.match(/onclone:\s*sanitizeCloneForHtml2Canvas/g)).toHaveLength(
       2,
     );

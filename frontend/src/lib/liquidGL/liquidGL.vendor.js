@@ -110,11 +110,8 @@
   function sanitizeCloneForHtml2Canvas(clonedDocument) {
     const view = clonedDocument.defaultView;
     if (!view) return;
-    const nodes = [clonedDocument.documentElement].concat(
-      Array.from(clonedDocument.querySelectorAll("*"))
-    );
 
-    nodes.forEach((node) => {
+    clonedDocument.querySelectorAll("*").forEach((node) => {
       if (!node || !node.style) return;
       const style = view.getComputedStyle(node);
       HTML2CANVAS_COLOR_PROPS.forEach(([propName, cssName]) => {
