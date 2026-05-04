@@ -233,7 +233,7 @@ class JiraClient:
         """Disambiguate Jira 404s that are actually bad credentials.
 
         Jira Cloud commonly returns 404 for issue/project reads when the caller
-        is anonymous or unauthorized. Probe a low-cost authenticated endpoint
+        is anonymous or unauthorized. Probe the authenticated profile endpoint
         before surfacing a misleading "not found" error.
         """
 
@@ -244,19 +244,20 @@ class JiraClient:
         ):
             return None
         try:
-            if self._connection.auth_mode == "service_account_scoped":
-                auth_response = await self._client.request(
-                    method="GET",
-                    url=self._resolve_request_path("/project/search"),
-                    params={"maxResults": 1},
-                )
-            else:
-                auth_response = await self._client.request(
-                    method="GET",
-                    url=self._resolve_request_path("/myself"),
-                )
+            auth_response = await self._client.request(
+                method="GET",
+                url=self._resolve_request_path("/myself"),
+            )
         except (httpx.TransportError, httpx.TimeoutException):
             return None
+        if (
+            auth_response.status_code in {401, 403}
+            and self._connection.auth_mode == "service_account_scoped"
+        ):
+            try:
+                auth_response = await self._service_account_auth_probe()
+            except (httpx.TransportError, httpx.TimeoutException):
+                return None
         if auth_response.status_code in {401, 403}:
             return JiraToolError(
                 "Jira credentials are invalid, expired, or use the wrong auth mode.",
@@ -265,6 +266,28 @@ class JiraClient:
                 action=action,
             )
         return None
+
+    async def _service_account_auth_probe(self) -> httpx.Response:
+        """Confirm scoped-token identity when /myself rejects the token shape."""
+
+        try:
+            response = await self._client.request(
+                method="GET",
+                url=self._resolve_request_path("/project/search"),
+                params={"maxResults": 1},
+            )
+        except (httpx.TransportError, httpx.TimeoutException):
+            raise
+        if response.status_code < 400 and not response.headers.get("x-aaccountid"):
+            return httpx.Response(
+                401,
+                text=(
+                    "Jira scoped credential probe did not include an "
+                    "authenticated account header."
+                ),
+                request=response.request,
+            )
+        return response
 
     def _resolve_request_path(self, path: str) -> str:
         if not path.startswith("agile:"):

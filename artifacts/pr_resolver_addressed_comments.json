@@ -1,27 +1,22 @@
 [
   {
-    "id": 3183649166,
+    "id": 3184882513,
     "disposition": "addressed",
-    "rationale": "Removed the CSS :active selector from the arrow-exit animation so click exit is driven only by React state."
+    "rationale": "Removed the redundant unpublished handoff check from the exception block; the pre-try guard already covers unchanged previous_outputs/ref inputs."
   },
   {
-    "id": 3183649177,
-    "disposition": "addressed",
-    "rationale": "Updated the CSS test to reuse a suite-level CSS fixture and assert the state-driven selector without :active."
-  },
-  {
-    "id": 4222500444,
+    "id": 4223961398,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; its actionable :active selector and redundant test fixture items are covered by the linked review comments."
+    "rationale": "Review summary only; its actionable child comment 3184882513 was addressed."
   },
   {
-    "id": 3183656357,
+    "id": 3184895029,
     "disposition": "addressed",
-    "rationale": "Cleared arrow-exit state when the exit animation is canceled and when submission or form-blocked state changes."
+    "rationale": "Scoped Jira auth diagnostics now require an authenticated signal: /myself is tried first, and the fallback project/search probe only succeeds when Jira returns x-aaccountid."
   },
   {
-    "id": 4222510205,
+    "id": 4223974897,
     "disposition": "not-applicable",
-    "rationale": "Codex review wrapper text only; no standalone code change requested beyond the actionable review comment."
+    "rationale": "Informational Codex review wrapper; its actionable child comment 3184895029 was addressed."
   }
 ]

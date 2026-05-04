@@ -1029,12 +1029,6 @@ async def create_jira_issues_from_stories(
                 breakdown_source_path = _breakdown_source_path(fetched_payload)
                 stories = _coerce_story_payload(fetched)
             except Exception as exc:
-                unpublished_reason = _unpublished_handoff_reason(
-                    previous_outputs=previous_outputs,
-                    ref=ref,
-                )
-                if unpublished_reason:
-                    raise ValueError(unpublished_reason) from exc
                 if fallback_for_missing_stories:
                     return _fallback_result(
                         reason=f"Unable to read story breakdown for Jira output: {exc}",
