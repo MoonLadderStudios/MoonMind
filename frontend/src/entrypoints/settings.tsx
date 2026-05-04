@@ -214,8 +214,9 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
     enabled: section === 'providers-secrets',
   });
 
+  const fallbackSection = SETTINGS_SECTIONS[0]!;
   const currentSection =
-    SETTINGS_SECTIONS.find((candidate) => candidate.id === section) ?? SETTINGS_SECTIONS[0];
+    SETTINGS_SECTIONS.find((candidate) => candidate.id === section) ?? fallbackSection;
 
   const handleSelectSection = (nextSection: SettingsSectionId) => {
     if (nextSection === section) {
