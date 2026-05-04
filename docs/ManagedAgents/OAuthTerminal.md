@@ -257,8 +257,9 @@ actor:
   provider login has completed or the session is otherwise eligible for
   verification/finalization
 - call `POST /api/v1/oauth-sessions/{session_id}/finalize` from that button
-- show `verifying` and `registering_profile` progress while finalization is in
-  flight
+- show `verifying` while the finalize endpoint validates durable auth material
+  and `registering_profile` while that same endpoint registers or updates the
+  Provider Profile
 - show the safe registered provider-profile summary on success, with a return to
   Settings or manage-profile action as a convenience rather than a required
   step
@@ -269,15 +270,19 @@ The Settings page may continue to start OAuth sessions, poll session status,
 invalidate Provider Profile query data, and offer its own finalize action for
 operators who stay on Settings. Finalization is not Settings-only. The terminal
 page and Settings page should call the same finalize endpoint and observe the
-same session state transitions.
+same session state transitions. The finalize operation owns the transition from
+an eligible post-login state into `verifying`, then into `registering_profile`,
+then into `succeeded` or `failed`; callers only request finalization and render
+the projected session status.
 
 The terminal-page finalize button must be duplicate-click and race safe. A
-second finalize request for an already-finalizing or already-succeeded session
-should not create duplicate Provider Profiles or mutate a different profile.
-Finalization must still fail safely if the session has been cancelled, expired,
-or superseded. The terminal page must not allow changing `profile_id`,
-`volume_ref`, `volume_mount_path`, or provider identity for the active session;
-those values come from the OAuth session that Settings created.
+second finalize request for a session already in `verifying`,
+`registering_profile`, or `succeeded` should not create duplicate Provider
+Profiles or mutate a different profile. Finalization must still fail safely if
+the session has been cancelled, expired, or superseded. The terminal page must
+not allow changing `profile_id`, `volume_ref`, `volume_mount_path`, or provider
+identity for the active session; those values come from the OAuth session that
+Settings created.
 
 ## 6. Provider Profile Registration
 
@@ -380,10 +385,11 @@ For Codex OAuth enrollment:
    completes provider login in the terminal.
 5. When the session is eligible for completion, the provider terminal page shows
    **Finalize Provider Profile**.
-6. The operator finalizes from the terminal page; MoonMind verifies the durable
-   auth volume and enters `registering_profile`.
-7. MoonMind registers or updates the Codex Provider Profile and refreshes any
-   Settings-side profile views that are open. Returning to Settings is optional.
+6. The operator finalizes from the terminal page; the finalize endpoint moves
+   the session through `verifying` while it checks the durable auth volume.
+7. MoonMind enters `registering_profile`, registers or updates the Codex
+   Provider Profile, and refreshes any Settings-side profile views that are open.
+   Returning to Settings is optional.
 8. Later task-scoped Codex managed sessions target that profile and mount the
    auth volume at `MANAGED_AUTH_VOLUME_PATH` when needed.
 9. The session runtime seeds the per-run `CODEX_HOME` under `agent_workspaces`

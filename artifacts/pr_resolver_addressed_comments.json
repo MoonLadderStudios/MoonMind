@@ -1,42 +1,27 @@
 [
   {
-    "id": 4369983668,
+    "id": 4372756673,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier notice only; no code action requested."
+    "rationale": "Qodo free-tier limit notice is informational and does not request a code or documentation change."
   },
   {
-    "id": 3180666263,
+    "id": 3183027381,
     "disposition": "addressed",
-    "rationale": "resolve_github_credential_sync now uses the canonical async resolver from a private thread when called inside an active event loop, preserving direct env and SecretRef sources."
+    "rationale": "Clarified that the shared finalize endpoint owns the verifying and registering_profile transitions that callers render."
   },
   {
-    "id": 3180666269,
+    "id": 3183027390,
     "disposition": "addressed",
-    "rationale": "Token probe checklist statuses now reflect mode-specific endpoint evidence and report write permissions verified through read endpoints as verified_read_access rather than passed."
+    "rationale": "Replaced ambiguous already-finalizing wording with explicit verifying, registering_profile, and succeeded statuses."
   },
   {
-    "id": 4218950285,
+    "id": 3183027406,
+    "disposition": "addressed",
+    "rationale": "Updated the operator workflow to state that finalize moves through verifying before entering registering_profile for provider-profile registration."
+  },
+  {
+    "id": 4221775105,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; its two specific child findings are addressed separately."
-  },
-  {
-    "id": 3180686360,
-    "disposition": "addressed",
-    "rationale": "Duplicate credential-source finding addressed by routing sync resolution through the canonical resolver even inside running event loops."
-  },
-  {
-    "id": 3180686365,
-    "disposition": "addressed",
-    "rationale": "Probe checks now vary by mode: indexing no longer requires PR access, readiness probes PR/status/checks/issues evidence, and write requirements are not marked fully passed by read-only GET checks."
-  },
-  {
-    "id": 4218973815,
-    "disposition": "not-applicable",
-    "rationale": "Codex review wrapper text only; its specific child findings are addressed separately."
-  },
-  {
-    "id": 3180817280,
-    "disposition": "addressed",
-    "rationale": "Narrowed the worker-thread exception capture in resolve_github_credential_sync from BaseException to Exception."
+    "rationale": "Top-level Gemini review summary only recaps the inline findings; the actionable inline comments are tracked separately."
   }
 ]
