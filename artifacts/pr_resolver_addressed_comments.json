@@ -1,12 +1,37 @@
 [
   {
-    "id": 3184131746,
+    "id": 3184941164,
     "disposition": "addressed",
-    "rationale": "Extracted the preset/skill instruction-label decision into usesGenericInstructionsLabel(stepType)."
+    "rationale": "Changed the blocked-outcome skip call to use the completed node's zero-based index so only downstream nodes are marked skipped and the completed node remains succeeded."
   },
   {
-    "id": 4223053049,
+    "id": 3184941177,
+    "disposition": "addressed",
+    "rationale": "Updated the fenced JSON regex to capture full code fence content instead of a non-greedy object fragment, preserving nested JSON objects."
+  },
+  {
+    "id": 3184941180,
+    "disposition": "addressed",
+    "rationale": "Updated fenced-content extraction to append only content that is a complete JSON object before calling json.loads."
+  },
+  {
+    "id": 4224028132,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; its actionable suggestion is covered by review comment 3184131746."
+    "rationale": "Broad review summary; the actionable inline findings from this review were handled individually."
+  },
+  {
+    "id": 3184947007,
+    "disposition": "addressed",
+    "rationale": "Guarded the blocked-outcome short-circuit behind a replay-stable workflow.patched marker."
+  },
+  {
+    "id": 3184947011,
+    "disposition": "addressed",
+    "rationale": "Made link-type matching strict when Jira provides a type name, so configured non-Blocks link types do not classify Blocks links as blockers."
+  },
+  {
+    "id": 4224033939,
+    "disposition": "not-applicable",
+    "rationale": "Automated review metadata without an actionable code request."
   }
 ]

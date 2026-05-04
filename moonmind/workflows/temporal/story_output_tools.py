@@ -95,8 +95,8 @@ def _is_blocking_link_type(
     link_type = _mapping(link.get("type"))
     configured = _string(link_type_name).lower() or "blocks"
     name = _string(link_type.get("name")).lower()
-    if name and name == configured:
-        return True
+    if name:
+        return name == configured
     outward = _string(link_type.get("outward")).lower()
     inward = _string(link_type.get("inward")).lower()
     return outward == "blocks" and inward == "is blocked by"

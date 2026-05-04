@@ -765,6 +765,37 @@ async def test_check_jira_blockers_fetches_missing_blocker_status_and_allows_don
     ]
 
 @pytest.mark.asyncio
+async def test_check_jira_blockers_respects_configured_link_type_name():
+    service = _FakeJiraService()
+    service.issue_responses["MM-2"] = {
+        "key": "MM-2",
+        "fields": {
+            "issuelinks": [
+                {
+                    "type": {
+                        "name": "Blocks",
+                        "outward": "blocks",
+                        "inward": "is blocked by",
+                    },
+                    "inwardIssue": {
+                        "key": "MM-1",
+                        "fields": {"status": {"name": "Backlog"}},
+                    },
+                }
+            ]
+        },
+    }
+
+    result = await check_jira_blockers(
+        {"targetIssueKey": "MM-2", "linkType": "Depends"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["blockingIssues"] == []
+    assert [request.issue_key for request in service.get_issue_requests] == ["MM-2"]
+
+@pytest.mark.asyncio
 async def test_create_jira_issues_dependency_mode_none_skips_links():
     service = _FakeJiraService()
 

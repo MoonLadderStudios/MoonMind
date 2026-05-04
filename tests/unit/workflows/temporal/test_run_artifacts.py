@@ -644,6 +644,7 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
         in {
             run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
             run_workflow_module.RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH,
+            run_workflow_module.RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH,
         },
     )
     monkeypatch.setattr(
@@ -1669,6 +1670,28 @@ def test_blocked_outcome_message_detects_structured_agent_report() -> None:
     )
 
     assert message == "Workflow blocked by plan step: THOR-354 is blocked by THOR-355."
+
+def test_blocked_outcome_message_detects_nested_json_code_fence() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    message = workflow._blocked_outcome_message(
+        {
+            "status": "COMPLETED",
+            "outputs": {
+                "operator_summary": """
+```json
+{
+  "decision": "blocked",
+  "details": {"source": "jira", "attempt": 1},
+  "summary": "Nested structured blocker parsed."
+}
+```
+""",
+            },
+        }
+    )
+
+    assert message == "Workflow blocked by plan step: Nested structured blocker parsed."
 
 def test_publish_completion_reports_blocked_outcome_without_pr_failure() -> None:
     workflow = MoonMindRunWorkflow()

@@ -163,7 +163,7 @@ _GITHUB_PR_URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _JSON_OBJECT_CODE_FENCE_PATTERN = re.compile(
-    r"```(?:json)?\s*(\{.*?\})\s*```",
+    r"```(?:json)?\s*([\s\S]*?)\s*```",
     re.IGNORECASE | re.DOTALL,
 )
 # Replay-stable `workflow.patched` id for integration status polling terminal handling.
@@ -172,6 +172,7 @@ INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
 # Replay-stable patch id for task-scoped Codex terminate activity+signal finalization.
 RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
+RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 # Replay-stable patch id for the v2 task-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
 # Temporal external workflow handles expose the session control surface by signal.
@@ -2338,7 +2339,10 @@ class MoonMindRunWorkflow:
                 execution_result=execution_result,
             )
             blocked_message = self._blocked_outcome_message(execution_result)
-            if blocked_message:
+            if (
+                blocked_message
+                and workflow.patched(RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH)
+            ):
                 self._plan_blocked_message = blocked_message
                 self._publish_status = "not_required"
                 self._publish_reason = blocked_message
@@ -2347,7 +2351,7 @@ class MoonMindRunWorkflow:
                 self._summary = blocked_message
                 self._mark_remaining_plan_steps_skipped(
                     ordered_nodes=ordered_nodes,
-                    completed_index=index,
+                    completed_index=index - 1,
                     summary=blocked_message,
                 )
                 self._refresh_step_readiness(updated_at=workflow.now())
@@ -2677,7 +2681,9 @@ class MoonMindRunWorkflow:
         if raw_text.startswith("{") and raw_text.endswith("}"):
             candidates.append(raw_text)
         for match in _JSON_OBJECT_CODE_FENCE_PATTERN.finditer(raw_text):
-            candidates.append(match.group(1))
+            content = match.group(1).strip()
+            if content.startswith("{") and content.endswith("}"):
+                candidates.append(content)
 
         mappings: list[Mapping[str, Any]] = []
         for candidate in candidates:
@@ -2737,7 +2743,7 @@ class MoonMindRunWorkflow:
         completed_index: int,
         summary: str,
     ) -> None:
-        for node in ordered_nodes[completed_index:]:
+        for node in ordered_nodes[completed_index + 1:]:
             node_id = str(node.get("id") or "").strip()
             if not node_id:
                 continue
