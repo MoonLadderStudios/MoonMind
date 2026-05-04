@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BootPayload } from '../boot/parseBootPayload';
 import { SecretManager } from '../components/secrets/SecretManager';
@@ -12,6 +12,35 @@ import {
   ProviderProfilesManager,
   type ProviderProfile,
 } from '../components/settings/ProviderProfilesManager';
+
+function ProvidersKeyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="8" cy="14" r="3.5" />
+      <path d="M10.5 12L20 4" />
+      <path d="M17 7l2 2" />
+      <path d="M14 10l2 2" />
+    </svg>
+  );
+}
+
+function UserWorkspaceIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="8" r="3.5" />
+      <path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6" />
+    </svg>
+  );
+}
+
+function OperationsGearIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
+    </svg>
+  );
+}
 
 interface ProfileData {
   id?: string | number;
@@ -35,24 +64,32 @@ interface SecretsListResponse {
   items: SecretMetadata[];
 }
 
-const SETTINGS_SECTIONS = [
+const SETTINGS_SECTIONS: ReadonlyArray<{
+  id: 'providers-secrets' | 'user-workspace' | 'operations';
+  label: string;
+  description: string;
+  Icon: () => ReactElement;
+}> = [
   {
     id: 'providers-secrets',
     label: 'Providers & Secrets',
     description:
       'Configure provider profiles, managed secrets, and the bindings that make runtimes launchable.',
+    Icon: ProvidersKeyIcon,
   },
   {
     id: 'user-workspace',
     label: 'User / Workspace',
     description:
       'Hold user-scoped and workspace-scoped settings as Mission Control exposes more of the broader configuration model.',
+    Icon: UserWorkspaceIcon,
   },
   {
     id: 'operations',
     label: 'Operations',
     description:
       'Keep worker pause, drain, quiesce, and related operational controls under Settings.',
+    Icon: OperationsGearIcon,
   },
 ] as const;
 
@@ -175,25 +212,35 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       </header>
 
       <section className="rounded-[2rem] border border-mm-border/80 bg-transparent p-3 shadow-sm">
-        <div className="flex flex-wrap gap-2">
-          {SETTINGS_SECTIONS.map((candidate) => {
-            const active = candidate.id === section;
-            return (
-              <button
-                key={candidate.id}
-                type="button"
-                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                  active
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
-                    : 'border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:text-slate-900 dark:bg-transparent dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white'
-                }`}
-                onClick={() => handleSelectSection(candidate.id)}
-              >
-                {candidate.label}
-              </button>
-            );
-          })}
-        </div>
+        <fieldset className="queue-step-type-field">
+          <legend className="sr-only">Settings Section</legend>
+          <div className="queue-step-type-options">
+            {SETTINGS_SECTIONS.map((candidate) => {
+              const Icon = candidate.Icon;
+              return (
+                <label
+                  key={candidate.id}
+                  className="queue-step-type-option"
+                  title={candidate.description}
+                >
+                  <input
+                    type="radio"
+                    name="settings-section"
+                    value={candidate.id}
+                    checked={candidate.id === section}
+                    onChange={() => handleSelectSection(candidate.id)}
+                  />
+                  <span className="queue-step-type-option-icon">
+                    <Icon />
+                  </span>
+                  <span className="queue-step-type-option-label">
+                    {candidate.label}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
       </section>
 
       {notice ? (
