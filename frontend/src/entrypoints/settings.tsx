@@ -15,7 +15,16 @@ import {
 
 function ProvidersKeyIcon() {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <circle cx="8" cy="14" r="3.5" />
       <path d="M10.5 12L20 4" />
       <path d="M17 7l2 2" />
@@ -26,7 +35,16 @@ function ProvidersKeyIcon() {
 
 function UserWorkspaceIcon() {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <circle cx="12" cy="8" r="3.5" />
       <path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6" />
     </svg>
@@ -35,7 +53,16 @@ function UserWorkspaceIcon() {
 
 function OperationsGearIcon() {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <circle cx="12" cy="12" r="3" />
       <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
     </svg>
@@ -212,15 +239,15 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       </header>
 
       <section className="rounded-[2rem] border border-mm-border/80 bg-transparent p-3 shadow-sm">
-        <fieldset className="queue-step-type-field">
+        <fieldset className="settings-nav-field">
           <legend className="sr-only">Settings Section</legend>
-          <div className="queue-step-type-options">
+          <div className="settings-nav-options">
             {SETTINGS_SECTIONS.map((candidate) => {
               const Icon = candidate.Icon;
               return (
                 <label
                   key={candidate.id}
-                  className="queue-step-type-option"
+                  className="settings-nav-option"
                   title={candidate.description}
                 >
                   <input
@@ -230,10 +257,10 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
                     checked={candidate.id === section}
                     onChange={() => handleSelectSection(candidate.id)}
                   />
-                  <span className="queue-step-type-option-icon">
+                  <span className="settings-nav-option-icon">
                     <Icon />
                   </span>
-                  <span className="queue-step-type-option-label">
+                  <span className="settings-nav-option-label">
                     {candidate.label}
                   </span>
                 </label>
