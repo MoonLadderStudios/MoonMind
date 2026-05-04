@@ -3,7 +3,7 @@
 **Replaces:** `docs/ManagedAgents/TmateArchitecture.md`
 **Status:** Desired state, Codex-focused current target
 **Owners:** MoonMind Engineering
-**Last updated:** 2026-04-14
+**Last updated:** 2026-05-04
 
 Related:
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
@@ -172,14 +172,15 @@ OAuth flows instead of external terminal handoff services.
 The desired OAuth terminal architecture is:
 
 ```text
-Mission Control UI
+Settings / Mission Control UI
   -> OAuth Session API
   -> MoonMind.OAuthSession workflow
   -> short-lived auth runner container
   -> MoonMind PTY/WebSocket bridge
-  -> xterm.js terminal in Mission Control
+  -> provider terminal page with xterm.js
   -> provider login CLI
   -> mounted auth volume
+  -> terminal-page finalization action
   -> verification
   -> Provider Profile registration
 ```
@@ -238,10 +239,57 @@ is enabled, the transport identifier should be a MoonMind-owned value such as
 `moonmind_pty_ws`; provider profile and workflow semantics should not depend on
 the old `tmate` URL model.
 
+### 5.4 Provider terminal finalization workflow
+
+The launched provider terminal page should let the operator finish provider
+profile setup in the same browser surface where interactive provider auth is
+completed. Operators should not have to switch back to the Settings page only to
+finalize a profile after using the terminal.
+
+The provider terminal page should own a safe status projection for its OAuth
+session and expose session actions that are already valid for the authenticated
+actor:
+
+- show the selected provider profile label, runtime, provider, session status,
+  expiry, and sanitized failure or success summary
+- attach to the PTY/WebSocket bridge when the session is terminal-attachable
+- show **Finalize Provider Profile** once the session status indicates the
+  provider login has completed or the session is otherwise eligible for
+  verification/finalization
+- call `POST /api/v1/oauth-sessions/{session_id}/finalize` from that button
+- show `verifying` and `registering_profile` progress while finalization is in
+  flight
+- show the safe registered provider-profile summary on success, with a return to
+  Settings or manage-profile action as a convenience rather than a required
+  step
+- expose Cancel, Retry, or Reconnect actions when the current session state
+  allows them
+
+The Settings page may continue to start OAuth sessions, poll session status,
+invalidate Provider Profile query data, and offer its own finalize action for
+operators who stay on Settings. Finalization is not Settings-only. The terminal
+page and Settings page should call the same finalize endpoint and observe the
+same session state transitions.
+
+The terminal-page finalize button must be duplicate-click and race safe. A
+second finalize request for an already-finalizing or already-succeeded session
+should not create duplicate Provider Profiles or mutate a different profile.
+Finalization must still fail safely if the session has been cancelled, expired,
+or superseded. The terminal page must not allow changing `profile_id`,
+`volume_ref`, `volume_mount_path`, or provider identity for the active session;
+those values come from the OAuth session that Settings created.
+
 ## 6. Provider Profile Registration
 
 After OAuth verification succeeds, MoonMind registers or updates a Provider
 Profile instead of inventing a parallel auth store.
+
+Finalization may be initiated either from Settings or from the launched provider
+terminal page. In both cases the same OAuth session metadata is used, and the
+finalize operation only verifies the durable auth volume and registers or
+updates the selected Provider Profile. The provider terminal page is a
+completion surface for the existing session, not a separate profile editor or a
+parallel credential store.
 
 For Codex OAuth, the resulting profile should preserve:
 
@@ -324,15 +372,21 @@ or raw auth-volume listings.
 
 For Codex OAuth enrollment:
 
-1. The operator starts a Codex OAuth session from Mission Control or an operator
-   helper.
-2. MoonMind creates or reuses the selected `codex_auth_volume`.
-3. The auth runner writes credentials into that volume.
-4. Verification succeeds.
-5. MoonMind registers or updates the Codex Provider Profile.
-6. Later task-scoped Codex managed sessions target that profile and mount the
+1. The operator starts a Codex OAuth session from Settings, Mission Control, or
+   an operator helper.
+2. MoonMind opens the launched provider terminal page for that session.
+3. MoonMind creates or reuses the selected `codex_auth_volume`.
+4. The auth runner writes credentials into that volume while the operator
+   completes provider login in the terminal.
+5. When the session is eligible for completion, the provider terminal page shows
+   **Finalize Provider Profile**.
+6. The operator finalizes from the terminal page; MoonMind verifies the durable
+   auth volume and enters `registering_profile`.
+7. MoonMind registers or updates the Codex Provider Profile and refreshes any
+   Settings-side profile views that are open. Returning to Settings is optional.
+8. Later task-scoped Codex managed sessions target that profile and mount the
    auth volume at `MANAGED_AUTH_VOLUME_PATH` when needed.
-7. The session runtime seeds the per-run `CODEX_HOME` under `agent_workspaces`
+9. The session runtime seeds the per-run `CODEX_HOME` under `agent_workspaces`
    and starts Codex App Server.
 
 For ordinary task execution, operators should inspect Live Logs, artifacts,
