@@ -8,6 +8,8 @@ from llama_index.core.node_parser import SimpleNodeParser  # Default node parser
 from llama_index.readers.github import GithubRepositoryReader
 from llama_index.readers.github.repository.github_client import GithubClient
 
+from moonmind.auth.github_credentials import resolve_github_credential_sync
+
 class GitHubIndexer:
     def __init__(
         self,
@@ -42,13 +44,18 @@ class GitHubIndexer:
                 f"Invalid repo_full_name format: {repo_full_name}. Expected 'owner/repo_name'. Error: {e}"
             )
 
+        credential = resolve_github_credential_sync(
+            self.github_token, repo=repo_full_name
+        )
+        github_token = credential.token or self.github_token
+
         # Determine the branch to use
         if not branch:
             self.logger.info(
                 f"No branch specified for {repo_full_name}. Attempting to fetch default branch."
             )
             try:
-                g = Github(self.github_token)
+                g = Github(github_token)
                 repo = g.get_repo(f"{owner}/{repo_name}")
                 branch = repo.default_branch
                 self.logger.info(f"Default branch for {repo_full_name} is '{branch}'.")
@@ -76,7 +83,7 @@ class GitHubIndexer:
         self.logger.info(f"Initializing GithubRepositoryReader for {owner}/{repo_name}")
         try:
             github_client = GithubClient(
-                github_token=self.github_token, verbose=False
+                github_token=github_token, verbose=False
             )  # Initialize client
             reader = GithubRepositoryReader(
                 github_client=github_client,  # Pass client object

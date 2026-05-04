@@ -999,6 +999,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/github/token-probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Github Token Probe */
+        post: operations["github_token_probe_api_v1_settings_github_token_probe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/audit": {
         parameters: {
             query?: never;
@@ -4412,6 +4429,22 @@ export interface components {
             filter_extensions?: string[] | null;
             /** Github Token */
             github_token?: string | null;
+        };
+        /**
+         * GitHubTokenProbeRequest
+         * @description Targeted GitHub token validation request.
+         */
+        GitHubTokenProbeRequest: {
+            /** Repo */
+            repo: string;
+            /**
+             * Mode
+             * @default indexing
+             * @enum {string}
+             */
+            mode: "indexing" | "publish" | "readiness" | "full_pr_automation";
+            /** Basebranch */
+            baseBranch?: string | null;
         };
         /** GoogleDriveLoadRequest */
         GoogleDriveLoadRequest: {
@@ -9252,6 +9285,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    github_token_probe_api_v1_settings_github_token_probe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubTokenProbeRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

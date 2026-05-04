@@ -151,6 +151,12 @@ async def resolve_github_token_for_launch(
             return None
         raise ValueError(f"Unsupported GitHub credential source: {source or '<blank>'}")
 
+    from moonmind.auth.github_credentials import resolve_github_credential
+
+    resolved = await resolve_github_credential()
+    if resolved.token:
+        return resolved.token
+
     from moonmind.config.settings import settings as _mm_settings
 
     secret_ref = str(

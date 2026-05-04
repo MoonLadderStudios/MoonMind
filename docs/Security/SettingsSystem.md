@@ -1638,6 +1638,29 @@ OperationsPanel
 8. Backend stores only the SecretRef.
 9. GitHub integration resolves the secret only when needed.
 
+The SecretRef is accepted by the same resolver as `GITHUB_TOKEN`, `GH_TOKEN`,
+`WORKFLOW_GITHUB_TOKEN`, `GITHUB_TOKEN_SECRET_REF`,
+`WORKFLOW_GITHUB_TOKEN_SECRET_REF`, and `MOONMIND_GITHUB_TOKEN_REF`.
+
+For a fine-grained PAT, the token must target the repository resource owner and
+include the selected repository. Minimum permission profiles are:
+
+- Repository indexing: `Contents: Read`.
+- Branch/PR publishing: `Contents: Read and write` and
+  `Pull requests: Read and write`.
+- PR readiness: `Pull requests: Read`, `Commit statuses: Read`,
+  `Checks: Read`, and `Issues: Read` when reaction fallback is enabled.
+- Workflow file edits: add `Workflows: Write` when agents may modify
+  `.github/workflows/*`.
+
+The GitHub token probe validates the exact selected repository rather than
+classic OAuth scopes. It reports repository, branch, and pull-request endpoint
+access plus a mode-specific permission checklist without exposing the token.
+Fine-grained PATs that are pending organization approval, created for the wrong
+resource owner, excluded from the selected repository, or used for
+multi-organization/outside-collaborator automation can still fail; long-lived
+organization automation should prefer a GitHub App.
+
 ### 27.3 Reset User Override
 
 1. User opens User / Workspace → User.
@@ -1697,4 +1720,3 @@ The Settings System is correct only if the following invariants hold:
 10. An operator lock cannot be overwritten by ordinary user/workspace writes.
 11. Operational commands are authorization-gated and audited.
 12. Catalog changes are testable and intentional.
-

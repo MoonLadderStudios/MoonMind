@@ -476,6 +476,9 @@ async def test_controller_launch_clones_workspace_before_starting_container(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("WORKFLOW_GITHUB_TOKEN", raising=False)
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
         taskRunId="mm:task-1",
@@ -812,12 +815,11 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
             "socket_path": DockerCodexManagedSessionController._build_github_socket_path(
                 run_id=request.session_id,
                 support_root=str(Path(request.session_workspace_path) / ".moonmind"),
-                socket_root=str(workspace_root / ".mm-gh"),
             ),
         }
     ]
     assert github_auth_brokers.starts[0]["socket_path"].startswith(
-        str(workspace_root / ".mm-gh")
+        str(Path("/tmp") / "mm-gh")
     )
     assert request.session_workspace_path not in github_auth_brokers.starts[0]["socket_path"]
     docker_run_text = " ".join(docker_commands[0])

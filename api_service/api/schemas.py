@@ -88,6 +88,17 @@ class ApiKeyStatus(BaseModel):
     # anthropic_api_key_set: bool = False # Example for other keys
     # Add other keys as needed
 
+class GitHubTokenProbeRequest(BaseModel):
+    """Targeted GitHub token validation request."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    repo: str = Field(..., min_length=1)
+    mode: Literal["indexing", "publish", "readiness", "full_pr_automation"] = Field(
+        "indexing"
+    )
+    base_branch: Optional[str] = Field(None, alias="baseBranch")
+
 class ManifestStateModel(BaseModel):
     """Manifest checkpoint state metadata."""
 

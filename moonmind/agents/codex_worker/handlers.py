@@ -889,6 +889,7 @@ class CodexExecHandler:
             *,
             cwd: Path,
             check: bool = True,
+            env: Mapping[str, str] | None = None,
             redaction_values: tuple[str, ...] = (),
         ) -> CommandResult:
             return await self._run_command(
@@ -896,6 +897,7 @@ class CodexExecHandler:
                 cwd=cwd,
                 log_path=log_path,
                 check=check,
+                env=env,
                 redaction_values=redaction_values,
                 cancel_event=cancel_event,
                 output_chunk_callback=output_chunk_callback,
@@ -913,6 +915,7 @@ class CodexExecHandler:
             runtime_mode="codex",
             repo_dir=repo_dir,
             run_command=run_command_wrapper,
+            repo=payload.repository,
         )
 
     @staticmethod

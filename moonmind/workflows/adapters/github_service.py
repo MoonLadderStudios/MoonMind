@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
 import httpx
@@ -57,6 +58,13 @@ class PullRequestReadinessResult(BaseModel):
     )
     policy_allowed: bool | None = Field(True, alias="policyAllowed")
     blockers: list[dict[str, Any]] = Field(default_factory=list, alias="blockers")
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubPermissionProfile:
+    profile_id: str
+    required_permissions: dict[str, str]
+    optional_permissions: dict[str, str]
 
 # ---------------------------------------------------------------------------
 # Service
@@ -133,31 +141,60 @@ class GitHubService:
     @staticmethod
     async def resolve_github_token(
         explicit_token: str | None = None,
+        *,
+        repo: str | None = None,
     ) -> tuple[str, str | None]:
         """Resolve a GitHub token from explicit input, env, or secret ref."""
-        token = (explicit_token or os.environ.get("GITHUB_TOKEN", "")).strip()
-        if token:
-            return token, None
+        from moonmind.auth.github_credentials import resolve_github_credential
 
-        from moonmind.config.settings import settings
-        from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
-            resolve_managed_api_key_reference,
-        )
+        resolved = await resolve_github_credential(explicit_token, repo=repo)
+        if resolved.token:
+            return resolved.token, None
+        return "", resolved.safe_summary
 
-        secret_ref = str(
-            getattr(settings.github, "github_token_secret_ref", "") or ""
-        ).strip()
-        if not secret_ref:
-            return "", None
-
-        try:
-            return await resolve_managed_api_key_reference(secret_ref), None
-        except Exception:
-            logger.warning(
-                "Failed to resolve GitHub token secret ref",
-                exc_info=True,
-            )
-            return "", GitHubService._secret_ref_resolution_summary()
+    @staticmethod
+    def github_permission_profiles() -> dict[str, GitHubPermissionProfile]:
+        return {
+            "indexing": GitHubPermissionProfile(
+                profile_id="indexing",
+                required_permissions={"Contents": "read"},
+                optional_permissions={},
+            ),
+            "publish": GitHubPermissionProfile(
+                profile_id="publish",
+                required_permissions={
+                    "Contents": "write",
+                    "Pull requests": "write",
+                },
+                optional_permissions={
+                    "Workflows": "write",
+                    "Commit statuses": "read",
+                    "Checks": "read",
+                    "Issues": "read",
+                },
+            ),
+            "readiness": GitHubPermissionProfile(
+                profile_id="readiness",
+                required_permissions={
+                    "Pull requests": "read",
+                    "Commit statuses": "read",
+                    "Checks": "read",
+                    "Issues": "read",
+                },
+                optional_permissions={},
+            ),
+            "full_pr_automation": GitHubPermissionProfile(
+                profile_id="full_pr_automation",
+                required_permissions={
+                    "Contents": "write",
+                    "Pull requests": "write",
+                    "Commit statuses": "read",
+                    "Checks": "read",
+                    "Issues": "read",
+                },
+                optional_permissions={"Workflows": "write"},
+            ),
+        }
 
     @staticmethod
     def _github_headers(token: str) -> dict[str, str]:
@@ -166,6 +203,270 @@ class GitHubService:
             "Authorization": f"Bearer {token}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
+
+    @staticmethod
+    def _github_permission_summary(response: httpx.Response | None) -> str:
+        if response is None:
+            return ""
+        from moonmind.utils.logging import redact_sensitive_text
+
+        parts: list[str] = []
+        try:
+            body = response.json()
+        except Exception:
+            body = {}
+        if isinstance(body, dict):
+            message = redact_sensitive_text(str(body.get("message") or "")).strip()
+            if message:
+                parts.append(message)
+            documentation_url = redact_sensitive_text(
+                str(body.get("documentation_url") or "")
+            ).strip()
+            if documentation_url:
+                parts.append(documentation_url)
+        accepted = str(
+            response.headers.get("X-Accepted-GitHub-Permissions")
+            or response.headers.get("x-accepted-github-permissions")
+            or ""
+        ).strip()
+        if accepted:
+            parts.append(f"accepted permissions: {redact_sensitive_text(accepted)}")
+        return "; ".join(parts)
+
+    @classmethod
+    def _permission_blocker(
+        cls,
+        *,
+        response: httpx.Response,
+        evidence_source: str,
+        missing_permission: str,
+        summary: str,
+    ) -> dict[str, Any]:
+        detail = cls._github_permission_summary(response)
+        return {
+            "kind": "readiness_evidence_unavailable",
+            "summary": f"{summary}" + (f" {detail}" if detail else ""),
+            "retryable": False,
+            "source": "github",
+            "evidenceSource": evidence_source,
+            "missingPermission": missing_permission,
+        }
+
+    @staticmethod
+    def _profile_checklist(mode: str) -> list[dict[str, Any]]:
+        profile = GitHubService.github_permission_profiles().get(
+            mode,
+            GitHubService.github_permission_profiles()["publish"],
+        )
+        items = [
+            {
+                "permission": permission,
+                "level": level,
+                "required": True,
+                "status": "not_checked",
+            }
+            for permission, level in profile.required_permissions.items()
+        ]
+        items.extend(
+            {
+                "permission": permission,
+                "level": level,
+                "required": False,
+                "status": "not_checked",
+            }
+            for permission, level in profile.optional_permissions.items()
+        )
+        return items
+
+    @staticmethod
+    def _mark_probe_permission(
+        checklist: list[dict[str, Any]],
+        *,
+        permission: str,
+        success: bool,
+        verified_level: str = "read",
+    ) -> None:
+        for item in checklist:
+            if item["permission"] != permission or not item["required"]:
+                continue
+            if not success:
+                item["status"] = "failed"
+            elif item["level"] == verified_level:
+                item["status"] = "passed"
+            else:
+                item["status"] = f"verified_{verified_level}_access"
+
+    @classmethod
+    def _probe_checks_for_mode(
+        cls,
+        *,
+        repo: str,
+        mode: str,
+        base_branch: str | None,
+    ) -> list[dict[str, str | None]]:
+        profile = cls.github_permission_profiles().get(
+            mode,
+            cls.github_permission_profiles()["publish"],
+        )
+        required = profile.required_permissions
+        ref = base_branch or "main"
+        checks: list[dict[str, str | None]] = [
+            {
+                "field": "repositoryAccessible",
+                "url": f"https://api.github.com/repos/{repo}",
+                "operation": "repository",
+                "permission": None,
+            }
+        ]
+        if "Contents" in required:
+            checks.append(
+                {
+                    "field": "defaultBranchAccessible",
+                    "url": f"https://api.github.com/repos/{repo}/branches/{ref}",
+                    "operation": "branch",
+                    "permission": "Contents",
+                }
+            )
+        if "Pull requests" in required:
+            checks.append(
+                {
+                    "field": "pullRequestAccessible",
+                    "url": f"https://api.github.com/repos/{repo}/pulls?per_page=1",
+                    "operation": "pulls",
+                    "permission": "Pull requests",
+                }
+            )
+        if "Commit statuses" in required:
+            checks.append(
+                {
+                    "field": None,
+                    "url": f"https://api.github.com/repos/{repo}/commits/{ref}/status",
+                    "operation": "commit_statuses",
+                    "permission": "Commit statuses",
+                }
+            )
+        if "Checks" in required:
+            checks.append(
+                {
+                    "field": None,
+                    "url": (
+                        f"https://api.github.com/repos/{repo}/commits/{ref}/check-runs"
+                    ),
+                    "operation": "checks",
+                    "permission": "Checks",
+                }
+            )
+        if "Issues" in required:
+            checks.append(
+                {
+                    "field": None,
+                    "url": f"https://api.github.com/repos/{repo}/issues?per_page=1",
+                    "operation": "issues",
+                    "permission": "Issues",
+                }
+            )
+        return checks
+
+    async def probe_token(
+        self,
+        *,
+        repo: str,
+        mode: str = "publish",
+        base_branch: str | None = None,
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        from moonmind.auth.github_credentials import resolve_github_credential
+
+        resolved = await resolve_github_credential(github_token, repo=repo)
+        checklist = self._profile_checklist(mode)
+        result: dict[str, Any] = {
+            "repo": repo,
+            "mode": mode,
+            "credentialSource": resolved.safe_source_dict(),
+            "repositoryAccessible": None,
+            "defaultBranchAccessible": None,
+            "pullRequestAccessible": None,
+            "permissionChecklist": checklist,
+            "diagnostics": [],
+            "limitations": [
+                (
+                    "Fine-grained personal access tokens must target the repository "
+                    "resource owner and include the selected repository."
+                ),
+                (
+                    "Organization approval, outside-collaborator restrictions, "
+                    "multi-organization automation, and SSH-only remotes may require "
+                    "a classic PAT or GitHub App instead."
+                ),
+            ],
+        }
+        if not resolved.token:
+            result["diagnostics"].append(
+                {
+                    "operation": "resolve_github_credential",
+                    "message": resolved.safe_summary,
+                    "retryable": False,
+                }
+            )
+            return result
+
+        headers = self._github_headers(resolved.token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            checks = self._probe_checks_for_mode(
+                repo=repo,
+                mode=mode,
+                base_branch=base_branch,
+            )
+            for check in checks:
+                field = check["field"]
+                url = str(check["url"])
+                operation = str(check["operation"])
+                permission = check["permission"]
+                try:
+                    response = await client.get(url, headers=headers)
+                    response.raise_for_status()
+                    if field:
+                        result[field] = True
+                    if permission:
+                        self._mark_probe_permission(
+                            result["permissionChecklist"],
+                            permission=str(permission),
+                            success=True,
+                        )
+                except httpx.HTTPStatusError as exc:
+                    if field:
+                        result[field] = False
+                    if permission:
+                        self._mark_probe_permission(
+                            result["permissionChecklist"],
+                            permission=str(permission),
+                            success=False,
+                        )
+                    result["diagnostics"].append(
+                        {
+                            "operation": operation,
+                            "httpStatus": exc.response.status_code,
+                            "message": self._github_permission_summary(exc.response),
+                            "retryable": exc.response.status_code >= 500,
+                        }
+                    )
+                except (httpx.TransportError, httpx.TimeoutException) as exc:
+                    if field:
+                        result[field] = False
+                    if permission:
+                        self._mark_probe_permission(
+                            result["permissionChecklist"],
+                            permission=str(permission),
+                            success=False,
+                        )
+                    result["diagnostics"].append(
+                        {
+                            "operation": operation,
+                            "message": exc.__class__.__name__,
+                            "retryable": True,
+                        }
+                    )
+        return result
 
     # -- PR operations ----------------------------------------------------
 
@@ -181,7 +482,10 @@ class GitHubService:
     ) -> CreatePRResult:
         """Create a GitHub pull request via REST API."""
 
-        token, resolution_error = await self.resolve_github_token(github_token)
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
         if not token:
             return CreatePRResult(
                 created=False,
@@ -221,6 +525,11 @@ class GitHubService:
                     summary=(
                         f"GitHub create PR failed with HTTP {status_code}"
                         f" for {repo}."
+                        + (
+                            f" {self._github_permission_summary(exc.response)}"
+                            if self._github_permission_summary(exc.response)
+                            else ""
+                        )
                     ),
                 )
             except (httpx.TransportError, httpx.TimeoutException) as exc:
@@ -255,7 +564,10 @@ class GitHubService:
             )
 
         owner, repo, pr_number = parsed
-        token, resolution_error = await self.resolve_github_token(github_token)
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=f"{owner}/{repo}",
+        )
         if not token:
             return MergePRResult(
                 pr_url=pr_url,
@@ -336,7 +648,10 @@ class GitHubService:
             return False, f"Could not parse PR URL: {pr_url}"
 
         owner, repo, pr_number = parsed
-        token, resolution_error = await self.resolve_github_token(github_token)
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=f"{owner}/{repo}",
+        )
         if not token:
             return (
                 False,
@@ -398,7 +713,10 @@ class GitHubService:
     ) -> PullRequestReadinessResult:
         """Evaluate GitHub readiness for a tracked pull request revision."""
 
-        token, resolution_error = await self.resolve_github_token(github_token)
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
         if not token:
             return PullRequestReadinessResult(
                 headSha=head_sha,
@@ -561,6 +879,43 @@ class GitHubService:
             checks_data = checks_response.json()
             check_runs = checks_data.get("check_runs") or []
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403:
+                accepted = str(
+                    exc.response.headers.get("X-Accepted-GitHub-Permissions")
+                    or exc.response.headers.get("x-accepted-github-permissions")
+                    or ""
+                ).lower()
+                if "statuses=read" in accepted or "commit_statuses=read" in accepted:
+                    return {
+                        "complete": None,
+                        "passing": None,
+                        "blockers": [
+                            self._permission_blocker(
+                                response=exc.response,
+                                evidence_source="commit_status",
+                                missing_permission="Commit statuses: read",
+                                summary=(
+                                    "Commit status evidence unavailable; grant "
+                                    "Commit statuses read."
+                                ),
+                            )
+                        ],
+                    }
+                if "checks=read" in accepted:
+                    return {
+                        "complete": None,
+                        "passing": None,
+                        "blockers": [
+                            self._permission_blocker(
+                                response=exc.response,
+                                evidence_source="checks",
+                                missing_permission="Checks: read",
+                                summary=(
+                                    "Check run evidence unavailable; grant Checks read."
+                                ),
+                            )
+                        ],
+                    }
             return {
                 "complete": None,
                 "passing": None,
@@ -647,6 +1002,27 @@ class GitHubService:
             response.raise_for_status()
             reviews = response.json()
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403:
+                accepted = str(
+                    exc.response.headers.get("X-Accepted-GitHub-Permissions")
+                    or exc.response.headers.get("x-accepted-github-permissions")
+                    or ""
+                ).lower()
+                if "issues=read" in accepted:
+                    return {
+                        "complete": None,
+                        "blockers": [
+                            self._permission_blocker(
+                                response=exc.response,
+                                evidence_source="issue_reactions",
+                                missing_permission="Issues: read",
+                                summary=(
+                                    "Reaction evidence unavailable; grant Issues "
+                                    "read or disable reaction fallback."
+                                ),
+                            )
+                        ],
+                    }
             return {
                 "complete": None,
                 "blockers": [
@@ -768,6 +1144,21 @@ class GitHubService:
                         return {"complete": True, "blockers": []}
                 reaction_url = response.links.get("next", {}).get("url")
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403:
+                return {
+                    "complete": None,
+                    "blockers": [
+                        self._permission_blocker(
+                            response=exc.response,
+                            evidence_source="issue_reactions",
+                            missing_permission="Issues: read",
+                            summary=(
+                                "Reaction evidence unavailable; grant Issues "
+                                "read or disable reaction fallback."
+                            ),
+                        )
+                    ],
+                }
             return {
                 "complete": None,
                 "blockers": [

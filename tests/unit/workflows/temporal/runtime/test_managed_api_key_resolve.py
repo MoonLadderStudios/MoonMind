@@ -138,6 +138,19 @@ async def test_resolve_github_token_for_launch_prefers_existing_environment_toke
 
     assert out == "ghp-inline-token"
 
+async def test_resolve_github_token_for_launch_uses_canonical_workflow_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("WORKFLOW_GITHUB_TOKEN", "workflow-token")
+
+    out = await resolve_github_token_for_launch({})
+
+    assert out == "workflow-token"
+
 async def test_shape_launch_github_auth_environment_uses_ambient_token_before_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
