@@ -15,6 +15,7 @@ from moonmind.integrations.jira.models import (
     CreateIssueRequest,
     CreateIssueLinkRequest,
     CreateSubtaskRequest,
+    GetIssueRequest,
     ListCreateIssueTypesRequest,
     SearchIssuesRequest,
 )
@@ -24,6 +25,7 @@ from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 
 JIRA_CREATE_ISSUES_TOOL_NAME = "story.create_jira_issues"
 JIRA_ORCHESTRATE_TASKS_TOOL_NAME = "story.create_jira_orchestrate_tasks"
+JIRA_CHECK_BLOCKERS_TOOL_NAME = "jira.check_blockers"
 JIRA_STORY_TOOL_NAMES = frozenset(
     {JIRA_CREATE_ISSUES_TOOL_NAME, JIRA_ORCHESTRATE_TASKS_TOOL_NAME}
 )
@@ -56,6 +58,72 @@ def _list(value: Any) -> list[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return list(value)
     return []
+
+def _issue_key(value: Mapping[str, Any]) -> str:
+    return _string(value.get("key") or value.get("issueKey")).upper()
+
+def _status_payload(issue: Mapping[str, Any]) -> dict[str, Any]:
+    fields = _mapping(issue.get("fields"))
+    return _mapping(fields.get("status") or issue.get("status"))
+
+def _status_name(issue: Mapping[str, Any]) -> str:
+    return _string(_status_payload(issue).get("name"))
+
+def _status_is_done(issue: Mapping[str, Any]) -> bool:
+    status = _status_payload(issue)
+    if _string(status.get("name")).lower() == "done":
+        return True
+    category = _mapping(status.get("statusCategory") or status.get("category"))
+    return _string(category.get("key") or category.get("name")).lower() == "done"
+
+def _issue_links(issue: Mapping[str, Any]) -> list[dict[str, Any]]:
+    fields = _mapping(issue.get("fields"))
+    candidates = (
+        fields.get("issuelinks")
+        or fields.get("issueLinks")
+        or issue.get("issuelinks")
+        or issue.get("issueLinks")
+        or []
+    )
+    return [dict(item) for item in _list(candidates) if isinstance(item, Mapping)]
+
+def _is_blocking_link_type(
+    link: Mapping[str, Any],
+    *,
+    link_type_name: str,
+) -> bool:
+    link_type = _mapping(link.get("type"))
+    configured = _string(link_type_name).lower() or "blocks"
+    name = _string(link_type.get("name")).lower()
+    if name and name == configured:
+        return True
+    outward = _string(link_type.get("outward")).lower()
+    inward = _string(link_type.get("inward")).lower()
+    return outward == "blocks" and inward == "is blocked by"
+
+def _blocking_issue_from_link(
+    link: Mapping[str, Any],
+    *,
+    target_issue_key: str,
+    link_type_name: str,
+) -> dict[str, Any] | None:
+    if not _is_blocking_link_type(link, link_type_name=link_type_name):
+        return None
+
+    target = target_issue_key.upper()
+    outward_issue = _mapping(link.get("outwardIssue") or link.get("outward_issue"))
+    inward_issue = _mapping(link.get("inwardIssue") or link.get("inward_issue"))
+    outward_key = _issue_key(outward_issue)
+    inward_key = _issue_key(inward_issue)
+
+    if outward_issue and inward_issue:
+        if inward_key == target and outward_key and outward_key != target:
+            return outward_issue
+        return None
+
+    if inward_issue and inward_key != target:
+        return inward_issue
+    return None
 
 def _coerce_story_payload(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, str) and value.strip():
@@ -1209,6 +1277,175 @@ async def create_jira_issues_from_stories(
         },
     )
 
+def _blocker_preflight_target_issue_key(inputs: Mapping[str, Any]) -> str:
+    nested = _mapping(
+        inputs.get("blockerPreflight")
+        or inputs.get("blocker_preflight")
+        or inputs.get("jira")
+    )
+    return _string(
+        inputs.get("targetIssueKey")
+        or inputs.get("target_issue_key")
+        or inputs.get("issueKey")
+        or inputs.get("issue_key")
+        or inputs.get("jiraIssueKey")
+        or inputs.get("jira_issue_key")
+        or nested.get("targetIssueKey")
+        or nested.get("target_issue_key")
+        or nested.get("issueKey")
+        or nested.get("issue_key")
+    ).upper()
+
+def _blocker_preflight_link_type(inputs: Mapping[str, Any]) -> str:
+    nested = _mapping(
+        inputs.get("blockerPreflight")
+        or inputs.get("blocker_preflight")
+        or inputs.get("jira")
+    )
+    return _string(
+        inputs.get("linkType")
+        or inputs.get("link_type")
+        or nested.get("linkType")
+        or nested.get("link_type")
+        or "Blocks"
+    )
+
+def _blocked_summary(
+    *,
+    target_issue_key: str,
+    unresolved: Sequence[Mapping[str, Any]],
+) -> str:
+    if not unresolved:
+        return (
+            f"Could not determine Jira blockers for {target_issue_key} from "
+            "trusted Jira data."
+        )
+    formatted = []
+    for item in unresolved:
+        issue_key = _string(item.get("issueKey"))
+        status = _string(item.get("status")) or "unknown"
+        formatted.append(f"{issue_key} ({status})" if issue_key else status)
+    joined = ", ".join(formatted)
+    return f"{target_issue_key} is blocked by unresolved Jira issue(s): {joined}."
+
+async def check_jira_blockers(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    jira_service_factory: JiraServiceFactory = JiraToolService,
+) -> ToolResult:
+    """Deterministically stop Jira Orchestrate only for true inbound blockers."""
+
+    target_issue_key = _blocker_preflight_target_issue_key(inputs)
+    link_type = _blocker_preflight_link_type(inputs)
+    if not target_issue_key:
+        raise ValueError("targetIssueKey is required for Jira blocker preflight.")
+
+    service = jira_service_factory()
+    try:
+        target_issue = await service.get_issue(
+            GetIssueRequest(
+                issueKey=target_issue_key,
+                fields=["status", "issuelinks"],
+            )
+        )
+    except Exception as exc:
+        code = _string(getattr(exc, "code", "")) or exc.__class__.__name__
+        summary = (
+            f"Could not determine Jira blockers for {target_issue_key} through "
+            f"trusted Jira data ({code})."
+        )
+        return ToolResult(
+            status="COMPLETED",
+            outputs={
+                "targetIssueKey": target_issue_key,
+                "decision": "blocked",
+                "blockingIssues": [],
+                "summary": summary,
+            },
+        )
+
+    target_mapping = _mapping(target_issue)
+    blockers: list[dict[str, Any]] = []
+    for link in _issue_links(target_mapping):
+        blocker_issue = _blocking_issue_from_link(
+            link,
+            target_issue_key=target_issue_key,
+            link_type_name=link_type,
+        )
+        if blocker_issue is None:
+            continue
+        blocker_key = _issue_key(blocker_issue)
+        if not blocker_key:
+            blockers.append(
+                {
+                    "issueKey": "",
+                    "status": "unknown",
+                    "statusKnown": False,
+                    "linkType": link_type,
+                    "relationship": "blocks",
+                }
+            )
+            continue
+        if not _status_name(blocker_issue):
+            try:
+                fetched = await service.get_issue(
+                    GetIssueRequest(issueKey=blocker_key, fields=["status"])
+                )
+                if isinstance(fetched, Mapping):
+                    blocker_issue = dict(fetched)
+            except Exception:
+                blocker_issue = {"key": blocker_key}
+        status = _status_name(blocker_issue)
+        blockers.append(
+            {
+                "issueKey": blocker_key,
+                "status": status or "unknown",
+                "statusKnown": bool(status),
+                "linkType": link_type,
+                "relationship": "blocks",
+                "done": _status_is_done(blocker_issue),
+            }
+        )
+
+    unresolved = [
+        item
+        for item in blockers
+        if not bool(item.get("statusKnown")) or not bool(item.get("done"))
+    ]
+    if unresolved:
+        return ToolResult(
+            status="COMPLETED",
+            outputs={
+                "targetIssueKey": target_issue_key,
+                "decision": "blocked",
+                "blockingIssues": unresolved,
+                "resolvedBlockingIssues": [
+                    item for item in blockers if bool(item.get("done"))
+                ],
+                "summary": _blocked_summary(
+                    target_issue_key=target_issue_key,
+                    unresolved=unresolved,
+                ),
+            },
+        )
+
+    summary = (
+        f"{target_issue_key} has no Jira blocker links."
+        if not blockers
+        else f"All Jira blockers for {target_issue_key} are Done."
+    )
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "targetIssueKey": target_issue_key,
+            "decision": "continue",
+            "blockingIssues": [],
+            "resolvedBlockingIssues": blockers,
+            "summary": summary,
+        },
+    )
+
 def register_story_output_tool_handlers(
     dispatcher: Any,
     *,
@@ -1247,8 +1484,22 @@ def register_story_output_tool_handlers(
         handler=_create_jira_orchestrate_tasks,
     )
 
+    async def _check_jira_blockers(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await check_jira_blockers(inputs, context)
+
+    dispatcher.register_skill(
+        skill_name=JIRA_CHECK_BLOCKERS_TOOL_NAME,
+        version="1.0",
+        handler=_check_jira_blockers,
+    )
+
 __all__ = [
+    "JIRA_CHECK_BLOCKERS_TOOL_NAME",
     "JIRA_STORY_TOOL_NAMES",
+    "check_jira_blockers",
     "create_jira_issues_from_stories",
     "create_jira_orchestrate_tasks_from_issue_mappings",
     "register_story_output_tool_handlers",

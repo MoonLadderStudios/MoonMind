@@ -529,6 +529,144 @@ async def test_run_execution_stage_skips_empty_registry_for_agent_runtime_only_p
     assert artifact_reads == ["art_plan_1"]
 
 @pytest.mark.asyncio
+async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._integration = None
+    child_calls: list[str] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        normalized = _normalize_payload(payload)
+        if activity_type == "artifact.read":
+            assert normalized["artifact_ref"] == "art_plan_1"
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Runtime Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/unused",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "check-blockers",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "codex_cli",
+                                "version": "1.0",
+                            },
+                            "inputs": {"instructions": "Check blockers."},
+                        },
+                        {
+                            "id": "implement",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "codex_cli",
+                                "version": "1.0",
+                            },
+                            "inputs": {"instructions": "Implement changes."},
+                        },
+                    ],
+                    "edges": [{"from": "check-blockers", "to": "implement"}],
+                }
+            ).encode("utf-8")
+        raise AssertionError(f"unexpected activity {activity_type}")
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        args: object,
+        **_kwargs: object,
+    ) -> object:
+        node_id = str(_kwargs["id"]).rsplit(":agent:", 1)[1]
+        child_calls.append(node_id)
+        return {
+            "summary": "Agent finished",
+            "metadata": {
+                "operator_summary": (
+                    '{"decision":"blocked","summary":"Required dependency is not done."}'
+                ),
+                "push_status": "no_commits",
+                "push_branch": "generated-branch",
+                "push_base_ref": "origin/main",
+                "push_commit_count": 0,
+            },
+            "output_refs": [],
+        }
+
+    async def fake_bind_task_scoped_session(
+        self: MoonMindRunWorkflow,
+        request: object,
+    ) -> object:
+        return request
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+            run_workflow_module.RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH,
+        },
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_task_scoped_session",
+        fake_bind_task_scoped_session,
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
+        plan_ref="art_plan_1",
+    )
+
+    steps = workflow.get_step_ledger()["steps"]
+    assert child_calls == ["check-blockers"]
+    assert workflow._plan_blocked_message == (
+        "Workflow blocked by plan step: Required dependency is not done."
+    )
+    assert workflow._publish_status == "not_required"
+    assert steps[0]["status"] == "succeeded"
+    assert steps[1]["status"] == "skipped"
+
+@pytest.mark.asyncio
 async def test_run_execution_stage_preserves_registry_read_for_unpatched_histories(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1505,6 +1643,49 @@ def test_activity_result_failure_message_prefers_stderr_tail_over_progress_detai
         }
     )
     assert message == "gemini quota exceeded"
+
+def test_blocked_outcome_message_detects_structured_agent_report() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    message = workflow._blocked_outcome_message(
+        {
+            "status": "COMPLETED",
+            "outputs": {
+                "operator_summary": """
+```json
+{
+  "targetIssueKey": "THOR-354",
+  "decision": "blocked",
+  "blockingIssues": [
+    {"issueKey": "THOR-355", "status": "Backlog"}
+  ],
+  "summary": "THOR-354 is blocked by THOR-355."
+}
+```
+""",
+                "push_status": "no_commits",
+            },
+        }
+    )
+
+    assert message == "Workflow blocked by plan step: THOR-354 is blocked by THOR-355."
+
+def test_publish_completion_reports_blocked_outcome_without_pr_failure() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._integration = None
+    workflow._publish_status = "not_required"
+    workflow._publish_reason = "Workflow blocked by plan step: blocked upstream."
+    workflow._plan_blocked_message = (
+        "Workflow blocked by plan step: blocked upstream."
+    )
+
+    status, reason, failed = workflow._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
+    assert status == "blocked"
+    assert reason == "Workflow blocked by plan step: blocked upstream."
+    assert failed is False
 
 def test_publish_completion_accepts_jira_output_without_pr_url() -> None:
     workflow = MoonMindRunWorkflow()

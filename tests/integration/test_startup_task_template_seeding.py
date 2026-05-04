@@ -105,18 +105,22 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert jira_orchestrate_template is not None
         assert jira_orchestrate_template.latest_version is not None
         jira_orchestrate_steps = [
-            step["skill"]["id"]
+            (step.get("skill") or step.get("tool"))["id"]
             for step in jira_orchestrate_template.latest_version.steps
         ]
         assert jira_orchestrate_steps[0] == "jira-issue-updater"
-        assert jira_orchestrate_steps[1] == "auto"
+        assert jira_orchestrate_steps[1] == "jira.check_blockers"
         assert "moonspec-implement" in jira_orchestrate_steps
         assert "moonspec-verify" in jira_orchestrate_steps
         assert jira_orchestrate_steps[-1] == "jira-issue-updater"
         assert len(jira_orchestrate_steps) == 13
         blocker_step = jira_orchestrate_template.latest_version.steps[1]
         assert blocker_step["title"] == "Check Jira blockers before implementation"
-        assert "trusted Jira tool surface" in blocker_step["instructions"]
+        assert blocker_step["type"] == "tool"
+        assert blocker_step["tool"]["id"] == "jira.check_blockers"
+        assert "deterministic trusted Jira blocker preflight" in blocker_step["instructions"]
+        assert "inwardIssue" in blocker_step["instructions"]
+        assert "outwardIssue" in blocker_step["instructions"]
         assert "Done" in blocker_step["instructions"]
         assert "non-blocker" in blocker_step["instructions"]
         assert "status cannot be determined" in blocker_step["instructions"]

@@ -162,6 +162,10 @@ _GITHUB_PR_URL_PATTERN = re.compile(
     r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+",
     re.IGNORECASE,
 )
+_JSON_OBJECT_CODE_FENCE_PATTERN = re.compile(
+    r"```(?:json)?\s*(\{.*?\})\s*```",
+    re.IGNORECASE | re.DOTALL,
+)
 # Replay-stable `workflow.patched` id for integration status polling terminal handling.
 INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 # Replay-stable patch id for parent-initiated defensive slot release on child terminal state.
@@ -263,6 +267,7 @@ class MoonMindRunWorkflow:
         self._operator_summary: Optional[str] = None
         self._last_step_id: Optional[str] = None
         self._last_step_summary: Optional[str] = None
+        self._plan_blocked_message: Optional[str] = None
         self._last_diagnostics_ref: Optional[str] = None
         self._merge_automation_disposition: Optional[str] = None
         self._merge_automation_head_sha: Optional[str] = None
@@ -2332,6 +2337,22 @@ class MoonMindRunWorkflow:
                 node_id=node_id,
                 execution_result=execution_result,
             )
+            blocked_message = self._blocked_outcome_message(execution_result)
+            if blocked_message:
+                self._plan_blocked_message = blocked_message
+                self._publish_status = "not_required"
+                self._publish_reason = blocked_message
+                require_pull_request_url = False
+                pull_request_url = None
+                self._summary = blocked_message
+                self._mark_remaining_plan_steps_skipped(
+                    ordered_nodes=ordered_nodes,
+                    completed_index=index,
+                    summary=blocked_message,
+                )
+                self._refresh_step_readiness(updated_at=workflow.now())
+                self._update_memo()
+                break
             self._record_publish_result(
                 parameters=parameters,
                 execution_result=execution_result,
@@ -2554,7 +2575,10 @@ class MoonMindRunWorkflow:
             self._publish_status = "published"
             self._publish_reason = "published pull request"
             self._publish_context["pullRequestUrl"] = pull_request_url
-        self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
+        if self._plan_blocked_message:
+            self._summary = self._plan_blocked_message
+        else:
+            self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 
         await self._maybe_start_merge_gate(
@@ -2598,6 +2622,135 @@ class MoonMindRunWorkflow:
             if isinstance(details, str) and details.strip():
                 return details.strip()
         return ""
+
+    @staticmethod
+    def _is_blocked_outcome_value(value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+        return value.strip().lower() == "blocked"
+
+    def _blocked_outcome_message_from_mapping(
+        self,
+        payload: Mapping[str, Any],
+    ) -> str | None:
+        status_value = (
+            payload.get("decision")
+            or payload.get("status")
+            or payload.get("outcome")
+            or payload.get("result")
+        )
+        if not self._is_blocked_outcome_value(status_value):
+            return None
+
+        blockers = payload.get("blockingIssues")
+        if blockers is None:
+            blockers = payload.get("blocking_issues")
+        if blockers is None:
+            blockers = payload.get("blockers")
+
+        summary = self._coerce_text(
+            payload.get("summary")
+            or payload.get("message")
+            or payload.get("reason")
+            or payload.get("blockedReason")
+            or payload.get("blocked_reason"),
+            max_chars=700,
+        )
+        if (
+            not summary
+            and isinstance(blockers, Sequence)
+            and not isinstance(blockers, (str, bytes))
+            and blockers
+        ):
+            summary = "A plan step reported unresolved blockers."
+        if not summary:
+            return None
+        return f"Workflow blocked by plan step: {summary}"
+
+    @staticmethod
+    def _json_mapping_candidates_from_text(text: str) -> tuple[Mapping[str, Any], ...]:
+        raw_text = str(text or "").strip()
+        if not raw_text:
+            return ()
+
+        candidates: list[str] = []
+        if raw_text.startswith("{") and raw_text.endswith("}"):
+            candidates.append(raw_text)
+        for match in _JSON_OBJECT_CODE_FENCE_PATTERN.finditer(raw_text):
+            candidates.append(match.group(1))
+
+        mappings: list[Mapping[str, Any]] = []
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(parsed, Mapping):
+                mappings.append(parsed)
+        return tuple(mappings)
+
+    def _blocked_outcome_message(self, execution_result: Any) -> str | None:
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return None
+
+        mapping_candidates: list[Mapping[str, Any]] = [outputs]
+        for field in (
+            "workflowOutcome",
+            "workflow_outcome",
+            "terminalOutcome",
+            "terminal_outcome",
+            "outcome",
+            "result",
+        ):
+            value = outputs.get(field)
+            if isinstance(value, Mapping):
+                mapping_candidates.append(value)
+
+        for candidate in mapping_candidates:
+            message = self._blocked_outcome_message_from_mapping(candidate)
+            if message:
+                return message
+
+        for field in (
+            "operator_summary",
+            "operatorSummary",
+            "lastAssistantText",
+            "assistantText",
+            "summary",
+            "message",
+        ):
+            value = outputs.get(field)
+            if not isinstance(value, str):
+                continue
+            for candidate in self._json_mapping_candidates_from_text(value):
+                message = self._blocked_outcome_message_from_mapping(candidate)
+                if message:
+                    return message
+
+        return None
+
+    def _mark_remaining_plan_steps_skipped(
+        self,
+        *,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        completed_index: int,
+        summary: str,
+    ) -> None:
+        for node in ordered_nodes[completed_index:]:
+            node_id = str(node.get("id") or "").strip()
+            if not node_id:
+                continue
+            try:
+                self._mark_step_terminal(
+                    node_id,
+                    status="skipped",
+                    updated_at=workflow.now(),
+                    summary=summary,
+                    last_error=None,
+                )
+            except KeyError:
+                continue
 
     def _publish_mode(self, parameters: Mapping[str, Any]) -> str:
         value = parameters.get("publishMode")
@@ -3338,6 +3491,9 @@ class MoonMindRunWorkflow:
         *,
         parameters: Mapping[str, Any],
     ) -> tuple[str, str, bool]:
+        if self._plan_blocked_message:
+            return ("blocked", self._plan_blocked_message, False)
+
         publish_mode = self._publish_mode(parameters)
         if publish_mode == "none":
             return (
