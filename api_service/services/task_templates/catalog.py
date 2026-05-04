@@ -109,6 +109,8 @@ _STEP_KIND = "step"
 _INCLUDE_KIND = "include"
 _STEP_TYPE_TOOL = "tool"
 _STEP_TYPE_SKILL = "skill"
+_RUNTIME_ONLY_ORCHESTRATE_SLUGS = {"jira-orchestrate", "moonspec-orchestrate"}
+_ORCHESTRATION_MODE_INPUT = "orchestration_mode"
 _SKILL_METADATA_KEYS = frozenset(
     {"context", "permissions", "autonomy", "runtime", "allowedTools"}
 )
@@ -485,6 +487,24 @@ def _repository_from_context(context: Mapping[str, Any] | None) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def _normalize_runtime_orchestration_mode(
+    *,
+    slug: str,
+    submitted: Mapping[str, Any],
+    resolved: dict[str, Any],
+) -> dict[str, Any]:
+    if slug not in _RUNTIME_ONLY_ORCHESTRATE_SLUGS:
+        return resolved
+    if (
+        _ORCHESTRATION_MODE_INPUT not in submitted
+        and _ORCHESTRATION_MODE_INPUT not in resolved
+    ):
+        return resolved
+    normalized = dict(resolved)
+    normalized[_ORCHESTRATION_MODE_INPUT] = "runtime"
+    return normalized
 
 def _jira_project_default_for_repository(repository: str | None) -> str | None:
     if not repository:
@@ -1226,14 +1246,20 @@ class TaskTemplateCatalogService:
                         inputs_schema=child_version.inputs_schema or [],
                         context=variables.get("context"),
                     )
+                    submitted_child_inputs = _apply_contextual_input_overrides(
+                        slug=child_template.slug,
+                        inputs_schema=child_schema,
+                        submitted=dict(input_mapping),
+                        context=variables.get("context"),
+                    )
                     child_inputs = self._resolve_inputs(
                         schema=child_schema,
-                        submitted=_apply_contextual_input_overrides(
-                            slug=child_template.slug,
-                            inputs_schema=child_schema,
-                            submitted=dict(input_mapping),
-                            context=variables.get("context"),
-                        ),
+                        submitted=submitted_child_inputs,
+                    )
+                    child_inputs = _normalize_runtime_orchestration_mode(
+                        slug=child_template.slug,
+                        submitted=submitted_child_inputs,
+                        resolved=child_inputs,
                     )
                 except TaskTemplateValidationError as exc:
                     raise TaskTemplateValidationError(
@@ -1383,14 +1409,20 @@ class TaskTemplateCatalogService:
             inputs_schema=selected_version.inputs_schema or [],
             context=effective_context,
         )
+        submitted_inputs = _apply_contextual_input_overrides(
+            slug=template.slug,
+            inputs_schema=effective_schema,
+            submitted=dict(inputs or {}),
+            context=effective_context,
+        )
         validated_inputs = self._resolve_inputs(
             schema=effective_schema,
-            submitted=_apply_contextual_input_overrides(
-                slug=template.slug,
-                inputs_schema=effective_schema,
-                submitted=dict(inputs or {}),
-                context=effective_context,
-            ),
+            submitted=submitted_inputs,
+        )
+        validated_inputs = _normalize_runtime_orchestration_mode(
+            slug=template.slug,
+            submitted=submitted_inputs,
+            resolved=validated_inputs,
         )
         variables = {
             "inputs": validated_inputs,

@@ -36,9 +36,11 @@ const SELF_MANAGED_PUBLISH_SKILLS = new Set([
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
 const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
   [JIRA_ORCHESTRATE_PRESET_SLUG]: new Set([
+    "orchestrationmode",
     "sourcedesignpath",
     "constraints",
   ]),
+  [MOONSPEC_ORCHESTRATE_PRESET_SLUG]: new Set(["orchestrationmode"]),
 };
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
 const LAST_REPOSITORY_OPTION_PREFERENCE_KEY =

@@ -109,7 +109,6 @@ steps:
           mode: "pr"
           mergeAutomation:
             enabled: "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
-        orchestrationMode: "runtime"
       traceability:
         sourceIssueKey: "{{ inputs.source_issue_key }}"
     skill:
