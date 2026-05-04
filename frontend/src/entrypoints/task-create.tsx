@@ -5916,7 +5916,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           ...expandedSteps,
           ...nextSubmissionSteps.slice(index + 1),
         ];
-        index += Math.max(expandedSteps.length - 1, 0);
+        index += expandedSteps.length - 1;
         updatePresetSubmitExpansion(step.localId, {
           presetMessage:
             expansion.warnings.length > 0
@@ -5956,16 +5956,18 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (isSubmitting || submitExpansionInFlightRef.current) {
       return;
     }
+    const requestSerial = submitExpansionRequestIdRef.current + 1;
+    submitExpansionRequestIdRef.current = requestSerial;
+    const requestId = `submit-${requestSerial}`;
+    submitExpansionInFlightRef.current = true;
+    setIsSubmitting(true);
     setSubmitMessage(null);
 
     let submissionSteps = steps;
     let submissionAppliedTemplates = appliedTemplates;
-    let submitExpansionActivated = false;
     const clearSubmitBusy = () => {
       submitExpansionInFlightRef.current = false;
-      if (submitExpansionActivated) {
-        setIsSubmitting(false);
-      }
+      setIsSubmitting(false);
     };
     const normalizedRepository = repository.trim() || defaultRepository;
     if (!normalizedRepository) {
@@ -6020,12 +6022,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       (step) => step.stepType === "preset",
     );
     if (unresolvedPresetSteps.length > 0) {
-      submitExpansionActivated = true;
-      submitExpansionInFlightRef.current = true;
-      const requestSerial = submitExpansionRequestIdRef.current + 1;
-      submitExpansionRequestIdRef.current = requestSerial;
-      const requestId = `submit-${requestSerial}`;
-      setIsSubmitting(true);
       try {
         const expanded = await expandUnresolvedPresetsForSubmit({
           requestId,
@@ -6044,8 +6040,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         setSubmitMessage(failure.message);
         clearSubmitBusy();
         return;
-      } finally {
-        submitExpansionInFlightRef.current = false;
       }
     }
 
@@ -6302,7 +6296,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       };
     }
 
-    setIsSubmitting(true);
     const uploadedObjectiveAttachments: StepAttachmentRef[] = [];
     const uploadedStepAttachments: Record<string, StepAttachmentRef[]> = {};
     try {
@@ -6392,7 +6385,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         const uploadFailure = uploadResults.find((result) => !result.ok);
         if (uploadFailure && !uploadFailure.ok) {
           setSubmitMessage(uploadFailure.message);
-          setIsSubmitting(false);
+          clearSubmitBusy();
           return;
         }
 
@@ -6425,7 +6418,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           ? error
           : new Error("Failed to upload attachments.");
       setSubmitMessage(failure.message);
-      setIsSubmitting(false);
+      clearSubmitBusy();
       return;
     }
 
@@ -6932,7 +6925,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         setSubmitMessage(failure.message);
       }
     } finally {
-      setIsSubmitting(false);
+      clearSubmitBusy();
     }
   }
 

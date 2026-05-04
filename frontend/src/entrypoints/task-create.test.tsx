@@ -12914,6 +12914,101 @@ describe("Task Create MM-578 Preset expansion", () => {
     ]);
   });
 
+  it("continues expanding the next Preset when a prior Preset expands to zero steps", async () => {
+    let expansionCount = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/task-step-templates/mm-578-preset:expand?scope=global",
+        )
+      ) {
+        expansionCount += 1;
+        if (expansionCount === 1) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              steps: [],
+              appliedTemplate: {
+                slug: "mm-578-preset",
+                version: "1.0.0",
+              },
+              warnings: [],
+            }),
+          } as Response);
+        }
+      }
+      return mockMm578PresetFetch(input);
+    });
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const firstStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(firstStep);
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const secondStep = (await screen.findByText("Step 2")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(secondStep);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expect(expansionCount).toBe(2);
+    expect(latestCreateTaskSteps().map((entry) => entry.type)).toEqual([
+      "tool",
+      "skill",
+    ]);
+  });
+
+  it("guards duplicate non-Preset submit clicks while final submission is in progress", async () => {
+    const createResolvers: Array<(response: Response) => void> = [];
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/executions") {
+        return new Promise<Response>((resolve) => {
+          createResolvers.push(resolve);
+        });
+      }
+      return mockMm578PresetFetch(input);
+    });
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Step 1 Instructions"), {
+      target: { value: "Create a regular task." },
+    });
+    const createButton = screen.getByRole("button", { name: "Create" });
+    fireEvent.click(createButton);
+    fireEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(createResolvers).toHaveLength(1);
+    });
+    const completeCreate = createResolvers[0];
+    if (!completeCreate) {
+      throw new Error("Create promise was not captured.");
+    }
+    completeCreate({
+      ok: true,
+      json: async () => ({ workflowId: "mm:workflow-regular" }),
+    } as Response);
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.filter(([url]) => String(url) === "/api/executions"),
+      ).toHaveLength(1);
+    });
+  });
+
   it("uses the same submit-time expansion path for edit updates", async () => {
     window.history.pushState(
       {},

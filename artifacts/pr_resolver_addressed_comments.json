@@ -1,27 +1,22 @@
 [
   {
-    "id": 4372756673,
+    "id": 4373267875,
     "disposition": "not-applicable",
-    "rationale": "Qodo free-tier limit notice is informational and does not request a code or documentation change."
+    "rationale": "Qodo free-tier informational notice; no code change requested."
   },
   {
-    "id": 3183027381,
+    "id": 4222298205,
     "disposition": "addressed",
-    "rationale": "Clarified that the shared finalize endpoint owns the verifying and registering_profile transitions that callers render."
+    "rationale": "Addressed the summarized review feedback by guarding all submit attempts and fixing zero-step preset expansion ordering."
   },
   {
-    "id": 3183027390,
+    "id": 3183472671,
     "disposition": "addressed",
-    "rationale": "Replaced ambiguous already-finalizing wording with explicit verifying, registering_profile, and succeeded statuses."
+    "rationale": "Moved submit request identity, in-flight guard, and busy state setup to the start of handleSubmit, covering non-preset submissions too."
   },
   {
-    "id": 3183027406,
+    "id": 3183472688,
     "disposition": "addressed",
-    "rationale": "Updated the operator workflow to state that finalize moves through verifying before entering registering_profile for provider-profile registration."
-  },
-  {
-    "id": 4221775105,
-    "disposition": "not-applicable",
-    "rationale": "Top-level Gemini review summary only recaps the inline findings; the actionable inline comments are tracked separately."
+    "rationale": "Changed the splice loop adjustment to index += expandedSteps.length - 1 and added zero-step expansion regression coverage."
   }
 ]
