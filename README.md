@@ -1,5 +1,3 @@
-WARNING: This project is still pre-release. A release should be ready in May 2026 after the full migration to Temporal.
-
 # 🌙 MoonMind — Mission control for your AI agents
 
 <p align="center">
@@ -9,7 +7,7 @@ WARNING: This project is still pre-release. A release should be ready in May 202
     </picture>
 </p>
 
-MoonMind is an open-source platform that orchestrates leading AI agents out of the box — Claude Code, Codex, Gemini CLI, and more — adding safety, resiliency, and observability.
+MoonMind is an open-source platform that orchestrates leading AI agents out of the box — Claude Code, Codex, and more coming soon — adding safety, resiliency, and observability.
 
 ## Quick Start
 

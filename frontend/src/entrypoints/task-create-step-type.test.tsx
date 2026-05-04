@@ -290,9 +290,7 @@ describe("Task Create Step Type authoring", () => {
     expect(screen.getByDisplayValue("Keep first manual skill.")).toBeTruthy();
     expect(screen.getByDisplayValue("Keep trailing skill.")).toBeTruthy();
     expect(
-      await screen.findByText(
-        /Applied preset 'Jira Orchestrate' \(2 steps\)\. .*Publish Mode is forced to None/,
-      ),
+      await screen.findByText(/Applied preset 'Jira Orchestrate' \(2 steps\)\./),
     ).toBeTruthy();
 
     const renderedSteps = Array.from(

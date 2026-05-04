@@ -700,6 +700,52 @@ def _plan_node_selected_skill(node: Mapping[str, Any]) -> str:
         return ""
     return str(inputs.get("selectedSkill") or "").strip()
 
+
+def _task_has_applied_template(task_payload: Mapping[str, Any], slug: str) -> bool:
+    applied = task_payload.get("appliedStepTemplates")
+    if not isinstance(applied, list):
+        return False
+    target = slug.strip().lower()
+    for entry in applied:
+        if not isinstance(entry, Mapping):
+            continue
+        if str(entry.get("slug") or "").strip().lower() == target:
+            return True
+    return False
+
+
+def _template_step_id_matches(
+    node: Mapping[str, Any],
+    *,
+    slug: str,
+    step_index: int,
+) -> bool:
+    node_id = str(node.get("id") or "").strip().lower()
+    target_prefix = f"tpl:{slug.strip().lower()}:"
+    if not node_id.startswith(target_prefix):
+        return False
+    parts = node_id.split(":")
+    return len(parts) >= 4 and parts[3] == f"{step_index:02d}"
+
+
+def _is_jira_orchestrate_pr_handoff_node(
+    node: Mapping[str, Any],
+    *,
+    task_payload: Mapping[str, Any],
+) -> bool:
+    if not _task_has_applied_template(task_payload, "jira-orchestrate"):
+        return False
+    inputs = node.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return False
+    annotations = inputs.get("annotations")
+    if isinstance(annotations, Mapping):
+        role = str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
+        if role == "pull-request-handoff":
+            return True
+    return _template_step_id_matches(node, slug="jira-orchestrate", step_index=12)
+
+
 def _append_story_breakdown_instructions(
     instructions: str,
     *,
@@ -1256,6 +1302,10 @@ def _build_runtime_planner():
             if (
                 publish_tool not in _TOOLS_WITH_AUTO_PR_CREATION
                 and not _jira_agent_skill_selected(publish_selected_skill)
+                and not _is_jira_orchestrate_pr_handoff_node(
+                    publish_node,
+                    task_payload=task_payload,
+                )
             ):
                 publish_inputs = publish_node["inputs"]
                 if (

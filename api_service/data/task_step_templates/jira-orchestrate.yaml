@@ -138,10 +138,12 @@ steps:
       id: moonspec-verify
       args: {}
   - title: Create pull request
+    annotations:
+      jiraOrchestrateRole: pull-request-handoff
     instructions: |-
       Create a pull request for the completed work for Jira issue {{ inputs.jira_issue_key }}.
 
-      This preset owns pull request creation before the Jira Code Review transition. It must be run with task.publish.mode=none so the pull request is created in this step, not by a later MoonMind publish stage. If the runtime instructions, task parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Code Review and report the exact blocker.
+      This preset owns pull request creation before the Jira Code Review transition so the confirmed pull request URL is available to both Jira and MoonMind publish handling. If the task is submitted with PR merge automation enabled, the parent workflow must use the pull request URL produced by this step as the published PR and then run merge automation against that PR. If the runtime instructions, task parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Code Review and report the exact blocker.
 
       First confirm the working tree contains only intentional changes for this issue and no raw credentials. Commit the work with a concise message that includes {{ inputs.jira_issue_key }}. Push the current non-protected work branch and create a non-draft pull request with the available authenticated GitHub tooling.
 

@@ -15,8 +15,9 @@ As an operator, I can select a Jira Orchestrate preset, enter a Jira issue key, 
 1. **Given** the seeded preset catalog is synchronized, **When** the Jira Orchestrate preset is loaded, **Then** it is available as a global active preset.
 2. **Given** a Jira issue key input, **When** the preset is expanded, **Then** the first step changes that issue to In Progress through the Jira updater skill.
 3. **Given** the same expansion, **When** the MoonSpec stages are inspected, **Then** they mirror the existing MoonSpec Orchestrate lifecycle while using the Jira preset brief as the canonical input.
-4. **Given** verification succeeds, **When** the PR stage runs, **Then** the workflow requires a pull request whose title includes the Jira issue key.
+4. **Given** verification succeeds, **When** the PR stage runs, **Then** the workflow requires a pull request whose title includes the Jira issue key and records the PR URL for parent publish and merge automation handling.
 5. **Given** the PR exists, **When** the final Jira transition runs, **Then** the issue is moved to Code Review through the Jira updater skill.
+6. **Given** an operator selects PR with merge automation for Jira Orchestrate, **When** the preset submits, **Then** the parent run preserves that publish choice and starts merge automation from the PR URL produced by the preset.
 
 ## Requirements
 
@@ -29,10 +30,11 @@ As an operator, I can select a Jira Orchestrate preset, enter a Jira issue key, 
 - **FR-007**: The preset MUST transition the Jira issue to Code Review only after the pull request exists and a confirmed pull request URL is available from the PR creation step.
 - **FR-008**: The preset MUST stop before the Code Review transition when PR creation is blocked or no confirmed pull request URL is available.
 - **FR-009**: Automated tests MUST validate seed synchronization and expansion behavior for the new preset.
+- **FR-010**: The Create page and task contract MUST allow Jira Orchestrate to use the operator-selected publish mode, including PR with merge automation.
 
 ## Success Criteria
 
 - **SC-001**: Startup seed synchronization creates the `jira-orchestrate` preset.
 - **SC-002**: Expansion with `MM-328` produces the expected Jira, MoonSpec, PR, and report steps with the issue key rendered.
-- **SC-003**: Expansion with `MM-328` makes the PR creation step require `task.publish.mode=none` and makes the Code Review step verify a concrete PR URL handoff before changing Jira.
+- **SC-003**: Expansion with `MM-328` makes the PR creation step produce a concrete PR URL handoff for parent publish and merge automation handling, and makes the Code Review step verify that handoff before changing Jira.
 - **SC-004**: Existing seeded presets continue to pass their catalog tests.
