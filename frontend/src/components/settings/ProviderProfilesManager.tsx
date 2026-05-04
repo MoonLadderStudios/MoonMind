@@ -251,7 +251,7 @@ function visibleReadinessChecks(readiness?: ProviderProfileReadiness | null): Pr
 }
 
 type ProviderAuthActionLabel =
-  | 'Connect with Claude OAuth'
+  | 'OAuth'
   | 'Use Anthropic API key'
   | 'Validate OAuth'
   | 'Disconnect OAuth';
@@ -308,7 +308,7 @@ interface ClaudeManualAuthResult {
 }
 
 const CLAUDE_AUTH_ACTION_LABELS: Record<string, ProviderAuthActionLabel> = {
-  connect_oauth: 'Connect with Claude OAuth',
+  connect_oauth: 'OAuth',
   use_api_key: 'Use Anthropic API key',
   validate_oauth: 'Validate OAuth',
   disconnect_oauth: 'Disconnect OAuth',

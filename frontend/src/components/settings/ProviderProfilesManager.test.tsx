@@ -635,7 +635,7 @@ describe('ProviderProfilesManager form controls', () => {
   it('shows distinct Claude credential method actions for supported claude_anthropic rows', () => {
     renderProviderProfilesManager([claudeCredentialProfile]);
 
-    expect(screen.getByRole('button', { name: 'Connect with Claude OAuth claude-anthropic' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'OAuth claude-anthropic' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Auth claude-anthropic' })).toBeNull();
     expect(screen.getByText('Claude credentials not connected')).toBeTruthy();
@@ -645,7 +645,7 @@ describe('ProviderProfilesManager form controls', () => {
     renderProviderProfilesManager([connectedClaudeCredentialProfile]);
 
     expect(
-      screen.getByRole('button', { name: 'Connect with Claude OAuth claude-anthropic-connected' }),
+      screen.getByRole('button', { name: 'OAuth claude-anthropic-connected' }),
     ).toBeTruthy();
     expect(
       screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic-connected' }),
@@ -669,7 +669,7 @@ describe('ProviderProfilesManager form controls', () => {
       },
     ]);
 
-    expect(screen.queryByRole('button', { name: /Connect with Claude OAuth/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^OAuth / })).toBeNull();
     expect(
       screen.getByRole('button', { name: 'Use Anthropic API key claude-without-metadata' }),
     ).toBeTruthy();
@@ -692,7 +692,7 @@ describe('ProviderProfilesManager form controls', () => {
     ]);
 
     expect(screen.getByText('Claude enrollment pending')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Connect with Claude OAuth/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^OAuth / })).toBeNull();
     expect(screen.queryByRole('button', { name: /Use Anthropic API key/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Validate OAuth/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Disconnect OAuth/ })).toBeNull();
@@ -743,7 +743,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([claudeCredentialProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Connect with Claude OAuth claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'OAuth claude-anthropic' }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
