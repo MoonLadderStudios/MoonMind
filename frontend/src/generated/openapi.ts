@@ -9927,6 +9927,7 @@ export interface operations {
                 entry?: string | null;
                 repo?: string | null;
                 integration?: string | null;
+                targetRuntime?: string | null;
                 scope?: string | null;
                 pageSize?: number;
                 nextPageToken?: string | null;
