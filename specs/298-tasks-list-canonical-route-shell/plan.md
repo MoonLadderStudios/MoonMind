@@ -21,13 +21,13 @@ Implement the MM-585 runtime story by preserving `/tasks/list` as the canonical 
 | FR-008 | implemented_verified | `frontend/src/entrypoints/tasks-list.test.tsx` covers disabled list state and recoverable shell behavior | no code change | focused UI tests |
 | FR-009 | implemented_verified | `frontend/src/entrypoints/tasks-list.test.tsx` asserts page-size selector and next-page pagination behavior | no code change | focused UI tests |
 | FR-010 | implemented_verified | `frontend/src/entrypoints/tasks-list.tsx` builds fetches from `payload.apiBase` to `/executions`; tests assert `/api/executions?...` request URLs | no code change | focused UI tests |
-| FR-011 | implemented_unverified | `spec.md`, this plan, and tasks preserve `MM-585` | preserve in verification output | final verify |
+| FR-011 | implemented_verified | `spec.md`, this plan, `tasks.md`, and `verification.md` preserve `MM-585` | no code change | final verify evidence recorded |
 | SC-001 | implemented_verified | route tests inspect `/tasks/list` boot payload and layout | no code change | focused unit route tests |
 | SC-002 | implemented_verified | route tests inspect `/tasks` and `/tasks/tasks-list` redirects | no code change | focused unit route tests |
 | SC-003 | implemented_verified | UI tests inspect one control deck and one data slab | no code change | focused UI tests |
 | SC-004 | implemented_verified | UI tests cover live updates, polling copy, disabled notice, page size, and pagination | no code change | focused UI tests |
 | SC-005 | implemented_verified | UI tests assert MoonMind API fetch URLs built from boot payload base | no code change | focused UI tests |
-| SC-006 | implemented_unverified | artifacts preserve MM-585 and source IDs | preserve in verification output | final verify |
+| SC-006 | implemented_verified | `verification.md` confirms MM-585 and source IDs are preserved and covered | no code change | final verify evidence recorded |
 | DESIGN-REQ-001 | implemented_verified | same as FR-001 | no code change | focused unit route tests |
 | DESIGN-REQ-002 | implemented_verified | same as FR-002 | no code change | focused unit route tests |
 | DESIGN-REQ-003 | implemented_verified | same as FR-003 | no code change | focused unit route tests |
@@ -40,7 +40,7 @@ Implement the MM-585 runtime story by preserving `/tasks/list` as the canonical 
 **Primary Dependencies**: FastAPI, Pydantic v2 route/runtime config helpers, React, TanStack Query, Vitest, Testing Library, pytest  
 **Storage**: No new persistent storage; existing dashboard runtime configuration and execution-list API calls only  
 **Unit Testing**: pytest via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`; focused backend route tests via `pytest tests/unit/api/routers/test_task_dashboard.py -q`  
-**Integration Testing**: Vitest/Testing Library integration-style UI tests via `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx`; optional Playwright smoke remains gated by `RUN_E2E_TESTS=1`  
+**Integration Testing**: Vitest/Testing Library integration-style UI tests via `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/tasks-list.test.tsx` in this managed shell; `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx` is the intended developer command when npm resolves local binaries; optional Playwright smoke remains gated by `RUN_E2E_TESTS=1`  
 **Target Platform**: MoonMind API service and Mission Control frontend  
 **Project Type**: FastAPI backend with React/Vite frontend entrypoints  
 **Performance Goals**: No additional route work or browser requests beyond existing shell boot and bounded execution-list fetches  
@@ -80,6 +80,7 @@ specs/298-tasks-list-canonical-route-shell/
 │   └── tasks-list-route-shell.md
 ├── checklists/
 │   └── requirements.md
+├── moonspec_align_report.md
 ├── tasks.md
 └── verification.md
 ```

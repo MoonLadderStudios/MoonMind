@@ -50,8 +50,8 @@ Test implications: Focused Vitest UI tests should be rerun.
 
 ## FR-011 and SC-006
 
-Decision: Implemented but pending final verification.
-Evidence: `spec.md`, `plan.md`, and `tasks.md` preserve the MM-585 Jira preset brief and source requirement IDs.
-Rationale: Traceability must be confirmed in the final verification report after validation commands run.
+Decision: Implemented and verified.
+Evidence: `spec.md`, `plan.md`, `tasks.md`, and `verification.md` preserve the MM-585 Jira preset brief and source requirement IDs.
+Rationale: Traceability was confirmed in the final verification report after focused route, frontend, and unit-wrapper validation passed.
 Alternatives considered: Omitting traceability would violate the Jira orchestration input.
-Test implications: Final MoonSpec verification must preserve MM-585 and DESIGN-REQ evidence.
+Test implications: No additional planning work is required beyond preserving the final verification evidence.

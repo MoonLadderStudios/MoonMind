@@ -16,7 +16,7 @@ Expected evidence:
 ## Focused Frontend Shell Validation
 
 ```bash
-npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx
+./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/tasks-list.test.tsx
 ```
 
 Expected evidence:
@@ -24,6 +24,8 @@ Expected evidence:
 - The Tasks List entrypoint renders one control deck and one data slab.
 - Live updates, polling copy, disabled notice, page-size, and pagination surfaces remain available.
 - Data requests use the boot payload API base and MoonMind `/api/executions` route.
+
+Developer note: `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx` is the intended npm wrapper when the shell resolves local binaries. In this managed shell, the direct local Vitest binary is the reliable focused command; the final unit wrapper below also prepares frontend dependencies and runs the same focused UI file.
 
 ## Final Unit Wrapper
 
