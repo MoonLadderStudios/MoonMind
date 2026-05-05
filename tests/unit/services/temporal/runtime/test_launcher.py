@@ -236,6 +236,7 @@ async def test_launch_seeds_github_git_auth_before_initial_clone(
     token = "ghp_private_clone_token"
     store_root = tmp_path / "store"
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(store_root))
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example")
 
     async def _fake_resolve(*args, **kwargs):
         return token
@@ -309,8 +310,17 @@ async def test_launch_seeds_github_git_auth_before_initial_clone(
     assert clone_env["GIT_CONFIG_KEY_0"] == "credential.https://github.com.helper"
     assert clone_env["GIT_CONFIG_VALUE_0"] == ""
     assert clone_env["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
+    assert clone_env["HTTPS_PROXY"] == "http://proxy.example"
     assert "$GITHUB_TOKEN" in clone_env["GIT_CONFIG_VALUE_1"]
     assert token not in clone_env["GIT_CONFIG_VALUE_1"]
+
+def test_source_uses_github_https_includes_www_variant() -> None:
+    assert ManagedRuntimeLauncher._source_uses_github_https(
+        "https://www.github.com/MoonLadderStudios/Tactics.git"
+    )
+    assert ManagedRuntimeLauncher._source_uses_github_https(
+        "http://www.github.com/MoonLadderStudios/Tactics.git"
+    )
 
 @pytest.mark.asyncio
 async def test_launch_registers_generated_support_dir_for_cleanup(tmp_path, monkeypatch):

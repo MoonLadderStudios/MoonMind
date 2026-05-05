@@ -96,7 +96,14 @@ class ManagedRuntimeLauncher:
     @staticmethod
     def _source_uses_github_https(source: str | None) -> bool:
         normalized = str(source or "").strip().lower()
-        return normalized.startswith(("https://github.com/", "http://github.com/"))
+        return normalized.startswith(
+            (
+                "https://github.com/",
+                "http://github.com/",
+                "https://www.github.com/",
+                "http://www.github.com/",
+            )
+        )
 
     @classmethod
     def _request_workspace_needs_github_https_auth(
@@ -717,7 +724,10 @@ class ManagedRuntimeLauncher:
             else None
         )
         git_host_env = (
-            build_github_token_git_environment(launch_github_token)
+            build_github_token_git_environment(
+                launch_github_token,
+                base_env=self._build_managed_runtime_base_env(),
+            )
             if launch_github_token
             else None
         )
