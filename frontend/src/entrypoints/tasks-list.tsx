@@ -231,14 +231,40 @@ function uniqueValues(values: Array<string | null | undefined>): string[] {
   return Array.from(new Set(values.map((value) => (value || '').trim()).filter(Boolean)));
 }
 
-function splitParam(value: string | null): string[] {
-  return uniqueValues((value || '').split(','));
+function splitParamValues(values: string[]): string[] {
+  return uniqueValues(values.flatMap((value) => value.split(',')));
+}
+
+function splitParam(params: URLSearchParams, key: string): string[] {
+  return splitParamValues(params.getAll(key));
+}
+
+function validateCanonicalFilterPair(
+  params: URLSearchParams,
+  includeParam: string,
+  excludeParam: string,
+): string | null {
+  const includeValues = splitParam(params, includeParam);
+  const excludeValues = splitParam(params, excludeParam);
+  if (includeValues.length > 0 && excludeValues.length > 0) {
+    return `Cannot combine ${includeParam} and ${excludeParam}.`;
+  }
+  return null;
+}
+
+function validateInitialFilterParams(params: URLSearchParams): string[] {
+  return [
+    validateCanonicalFilterPair(params, 'stateIn', 'stateNotIn'),
+    validateCanonicalFilterPair(params, 'repoIn', 'repoNotIn'),
+    validateCanonicalFilterPair(params, 'targetRuntimeIn', 'targetRuntimeNotIn'),
+    validateCanonicalFilterPair(params, 'targetSkillIn', 'targetSkillNotIn'),
+  ].filter((message): message is string => Boolean(message));
 }
 
 function parseInitialFilters(params: URLSearchParams): ColumnFilters {
   const filters = emptyFilters();
-  const stateIn = splitParam(params.get('stateIn'));
-  const stateNotIn = splitParam(params.get('stateNotIn'));
+  const stateIn = splitParam(params, 'stateIn');
+  const stateNotIn = splitParam(params, 'stateNotIn');
   const legacyState = (params.get('state') || '').trim().toLowerCase();
   if (stateNotIn.length > 0) {
     filters.status = { mode: 'exclude', values: stateNotIn, blank: '' };
@@ -246,8 +272,8 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
     filters.status = { mode: 'include', values: stateIn.length > 0 ? stateIn : [legacyState], blank: '' };
   }
 
-  const repoIn = splitParam(params.get('repoIn'));
-  const repoNotIn = splitParam(params.get('repoNotIn'));
+  const repoIn = splitParam(params, 'repoIn');
+  const repoNotIn = splitParam(params, 'repoNotIn');
   const repoExact = (params.get('repoExact') || params.get('repo') || '').trim();
   if (repoNotIn.length > 0) {
     filters.repository = { mode: 'exclude', values: repoNotIn, exactText: repoExact, blank: '' };
@@ -255,8 +281,8 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
     filters.repository = { mode: 'include', values: repoIn, exactText: repoExact, blank: '' };
   }
 
-  const runtimeIn = splitParam(params.get('targetRuntimeIn'));
-  const runtimeNotIn = splitParam(params.get('targetRuntimeNotIn'));
+  const runtimeIn = splitParam(params, 'targetRuntimeIn');
+  const runtimeNotIn = splitParam(params, 'targetRuntimeNotIn');
   const legacyRuntime = (params.get('targetRuntime') || '').trim();
   if (runtimeNotIn.length > 0) {
     filters.targetRuntime = { mode: 'exclude', values: runtimeNotIn, blank: '' };
@@ -268,8 +294,8 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
     };
   }
 
-  const skillIn = splitParam(params.get('targetSkillIn'));
-  const skillNotIn = splitParam(params.get('targetSkillNotIn'));
+  const skillIn = splitParam(params, 'targetSkillIn');
+  const skillNotIn = splitParam(params, 'targetSkillNotIn');
   if (skillNotIn.length > 0) {
     filters.targetSkill = { mode: 'exclude', values: skillNotIn, blank: '' };
   } else if (skillIn.length > 0) {
@@ -370,6 +396,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
+  const [filterValidationErrors] = useState(() => validateInitialFilterParams(initial));
   const [ignoredWorkflowScopeState] = useState(() => hasUnsupportedWorkflowScopeState(initial));
   const [filters, setFilters] = useState(() => parseInitialFilters(initial));
   const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
@@ -389,6 +416,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   });
 
   const syncUrl = useCallback(() => {
+    if (filterValidationErrors.length > 0) return;
     const params = new URLSearchParams();
     appendFilterParams(params, filters);
     params.set('limit', String(pageSize));
@@ -400,6 +428,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     replaceUrlQuery(params);
   }, [
     filters,
+    filterValidationErrors.length,
     pageSize,
     listCursor,
     sortField,
@@ -420,7 +449,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey,
-    enabled: listEnabled,
+    enabled: listEnabled && filterValidationErrors.length === 0,
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set('source', 'temporal');
@@ -976,6 +1005,13 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
         {ignoredWorkflowScopeState ? (
           <div className="notice warning">
             Workflow scope filters are not available on Tasks List. Showing task runs only.
+          </div>
+        ) : null}
+        {filterValidationErrors.length > 0 ? (
+          <div className="notice error" role="alert">
+            {filterValidationErrors.map((message) => (
+              <div key={message}>{message}</div>
+            ))}
           </div>
         ) : null}
 

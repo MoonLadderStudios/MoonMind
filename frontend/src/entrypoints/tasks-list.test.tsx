@@ -215,6 +215,39 @@ describe('Tasks List Entrypoint', () => {
     expect(screen.queryByText('manifest')).toBeNull();
   });
 
+  it('loads repeated canonical runtime params as raw URL values with product-label chips', async () => {
+    window.history.pushState(
+      {},
+      'Repeated canonical filters',
+      '/tasks/list?targetRuntimeIn=codex_cli&targetRuntimeIn=claude_code&targetRuntimeIn=&limit=50',
+    );
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeIn=codex_cli%2Cclaude_code',
+    );
+    expect(window.location.search).toBe('?targetRuntimeIn=codex_cli%2Cclaude_code&limit=50');
+    expect(screen.getByRole('button', { name: 'Runtime filter: Codex CLI +1' })).toBeTruthy();
+  });
+
+  it('shows a clear validation error for contradictory canonical URL filters', async () => {
+    const baselineCalls = fetchSpy.mock.calls.length;
+    window.history.pushState(
+      {},
+      'Contradictory filters',
+      '/tasks/list?stateIn=completed&stateNotIn=canceled&targetRuntimeIn=codex_cli&targetRuntimeNotIn=jules',
+    );
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
+    expect(screen.getByText('Cannot combine targetRuntimeIn and targetRuntimeNotIn.')).toBeTruthy();
+    expect(fetchSpy.mock.calls.length).toBe(baselineCalls);
+  });
+
   it('renders active task-list pills with the shared shimmer selector contract while keeping inactive pills plain', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
@@ -507,6 +540,27 @@ describe('Tasks List Entrypoint', () => {
         '/api/executions?source=temporal&pageSize=50&scope=tasks',
       );
     });
+  });
+
+  it('clears stale cursor state when the page size changes', async () => {
+    window.history.pushState({}, 'Paged', '/tasks/list?nextPageToken=stale-token&limit=50');
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&nextPageToken=stale-token',
+      );
+    });
+    await screen.findAllByText('Example task');
+
+    fireEvent.change(screen.getByLabelText('Show'), { target: { value: '100' } });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=100&scope=tasks',
+      );
+    });
+    expect(window.location.search).toBe('?limit=100');
   });
 
   it('supports skill and date filter chips with blank semantics', async () => {
