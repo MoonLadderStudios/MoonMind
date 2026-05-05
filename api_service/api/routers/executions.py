@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 from functools import lru_cache
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -4146,6 +4146,7 @@ async def create_execution(
 @router.get("", response_model=ExecutionListResponse)
 async def list_executions(
     *,
+    request: Request,
     workflow_type: Optional[str] = Query(None, alias="workflowType"),
     owner_type: Optional[str] = Query(None, alias="ownerType"),
     state: Optional[str] = Query(None, alias="state"),
@@ -4216,17 +4217,36 @@ async def list_executions(
             def escape_val(v: str) -> str:
                 return v.replace('"', '\\"')
 
-            def split_csv(raw: str | None) -> list[str]:
+            def split_csv(raw: str | list[str] | None) -> list[str]:
                 if not raw:
                     return []
+                parts = raw if isinstance(raw, list) else [raw]
                 seen: set[str] = set()
                 values: list[str] = []
-                for part in raw.split(","):
-                    value = part.strip()
-                    if value and value not in seen:
-                        seen.add(value)
-                        values.append(value)
+                for item in parts:
+                    for part in item.split(","):
+                        value = part.strip()
+                        if value and value not in seen:
+                            seen.add(value)
+                            values.append(value)
                 return values
+
+            def raw_query_values(alias: str, fallback: str | None) -> list[str]:
+                values = request.query_params.getlist(alias)
+                if not values and fallback is not None:
+                    values = [fallback]
+                return split_csv(values)
+
+            def validate_non_contradictory(
+                include_alias: str,
+                include_raw: str | list[str] | None,
+                exclude_alias: str,
+                exclude_raw: str | list[str] | None,
+            ) -> None:
+                if split_csv(include_raw) and split_csv(exclude_raw):
+                    raise TemporalExecutionValidationError(
+                        f"Cannot combine {include_alias} and {exclude_alias}."
+                    )
 
             def any_query(attr: str, values: list[str]) -> str | None:
                 if not values:
@@ -4241,8 +4261,8 @@ async def list_executions(
                 attr: str,
                 *,
                 exact: str | None = None,
-                include: str | None = None,
-                exclude: str | None = None,
+                include: str | list[str] | None = None,
+                exclude: str | list[str] | None = None,
             ) -> None:
                 exact_value = (exact or "").strip()
                 if exact_value:
@@ -4301,6 +4321,28 @@ async def list_executions(
                 query_parts.extend(range_parts)
 
             query_parts = []
+            state_in_values = raw_query_values("stateIn", state_in)
+            state_not_in_values = raw_query_values("stateNotIn", state_not_in)
+            repo_in_values = raw_query_values("repoIn", repo_in)
+            repo_not_in_values = raw_query_values("repoNotIn", repo_not_in)
+            target_runtime_in_values = raw_query_values("targetRuntimeIn", target_runtime_in)
+            target_runtime_not_in_values = raw_query_values("targetRuntimeNotIn", target_runtime_not_in)
+            target_skill_in_values = raw_query_values("targetSkillIn", target_skill_in)
+            target_skill_not_in_values = raw_query_values("targetSkillNotIn", target_skill_not_in)
+            validate_non_contradictory("stateIn", state_in_values, "stateNotIn", state_not_in_values)
+            validate_non_contradictory("repoIn", repo_in_values, "repoNotIn", repo_not_in_values)
+            validate_non_contradictory(
+                "targetRuntimeIn",
+                target_runtime_in_values,
+                "targetRuntimeNotIn",
+                target_runtime_not_in_values,
+            )
+            validate_non_contradictory(
+                "targetSkillIn",
+                target_skill_in_values,
+                "targetSkillNotIn",
+                target_skill_not_in_values,
+            )
             temporal_scope = _normalize_temporal_list_scope(
                 scope,
                 workflow_type=workflow_type,
@@ -4316,12 +4358,12 @@ async def list_executions(
                 )
             elif workflow_type and not scope_query:
                 query_parts.append(f'WorkflowType="{escape_val(workflow_type)}"')
-            if state and not (state_in or state_not_in):
+            if state and not (state_in_values or state_not_in_values):
                 query_parts.append(f'mm_state="{escape_val(state)}"')
             append_exact_or_multi_filter(
                 "mm_state",
-                include=state_in,
-                exclude=state_not_in,
+                include=state_in_values,
+                exclude=state_not_in_values,
             )
             if entry and not _is_task_list_entry(entry):
                 logger.info(
@@ -4339,21 +4381,21 @@ async def list_executions(
             append_exact_or_multi_filter(
                 "mm_repo",
                 exact=repo_exact or repo,
-                include=repo_in,
-                exclude=repo_not_in,
+                include=repo_in_values,
+                exclude=repo_not_in_values,
             )
             if integration:
                 query_parts.append(f'mm_integration="{escape_val(integration)}"')
             append_exact_or_multi_filter(
                 "mm_target_runtime",
                 exact=target_runtime,
-                include=target_runtime_in,
-                exclude=target_runtime_not_in,
+                include=target_runtime_in_values,
+                exclude=target_runtime_not_in_values,
             )
             append_exact_or_multi_filter(
                 "mm_target_skill",
-                include=target_skill_in,
-                exclude=target_skill_not_in,
+                include=target_skill_in_values,
+                exclude=target_skill_not_in_values,
             )
             append_datetime_filter("mm_scheduled_for", scheduled_from, scheduled_to, scheduled_blank)
             append_datetime_filter("StartTime", created_from, created_to)
@@ -4452,6 +4494,14 @@ async def list_executions(
                 degraded_count=False,
                 refreshed_at=datetime.now(UTC),
             )
+        except TemporalExecutionValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "invalid_execution_query",
+                    "message": str(exc),
+                },
+            ) from exc
         except RPCError as exc:
             logger.warning(
                 "Failed to list Temporal executions directly: %s", exc, exc_info=True
