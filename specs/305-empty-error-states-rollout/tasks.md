@@ -7,11 +7,11 @@
 **Contract**: `specs/305-empty-error-states-rollout/contracts/tasks-list-empty-error-rollout.md`  
 **Unit Test Command**: `node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/tasks-list.test.tsx`  
 **Integration Test Command**: `node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/tasks-list.test.tsx`  
-**Final Verification**: `/speckit.verify`
+**Final Verification**: `/moonspec-verify`
 
 **Source Traceability**: The original `MM-592` Jira preset brief is preserved in `spec.md`. This task list covers exactly one story, FR-001 through FR-013, acceptance scenarios 1 through 8, SC-001 through SC-008, and DESIGN-REQ-006, DESIGN-REQ-024, DESIGN-REQ-026, DESIGN-REQ-027, and DESIGN-REQ-028.
 
-**Requirement Status Summary**: `plan.md` marks structured API error handling and final regression coverage as partial or implemented-unverified. The task sequence is TDD-first: add focused failing tests, confirm red-first for the structured API error gap, implement the error-detail parser, then run focused and final validation.
+**Requirement Status Summary**: `plan.md` marks all tracked requirement, scenario, success-criterion, and source-design rows as `implemented_verified`. The completed task sequence preserves TDD evidence: focused failing tests were added first, red-first behavior was confirmed for the structured API error gap, the error-detail parser was implemented, and focused plus full validation passed.
 
 ## Phase 1: Setup
 
@@ -65,7 +65,7 @@
 
 - [X] T016 Review `specs/305-empty-error-states-rollout/contracts/tasks-list-empty-error-rollout.md` against `tasks-list.tsx` and `tasks-list.test.tsx`. (FR-001 through FR-012)
 - [X] T017 Run source traceability check for `MM-592` and DESIGN-REQ-006/DESIGN-REQ-024/DESIGN-REQ-026/DESIGN-REQ-027/DESIGN-REQ-028 across `specs/305-empty-error-states-rollout`. (FR-013, SC-008)
-- [X] T018 Run `/speckit.verify` and write `specs/305-empty-error-states-rollout/verification.md` with the final verdict against the original `MM-592` preset brief. (FR-013, SC-008)
+- [X] T018 Run `/moonspec-verify` and write `specs/305-empty-error-states-rollout/verification.md` with the final verdict against the original `MM-592` preset brief. (FR-013, SC-008)
 
 ## Dependencies and Execution Order
 
