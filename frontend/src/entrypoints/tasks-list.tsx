@@ -704,6 +704,57 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   ]
     .filter(Boolean)
     .join(' · ');
+  const resultsFooter = (
+    <div className="queue-results-toolbar task-list-results-footer">
+      <div className="task-list-footer-summary">
+        <span className="small">{pageSummary}</span>
+        <span className="small">
+          {liveUpdates && listEnabled
+            ? `Polling every ${Math.round(listPollMs / 1000)}s`
+            : 'Updates paused to keep selections stable.'}
+        </span>
+      </div>
+      <div className="queue-pagination">
+        <label className="queue-inline-toggle toolbar-live-toggle task-list-footer-live-toggle">
+          <input
+            type="checkbox"
+            checked={liveUpdates}
+            disabled={!listEnabled}
+            onChange={(event) => setLiveUpdates(event.target.checked)}
+          />
+          Live updates
+        </label>
+        <PageSizeSelector
+          pageSize={pageSize}
+          disabled={!listEnabled}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            resetToFirstPage();
+          }}
+        />
+        <nav aria-label="Pagination" style={{ display: 'inline-flex', gap: '0.45rem' }}>
+          <button
+            type="button"
+            className="secondary queue-pagination-button"
+            disabled={!listEnabled || cursorStack.length === 0}
+            onClick={goPrev}
+            aria-label="Previous page"
+          >
+            <span aria-hidden="true">&larr;</span>
+          </button>
+          <button
+            type="button"
+            className="secondary queue-pagination-button"
+            disabled={!listEnabled || !data?.nextPageToken}
+            onClick={goNext}
+            aria-label="Next page"
+          >
+            <span aria-hidden="true">&rarr;</span>
+          </button>
+        </nav>
+      </div>
+    </div>
+  );
   const filterValueForField = useCallback(
     (field: string): string => {
       if (!isFilterField(field)) return '';
@@ -723,13 +774,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     [filters],
   );
   const hasActiveFilters = activeFilters.length > 0;
-  const clearFilters = useCallback(() => {
-    setHasEditedFilters(true);
-    setFilters(emptyFilters());
-    setDraftFilters(emptyFilters());
-    setOpenFilter(null);
-    resetToFirstPage();
-  }, [resetToFirstPage]);
   const toggleFilter = useCallback((field: FilterField) => {
     setOpenFilter((current) => (current === field ? null : field));
   }, []);
@@ -1202,22 +1246,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           <div>
             <h2 className="page-title" id="task-list-title">Tasks List</h2>
           </div>
-          <div className="toolbar-controls task-list-utility-cluster">
-            <label className="queue-inline-toggle toolbar-live-toggle">
-              <input
-                type="checkbox"
-                checked={liveUpdates}
-                disabled={!listEnabled}
-                onChange={(event) => setLiveUpdates(event.target.checked)}
-              />
-              Live updates
-            </label>
-            <span className="small">
-              {liveUpdates && listEnabled
-                ? `Polling every ${Math.round(listPollMs / 1000)}s`
-                : 'Updates paused to keep selections stable.'}
-            </span>
-          </div>
         </div>
 
         {!listEnabled ? (
@@ -1236,8 +1264,8 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           </div>
         ) : null}
 
-        <div className="task-list-filter-row" aria-live="polite">
-          {hasActiveFilters ? (
+        {hasActiveFilters ? (
+          <div className="task-list-filter-row" aria-live="polite">
             <div className="task-list-filter-chips" aria-label="Active filters">
               {activeFilters.map(({ field, label, value }) => (
                 <span className="task-list-filter-chip" key={`${label}:${value}`}>
@@ -1274,18 +1302,8 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                 </span>
               ))}
             </div>
-          ) : (
-            <span className="small">Showing all task executions.</span>
-          )}
-          <button
-            type="button"
-            className="secondary task-list-clear-filters"
-            disabled={!listEnabled || !hasActiveFilters}
-            onClick={clearFilters}
-          >
-            Clear filters
-          </button>
-        </div>
+          </div>
+        ) : null}
         <div className="task-list-mobile-filter-controls" aria-label="Mobile task filters">
           {TABLE_COLUMNS.map(([field]) =>
             isFilterField(field) ? <div key={field}>{renderFilterControl(field, 'Mobile ')}</div> : null,
@@ -1296,44 +1314,17 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       {isLoading ? (
         <p className="loading">Loading tasks...</p>
       ) : isError ? (
-        <div className="notice error">{(error as Error).message}</div>
+        <>
+          <div className="notice error">{(error as Error).message}</div>
+          {resultsFooter}
+        </>
       ) : sortedItems.length === 0 && !hasPaginationContext ? (
-        <p className="small">No tasks found for the current filters.</p>
+        <>
+          <p className="small">No tasks found for the current filters.</p>
+          {resultsFooter}
+        </>
       ) : (
         <section className="queue-layouts panel--data task-list-data-slab" aria-label="Task results">
-          <div className="queue-results-toolbar">
-            <span className="small">{pageSummary}</span>
-            <div className="queue-pagination">
-              <PageSizeSelector
-                pageSize={pageSize}
-                disabled={!listEnabled}
-                onPageSizeChange={(size) => {
-                  setPageSize(size);
-                  resetToFirstPage();
-                }}
-              />
-              <nav aria-label="Pagination" style={{ display: 'inline-flex', gap: '0.45rem' }}>
-                <button
-                  type="button"
-                  className="secondary queue-pagination-button"
-                  disabled={!listEnabled || cursorStack.length === 0}
-                  onClick={goPrev}
-                  aria-label="Previous page"
-                >
-                  <span aria-hidden="true">&larr;</span>
-                </button>
-                <button
-                  type="button"
-                  className="secondary queue-pagination-button"
-                  disabled={!listEnabled || !data?.nextPageToken}
-                  onClick={goNext}
-                  aria-label="Next page"
-                >
-                  <span aria-hidden="true">&rarr;</span>
-                </button>
-              </nav>
-            </div>
-          </div>
           {sortedItems.length === 0 ? (
             <div className="card small">No tasks found for the current filters.</div>
           ) : (
@@ -1391,7 +1382,14 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                                 aria-label={filterAccessibilityLabel(field, label)}
                                 aria-expanded={filterField ? openFilter === filterField : false}
                               >
-                                <span aria-hidden="true">Filter</span>
+                                <svg
+                                  aria-hidden="true"
+                                  className="task-list-column-filter-icon"
+                                  viewBox="0 0 16 16"
+                                  focusable="false"
+                                >
+                                  <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+                                </svg>
                               </button>
                             </div>
                             {filterField ? renderFilterPopover(filterField, label) : null}
@@ -1512,6 +1510,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               </ul>
             </>
           )}
+          {resultsFooter}
         </section>
       )}
     </div>

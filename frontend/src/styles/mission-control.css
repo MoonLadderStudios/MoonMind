@@ -55,6 +55,9 @@
   --mm-executing-sweep-layer-offset-y: -10%;
   --mm-executing-sweep-core-opacity: 0.34;
   --mm-executing-sweep-halo-opacity: 0.14;
+  --mm-executing-border-glint-outset: 1px;
+  --mm-executing-border-glint-width: 3px;
+  --mm-executing-border-glint-opacity: 0.95;
   --mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration);
   --mm-executing-letter-sweep-start-ratio: 0.2;
   --mm-executing-letter-sweep-travel-ratio: 0.18;
@@ -584,7 +587,7 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 1.75rem;
+  width: 1.75rem;
   min-height: 1.65rem;
   padding: 0.12rem 0.32rem;
   border: 1px solid transparent;
@@ -606,6 +609,13 @@ h1 {
   box-shadow: var(--mm-control-focus-ring);
   transform: none;
   filter: none;
+}
+
+.task-list-column-filter-icon {
+  display: block;
+  width: 0.85rem;
+  height: 0.85rem;
+  fill: currentColor;
 }
 
 .task-list-header-filter-popover {
@@ -965,6 +975,23 @@ tbody tr:hover {
 .task-list-data-slab .queue-results-toolbar {
   padding: 0.85rem 1rem;
   border-bottom: 1px solid rgb(var(--mm-border) / 0.28);
+}
+
+.task-list-data-slab .task-list-results-footer {
+  border-top: 1px solid rgb(var(--mm-border) / 0.28);
+  border-bottom: 0;
+}
+
+.task-list-footer-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.task-list-footer-live-toggle {
+  flex: 0 0 auto;
 }
 
 .queue-pagination {
@@ -1377,6 +1404,10 @@ tr[data-proposal-id].proposal-consuming td {
     width: 100%;
   }
 
+  .task-list-footer-summary {
+    width: 100%;
+  }
+
   .queue-pagination {
     justify-content: space-between;
   }
@@ -1502,9 +1533,10 @@ tr[data-proposal-id].proposal-consuming td {
 .status-running.is-executing::after,
 .status-running.is-planning::after {
   z-index: 2;
+  inset: calc(-1 * var(--mm-executing-border-glint-outset));
   border-radius: inherit;
-  padding: 1px;
-  opacity: 0.82;
+  padding: var(--mm-executing-border-glint-width);
+  opacity: var(--mm-executing-border-glint-opacity);
   mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
@@ -2062,13 +2094,13 @@ button {
   transition: var(--mm-control-transition);
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle) {
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)) {
   border-color: rgb(255 255 255 / 0.52);
   color: #fff;
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle):hover {
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):hover {
   background: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -2085,8 +2117,8 @@ button:focus-visible {
   box-shadow: var(--mm-control-focus-ring);
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle):active,
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle).is-clicked {
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):active,
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)).is-clicked {
   background: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -2151,12 +2183,12 @@ button.task-list-column-filter-button.is-active {
   transition: var(--mm-control-transition);
 }
 
-.button:not(.secondary):not(.queue-action):not(.queue-submit-primary) {
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary)) {
   border-color: rgb(255 255 255 / 0.52);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
 }
 
-.button:not(.secondary):not(.queue-action):not(.queue-submit-primary):hover {
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary)):hover {
   background: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -2173,8 +2205,8 @@ button.task-list-column-filter-button.is-active {
   box-shadow: var(--mm-control-focus-ring);
 }
 
-.button:not(.secondary):not(.queue-action):not(.queue-submit-primary):active,
-.button:not(.secondary):not(.queue-action):not(.queue-submit-primary).is-clicked {
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary)):active,
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary)).is-clicked {
   background: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -2206,14 +2238,14 @@ button:disabled,
 button:disabled:hover,
 button.secondary:disabled,
 button.secondary:disabled:hover,
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle):disabled,
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle):disabled:hover,
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled,
+button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled:hover,
 .button[aria-disabled="true"],
 .button[aria-disabled="true"]:hover,
 .button.secondary[aria-disabled="true"],
 .button.secondary[aria-disabled="true"]:hover,
-.button:not(.secondary):not(.queue-action):not(.queue-submit-primary)[aria-disabled="true"],
-.button:not(.secondary):not(.queue-action):not(.queue-submit-primary)[aria-disabled="true"]:hover {
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary))[aria-disabled="true"],
+.button:where(:not(.secondary, .queue-action, .queue-submit-primary))[aria-disabled="true"]:hover {
   cursor: not-allowed;
   opacity: var(--mm-control-disabled-opacity);
   transform: none;

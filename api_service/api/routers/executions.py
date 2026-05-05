@@ -42,6 +42,7 @@ from api_service.db.models import (
 )
 from moonmind.config.settings import settings
 from moonmind.utils.metrics import get_metrics_emitter
+from moonmind.workflows.report_output import normalize_report_output_primary_path
 from moonmind.workflows.tasks.routing import _coerce_bool
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
@@ -3032,14 +3033,16 @@ def _normalize_report_output_payload(
             text = value.strip()
             if not text:
                 continue
-            if len(text) > _REPORT_OUTPUT_MAX_STRING_CHARS:
-                raise _invalid_task_request(
-                    f"reportOutput.{key} must be "
-                    f"{_REPORT_OUTPUT_MAX_STRING_CHARS} characters or fewer."
-                )
             canonical_key = {
                 "primary_path": "primaryPath",
             }.get(key, key)
+            if canonical_key == "primaryPath":
+                text = normalize_report_output_primary_path(text)
+            if len(text) > _REPORT_OUTPUT_MAX_STRING_CHARS:
+                raise _invalid_task_request(
+                    f"reportOutput.{canonical_key} must be "
+                    f"{_REPORT_OUTPUT_MAX_STRING_CHARS} characters or fewer."
+                )
             normalized[canonical_key] = text
         return normalized
     return {}

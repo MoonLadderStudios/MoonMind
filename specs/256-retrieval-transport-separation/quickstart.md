@@ -4,6 +4,8 @@
 
 Verify MM-508 as a runtime Workflow RAG story: retrieval configuration stays separate from managed-runtime provider profiles, gateway retrieval is preferred when runtime embedding credentials should not be required, direct retrieval remains available when policy permits, local fallback stays explicitly degraded, and overlay or budget knobs remain coherent across supported transports.
 
+Gateway-mode follow-up retrieval requires `MOONMIND_RETRIEVAL_URL` plus scoped `MOONMIND_RETRIEVAL_TOKEN` configuration. Optional `MOONMIND_RETRIEVAL_ALLOWED_REPOSITORIES` values constrain scoped-token requests at the gateway.
+
 ## Preconditions
 
 - Work from the active feature directory `specs/256-retrieval-transport-separation`.

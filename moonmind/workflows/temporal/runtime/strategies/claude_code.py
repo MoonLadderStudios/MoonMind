@@ -80,7 +80,9 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
 
         from moonmind.rag.context_injection import ContextInjectionService
 
-        service = ContextInjectionService()
+        service = ContextInjectionService(
+            env=dict(environment) if environment is not None else None
+        )
         await service.inject_context(
             request=request,
             workspace_path=workspace_path,

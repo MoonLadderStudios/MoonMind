@@ -88,6 +88,7 @@ layers:
   border_mask:
     role: border-ring glint where the shared light field crosses the pill edge
     source: shared_light_field
+    geometry: overlap the host border and a narrow inner edge while remaining clipped to the rounded pill bounds
     blend_intent: additive_light
 
   text_mask:
@@ -280,7 +281,7 @@ implementation_shape:
 
   overlay_elements:
     - ::before as fill_mask of shared_light_field
-    - ::after as border_mask of shared_light_field
+    - ::after as border_mask of shared_light_field, out-set and widened enough to overlap the physical border before clipping
 
   text_strategy:
     text_must_render_above_overlay: true
@@ -338,6 +339,9 @@ effect_tokens:
   --mm-executing-sweep-end-y: -160%
   --mm-executing-sweep-layer-offset-x: -12%
   --mm-executing-sweep-layer-offset-y: -10%
+  --mm-executing-border-glint-outset: 1px
+  --mm-executing-border-glint-width: 3px
+  --mm-executing-border-glint-opacity: 0.95
   --mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)
   --mm-executing-letter-sweep-start-ratio: 0.2
   --mm-executing-letter-sweep-travel-ratio: 0.18

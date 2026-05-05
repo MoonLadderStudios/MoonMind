@@ -18,11 +18,12 @@ def test_runtime_settings_from_env_overrides_defaults():
     )
     assert settings.resolved_transport(None) == "direct"
 
-def test_retrieval_executable_gateway_does_not_require_embedding_keys():
+def test_retrieval_executable_gateway_uses_scoped_token_not_embedding_keys():
     env = {
         "RAG_ENABLED": "1",
         "DEFAULT_EMBEDDING_PROVIDER": "google",
         "MOONMIND_RETRIEVAL_URL": "http://gateway:8080",
+        "MOONMIND_RETRIEVAL_TOKEN": "scoped-token",
         "QDRANT_ENABLED": "0",
         "GOOGLE_API_KEY": "",
     }

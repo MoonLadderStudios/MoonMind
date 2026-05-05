@@ -45,6 +45,7 @@ from moonmind.schemas.temporal_activity_models import (
     ExternalAgentRunInput,
     PlanGenerateInput,
 )
+from moonmind.workflows.report_output import report_output_display_name
 from moonmind.workflows.tasks.routing import _coerce_bool
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
@@ -3592,6 +3593,10 @@ class TemporalAgentRuntimeActivities:
                     raise TemporalActivityRuntimeError(
                         "reportOutput enabled but executionRef is incomplete"
                     )
+                primary_report_name = report_output_display_name(
+                    report_output.get("primaryPath")
+                    or report_output.get("primary_path")
+                )
                 report_type = str(
                     report_output.get("reportType")
                     or report_output.get("report_type")
@@ -3620,7 +3625,7 @@ class TemporalAgentRuntimeActivities:
                             or "Agent-authored final report",
                             "producer": "activity:agent_runtime.publish_artifacts",
                             "render_hint": "text",
-                            "name": "final-report.md",
+                            "name": primary_report_name,
                             **step_artifact_metadata,
                         },
                     },

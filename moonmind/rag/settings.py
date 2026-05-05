@@ -163,6 +163,19 @@ class RagRuntimeSettings:
             return "gateway"
         return "direct"
 
+    @staticmethod
+    def retrieval_gateway_auth_configured(
+        source: Mapping[str, str] | None = None,
+    ) -> bool:
+        """Return whether a scoped RetrievalGateway token is configured."""
+
+        token = (
+            str(source.get("MOONMIND_RETRIEVAL_TOKEN") or "")
+            if source is not None
+            else os.getenv("MOONMIND_RETRIEVAL_TOKEN", "")
+        ).strip()
+        return bool(token)
+
     def overlay_collection_name(self, run_id: str) -> str:
         sanitized = re.sub(r"[^a-zA-Z0-9_-]+", "-", run_id).strip("-") or "overlay"
         return f"{self.vector_collection}__overlay__{sanitized}"[:128]
@@ -221,6 +234,8 @@ class RagRuntimeSettings:
         if transport == "gateway":
             if not self.retrieval_gateway_url:
                 return False, "retrieval_gateway_url_missing"
+            if not self.retrieval_gateway_auth_configured(source):
+                return False, "retrieval_gateway_auth_missing"
             return True, "ok"
 
         if not self.embedding_provider_configured(source):

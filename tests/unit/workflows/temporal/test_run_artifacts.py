@@ -1722,11 +1722,165 @@ def test_publish_completion_reports_blocked_outcome_without_pr_failure() -> None
         parameters={"publishMode": "pr"}
     )
 
-    assert status == "blocked"
+    assert status == "failed"
     assert reason == "Workflow blocked by plan step: blocked upstream."
-    assert failed is False
+    assert failed is True
 
-def test_publish_completion_accepts_jira_output_without_pr_url() -> None:
+@pytest.mark.asyncio
+async def test_run_marks_blocked_outcome_as_failed_terminal_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    blocker_summary = "Workflow blocked by plan step: blocked upstream."
+    finalizing_calls: list[dict[str, Any]] = []
+    terminal_calls: list[dict[str, Any]] = []
+    states: list[tuple[str, str | None]] = []
+
+    def fake_initialize(
+        _self: MoonMindRunWorkflow,
+        _payload: dict[str, Any],
+    ) -> tuple[str, dict[str, Any], None, str, None]:
+        _self._owner_type = "user"
+        _self._owner_id = "owner-1"
+        _self._entry = "run"
+        return (
+            "MoonMind.Run",
+            {"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
+            None,
+            "art_plan_1",
+            None,
+        )
+
+    async def fake_run_execution_stage(
+        self: MoonMindRunWorkflow,
+        *,
+        parameters: dict[str, Any],
+        plan_ref: str | None,
+    ) -> None:
+        self._plan_blocked_message = blocker_summary
+        self._publish_status = "not_required"
+        self._publish_reason = blocker_summary
+
+    async def fake_noop_async(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def fake_run_finalizing_stage(
+        self: MoonMindRunWorkflow,
+        *,
+        parameters: dict[str, Any],
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        finalizing_calls.append({"status": status, "error": error})
+
+    async def fake_record_terminal_state(
+        self: MoonMindRunWorkflow,
+        *,
+        state: str,
+        close_status: str,
+        summary: str | None,
+        error_category: str | None = None,
+    ) -> None:
+        terminal_calls.append(
+            {
+                "state": state,
+                "close_status": close_status,
+                "summary": summary,
+                "error_category": error_category,
+            }
+        )
+
+    original_set_state = MoonMindRunWorkflow._set_state
+
+    def capture_set_state(
+        self: MoonMindRunWorkflow,
+        state: str,
+        summary: str | None = None,
+    ) -> None:
+        states.append((state, summary))
+        original_set_state(self, state, summary)
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-blocked",
+            "run_id": "run-blocked",
+            "task_queue": "mm.workflow",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: True,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_initialize_from_payload",
+        fake_initialize,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_wait_if_paused_at_safe_boundary",
+        fake_noop_async,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_run_execution_stage",
+        fake_run_execution_stage,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_run_proposals_stage",
+        fake_noop_async,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_run_finalizing_stage",
+        fake_run_finalizing_stage,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_record_terminal_state",
+        fake_record_terminal_state,
+    )
+    monkeypatch.setattr(MoonMindRunWorkflow, "_set_state", capture_set_state)
+
+    with pytest.raises(run_workflow_module.exceptions.ApplicationError) as exc_info:
+        await workflow.run({"workflowType": "MoonMind.Run"})
+
+    assert str(exc_info.value) == blocker_summary
+    assert finalizing_calls == [{"status": "failed", "error": blocker_summary}]
+    assert terminal_calls == [
+        {
+            "state": "failed",
+            "close_status": "failed",
+            "summary": blocker_summary,
+            "error_category": "user_error",
+        }
+    ]
+    assert states[-1] == ("failed", blocker_summary)
+    assert workflow._close_status == "failed"
+
+def test_publish_completion_requires_pr_url_for_pr_publish_mode() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._publish_status = "published"
     workflow._publish_reason = "Jira issue output succeeded; no PR output required"
@@ -1736,9 +1890,9 @@ def test_publish_completion_accepts_jira_output_without_pr_url() -> None:
         parameters={"publishMode": "pr"}
     )
 
-    assert status == "success"
-    assert reason == "Workflow completed successfully"
-    assert failed is False
+    assert status == "failed"
+    assert reason == "publishMode 'pr' requested but no PR was created"
+    assert failed is True
 
 @pytest.mark.parametrize("story_status", ["jira_created", "jira_partial"])
 def test_jira_story_output_status_satisfies_pr_publish(story_status: str) -> None:

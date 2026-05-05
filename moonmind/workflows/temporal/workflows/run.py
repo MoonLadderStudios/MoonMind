@@ -273,6 +273,8 @@ class MoonMindRunWorkflow:
         self._last_diagnostics_ref: Optional[str] = None
         self._merge_automation_disposition: Optional[str] = None
         self._merge_automation_head_sha: Optional[str] = None
+        self._report_created: bool = False
+        self._report_ref: Optional[str] = None
         self._declared_dependencies: list[str] = []
         self._dependency_wait_occurred: bool = False
         self._dependency_wait_duration_ms: int = 0
@@ -1599,7 +1601,9 @@ class MoonMindRunWorkflow:
                 state=STATE_FAILED,
                 close_status=CLOSE_STATUS_FAILED,
                 summary=output_message,
-                error_category="execution_error",
+                error_category=(
+                    "user_error" if self._plan_blocked_message else "execution_error"
+                ),
             )
             raise exceptions.ApplicationError(
                 output_message,
@@ -3396,6 +3400,48 @@ class MoonMindRunWorkflow:
         if head_sha:
             self._publish_context["headSha"] = head_sha
 
+        self._record_report_result(execution_result)
+
+    def _record_report_result(self, execution_result: Any) -> None:
+        metadata = self._get_from_result(execution_result, "metadata")
+        outputs = self._get_from_result(execution_result, "outputs")
+        report_sources = [
+            source
+            for source in (metadata, outputs)
+            if isinstance(source, Mapping)
+        ]
+        if not report_sources:
+            return
+
+        report_ref = ""
+        report_bundle: Any = None
+        for source in report_sources:
+            report_ref = self._coerce_text(
+                source.get("primaryReportRef")
+                or source.get("primary_report_ref"),
+                max_chars=200,
+            )
+            report_bundle = source.get("reportBundle") or source.get("report_bundle")
+            if report_ref or isinstance(report_bundle, Mapping):
+                break
+        if not report_ref and isinstance(report_bundle, Mapping):
+            primary_ref = (
+                report_bundle.get("primary_report_ref")
+                or report_bundle.get("primaryReportRef")
+            )
+            if isinstance(primary_ref, Mapping):
+                report_ref = self._coerce_text(
+                    primary_ref.get("artifact_id")
+                    or primary_ref.get("artifactId"),
+                    max_chars=200,
+                )
+            else:
+                report_ref = self._coerce_text(primary_ref, max_chars=200)
+        if report_ref:
+            self._report_created = True
+            self._report_ref = report_ref
+            self._publish_context["reportRef"] = report_ref
+
     @staticmethod
     def _node_selected_skill(node: Mapping[str, Any]) -> str:
         inputs = node.get("inputs")
@@ -3543,16 +3589,9 @@ class MoonMindRunWorkflow:
         parameters: Mapping[str, Any],
     ) -> tuple[str, str, bool]:
         if self._plan_blocked_message:
-            return ("blocked", self._plan_blocked_message, False)
+            return ("failed", self._plan_blocked_message, True)
 
         publish_mode = self._publish_mode(parameters)
-        if publish_mode == "none":
-            return (
-                "success",
-                self._compose_success_completion_message(publish_mode=publish_mode),
-                False,
-            )
-
         if self._publish_status == "skipped":
             if publish_mode == "pr":
                 self._publish_status = "failed"
@@ -3564,6 +3603,29 @@ class MoonMindRunWorkflow:
                 )
             return ("no_changes", "Workflow completed with no local changes", False)
 
+        if self._publish_status == "failed":
+            return (
+                "failed",
+                self._publish_reason or "Publish failed",
+                True,
+            )
+
+        missing_outcome = self._missing_required_outcome_reason(
+            parameters=parameters,
+            publish_mode=publish_mode,
+        )
+        if missing_outcome:
+            self._publish_status = "failed"
+            self._publish_reason = missing_outcome
+            return ("failed", missing_outcome, True)
+
+        if publish_mode == "none":
+            return (
+                "success",
+                self._compose_success_completion_message(publish_mode=publish_mode),
+                False,
+            )
+
         if self._publish_status == "not_required":
             return (
                 "success",
@@ -3572,13 +3634,6 @@ class MoonMindRunWorkflow:
                     publish_mode=publish_mode,
                 ),
                 False,
-            )
-
-        if self._publish_status == "failed":
-            return (
-                "failed",
-                self._publish_reason or "Publish failed",
-                True,
             )
 
         if publish_mode == "branch" and self._publish_status is None:
@@ -3625,6 +3680,75 @@ class MoonMindRunWorkflow:
             self._compose_success_completion_message(publish_mode=publish_mode),
             False,
         )
+
+    def _missing_required_outcome_reason(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+        publish_mode: str,
+    ) -> str | None:
+        if publish_mode == "pr" and not self._pull_request_created():
+            return "publishMode 'pr' requested but no PR was created"
+        if publish_mode == "branch" and self._publish_status is None:
+            return "branch publish outcome unknown"
+        if self._merge_automation_requested(parameters) and not self._merge_happened():
+            return "merge automation requested but PR was not merged"
+        if self._report_requested(parameters) and not self._report_created:
+            return "reportOutput requested but no final report was created"
+        return None
+
+    def _pull_request_created(self) -> bool:
+        if self._pull_request_url:
+            return True
+        pull_request_url = self._coerce_text(
+            self._publish_context.get("pullRequestUrl"),
+            max_chars=500,
+        )
+        if pull_request_url:
+            return True
+        pr_number = self._publish_context.get("pullRequestNumber")
+        return isinstance(pr_number, int) and pr_number > 0
+
+    def _branch_published(self) -> bool:
+        return self._publish_status == "published"
+
+    def _merge_happened(self) -> bool:
+        status = self._coerce_text(
+            self._publish_context.get("mergeAutomationStatus"),
+            max_chars=40,
+        )
+        if status in MERGE_AUTOMATION_SUCCESS_STATUSES:
+            return True
+        result = self._publish_context.get("mergeAutomationResult")
+        if isinstance(result, Mapping):
+            result_status = self._coerce_text(result.get("status"), max_chars=40)
+            return result_status in MERGE_AUTOMATION_SUCCESS_STATUSES
+        return False
+
+    def _merge_automation_requested(self, parameters: Mapping[str, Any]) -> bool:
+        return self._merge_automation_request(parameters) is not None
+
+    def _report_requested(self, parameters: Mapping[str, Any]) -> bool:
+        candidates = []
+        task_payload = self._mapping_value(parameters, "task")
+        if isinstance(task_payload, Mapping):
+            candidates.append(
+                task_payload.get("reportOutput") or task_payload.get("report_output")
+            )
+        candidates.append(
+            parameters.get("reportOutput") or parameters.get("report_output")
+        )
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                continue
+            try:
+                enabled = _coerce_bool(candidate.get("enabled"), default=False)
+                required = _coerce_bool(candidate.get("required"), default=True)
+            except ValueError:
+                continue
+            if enabled and required:
+                return True
+        return False
 
     def _merge_automation_request(
         self,
@@ -5298,6 +5422,13 @@ class MoonMindRunWorkflow:
                 elif self._publish_status == "failed":
                     publish_status = "failed"
                     publish_reason = self._publish_reason or error or "publish failed"
+                elif status == "failed" and self._publish_status == "not_required":
+                    publish_status = "skipped"
+                    publish_reason = (
+                        self._publish_reason
+                        or error
+                        or "publish output not required"
+                    )
             else:
                 if status == "success":
                     if publish_mode == "pr":
