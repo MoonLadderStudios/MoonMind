@@ -27,7 +27,7 @@
    - finalize transitions through `verifying` and `registering_profile` before `succeeded`,
    - finalize response or immediate follow-up session projection includes safe `profile_summary`,
    - duplicate finalize requests in `verifying`, `registering_profile`, and `succeeded` are idempotent,
-   - cancelled, expired, superseded, and unauthorized sessions do not mutate Provider Profiles,
+   - cancelled, expired, derived-superseded, and unauthorized sessions do not mutate Provider Profiles,
    - terminal/request-supplied identity fields cannot override session-owned values,
    - credential-like material is not returned in response fields.
 
@@ -84,7 +84,7 @@ Hermetic integration suite before final verification when Docker is available:
 7. Confirm the registered Provider Profile summary is visible and contains no raw credential material.
 8. Confirm Settings-side Provider Profile data refreshes or is invalidated without requiring the operator to click Finalize in Settings.
 9. Repeat finalization and confirm no duplicate Provider Profile is created and no different profile is mutated.
-10. Repeat with cancelled, expired, superseded, and unauthorized sessions and confirm safe failure without Provider Profile mutation.
+10. Repeat with cancelled, expired, derived-superseded, and unauthorized sessions and confirm safe failure without Provider Profile mutation.
 
 ## Expected Planning Outcome
 

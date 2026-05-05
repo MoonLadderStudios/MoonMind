@@ -37,7 +37,14 @@ verifying/registering_profile/succeeded -> idempotent finalize response
 pending/starting/bridge_ready -> not eligible for finalize
 cancelled/expired/failed -> safe failure or recovery action, no profile mutation
 failed/cancelled/expired -> reconnect creates a new pending OAuth Session
+older same-actor/profile session superseded by newer active or completed session -> safe failure, no profile mutation
 ```
+
+Superseded-session rule:
+
+- Superseded is a derived validation condition, not a stored `OAuthSessionStatus`.
+- A session is superseded when it is no longer the current owner of the finalization path for the same actor and Provider Profile because a newer active or completed OAuth Session has taken precedence.
+- Superseded sessions must fail finalization safely without registering or mutating a Provider Profile.
 
 ## Provider Profile
 

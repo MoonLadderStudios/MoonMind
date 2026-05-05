@@ -88,6 +88,7 @@ Failure:
 
 - Unauthorized sessions return not found or forbidden before verification.
 - Cancelled, expired, failed, or superseded sessions fail safely without Provider Profile mutation.
+- Superseded is a derived same-actor/profile validation condition, not a new persisted lifecycle status.
 - Verification failures transition to `failed`, stop the auth runner if present, signal workflow failure, and return a sanitized failure reason.
 
 ### Cancel OAuth Session

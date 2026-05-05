@@ -66,10 +66,10 @@ Test implications: API unit tests for `verifying`, `registering_profile`, and `s
 
 ## FR-009 / SC-004 - Safe Failure for Invalid Sessions
 
-Decision: partial; expand explicit failure matrix.
-Evidence: Unauthorized finalization returns 404 before verification in `test_finalize_oauth_session_rejects_other_users_claude_session_before_verify`. Cancelled and expired sessions fail by invalid status. Superseded session handling is not explicit in the current model.
+Decision: partial; expand explicit failure matrix and treat superseded as a derived validation condition rather than a new persisted lifecycle status.
+Evidence: Unauthorized finalization returns 404 before verification in `test_finalize_oauth_session_rejects_other_users_claude_session_before_verify`. Cancelled and expired sessions fail by invalid status. `spec.md` now defines superseded as an older session for the same actor and Provider Profile losing ownership of the selected profile-finalization path to a newer active or completed session.
 Rationale: The story requires safe failure without Provider Profile mutation for cancelled, expired, superseded, and unauthorized sessions.
-Alternatives considered: Treat all invalid states as generic 400. Rejected because tests should prove no mutation and sanitized outcomes.
+Alternatives considered: Add a new `superseded` OAuth session status, or treat all invalid states as generic 400. A new persisted status was rejected because it would broaden the story and touch lifecycle storage; generic 400 was rejected because tests should prove no mutation and sanitized outcomes.
 Test implications: API unit tests for cancelled, expired, superseded/active-session conflict policy, and unauthorized cases.
 
 ## FR-010 - Immutable Session Identity and Credential Refs

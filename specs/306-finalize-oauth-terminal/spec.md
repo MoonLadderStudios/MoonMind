@@ -57,6 +57,7 @@ Input classification: single-story runtime feature request. The request selects 
 - The OAuth session has already been created by Settings, Mission Control, or an equivalent authorized entry point; this story does not create a new OAuth-session start flow.
 - The provider terminal page already exists or is part of the selected OAuth terminal surface; this story owns finalization behavior on that surface, not the full terminal bridge implementation.
 - The canonical source design remains Codex-focused for the current target; Claude and Gemini task-scoped managed-session parity is outside this story.
+- For this story, a superseded OAuth session is a derived safety condition, not a new persisted lifecycle status: an older session for the same actor and Provider Profile must not finalize if a newer active or completed OAuth session has taken ownership of the selected profile-finalization path.
 
 ## Source Design Requirements
 
