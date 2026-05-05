@@ -41,6 +41,71 @@ describe('Tasks List Entrypoint', () => {
 
   const lastExecutionListUrl = () => executionListCalls().at(-1)?.[0];
 
+  it('shows the loading state while the task list request is pending', () => {
+    fetchSpy.mockReturnValue(new Promise(() => {}) as Promise<Response>);
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    expect(screen.getByText('Loading tasks...')).toBeTruthy();
+  });
+
+  it('shows structured API validation detail when the task list request fails', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: false,
+      statusText: 'Bad Request',
+      json: async () => ({
+        detail: {
+          code: 'execution_filter_validation_failed',
+          message: 'Cannot combine stateIn and stateNotIn.',
+        },
+      }),
+    } as Response);
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
+  });
+
+  it('keeps Clear filters available on an empty first page with active filters', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('stateIn=completed')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [], count: 0 }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              taskId: 'task-123',
+              source: 'temporal',
+              title: 'Example task',
+              status: 'completed',
+              state: 'completed',
+              rawState: 'completed',
+              createdAt: '2026-03-28T00:00:00Z',
+            },
+          ],
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    fireEvent.change(await screen.findByLabelText('Status filter value'), {
+      target: { value: 'completed' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+
+    expect(await screen.findByText('No tasks found for the current filters.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clear filters' }).getAttribute('disabled')).toBeNull();
+  });
+
   it('announces the current sort state on table headers', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
