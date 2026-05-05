@@ -303,7 +303,10 @@ describe('Mission Control shared entry', () => {
     const primaryButtonBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
       const selectors = rule.selector.split(',').map(normalizeCssSelector);
       return (
-        selectors.some((selector) => selector.startsWith('button:not(')) &&
+        selectors.some(
+          (selector) =>
+            selector.startsWith('button:not(') || selector.startsWith('button:where(:not('),
+        ) &&
         rule.nodes.some((node) => node.type === 'decl' && node.prop === 'color' && node.value === '#fff')
       );
     });
@@ -649,12 +652,12 @@ describe('Mission Control shared entry', () => {
     const routineBlocks = [
       cssRuleBlock(
         missionControlCss,
-        'button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle):hover',
+        'button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):hover',
       ),
       cssRuleBlock(missionControlCss, 'button.secondary:hover'),
       cssRuleBlock(
         missionControlCss,
-        '.button:not(.secondary):not(.queue-action):not(.queue-submit-primary):hover',
+        '.button:where(:not(.secondary, .queue-action, .queue-submit-primary)):hover',
       ),
       cssRuleBlock(missionControlCss, '.button.secondary:hover'),
       cssRuleBlock(missionControlCss, '.queue-action:hover,\n.queue-submit-primary:hover'),
@@ -671,11 +674,11 @@ describe('Mission Control shared entry', () => {
     const pressedBlocks = [
       cssRuleBlock(
         missionControlCss,
-        'button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle):active',
+        'button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):active',
       ),
       cssRuleBlock(
         missionControlCss,
-        '.button:not(.secondary):not(.queue-action):not(.queue-submit-primary):active',
+        '.button:where(:not(.secondary, .queue-action, .queue-submit-primary)):active',
       ),
       cssRuleBlock(missionControlCss, '.queue-action:active,\n.queue-submit-primary:active'),
       cssRuleBlock(missionControlCss, '.queue-step-icon-button:active'),
@@ -716,7 +719,7 @@ describe('Mission Control shared entry', () => {
     expect(cssRuleBlock(missionControlCss, 'input:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible')).toContain(
       'box-shadow: var(--mm-control-focus-ring)',
     );
-    expect(cssRuleBlock(missionControlCss, 'button:disabled,\nbutton:disabled:hover,\nbutton.secondary:disabled,\nbutton.secondary:disabled:hover,\nbutton:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle):disabled,\nbutton:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle):disabled:hover,\n.button[aria-disabled="true"],\n.button[aria-disabled="true"]:hover,\n.button.secondary[aria-disabled="true"],\n.button.secondary[aria-disabled="true"]:hover,\n.button:not(.secondary):not(.queue-action):not(.queue-submit-primary)[aria-disabled="true"],\n.button:not(.secondary):not(.queue-action):not(.queue-submit-primary)[aria-disabled="true"]:hover')).toMatch(
+    expect(cssRuleBlock(missionControlCss, 'button:disabled,\nbutton:disabled:hover,\nbutton.secondary:disabled,\nbutton.secondary:disabled:hover,\nbutton:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled,\nbutton:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled:hover,\n.button[aria-disabled="true"],\n.button[aria-disabled="true"]:hover,\n.button.secondary[aria-disabled="true"],\n.button.secondary[aria-disabled="true"]:hover,\n.button:where(:not(.secondary, .queue-action, .queue-submit-primary))[aria-disabled="true"],\n.button:where(:not(.secondary, .queue-action, .queue-submit-primary))[aria-disabled="true"]:hover')).toMatch(
       /opacity:\s*var\(--mm-control-disabled-opacity\);[^}]*transform:\s*none;[^}]*box-shadow:\s*none;/s,
     );
     expect(missionControlCss).toMatch(
