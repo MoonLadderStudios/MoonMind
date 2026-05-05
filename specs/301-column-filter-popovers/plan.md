@@ -1,8 +1,8 @@
 # Implementation Plan: Column Filter Popovers, Chips, and Selection Semantics
 
-**Branch**: `301-column-filter-popovers`  
-**Date**: 2026-05-05  
-**Spec**: `specs/301-column-filter-popovers/spec.md`  
+**Branch**: `301-column-filter-popovers`
+**Date**: 2026-05-05
+**Spec**: `specs/301-column-filter-popovers/spec.md`
 **Input**: Single-story runtime spec generated from the trusted Jira preset brief for `MM-588`.
 
 ## Summary
@@ -55,15 +55,15 @@ Tasks List already has the `MM-587` desktop column/header foundation: task-focus
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 for FastAPI route tests.  
-**Primary Dependencies**: React, TanStack Query, Zod, Vitest, Testing Library, FastAPI, pytest, Temporal visibility query helpers.  
-**Storage**: No new persistent storage; filter state is URL/query state and component state only.  
-**Unit Testing**: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` for focused UI coverage; targeted Python route tests through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py`.  
-**Integration Testing**: Existing route-boundary tests for `/api/executions` plus UI entrypoint tests cover the task-list workflow without external credentials.  
-**Target Platform**: Browser Mission Control Tasks List and MoonMind API.  
-**Project Type**: Existing full-stack web app.  
-**Performance Goals**: Popover interactions must not fetch until Apply/remove/clear; value lists remain bounded; no unbounded DOM rendering for long lists.  
-**Constraints**: Preserve task-only visibility, avoid raw Temporal query authoring, keep direct browser calls to MoonMind APIs only, keep page size/pagination outside filters, and preserve `MM-588` traceability.  
+**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 for FastAPI route tests.
+**Primary Dependencies**: React, TanStack Query, Zod, Vitest, Testing Library, FastAPI, pytest, Temporal visibility query helpers.
+**Storage**: No new persistent storage; filter state is URL/query state and component state only.
+**Unit Testing**: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` for focused UI coverage; targeted Python route tests through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py`.
+**Integration Testing**: Existing route-boundary tests for `/api/executions` plus UI entrypoint tests cover the task-list workflow without external credentials.
+**Target Platform**: Browser Mission Control Tasks List and MoonMind API.
+**Project Type**: Existing full-stack web app.
+**Performance Goals**: Popover interactions must not fetch until Apply/remove/clear; value lists remain bounded; no unbounded DOM rendering for long lists.
+**Constraints**: Preserve task-only visibility, avoid raw Temporal query authoring, keep direct browser calls to MoonMind APIs only, keep page size/pagination outside filters, and preserve `MM-588` traceability.
 **Scale/Scope**: One Tasks List entrypoint, shared Mission Control CSS, and one API list route filter surface.
 
 ## Constitution Check

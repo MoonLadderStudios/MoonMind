@@ -1,8 +1,8 @@
-# Specification Quality Checklist: Column Filter Popovers, Chips, and Selection Semantics
+# Specification Quality Checklist: Shared Additive Shimmer Masks
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-05-05
-**Feature**: [spec.md](../spec.md)
+**Feature**: [spec.md](/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/spec.md)
 
 ## Content Quality
 
@@ -36,5 +36,4 @@
 
 ## Notes
 
-- PASS: The input is a single runtime UI story selected by MM-588 and preserves the canonical Jira preset brief.
-- PASS: The source document is broader than the selected story, but the source mapping includes every MM-588 coverage ID and maps each in-scope requirement to functional requirements.
+- Checklist passes. The specification contains one independently testable runtime story for the active status-pill additive shimmer treatment.

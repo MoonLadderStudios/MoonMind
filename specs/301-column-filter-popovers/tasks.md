@@ -1,6 +1,6 @@
 # Tasks: Column Filter Popovers, Chips, and Selection Semantics
 
-**Input**: Design documents from `specs/301-column-filter-popovers/`  
+**Input**: Design documents from `specs/301-column-filter-popovers/`
 **Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`, `contracts/tasks-list-column-filter-popovers.md`, `quickstart.md`
 
 **Tests**: Unit tests and integration tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.
