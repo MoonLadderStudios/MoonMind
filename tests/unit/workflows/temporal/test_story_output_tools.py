@@ -54,6 +54,7 @@ class _FakeJiraService:
             "issueTypes": [
                 {"id": "10005", "name": "Story"},
                 {"id": "10006", "name": "Task"},
+                {"id": "10007", "name": "Sub-task", "subtask": True},
             ]
         }
 
@@ -575,6 +576,101 @@ async def test_create_jira_issues_truncates_description_and_creates_subtasks():
     assert len(request.description) == 32767
     assert request.description.endswith("[Truncated by MoonMind before Jira export]")
     assert request.fields["labels"] == ["moonmind-workflow-workflow-123"]
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_uses_source_issue_as_subtask_parent():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeName": "Sub-task",
+                    "sourceIssueKey": "MM-100",
+                },
+            },
+            "stories": [
+                {
+                    "summary": "Create a generated child issue",
+                    "description": "As an operator, I can request sub-task output.",
+                }
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    assert result.outputs["jira"]["createdIssues"][0]["issueKey"] == "MM-SUB-1"
+    assert service.requests == []
+    request = service.subtask_requests[0]
+    assert request.issue_type_id == "10007"
+    assert request.parent_issue_key == "MM-100"
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_does_not_use_source_issue_as_story_parent():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeName": "Story",
+                    "sourceIssueKey": "MM-100",
+                },
+            },
+            "stories": [
+                {
+                    "summary": "Create a generated story",
+                    "description": "As an operator, I can request story output.",
+                }
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    assert result.outputs["jira"]["createdIssues"][0]["issueKey"] == "MM-1"
+    assert service.subtask_requests == []
+    request = service.requests[0]
+    assert request.issue_type_id == "10005"
+    assert request.summary == "Create a generated story"
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_requires_each_subtask_story_to_have_parent():
+    service = _FakeJiraService()
+
+    with pytest.raises(ValueError, match="parentIssueKey for every story"):
+        await create_jira_issues_from_stories(
+            {
+                "storyOutput": {
+                    "mode": "jira",
+                    "onFailure": "fail",
+                    "jira": {
+                        "projectKey": "MM",
+                        "issueTypeName": "Sub-task",
+                    },
+                },
+                "stories": [
+                    {
+                        "summary": "Create first child issue",
+                        "description": "First generated sub-task.",
+                        "parentIssueKey": "MM-100",
+                    },
+                    {
+                        "summary": "Create second child issue",
+                        "description": "Second generated sub-task.",
+                    },
+                ],
+            },
+            jira_service_factory=lambda: service,
+        )
+
+    assert service.requests == []
+    assert service.subtask_requests == []
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_reuses_existing_issue_with_workflow_marker():
