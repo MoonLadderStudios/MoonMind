@@ -1,5 +1,15 @@
 [
   {
+    "id": 3184548974,
+    "disposition": "addressed",
+    "rationale": "Refactored the task-create fetch mock to use a path-based switch while preserving the delayed /api/executions response behavior."
+  },
+  {
+    "id": 4223560263,
+    "disposition": "not-applicable",
+    "rationale": "Broad review summary duplicated the actionable inline mock-refactor feedback and did not request a separate code change."
+  },
+  {
     "id": 3184494901,
     "disposition": "addressed",
     "rationale": "Added explicit fill=none, stroke=currentColor, strokeWidth=2, strokeLinecap/Join=round attributes to ProvidersKeyIcon SVG."
