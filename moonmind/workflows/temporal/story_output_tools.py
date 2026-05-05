@@ -1121,16 +1121,17 @@ async def create_jira_issues_from_stories(
         raise ValueError(reason)
 
     is_subtask_issue_type = _is_subtask_issue_type_name(issue_type_name)
-    source_parent_issue_key = _source_issue_key(
+    source_issue_key = _source_issue_key(
         inputs=inputs,
         traceability=jira_payload,
     )
+    source_parent_issue_key = source_issue_key if is_subtask_issue_type else ""
     explicit_parent_issue_key = _parent_issue_key(
         story={},
         jira_payload=jira_payload,
         inputs=inputs,
     )
-    has_story_parent_issue_key = any(
+    has_all_story_parent_issue_keys = all(
         _parent_issue_key(story=story, jira_payload={}, inputs={})
         for story in stories
     )
@@ -1138,11 +1139,12 @@ async def create_jira_issues_from_stories(
         is_subtask_issue_type
         and not source_parent_issue_key
         and not explicit_parent_issue_key
-        and not has_story_parent_issue_key
+        and not has_all_story_parent_issue_keys
     ):
         reason = (
             "Jira issueTypeName 'Sub-task' requires sourceIssueKey or "
-            "parentIssueKey so created issues can be attached to a parent issue."
+            "parentIssueKey for every story so created issues can be attached "
+            "to a parent issue."
         )
         if fallback_on_failure:
             return _fallback_result(

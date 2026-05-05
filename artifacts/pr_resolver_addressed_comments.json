@@ -1,32 +1,22 @@
 [
   {
-    "id": 3184919504,
+    "id": 3185306869,
     "disposition": "addressed",
-    "rationale": "Added w-full to queue-step-type-options container in settings.tsx to fix sliding thumb alignment with variable label widths."
+    "rationale": "Updated Jira story output creation so sourceIssueKey is only used as a parent fallback for Sub-task issue types; normal Story creation now uses create_issue even when sourceIssueKey is present."
   },
   {
-    "id": 4224002358,
-    "disposition": "addressed",
-    "rationale": "Review summary covers the same layout issue addressed by adding w-full to the navigation container."
-  },
-  {
-    "id": 3184882513,
-    "disposition": "addressed",
-    "rationale": "Removed the redundant unpublished handoff check from the exception block; the pre-try guard already covers unchanged previous_outputs/ref inputs."
-  },
-  {
-    "id": 4223961398,
+    "id": 4224468342,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; its actionable child comment 3184882513 was addressed."
+    "rationale": "Automated Codex review summary only; the actionable child review comments are classified separately."
   },
   {
-    "id": 3184895029,
+    "id": 3185321828,
     "disposition": "addressed",
-    "rationale": "Scoped Jira auth diagnostics now require an authenticated signal: /myself is tried first, and the fallback project/search probe only succeeds when Jira returns x-aaccountid."
+    "rationale": "Changed Sub-task validation to require a global fallback or every generated story to carry a parentIssueKey, preventing mixed parent coverage from passing validation."
   },
   {
-    "id": 4223974897,
+    "id": 4224484578,
     "disposition": "not-applicable",
-    "rationale": "Informational Codex review wrapper; its actionable child comment 3184895029 was addressed."
+    "rationale": "Automated review body summarizing the same actionable validation gap handled by comment 3185321828."
   }
 ]
