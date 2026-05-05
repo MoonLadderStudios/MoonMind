@@ -325,6 +325,219 @@ def test_list_executions_temporal_query_includes_target_runtime_filter() -> None
         == temporal_client.count_workflows.await_args.kwargs["query"]
     )
 
+def test_list_executions_temporal_query_includes_canonical_state_filters() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "scope": "tasks",
+                "stateIn": "completed,failed",
+                "stateNotIn": "canceled",
+            },
+        )
+
+    assert response.status_code == 200
+    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    assert 'WorkflowType="MoonMind.Run"' in query
+    assert 'mm_entry="run"' in query
+    assert '(mm_state="completed" OR mm_state="failed")' in query
+    assert 'mm_state!="canceled"' in query
+
+def test_list_executions_temporal_query_includes_canonical_runtime_skill_and_repo_filters() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "scope": "tasks",
+                "targetRuntimeIn": "codex_cli,claude_code",
+                "targetRuntimeNotIn": "jules",
+                "targetSkillIn": "moonspec-implement",
+                "targetSkillNotIn": "fix-ci",
+                "repoIn": "Moon/Mind",
+                "repoNotIn": "owner/archived",
+                "repoExact": "owner/repo",
+            },
+        )
+
+    assert response.status_code == 200
+    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    assert '(mm_target_runtime="codex_cli" OR mm_target_runtime="claude_code")' in query
+    assert 'mm_target_runtime!="jules"' in query
+    assert 'mm_target_skill="moonspec-implement"' in query
+    assert 'mm_target_skill!="fix-ci"' in query
+    assert 'mm_repo="owner/repo"' in query
+    assert 'mm_repo="Moon/Mind"' not in query
+    assert 'mm_repo!="owner/archived"' in query
+
+def test_list_executions_temporal_query_prefers_canonical_filters_over_legacy_exact_params() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "scope": "tasks",
+                "state": "executing",
+                "stateIn": "completed",
+                "repo": "legacy/repo",
+                "repoExact": "owner/repo",
+                "targetRuntime": "codex_cli",
+                "targetRuntimeIn": "claude_code",
+            },
+        )
+
+    assert response.status_code == 200
+    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    assert 'mm_state="completed"' in query
+    assert 'mm_state="executing"' not in query
+    assert 'mm_repo="owner/repo"' in query
+    assert 'mm_repo="legacy/repo"' not in query
+    assert 'mm_target_runtime="codex_cli"' in query
+    assert 'mm_target_runtime="claude_code"' not in query
+
+def test_list_executions_temporal_query_includes_canonical_date_bounds() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "scope": "tasks",
+                "scheduledFrom": "2026-05-01",
+                "scheduledTo": "2026-05-05",
+                "createdFrom": "2026-05-02",
+                "createdTo": "2026-05-06",
+                "finishedFrom": "2026-05-03",
+                "finishedTo": "2026-05-07",
+                "scheduledBlank": "exclude",
+                "finishedBlank": "exclude",
+            },
+        )
+
+    assert response.status_code == 200
+    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    assert "mm_scheduled_for IS NOT NULL" in query
+    assert 'mm_scheduled_for>="2026-05-01T00:00:00Z"' in query
+    assert 'mm_scheduled_for<="2026-05-05T23:59:59.999999Z"' in query
+    assert 'StartTime>="2026-05-02T00:00:00Z"' in query
+    assert 'StartTime<="2026-05-06T23:59:59.999999Z"' in query
+    assert "CloseTime IS NOT NULL" in query
+    assert 'CloseTime>="2026-05-03T00:00:00Z"' in query
+    assert 'CloseTime<="2026-05-07T23:59:59.999999Z"' in query
+
+def test_list_executions_temporal_query_includes_blank_date_filter_semantics() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "scope": "tasks",
+                "scheduledFrom": "2026-05-01",
+                "scheduledBlank": "include",
+                "finishedBlank": "include",
+            },
+        )
+
+    assert response.status_code == 200
+    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    assert '(mm_scheduled_for IS NULL OR (mm_scheduled_for>="2026-05-01T00:00:00Z"))' in query
+    assert "CloseTime IS NULL" in query
+
 def test_list_executions_rejects_non_admin_owner_type_override() -> None:
     app = FastAPI()
     app.include_router(router)

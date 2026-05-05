@@ -217,6 +217,8 @@ Key diagnostics:
 - Existing task input snapshots and artifact store only; no new persistent storage (295-submit-preset-auto-expansion)
 - TypeScript/React for Mission Control UI; CSS for visual effect; Python 3.12 remains present in the repository but is not part of this story. + React, existing Mission Control stylesheet, Vitest, Testing Library, PostCSS test helpers, existing `executionStatusPillProps()` helper. (301-shared-additive-shimmer)
 - N/A; no persistence or data-store changes. (301-shared-additive-shimmer)
+- TypeScript/React for Mission Control UI; Python 3.12 for FastAPI route tests. + React, TanStack Query, Zod, Vitest, Testing Library, FastAPI, pytest, Temporal visibility query helpers. (301-column-filter-popovers)
+- No new persistent storage; filter state is URL/query state and component state only. (301-column-filter-popovers)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
