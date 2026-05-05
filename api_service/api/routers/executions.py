@@ -42,6 +42,7 @@ from api_service.db.models import (
 )
 from moonmind.config.settings import settings
 from moonmind.utils.metrics import get_metrics_emitter
+from moonmind.workflows.report_output import normalize_report_output_primary_path
 from moonmind.workflows.tasks.routing import _coerce_bool
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
@@ -3040,6 +3041,8 @@ def _normalize_report_output_payload(
             canonical_key = {
                 "primary_path": "primaryPath",
             }.get(key, key)
+            if canonical_key == "primaryPath":
+                text = normalize_report_output_primary_path(text)
             normalized[canonical_key] = text
         return normalized
     return {}

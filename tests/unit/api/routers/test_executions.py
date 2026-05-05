@@ -1520,6 +1520,85 @@ def test_create_task_shaped_execution_preserves_report_output_contract(
     assert "MoonMind report output contract" in task_instructions
     assert "answer that request directly in the final report body" in task_instructions
 
+
+def test_create_task_report_output_defaults_primary_path_to_markdown_suffix(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "reportOutput": {
+                    "enabled": True,
+                    "required": True,
+                    "reportType": "agent_run_report",
+                    "primaryPath": "reports/final-report",
+                },
+                "task": {
+                    "instructions": "Generate a report.",
+                    "runtime": {"mode": "codex"},
+                    "publish": {"mode": "none"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.call_args.kwargs[
+        "initial_parameters"
+    ]
+    assert (
+        initial_parameters["reportOutput"]["primaryPath"]
+        == "reports/final-report.md"
+    )
+    assert (
+        "Also write the same report to `reports/final-report.md`"
+        in initial_parameters["task"]["instructions"]
+    )
+
+
+def test_create_task_report_output_preserves_explicit_primary_path_suffix(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "reportOutput": {
+                    "enabled": True,
+                    "required": True,
+                    "reportType": "agent_run_report",
+                    "primaryPath": "reports/final-report.txt",
+                },
+                "task": {
+                    "instructions": "Generate a report.",
+                    "runtime": {"mode": "codex"},
+                    "publish": {"mode": "none"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.call_args.kwargs[
+        "initial_parameters"
+    ]
+    assert (
+        initial_parameters["reportOutput"]["primaryPath"]
+        == "reports/final-report.txt"
+    )
+
+
 def test_create_task_shaped_execution_prefers_task_publish_mode_alias_over_top_publish(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
