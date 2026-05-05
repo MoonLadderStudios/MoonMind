@@ -53,12 +53,12 @@ So: yes, definitely possible. I would model it as â€œone sweep, multiple masks,â
 
 **Acceptance Scenarios**:
 
-1. **Given** a status pill opts into the shimmer effect, **When** it renders, **Then** the fill shimmer, border glint, and text shimmer are masks of the same moving light field.
-2. **Given** an active status pill contains glyph-rendered label text, **When** the sweep moves across the pill, **Then** text brightening is clipped to the visible label shape and remains phase-locked to the fill sweep.
-3. **Given** an active status pill renders in a browser that supports additive blending and text clipping, **When** the shimmer runs, **Then** the effect uses the strongest available additive compositing while keeping the pill isolated from the rest of the page.
-4. **Given** reduced motion is requested, **When** an active status pill renders, **Then** the animated light field stops and the pill retains a static active highlight.
-5. **Given** text clipping or additive compositing is unsupported, **When** an active status pill renders, **Then** the existing glyph brightening fallback remains available without becoming the primary effect.
-6. **Given** a non-active status pill renders, **When** the page updates, **Then** it does not inherit the shimmer, border glint, text mask, or fallback glyph animation.
+1. **SCN-001 - Shared masks**: **Given** a status pill opts into the shimmer effect, **When** it renders, **Then** the fill shimmer, border glint, and text shimmer are masks of the same moving light field.
+2. **SCN-002 - Text overlap**: **Given** an active status pill contains glyph-rendered label text, **When** the sweep moves across the pill, **Then** text brightening is clipped to the visible label shape and remains phase-locked to the fill sweep.
+3. **SCN-003 - Additive compositing**: **Given** an active status pill renders in a browser that supports additive blending and text clipping, **When** the shimmer runs, **Then** the effect uses the strongest available additive compositing while keeping the pill isolated from the rest of the page.
+4. **SCN-004 - Reduced motion**: **Given** reduced motion is requested, **When** an active status pill renders, **Then** the animated light field stops and the pill retains a static active highlight.
+5. **SCN-005 - Unsupported text mask fallback**: **Given** text clipping or additive compositing is unsupported, **When** an active status pill renders, **Then** the existing glyph brightening fallback remains available without becoming the primary effect.
+6. **SCN-006 - Non-active isolation**: **Given** a non-active status pill renders, **When** the page updates, **Then** it does not inherit the shimmer, border glint, text mask, or fallback glyph animation.
 
 ### Edge Cases
 

@@ -11,7 +11,7 @@
 
 **Test Commands**:
 
-- Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx`
+- Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/utils/executionStatusPillClasses.test.ts`
 - Integration tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/task-detail.test.tsx`
 - Final verification: `/speckit.verify`
 
@@ -65,7 +65,7 @@
 
 - [ ] T009 [P] Verify unit CSS contract coverage for FR-001, FR-002, FR-004, FR-005, FR-006, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SC-001, SC-002, SC-003, SC-004, DESIGN-REQ-001, DESIGN-REQ-002, and DESIGN-REQ-004 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/mission-control.test.tsx`
 - [ ] T010 [P] Verify non-active state isolation and selector boundary coverage for FR-003, FR-008, SCN-006, and DESIGN-REQ-005 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/utils/executionStatusPillClasses.test.ts`
-- [ ] T011 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` and record unit verification evidence for FR-001, FR-002, FR-004, FR-005, FR-006, SC-001, SC-002, SC-003, and SC-004
+- [ ] T011 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/utils/executionStatusPillClasses.test.ts` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` and record unit verification evidence for FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, SC-001, SC-002, SC-003, and SC-004
 
 ### Integration Tests (verify first)
 

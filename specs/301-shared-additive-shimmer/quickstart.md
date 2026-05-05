@@ -16,7 +16,7 @@ Frontend dependencies are prepared by `./tools/test_unit.sh` when needed.
 Run the focused CSS contract test:
 
 ```bash
-MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/utils/executionStatusPillClasses.test.ts
 ```
 
 Expected coverage:
@@ -25,6 +25,7 @@ Expected coverage:
 - Text mask uses the shared gradient, keyframes, and text clipping.
 - Glyph brightening remains fallback-only.
 - Reduced-motion and forced-colors branches disable decorative animation.
+- Non-active statuses remain outside the shimmer selector contract.
 
 ## Integration Strategy
 

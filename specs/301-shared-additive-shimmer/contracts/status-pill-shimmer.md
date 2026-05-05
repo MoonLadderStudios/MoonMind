@@ -72,6 +72,11 @@ Unit CSS contract tests must assert:
 - Glyph fallback is inactive by default and enabled only under unsupported text clipping.
 - Reduced-motion and forced-colors branches disable decorative animation.
 
+Unit selector-boundary tests must assert:
+- Executing and planning states receive shimmer metadata.
+- Non-active states do not receive shimmer metadata.
+- The helper preserves the existing status class contract.
+
 Integration-style render tests must assert:
 - Active task-list and task-detail pills receive shimmer metadata.
 - Non-active states do not receive shimmer metadata.
