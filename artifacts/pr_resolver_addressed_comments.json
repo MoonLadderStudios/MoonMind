@@ -1,5 +1,30 @@
 [
   {
+    "id": 3184494901,
+    "disposition": "addressed",
+    "rationale": "Added explicit fill=none, stroke=currentColor, strokeWidth=2, strokeLinecap/Join=round attributes to ProvidersKeyIcon SVG."
+  },
+  {
+    "id": 3184494931,
+    "disposition": "addressed",
+    "rationale": "Added explicit fill=none, stroke=currentColor, strokeWidth=2, strokeLinecap/Join=round attributes to UserWorkspaceIcon SVG."
+  },
+  {
+    "id": 3184494937,
+    "disposition": "addressed",
+    "rationale": "Added explicit fill=none, stroke=currentColor, strokeWidth=2, strokeLinecap/Join=round attributes to OperationsGearIcon SVG."
+  },
+  {
+    "id": 3184494948,
+    "disposition": "addressed",
+    "rationale": "Renamed the settings nav classes to settings-nav-* (settings-nav-field/options/option/option-icon/option-label) and added matching CSS selectors that share rules with the existing queue-step-type-* styles, so the settings page no longer leaks the queue-step-type abstraction."
+  },
+  {
+    "id": 4223495605,
+    "disposition": "not-applicable",
+    "rationale": "Summary review comment recapping the inline review comments; no separate action required since each underlying item is addressed."
+  },
+  {
     "id": 3184941164,
     "disposition": "addressed",
     "rationale": "Changed the blocked-outcome skip call to use the completed node's zero-based index so only downstream nodes are marked skipped and the completed node remains succeeded."

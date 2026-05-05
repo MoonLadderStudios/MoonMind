@@ -2600,22 +2600,26 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   padding: 0;
 }
 
-.queue-step-type-field {
+.queue-step-type-field,
+.settings-nav-field {
   border: 0;
   margin: 0;
   padding: 0;
 }
 
-.queue-step-type-field legend {
+.queue-step-type-field legend,
+.settings-nav-field legend {
   font-weight: 650;
   margin-bottom: 0.4rem;
 }
 
-.queue-step-type-field legend.sr-only {
+.queue-step-type-field legend.sr-only,
+.settings-nav-field legend.sr-only {
   margin-bottom: 0;
 }
 
-.queue-step-type-options {
+.queue-step-type-options,
+.settings-nav-options {
   position: relative;
   display: inline-flex;
   align-items: stretch;
@@ -2630,7 +2634,8 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 }
 
 /* Sliding thumb: gradient fill, glossy highlight, neon halo */
-.queue-step-type-options::before {
+.queue-step-type-options::before,
+.settings-nav-options::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -2663,12 +2668,18 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
 .queue-step-type-options:has(
     .queue-step-type-option:nth-child(2) input:checked
+  )::before,
+.settings-nav-options:has(
+    .settings-nav-option:nth-child(2) input:checked
   )::before {
   transform: translateX(100%);
 }
 
 .queue-step-type-options:has(
     .queue-step-type-option:nth-child(3) input:checked
+  )::before,
+.settings-nav-options:has(
+    .settings-nav-option:nth-child(3) input:checked
   )::before {
   transform: translateX(200%);
 }
@@ -2688,7 +2699,8 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 }
 
 /* Animated cyberpunk scan border */
-.queue-step-type-options::after {
+.queue-step-type-options::after,
+.settings-nav-options::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -2728,15 +2740,19 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
 @media (prefers-reduced-motion: reduce) {
   .queue-step-type-options::before,
-  .queue-step-type-options::after {
+  .queue-step-type-options::after,
+  .settings-nav-options::before,
+  .settings-nav-options::after {
     animation: none;
   }
-  .queue-step-type-options::before {
+  .queue-step-type-options::before,
+  .settings-nav-options::before {
     transition: none;
   }
 }
 
-.queue-step-type-option {
+.queue-step-type-option,
+.settings-nav-option {
   align-items: center;
   border: 0;
   color: rgb(var(--mm-muted));
@@ -2757,23 +2773,27 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   z-index: 3;
 }
 
-.queue-step-type-option:hover:not(:has(input:checked)) {
+.queue-step-type-option:hover:not(:has(input:checked)),
+.settings-nav-option:hover:not(:has(input:checked)) {
   color: rgb(var(--mm-accent));
 }
 
-.queue-step-type-option:has(input:checked) {
+.queue-step-type-option:has(input:checked),
+.settings-nav-option:has(input:checked) {
   color: rgb(var(--mm-accent-contrast));
   font-weight: 700;
   text-shadow: 0 1px 2px rgb(0 0 0 / 0.45);
 }
 
-.queue-step-type-option:has(input:focus-visible) {
+.queue-step-type-option:has(input:focus-visible),
+.settings-nav-option:has(input:focus-visible) {
   box-shadow: var(--mm-control-focus-ring);
   border-radius: 9px;
   z-index: 4;
 }
 
-.queue-step-type-option input[type="radio"] {
+.queue-step-type-option input[type="radio"],
+.settings-nav-option input[type="radio"] {
   border: 0;
   clip: rect(0 0 0 0);
   height: 1px;
@@ -2785,13 +2805,15 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   width: 1px;
 }
 
-.queue-step-type-option-icon {
+.queue-step-type-option-icon,
+.settings-nav-option-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
-.queue-step-type-option-icon svg {
+.queue-step-type-option-icon svg,
+.settings-nav-option-icon svg {
   width: 1rem;
   height: 1rem;
   stroke: currentcolor;
@@ -2801,11 +2823,13 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   stroke-linejoin: round;
 }
 
-.queue-step-type-option:has(input:checked) .queue-step-type-option-icon svg {
+.queue-step-type-option:has(input:checked) .queue-step-type-option-icon svg,
+.settings-nav-option:has(input:checked) .settings-nav-option-icon svg {
   filter: drop-shadow(0 0 6px rgb(var(--mm-accent-contrast) / 0.55));
 }
 
-.queue-step-type-option-label {
+.queue-step-type-option-label,
+.settings-nav-option-label {
   font-size: 0.78rem;
 }
 
