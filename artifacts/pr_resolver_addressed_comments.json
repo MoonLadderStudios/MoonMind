@@ -1,22 +1,22 @@
 [
   {
-    "id": 4376709295,
+    "id": 4377068969,
     "disposition": "not-applicable",
-    "rationale": "Quota warning issue comment is an operator/runtime notice, not PR code feedback."
+    "rationale": "Quota warning from Gemini bot; no repository action required."
   },
   {
-    "id": 3186195207,
+    "id": 3186528575,
     "disposition": "addressed",
-    "rationale": "Restored the legacy unpatched pause gate by awaiting workflow.wait_condition(lambda: not self._paused) when the safe-boundaries patch marker is absent, with workflow-boundary unit coverage."
+    "rationale": "Added base64 validation for facet nextPageToken so malformed dynamic facet tokens return structured invalid_execution_query 422 responses."
   },
   {
-    "id": 4225458590,
+    "id": 3186528579,
+    "disposition": "addressed",
+    "rationale": "Added real offset pagination for static status facets using the filtered canonical status list and nextPageToken."
+  },
+  {
+    "id": 4225851317,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary contains no separate actionable feedback beyond the linked review comments."
-  },
-  {
-    "id": 3186195209,
-    "disposition": "addressed",
-    "rationale": "Removed provider-failure classification from successful completed Codex turn assistant text; failed-turn classification remains covered separately and completed quota discussion now stays successful."
+    "rationale": "Automated review summary wrapper; actionable child review comments are tracked separately."
   }
 ]

@@ -1198,3 +1198,35 @@ class ExecutionListResponse(BaseModel):
     stale_state: bool = Field(False, alias="staleState")
     degraded_count: bool = Field(False, alias="degradedCount")
     refreshed_at: datetime | None = Field(None, alias="refreshedAt")
+
+class ExecutionFacetItemModel(BaseModel):
+    """One value bucket returned by an execution list facet query."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    value: str = Field(..., alias="value")
+    label: str = Field(..., alias="label")
+    count: int = Field(..., alias="count")
+
+class ExecutionFacetResponse(BaseModel):
+    """Facet values and counts for execution list column filters."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    facet: Literal[
+        "status",
+        "targetRuntime",
+        "targetSkill",
+        "repository",
+        "integration",
+    ] = Field(..., alias="facet")
+    items: list[ExecutionFacetItemModel] = Field(default_factory=list, alias="items")
+    blank_count: int | None = Field(None, alias="blankCount")
+    count_mode: Literal["exact", "estimated_or_unknown"] = Field(
+        "exact", alias="countMode"
+    )
+    truncated: bool = Field(False, alias="truncated")
+    next_page_token: Optional[str] = Field(None, alias="nextPageToken")
+    source: Literal["authoritative", "current_page_fallback"] = Field(
+        "authoritative", alias="source"
+    )
