@@ -1,639 +1,572 @@
 # Task Presets System
 
-**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+## Status
 
-Status: Active
-Owners: MoonMind Engineering (Task Platform + UI)
-Last Updated: 2026-03-13
+Desired-state architecture.
 
-## 1. Purpose
+This document defines MoonMind's task preset system as a declarative, schema-driven composition layer. Presets are reusable step plans that may request typed inputs from the user, expand into one or more executable steps, and preserve provenance so task runs remain understandable after expansion.
 
-Define the MoonMind **Task Presets** system: a server-hosted catalog of reusable orchestration presets that users browse, parameterize, and apply to tasks. Presets compile into `PlanDefinition` artifacts (see `docs/Tasks/SkillAndPlanContracts.md`) for execution by the Temporal Plan Executor.
+## Purpose
 
-The system serves three roles:
+Task presets let a user start from a known workflow shape without manually authoring every step. A preset may represent a simple one-step action, a multi-step coding workflow, a Jira-driven orchestration flow, a proposal/remediation flow, or another composed task pattern.
 
-1. **Discovery** — a searchable catalog of ready-made orchestrations with scopes, favorites, and recency tracking.
-2. **Authoring** — parameterized blueprints (Jinja2 inputs) that produce deterministic, validated plans without manual JSON editing.
-3. **Governance** — versioned, RBAC-scoped entries with audit trails, secret scrubbing, and release lifecycle management.
+The preset system must make the Create page easier to use without making the Create page responsible for knowing the details of every preset. Presets describe their own inputs through a machine-readable schema. The Create page renders those inputs automatically from the schema, validates them, and passes the collected values to the shared preset expansion path.
 
-### 1.1 Relationship to Plans
+## Design Goals
 
-A **Preset** is what a user *chooses*. A **Plan** is what *executes*.
+- Presets are first-class step types, not a separate Create page mode.
+- A preset may remain unexpanded while the user configures it.
+- The user may submit a task with unexpanded preset steps; submission expands them automatically after validation.
+- The Create page never hard-codes preset-specific forms such as `if presetId === "jira-orchestrate"`.
+- Each preset declares its expected inputs with an `input_schema` that can drive UI generation, API validation, preview, apply, reapply, and submit-time expansion.
+- Preset input schemas align with the same direction as MoonMind skill input schemas and Agent Skills-style declarative capability metadata.
+- Presets may compose other presets without losing input validation, provenance, or debuggability.
+- Expansion is deterministic and backend-owned. The frontend may preview expansion, but it does not become the source of truth for expanded steps.
 
-Presets are the authoring and discovery surface; Plans are the runtime execution contract. The expansion service compiles a preset into a `PlanDefinition` DAG, which is then stored as an immutable artifact and submitted to the `MoonMind.Run` Temporal workflow.
+## Non-Goals
 
-```
-Preset (catalog entry)
- ├── inputs_schema (parameterization)
- ├── step blueprints (Jinja2 templates)
- └── metadata (scope, tags, capabilities)
- │
- │ expand(inputs) — server-side
- v
-PlanDefinition (immutable artifact)
- ├── nodes[] (concrete Step invocations)
- ├── edges[] (dependency DAG)
- ├── policy (failure_mode, max_concurrency)
- └── metadata.registry_snapshot (pinned skill versions)
- │
- │ submit to Temporal
- v
-Plan Executor (MoonMind.Run workflow)
- └── schedules Activities, tracks progress, enforces policy
-```
+- Presets are not a replacement for skills. A skill is a reusable agent capability or instruction bundle. A preset is a reusable task/step composition that may invoke skills, scripts, managed agents, external agents, or other presets.
+- Presets do not require custom React code for each preset. Only reusable field widgets may have custom components.
+- Presets do not require the user to manually expand them before task creation.
+- Presets do not grant arbitrary execution rights. Expanded steps still pass through the same validation, policy, runtime, and publishing controls as manually authored steps.
 
-### 1.2 Terminology
+## Core Concepts
 
-| Term | Definition |
-|------|-----------|
-| **Preset** | A versioned, parameterized blueprint in the catalog. Users browse and select presets. |
-| **Plan** | A validated DAG of tool/skill invocations. The runtime execution artifact. See `SkillAndPlanContracts.md` §6. |
-| **Step** | A single node in a Plan that invokes one tool (skill subtype). See `Step` dataclass. |
-| **Tool / Skill** | An executable capability with input/output schemas, policies, and activity bindings. See `ToolDefinition`. |
-| **Expansion** | The server-side compilation of a preset + user inputs into a `PlanDefinition`. |
-| **Preset Include** | A compositional preset-version entry that references another preset by slug and pinned version. |
-| **Expansion Tree** | The recursive include graph resolved during expansion, including aliases and include paths. |
-| **Flattened Plan** | The ordered concrete step list produced after all includes are resolved. This is the execution-facing shape. |
-| **Preset Provenance** | Compact metadata attached to flattened steps identifying the root preset, source preset, pinned version, alias, and include path. |
-| **Detachment** | Save-as-preset behavior where customized, partial, or provenance-mismatched steps are serialized as concrete steps instead of preserving include semantics. |
+### Preset
 
----
+A preset is a catalog entry that defines metadata, optional user inputs, and an expansion plan. It may expand into one or more concrete steps or into nested preset steps that are recursively expanded.
 
-## 2. Goals and Non-Goals
+### Preset Step
 
-### Goals
+A preset step is a step on the Create page with `type: preset`, a `preset_id`, and collected `inputs`. It can be configured and submitted before it is expanded.
 
-- Provide a single authoritative preset catalog with versioning, ownership, and scopes (global / personal).
-- Offer deterministic server-side expansion that produces validated `PlanDefinition` artifacts with pinned registry snapshots.
-- Deliver UI conveniences (preview, append/replace, collapse-as-group, favorites) without changing the Plan execution contract.
-- Support CLI/MCP flows via REST endpoints identical to the UI.
-- Maintain full audit trails linking every task execution back to the preset, version, and inputs that produced it.
+### Input Schema
 
-### Non-Goals
+`input_schema` is the canonical machine-readable contract for the inputs a preset expects. It is JSON Schema-compatible and intentionally similar to the input schemas used by MoonMind skills and Agent Skills-style skill manifests.
 
-- Allowing parameter substitutions during Temporal runtime (remains an anti-pattern; all parameterization happens at expansion time).
-- Replacing the Plan Executor or modifying Temporal Workflow execution behavior.
-- Supporting conditional logic within presets (conditions belong in Plans via future `edges[].condition` support; see `SkillAndPlanContracts.md` §Q2).
+### UI Schema
 
----
+`ui_schema` is optional metadata that gives the Create page hints about presentation and widgets without changing validation semantics. The Create page may use `ui_schema` and recognized `x-moonmind-*` extensions to select reusable components such as a Jira issue picker.
 
-## 3. System Overview
+### Expansion
 
-```
- +---------------------+
- | Preset Catalog DB |
- +----------+----------+
- ^
- | CRUD + version seed
-+-------------+ REST | +----------------+
-| Task UI / +-------->+ Preset Catalog API <-+ MCP / CLI / CI |
-| Automations | | +----------------+
-+------+------+ v
- | +-----+------------------+
- | expand | Preset Expansion Svc |
- +--------->+ (validate + hydrate |
- | + compile to Plan) |
- +-----+------------------+
- |
- | PlanDefinition artifact
- v
- +-----+------------------+
- | Plan Submission |
- | (store artifact + |
- | start workflow) |
- +-----+------------------+
- v
- +-----+------------------+
- | Plan Executor |
- | (MoonMind.Run workflow) |
- +------------------------+
-```
+Expansion transforms a preset step plus validated inputs into concrete child steps. The backend owns expansion so preview, apply, submit, API-driven task creation, and re-run flows share the same behavior.
 
-Key properties:
+### Provenance
 
-- Presets are stored centrally and exposed via FastAPI routers under `/api/task-step-templates` (to be renamed `/api/presets` in a future migration).
-- The expansion service applies inputs via Jinja2 rendering, validates against skill schemas, generates deterministic step IDs, resolves the current registry snapshot, and compiles the result into a `PlanDefinition`.
-- The `PlanDefinition` is written as an immutable artifact. The Plan Executor in `MoonMind.Run` reads the artifact reference and executes the DAG.
-- Audit metadata (`appliedPreset`) is attached to the task record for governance and traceability.
+Provenance records which preset produced each expanded step, which preset version was used, and which input values or redacted input references influenced expansion.
 
----
+## Preset Catalog Contract
 
-## 4. Preset Model
-
-### 4.1 Catalog Entry (database)
-
-A preset is a `TaskStepTemplate` row with versioned releases:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `slug` | `String(128)` | Unique identifier within scope. URL-safe, lowercase. |
-| `scope_type` | `Enum(GLOBAL, PERSONAL)` | Visibility scope. |
-| `scope_ref` | `String(64)` | Owner reference (user_id for PERSONAL). Null for GLOBAL. |
-| `title` | `String(255)` | Human-readable display name. |
-| `description` | `Text` | Long-form description shown in catalog. |
-| `tags` | `JSON[List[str]]` | Searchable tags for filtering. |
-| `required_capabilities` | `JSON[List[str]]` | Worker capabilities needed to execute. |
-| `latest_version_id` | `UUID FK` | Points to the current active release. |
-| `is_active` | `Boolean` | Soft-delete flag. |
-| `created_by` | `UUID` | Creator user ID. |
-
-Unique constraint: `(slug, scope_type, scope_ref)`.
-
-### 4.2 Version (immutable release)
-
-Each version is a `TaskStepTemplateVersion` row:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `version` | `String(32)` | Semantic version label (e.g. `1.0.0`). |
-| `inputs_schema` | `JSON[List[Dict]]` | Input definitions for parameterization. |
-| `steps` | `JSON[List[Dict]]` | Step blueprints (Jinja2 templates). |
-| `annotations` | `JSON[Dict]` | Metadata (e.g. `sourceSkill`, `profile`). |
-| `required_capabilities` | `JSON[List[str]]` | Version-specific capability overrides. |
-| `max_step_count` | `Integer` | Safety limit on expanded steps (default 25). |
-| `release_status` | `Enum(DRAFT, ACTIVE, INACTIVE)` | Lifecycle state. |
-| `seed_source` | `String(255)` | Origin YAML file path for seeded presets. |
-
-Unique constraint: `(template_id, version)`.
-
-### 4.3 Input definitions
-
-Each entry in `inputs_schema` declares a parameterizable field:
+A preset catalog entry should follow this shape:
 
 ```yaml
-- name: feature_request
- label: Feature Request
- type: markdown # text | textarea | markdown | enum | boolean | user | team | repo_path
- required: true
- default: null
- options: [] # populated for enum type
+id: jira-orchestrate
+kind: preset
+version: 1
+label: Jira Orchestrate
+description: Build and execute an implementation workflow from a Jira issue.
+category: issue-tracker
+
+input_schema:
+  type: object
+  required:
+    - jira_issue
+  properties:
+    jira_issue:
+      type: object
+      title: Jira issue
+      description: Select the Jira issue that should seed the task instructions.
+      required:
+        - key
+      properties:
+        key:
+          type: string
+          title: Issue key
+        summary:
+          type: string
+          title: Summary
+        description:
+          type: string
+          title: Description
+        url:
+          type: string
+          title: URL
+          format: uri
+
+ui_schema:
+  jira_issue:
+    widget: jira.issue-picker
+    placeholder: Select a Jira issue
+    data_source: jira.issues
+    display_template: "{{ key }} — {{ summary }}"
+
+expansion:
+  steps:
+    - type: skill
+      skill_id: jira-orchestrate
+      title: "Implement {{ inputs.jira_issue.key }}"
+      inputs:
+        jira_issue_key: "{{ inputs.jira_issue.key }}"
+        jira_issue_summary: "{{ inputs.jira_issue.summary }}"
+        jira_issue_description: "{{ inputs.jira_issue.description }}"
+        jira_issue_url: "{{ inputs.jira_issue.url }}"
 ```
 
-### 4.4 Step blueprints
+The exact persisted representation may evolve, but these concepts are required:
 
-Each entry in `steps` is a Jinja2 template that expands into a Plan node. Entries
-without an explicit `kind` are treated as `kind: step` for compatibility:
+- stable preset identity
+- human-readable label and description
+- semantic category or tags
+- version
+- JSON Schema-compatible `input_schema`
+- optional `ui_schema`
+- deterministic expansion definition
+- provenance metadata for expanded steps
+
+## Input Schema Strategy
+
+`input_schema` is the source of truth for generated inputs. The Create page renders fields by inspecting the selected preset's schema. A preset that expects a Jira issue, branch name, provider profile, model override, boolean option, enum, file reference, or nested object should be able to declare that requirement without adding preset-specific logic to the Create page.
+
+The schema must support at least:
+
+- `type`
+- `title`
+- `description`
+- `default`
+- `required`
+- `properties`
+- `items`
+- `enum`
+- `oneOf` / `anyOf` where needed for advanced forms
+- `format` for standard strings such as URI, email, date, date-time, and path-like values
+- custom extension fields prefixed with `x-moonmind-*` when metadata belongs with the schema
+
+The preferred default is standard JSON Schema plus optional `ui_schema`. MoonMind-specific behavior should be expressed as reusable semantic widget hints rather than preset-specific frontend branches.
+
+Valid:
 
 ```yaml
-- title: Invoke moonspec-specify
- kind: step
- instructions: |-
- Run moonspec-specify with the canonical feature request:
- {{ inputs.feature_request }}
-
- MoonSpec Orchestrate always runs as a runtime implementation workflow.
- skill:
- id: moonspec-specify
- args: {}
- requiredCapabilities: [codex, git]
- annotations:
- phase: specification
+ui_schema:
+  jira_issue:
+    widget: jira.issue-picker
 ```
 
-**Allowed keys**: `kind`, `instructions`, `title`, `slug`, `skill`, `annotations`.
-
-**Forbidden keys** (prevent runtime override via presets): `runtime`, `targetRuntime`, `target_runtime`, `model`, `effort`, `repository`, `repo`, `git`, `publish`, `container`.
-
-### 4.5 Preset includes
-
-Preset versions MAY include other preset versions as compile-time composition
-entries:
+Also valid when colocating the hint is more convenient:
 
 ```yaml
-- kind: include
- slug: shared-quality-checks
- version: 1.0.0
- alias: quality
- scope: global
- inputMapping:
- feature_request: "{{ inputs.feature_request }}"
+input_schema:
+  type: object
+  properties:
+    jira_issue:
+      type: object
+      title: Jira issue
+      x-moonmind-widget: jira.issue-picker
+```
+
+Not valid as an architecture pattern:
+
+```tsx
+if (preset.id === "jira-orchestrate") {
+  return <JiraOrchestrateSpecialForm />
+}
+```
+
+The Create page may contain a reusable widget registry. It may map `jira.issue-picker` to a Jira issue picker component, `github.branch-picker` to a branch picker, or `provider.profile-picker` to a provider profile selector. That is generic field rendering, not preset-specific logic.
+
+## Alignment With Skills and Agent Skills
+
+Preset input schemas should align with MoonMind skill input schemas so the same schema-form renderer can be reused for both presets and skills.
+
+The desired direction is compatible with Agent Skills-style manifests:
+
+- a capability declares metadata in a machine-readable manifest
+- the manifest includes a typed input contract
+- UI and orchestration layers can discover expected inputs without custom code for every capability
+- richer behavior is expressed through portable schema fields and clearly namespaced extensions
+- runtime-specific or product-specific UI hints are optional and do not change the core input contract
+
+MoonMind should normalize preset and skill manifests into a shared internal capability input model. If Agent Skills standard field names differ from MoonMind's names, importers may support aliases, but MoonMind's internal canonical field for presets is `input_schema`.
+
+The shared internal model should be able to represent:
+
+```yaml
+capability_id: jira-orchestrate
+capability_type: preset
+input_schema: {}
+ui_schema: {}
+defaults: {}
+```
+
+and:
+
+```yaml
+capability_id: moonspec-breakdown
+capability_type: skill
+input_schema: {}
+ui_schema: {}
+defaults: {}
+```
+
+The Create page should not care whether the selected step type is a preset or a skill when rendering the input form. It should receive a normalized schema contract and render the appropriate fields.
+
+## UI Generation Rules
+
+When a user selects a preset on the Create page:
+
+1. The frontend loads the preset metadata from the catalog API.
+2. The frontend reads `input_schema`, `ui_schema`, defaults, and any already-collected values.
+3. The generic schema-form renderer creates fields for required and optional inputs.
+4. Fields are validated locally for immediate feedback.
+5. The same values are validated again by the backend before preview, apply, or submit.
+6. The configured preset step stores the input values while remaining unexpanded if the user has not chosen to preview/apply expansion.
+
+The Create page must support these states:
+
+- no preset selected
+- preset selected but required inputs missing
+- preset configured but not expanded
+- preset preview generated
+- preset applied into editable child steps
+- preset submitted without manual expansion
+- preset expansion failed due to invalid inputs or backend validation errors
+
+The Create page may group fields, show descriptions, display examples, and use custom widgets. It must not require a custom code path for each preset.
+
+## Generic Widget Registry
+
+The schema-form renderer uses a reusable widget registry. Initial widgets should include:
+
+| Widget | Purpose |
+| --- | --- |
+| `text` | single-line string input |
+| `textarea` | multi-line string input |
+| `number` | numeric input |
+| `checkbox` | boolean input |
+| `select` | enum / one-of selector |
+| `multi-select` | array of enum values |
+| `json` | advanced structured object editor |
+| `jira.issue-picker` | Jira issue search and selection |
+| `github.branch-picker` | repository branch selection |
+| `provider.profile-picker` | provider profile selection |
+| `model-picker` | model selection constrained by provider/runtime |
+| `file-reference-picker` | artifact or uploaded file reference selection |
+
+Only widgets are allowed to have custom UI components. Presets consume widgets declaratively through schema metadata.
+
+## Jira Issue Input Pattern
+
+A Jira-driven preset should request a Jira issue as an input object rather than relying only on free-text instructions. This allows the Create page to display a picker, the backend to validate the issue reference, and the expansion layer to bind the issue fields into child steps.
+
+Recommended schema:
+
+```yaml
+input_schema:
+  type: object
+  required:
+    - jira_issue
+  properties:
+    jira_issue:
+      type: object
+      title: Jira issue
+      description: Issue that will seed the task instructions and orchestration context.
+      required:
+        - key
+      properties:
+        key:
+          type: string
+        summary:
+          type: string
+        description:
+          type: string
+        url:
+          type: string
+          format: uri
+        status:
+          type: string
+        assignee:
+          type: string
+
+ui_schema:
+  jira_issue:
+    widget: jira.issue-picker
+    data_source: jira.issues
+    search_placeholder: Search Jira issues
+    allow_manual_key_entry: true
+```
+
+The Jira widget may enrich the selected value with summary, description, URL, status, and assignee, but the minimum durable input is the issue key. Expansion must tolerate missing optional enrichment fields by fetching or summarizing the issue during backend validation when possible.
+
+## Preset Step Shape
+
+Before expansion, a preset step should be representable as:
+
+```json
+{
+  "type": "preset",
+  "preset_id": "jira-orchestrate",
+  "title": "Jira Orchestrate",
+  "inputs": {
+    "jira_issue": {
+      "key": "MOON-123",
+      "summary": "Add schema-driven preset inputs",
+      "url": "https://example.atlassian.net/browse/MOON-123"
+    }
+  },
+  "expansion_state": "not_expanded"
+}
+```
+
+After preview or submit-time expansion, generated steps should include provenance:
+
+```json
+{
+  "type": "skill",
+  "skill_id": "jira-orchestrate",
+  "title": "Implement MOON-123",
+  "inputs": {
+    "jira_issue_key": "MOON-123"
+  },
+  "provenance": {
+    "source_type": "preset",
+    "preset_id": "jira-orchestrate",
+    "preset_version": "1",
+    "input_snapshot": {
+      "jira_issue": {
+        "key": "MOON-123"
+      }
+    }
+  }
+}
+```
+
+## Expansion Semantics
+
+Preset expansion must be available through one shared backend path:
+
+```text
+expandPreset(preset_id, inputs, context) -> expanded_steps
+```
+
+The same path is used by:
+
+- preset preview
+- preset apply
+- preset reapply
+- task submission with unexpanded presets
+- API-created tasks
+- task edit and re-run flows that reconstruct preset-originated steps
+
+Expansion must:
+
+1. Load the preset by ID and version.
+2. Validate inputs against `input_schema`.
+3. Apply defaults.
+4. Resolve allowed contextual values such as repository, branch, issue tracker connection, or provider profile.
+5. Expand nested presets recursively.
+6. Produce concrete executable steps.
+7. Attach provenance.
+8. Return validation errors in a field-addressable format the Create page can display next to generated inputs.
+
+Expansion must be deterministic for the same preset version, inputs, and context. If expansion requires fresh external data, the expansion output must record which external references were used.
+
+## Input Binding
+
+Preset expansion binds input values into generated steps through explicit expressions. Bindings must not rely on the frontend mutating instructions after expansion.
+
+Example:
+
+```yaml
+steps:
+  - type: skill
+    skill_id: moonspec-breakdown
+    inputs:
+      jira_issue_key: "{{ inputs.jira_issue.key }}"
+      jira_issue_summary: "{{ inputs.jira_issue.summary }}"
+      jira_issue_description: "{{ inputs.jira_issue.description }}"
+```
+
+Bindings should be limited to a safe deterministic expression language. They should support reading from:
+
+- `inputs.*`
+- `context.project.*`
+- `context.repository.*`
+- `context.branch.*`
+- `context.user.*` where safe
+- `defaults.*`
+
+Bindings must not execute arbitrary code.
+
+## Nested Presets
+
+A preset may include child preset steps. Parent presets must explicitly map inputs into child presets.
+
+```yaml
+steps:
+  - type: preset
+    preset_id: pr-with-merge-automation
+    inputs:
+      jira_issue: "{{ inputs.jira_issue }}"
+      publish_mode: "pr_with_merge_automation"
 ```
 
 Rules:
 
-- `slug`, pinned `version`, and `alias` are required.
-- `inputMapping` supplies the child preset inputs after the parent entry is rendered.
-- Repeated child includes in one parent version MUST use distinct aliases.
-- Child step overrides are not supported in v1; a child preset expands from its own pinned version and mapped inputs only.
-- `scope` defaults to the parent preset scope when omitted. Personal presets MAY include global presets, but GLOBAL presets MUST NOT include PERSONAL presets.
-- Missing, unreadable, inactive, cyclic, or input-incompatible includes are rejected before executable steps are returned.
+- Child presets are validated with their own `input_schema`.
+- Parent-to-child input mappings are explicit.
+- Missing required child inputs are reported with a path that identifies the parent preset and child preset.
+- Recursive expansion must detect cycles and fail safely.
+- Provenance records both parent and child preset ancestry.
 
-Composition is control-plane behavior only. Includes are fully resolved before a
-`PlanDefinition` artifact is stored or submitted; the executor does not evaluate
-nested preset semantics.
+## Submit-Time Auto-Expansion
 
-### 4.6 YAML seed format
+The user may click Create Task while one or more preset steps are still unexpanded. The submit path must:
 
-Global presets can be seeded from YAML files in `api_service/data/task_step_templates/`:
+1. Validate all non-preset step fields.
+2. Validate each preset step's collected inputs.
+3. Expand all unexpanded preset steps through the backend expansion path.
+4. Re-run final task validation on the fully expanded step list.
+5. Submit the task.
 
-```yaml
-slug: moonspec-orchestrate
-title: Workflow Orchestrate
-description: Run the full workflow pipeline...
-scope: global
-version: 1.0.0
-tags: [moonspec, orchestration]
-requiredCapabilities: [git]
-annotations:
- sourceSkill: moonspec-orchestrate
-inputs:
- - name: feature_request
- label: Feature Request
- type: markdown
- required: true
-steps:
- - title: Step 1
- instructions: "{{ inputs.feature_request }}"
- skill:
- id: auto
- args: {}
-```
+If a required preset input is missing, Create Task is blocked and the missing field is highlighted. If backend expansion fails, the Create page displays the field-addressable errors and preserves the user's entered values.
 
----
+## Preview and Apply
 
-## 5. Expansion Pipeline (Preset → PlanDefinition)
+Preview shows the generated steps without replacing the preset step. Apply replaces or augments the draft with generated child steps, depending on the selected UX mode.
 
-### 5.1 Overview
+When applied, generated steps remain editable, but MoonMind must preserve provenance and the original preset input snapshot. Editing generated steps does not mutate the preset template.
 
-Expansion is a server-side, deterministic compilation that transforms a preset + user inputs into a `PlanDefinition` ready for Temporal submission. The process is stateless and idempotent — the same preset version + inputs always produce the same Plan.
+Reapply should use the saved preset ID, version, and input snapshot unless the user explicitly changes inputs.
 
-### 5.2 Expansion steps
+## Validation and Error Shape
 
-```
-1. Resolve preset version
- └── Look up (slug, scope, version) in catalog DB
- └── Verify release_status is ACTIVE (or DRAFT for preview)
+Validation errors must be field-addressable so the schema-form renderer can display them next to the right input.
 
-2. Validate and resolve inputs
- └── Check required fields present
- └── Validate types and enum constraints
- └── Apply defaults for optional inputs
-
-3. Build Jinja2 variable context
- └── { inputs: {...}, context: {...}, now: ISO-timestamp, iso_today: YYYY-MM-DD }
-
-4. Render step blueprints and includes
- └── Apply SandboxedEnvironment to each step's instructions/title
- └── Reject any unresolved {{ ... }} placeholders
- └── Reject any forbidden keys in rendered output
- └── For `kind: include`, render `inputMapping` and resolve the child preset
- version by slug, scope, and pinned version
-
-5. Resolve composition
- └── Recursively resolve include entries into an expansion tree
- └── Reject cycles with a path such as parent@1.0.0 → child:shared@1.0.0
- └── Reject GLOBAL → PERSONAL includes
- └── Reject missing, unreadable, inactive, or child-input-incompatible includes
- └── Enforce `max_step_count` after flattening
-
-6. Generate deterministic step IDs
- └── Format: tpl:{slug}:{version}:{index:02d}:{input_hash}
- └── input_hash = sha256(canonical JSON of inputs)[:8]
- └── `index` is the flattened step index from the root preset expansion
-
-7. Attach provenance
- └── Each flattened step receives `presetProvenance`
- └── Provenance includes root slug/version, source slug/version/scope,
- source step index, include alias, and include path
-
-8. Resolve registry snapshot ← NEW
- └── Load current skill registry
- └── Compute snapshot digest
- └── Store snapshot as artifact, capture ArtifactRef
-
-9. Map steps to Plan nodes ← NEW
- └── For each rendered step:
- │ ├── Resolve skill.id → ToolDefinition(name, version) from registry
- │ ├── Validate step inputs against ToolDefinition.input_schema
- │ └── Create Step(id, skill_name, skill_version, inputs)
- └── Infer edges from sequential ordering (linear chain)
- └── Future: support explicit dependency annotations in blueprints
-
-10. Assemble PlanDefinition ← NEW
- └── plan_version: "1.0"
- └── metadata: { title, created_at, registry_snapshot }
- └── policy: { failure_mode: from preset annotations or default FAIL_FAST,
- max_concurrency: from preset annotations or default 1 }
- └── nodes: [Step, ...]
- └── edges: [PlanEdge, ...] (linear chain by default)
-
-11. Store Plan artifact ← NEW
- └── Write PlanDefinition JSON as immutable artifact
- └── Return ArtifactRef for workflow submission
-
-12. Record audit metadata
- └── Write appliedPreset { slug, version, inputs, planArtifactRef, appliedAt }
- └── Update recents table (top 5 per user)
-```
-
-### 5.3 Dependency inference
-
-In v1, preset steps compile to a **linear chain** — each step depends on the previous:
-
-```
-n1 → n2 → n3 → n4 → ...
-```
-
-This matches the existing sequential step model. Future versions will support:
-
-- **Explicit edges** via `dependsOn` annotations in step blueprints.
-- **Parallel groups** via `group` annotations that share a common predecessor and successor.
-- **Fan-out / fan-in** patterns for steps that can run concurrently.
-
-### 5.4 Registry snapshot pinning
-
-Every expanded Plan pins a `registry_snapshot`:
+Example:
 
 ```json
 {
- "digest": "reg:sha256:abc123...",
- "artifact_ref": "art:sha256:def456..."
+  "errors": [
+    {
+      "path": "inputs.jira_issue.key",
+      "message": "A Jira issue is required.",
+      "code": "required"
+    }
+  ]
 }
 ```
 
-This ensures the Plan can be re-executed against the exact same skill definitions, regardless of future registry changes. The snapshot is computed at expansion time from the current deployed registry.
-
-### 5.5 Policy defaults
-
-Presets can declare execution policy via `annotations`:
-
-```yaml
-annotations:
- planPolicy:
- failure_mode: CONTINUE # default: FAIL_FAST
- max_concurrency: 4 # default: 1
-```
-
-If omitted, the expansion service applies defaults (`FAIL_FAST`, concurrency 1).
-
-### 5.6 Skill resolution
-
-The `skill.id` field in step blueprints maps to registered `ToolDefinition` entries:
-
-| Blueprint `skill.id` | Resolution |
-|----------------------|------------|
-| `auto` | Inferred from step context (e.g. instructions analysis). Falls back to a default general-purpose skill. |
-| `moonspec-specify` | Exact match to `ToolDefinition.name` in registry. Uses latest version in snapshot. |
-| `repo.apply_patch@2.1.0` | Pinned to specific version. |
-
-Resolution failures (skill not found, version mismatch) produce expansion errors, not runtime failures.
-
-### 5.7 Composition output
-
-Expansion returns both:
-
-- `steps[]`: the flattened execution-facing step list.
-- `composition`: the expansion tree used for preview and audit.
-
-Flattened steps include `presetProvenance` so downstream audit, preview, and
-save-as-preset flows can understand the source of each concrete step without
-re-resolving the include graph.
-
----
-
-## 6. API Contract
-
-### 6.1 Endpoints
-
-Base path: `/api/task-step-templates`
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET /` | List presets | Filterable by scope, tags, favorites, recency. |
-| `POST /` | Create preset | New catalog entry with initial version. |
-| `POST /save-from-task` | Save from steps | Convert executed steps into a personal preset. |
-| `POST /{slug}:expand` | Expand preset | Compile to `PlanDefinition` with given inputs. Returns Plan artifact ref. |
-| `GET /{slug}` | Get latest version | Fetch preset details with latest active release. |
-| `GET /{slug}/versions/{version}` | Get specific version | Fetch a pinned version. |
-| `PUT /{slug}/versions/{version}` | Review version | Approve/reject for release (admin only for GLOBAL). |
-| `POST /{slug}:favorite` | Add favorite | Mark for quick access. |
-| `DELETE /{slug}:favorite` | Remove favorite | Unmark. |
-| `DELETE /{slug}` | Soft delete | Deactivate preset (preserves history). |
-
-### 6.2 Expand request
-
-```json
-POST /api/task-step-templates/{slug}:expand
-
-{
- "version": "1.0.0",
- "inputs": {
- "feature_request": "Add caching to the API layer"
- },
- "context": {},
- "options": {
- "enforceStepLimit": true,
- "preview": false
- }
-}
-```
-
-### 6.3 Expand response (updated for Plan output)
+Nested preset errors should include ancestry:
 
 ```json
 {
- "plan": {
- "plan_version": "1.0",
- "metadata": {
- "title": "moonspec-orchestrate v1.0.0",
- "created_at": "2026-03-13T12:00:00Z",
- "registry_snapshot": {
- "digest": "reg:sha256:abc123...",
- "artifact_ref": "art:sha256:def456..."
- }
- },
- "policy": {
- "failure_mode": "FAIL_FAST",
- "max_concurrency": 1
- },
- "nodes": [
- {
- "id": "tpl:moonspec-orchestrate:1.0.0:01:a1b2c3d4",
- "tool": { "type": "skill", "name": "moonspec-specify", "version": "1.2.0" },
- "inputs": { "feature_request": "Add caching to the API layer" }
- }
- ],
- "edges": []
- },
- "planArtifactRef": "art:sha256:789abc...",
- "appliedPreset": {
- "slug": "moonspec-orchestrate",
- "version": "1.0.0",
- "inputs": { "feature_request": "Add caching..." },
- "nodeIds": ["tpl:moonspec-orchestrate:1.0.0:01:a1b2c3d4"],
- "appliedAt": "2026-03-13T12:00:00Z"
- },
- "capabilities": ["git", "codex"],
- "warnings": []
+  "errors": [
+    {
+      "path": "steps[0].inputs.jira_issue.key",
+      "preset_path": ["parent-orchestrate", "jira-orchestrate"],
+      "message": "A Jira issue is required.",
+      "code": "required"
+    }
+  ]
 }
 ```
 
-When `options.preview` is true, the Plan is returned but not stored as an artifact — the caller can inspect it before committing.
+## API Requirements
 
-### 6.4 Save-from-task request
-
-```json
-POST /api/task-step-templates/save-from-task
-
-{
- "scope": "personal",
- "scopeRef": "user-uuid",
- "title": "My custom pipeline",
- "description": "Steps I use for feature work",
- "steps": [ ... ],
- "suggestedInputs": [ ... ],
- "tags": ["custom", "feature-work"]
-}
-```
-
-The save service sanitizes steps (strips forbidden keys), scans for secrets (GitHub tokens, AWS keys, PEM blocks, generic patterns), and creates a DRAFT version.
-
----
-
-## 7. RBAC and Scoping
-
-### 7.1 Scope rules
-
-| Scope | Visibility | Create | Activate | Delete |
-|-------|-----------|--------|----------|--------|
-| `PERSONAL` | Owner only | Any user | Auto (DRAFT default) | Owner |
-| `GLOBAL` | All users | Admin | Admin (requires review) | Admin |
-
-### 7.2 Access enforcement
-
-- The API resolves the caller's scope permissions before any read or write operation.
-- Expansion of INACTIVE presets emits a warning but is allowed with explicit confirmation (audit logged).
-- Personal presets are invisible to other users in listings and direct fetch.
-
----
-
-## 8. UX Affordances
-
-### 8.1 Catalog browsing
-
-- Filter by scope, tags, required capabilities.
-- Sort by recency, popularity, or alphabetical.
-- Favorites pinned to top of listings.
-
-### 8.2 Preview and apply
-
-- **Preview**: expand with `options.preview: true` to see the resulting Plan nodes without submitting.
-- **Append**: merge expanded nodes into existing draft plan (extends the DAG).
-- **Replace**: discard existing draft nodes and replace with expanded preset.
-- **Collapse-as-group**: UI renders preset-derived nodes as a collapsible group with the preset title.
-
-### 8.3 Save-as-preset
-
-- Select steps from an executed task.
-- Scrub detected secrets (highlighted in UI).
-- Parameterize repeated values as input placeholders.
-- Choose scope (personal; global requires admin promotion).
-- Preserve an include only when the selected steps exactly match an intact
- provenance subtree from one include expansion and the source preset/version is
- still readable.
-- Serialize detached, partial, reordered, or customized selections as concrete
- `kind: step` entries so saved presets never silently retain stale nested
- semantics.
-
----
-
-## 9. Observability and Governance
-
-### 9.1 Audit trail
-
-Every preset expansion records:
-
-- `appliedPreset.slug` — which preset was used.
-- `appliedPreset.version` — which version was expanded.
-- `appliedPreset.inputs` — what inputs the user provided.
-- `appliedPreset.planArtifactRef` — reference to the produced Plan artifact.
-- `appliedPreset.appliedAt` — when expansion occurred.
-
-This metadata is stored on the task record and is queryable for compliance review.
-
-### 9.2 Telemetry
-
-StatsD counters emitted under `moonmind.task_templates.*`:
-
-- `expand.count` — total expansions (tagged by slug, scope).
-- `expand.error` — expansion failures (tagged by error type).
-- `save.count` — presets saved from task steps.
-- `favorite.count` — favorite toggles.
-
-### 9.3 Lifecycle management
-
-- Versions are immutable once created. Edits produce new versions.
-- `INACTIVE` versions remain in the catalog for audit but emit warnings on expansion.
-- Soft-deleted presets (`is_active: false`) are excluded from listings but preserved in DB.
-
----
-
-## 10. Plan-based expansion (target)
-
-**Steady-state:** preset expansion produces a **`PlanDefinition`** (and `planArtifactRef`) consumed by `MoonMind.Run`; legacy `steps[]` / `appliedStepTemplates` paths may exist only during transition. **Target API** surface is `/api/presets` with `Preset` / `PresetVersion` models; expanders and compilers align on `appliedPreset` + artifact refs. Interim dual-output and rename steps are tracked in MoonSpec feature artifacts or local planning notes when needed.
-
----
-
-## 11. Open Design Decisions
-
-### Q1: How should presets express non-linear dependencies?
-
-**Proposed**: Add optional `dependsOn` field to step blueprints:
-
-```yaml
-steps:
- - slug: run-tests
- title: Run tests
- instructions: "..."
- skill: { id: repo.run_tests }
-
- - slug: run-lint
- title: Run linter
- instructions: "..."
- skill: { id: repo.lint }
-
- - slug: merge-results
- title: Merge results
- instructions: "..."
- skill: { id: plan.merge }
- dependsOn: [run-tests, run-lint] # ← parallel predecessors
-```
-
-The expansion service would translate `dependsOn` into `PlanEdge` entries. Steps without `dependsOn` default to depending on the previous step (linear chain). This is a Phase 2+ feature.
-
-### Q2: Should presets support `planPolicy` overrides per-expansion?
-
-**Proposed**: Allow callers to override policy in the expand request:
+The preset catalog API must expose enough metadata for schema-driven UI generation:
 
 ```json
 {
- "inputs": { ... },
- "policyOverrides": {
- "failure_mode": "CONTINUE",
- "max_concurrency": 4
- }
+  "id": "jira-orchestrate",
+  "kind": "preset",
+  "version": "1",
+  "label": "Jira Orchestrate",
+  "description": "Build and execute an implementation workflow from a Jira issue.",
+  "inputSchema": {},
+  "uiSchema": {},
+  "defaults": {},
+  "capabilities": {
+    "preview": true,
+    "apply": true,
+    "submitTimeExpansion": true
+  }
 }
 ```
 
-Overrides are bounded by server-enforced limits (e.g. max_concurrency capped at 16).
+The API may expose camelCase to the frontend while storing snake_case internally, but the mapping must be lossless.
 
-### Q3: How do presets reference skills that require specific versions?
+Required endpoints or equivalent service operations:
 
-**Current**: `skill.id` resolves to the latest version in the registry snapshot.
+- list presets
+- read preset details
+- validate preset inputs
+- preview preset expansion
+- expand preset for submission
 
-**Proposed**: Support explicit version pinning in blueprints via `skill.id: "repo.apply_patch@2.1.0"`. Unpinned skills resolve to latest-in-snapshot. This preserves the registry snapshot's reproducibility guarantee while allowing presets to be more or less specific.
+## Security and Policy
 
----
+Input schemas and UI schemas are untrusted catalog data. The frontend must treat them as data, not executable code.
 
-## 12. Related Documents
+Requirements:
 
-- `docs/Tasks/SkillAndPlanContracts.md` — Plan schema, execution semantics, validation rules.
-- `docs/Tasks/SkillAndPlanEvolution.md` — Design rationale and terminology decisions.
-- `specs/028-task-presets/spec.md` — Original feature specification with user stories and acceptance criteria.
-- `moonmind/workflows/skills/tool_plan_contracts.py` — `PlanDefinition`, `Step`, `PlanEdge` dataclasses.
-- `moonmind/workflows/skills/plan_validation.py` — DAG validation logic.
-- `moonmind/workflows/skills/plan_executor.py` — Deterministic plan execution in Temporal.
-- `api_service/services/task_templates/catalog.py` — Expansion service implementation.
-- `api_service/services/task_templates/save.py` — Save-from-task service.
-- `api_service/api/routers/task_step_templates.py` — REST API router.
-- `api_service/db/models.py` — Database models (`TaskStepTemplate*`).
+- Widget names resolve only through a local allowlist registry.
+- Markdown descriptions are sanitized before rendering.
+- Binding expressions are evaluated by a safe deterministic interpreter.
+- Secrets are never exposed through schema defaults.
+- Sensitive input values are redacted from provenance unless explicitly classified as safe.
+- Expanded steps pass through the same policy checks as manually created steps.
+
+## Persistence
+
+MoonMind should persist both the configured preset step and the expanded step provenance when useful.
+
+Persisted records should support:
+
+- draft reconstruction
+- edit and re-run
+- audit/debugging
+- comparison between original preset inputs and edited generated steps
+- future migrations when preset versions change
+
+Preset versions are immutable once tasks have been created from them. Updating a preset creates a new version or equivalent revision identifier.
+
+## Implementation Requirements
+
+To fully realize this design, MoonMind needs:
+
+1. A canonical preset manifest model with `input_schema`, optional `ui_schema`, defaults, expansion rules, and versioning.
+2. Backend validation of preset inputs using the same schema returned to the frontend.
+3. A generic schema-form renderer on the Create page.
+4. A reusable widget registry for semantic widgets such as Jira issue picker.
+5. Removal of preset-specific Create page branches.
+6. A shared backend expansion service used by preview, apply, reapply, submit-time auto-expansion, and API-created tasks.
+7. Provenance on expanded steps.
+8. Recursive expansion support with cycle detection.
+9. Field-addressable validation errors.
+10. Tests that prove new presets can add inputs without changing Create page logic.
+
+## Testing Strategy
+
+Tests should cover:
+
+- catalog loading of a preset with `input_schema`
+- frontend rendering of required and optional fields from schema
+- Jira issue picker selection populating the configured preset input object
+- validation failures for missing required fields
+- preview expansion using the backend expansion service
+- submit-time auto-expansion for unexpanded preset steps
+- nested preset input mapping
+- cycle detection
+- provenance on expanded steps
+- adding a new preset with a new schema that uses existing widgets without modifying Create page preset logic
+
+The key acceptance test is: a developer can add a new preset manifest with a supported schema and widget hints, and the Create page renders the required inputs automatically without any new preset-specific React code.
+
+## Related Documents
+
+- `docs/UI/CreatePage.md`
+- `docs/Steps/StepTypes.md`
+- `docs/Steps/SkillSystem.md`
+- `docs/Steps/JiraIntegration.md`
+- `docs/Tasks/TaskArchitecture.md`
+- `docs/Tasks/TaskEditingSystem.md`
