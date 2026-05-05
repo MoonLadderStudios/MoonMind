@@ -8,5 +8,65 @@
     "id": 4223560263,
     "disposition": "not-applicable",
     "rationale": "Broad review summary duplicated the actionable inline mock-refactor feedback and did not request a separate code change."
+  },
+  {
+    "id": 3184494901,
+    "disposition": "addressed",
+    "rationale": "Added explicit fill=none, stroke=currentColor, strokeWidth=2, strokeLinecap/Join=round attributes to ProvidersKeyIcon SVG."
+  },
+  {
+    "id": 3184494931,
+    "disposition": "addressed",
+    "rationale": "Added explicit fill=none, stroke=currentColor, strokeWidth=2, strokeLinecap/Join=round attributes to UserWorkspaceIcon SVG."
+  },
+  {
+    "id": 3184494937,
+    "disposition": "addressed",
+    "rationale": "Added explicit fill=none, stroke=currentColor, strokeWidth=2, strokeLinecap/Join=round attributes to OperationsGearIcon SVG."
+  },
+  {
+    "id": 3184494948,
+    "disposition": "addressed",
+    "rationale": "Renamed the settings nav classes to settings-nav-* (settings-nav-field/options/option/option-icon/option-label) and added matching CSS selectors that share rules with the existing queue-step-type-* styles, so the settings page no longer leaks the queue-step-type abstraction."
+  },
+  {
+    "id": 4223495605,
+    "disposition": "not-applicable",
+    "rationale": "Summary review comment recapping the inline review comments; no separate action required since each underlying item is addressed."
+  },
+  {
+    "id": 3184941164,
+    "disposition": "addressed",
+    "rationale": "Changed the blocked-outcome skip call to use the completed node's zero-based index so only downstream nodes are marked skipped and the completed node remains succeeded."
+  },
+  {
+    "id": 3184941177,
+    "disposition": "addressed",
+    "rationale": "Updated the fenced JSON regex to capture full code fence content instead of a non-greedy object fragment, preserving nested JSON objects."
+  },
+  {
+    "id": 3184941180,
+    "disposition": "addressed",
+    "rationale": "Updated fenced-content extraction to append only content that is a complete JSON object before calling json.loads."
+  },
+  {
+    "id": 4224028132,
+    "disposition": "not-applicable",
+    "rationale": "Broad review summary; the actionable inline findings from this review were handled individually."
+  },
+  {
+    "id": 3184947007,
+    "disposition": "addressed",
+    "rationale": "Guarded the blocked-outcome short-circuit behind a replay-stable workflow.patched marker."
+  },
+  {
+    "id": 3184947011,
+    "disposition": "addressed",
+    "rationale": "Made link-type matching strict when Jira provides a type name, so configured non-Blocks link types do not classify Blocks links as blockers."
+  },
+  {
+    "id": 4224033939,
+    "disposition": "not-applicable",
+    "rationale": "Automated review metadata without an actionable code request."
   }
 ]

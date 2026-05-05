@@ -232,6 +232,98 @@ async def test_request_json_preserves_issue_404_when_myself_succeeds() -> None:
 
     assert excinfo.value.code == "jira_not_found"
 
+async def test_request_json_preserves_cloud_issue_404_when_scoped_probe_is_authenticated() -> None:
+    connection = _build_cloud_connection()
+    seen_paths: list[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path.endswith("/myself"):
+            return httpx.Response(
+                401,
+                text="Current user profile is not available for this token shape.",
+                headers={"content-type": "text/plain"},
+            )
+        if request.url.path.endswith("/project/search"):
+            assert request.url.params["maxResults"] == "1"
+            return httpx.Response(
+                200,
+                json={"values": []},
+                headers={
+                    "content-type": "application/json",
+                    "x-aaccountid": "acct-1",
+                },
+            )
+        return httpx.Response(
+            404,
+            json={"errorMessages": ["No project could be found."], "errors": {}},
+            headers={"content-type": "application/json"},
+        )
+
+    injected = _build_injected_client(connection, _handler)
+    client = JiraClient(connection=connection, client=injected)
+    try:
+        with pytest.raises(JiraToolError) as excinfo:
+            await client.request_json(
+                method="GET",
+                path="/issue/createmeta/KANDY/issuetypes",
+                action="list_create_issue_types",
+                context={"projectKey": "KANDY"},
+            )
+    finally:
+        await injected.aclose()
+
+    assert excinfo.value.code == "jira_not_found"
+    assert seen_paths == [
+        "/ex/jira/cloud-abc/rest/api/3/issue/createmeta/KANDY/issuetypes",
+        "/ex/jira/cloud-abc/rest/api/3/myself",
+        "/ex/jira/cloud-abc/rest/api/3/project/search",
+    ]
+
+async def test_request_json_maps_cloud_issue_404_to_auth_failure_when_project_probe_is_anonymous() -> None:
+    connection = _build_cloud_connection()
+    seen_paths: list[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path.endswith("/myself"):
+            return httpx.Response(
+                401,
+                text="Client must be authenticated to access this resource.",
+                headers={"content-type": "text/plain"},
+            )
+        if request.url.path.endswith("/project/search"):
+            return httpx.Response(
+                200,
+                json={"values": []},
+                headers={"content-type": "application/json"},
+            )
+        return httpx.Response(
+            404,
+            json={"errorMessages": ["No project could be found."], "errors": {}},
+            headers={"content-type": "application/json"},
+        )
+
+    injected = _build_injected_client(connection, _handler)
+    client = JiraClient(connection=connection, client=injected)
+    try:
+        with pytest.raises(JiraToolError) as excinfo:
+            await client.request_json(
+                method="GET",
+                path="/issue/createmeta/KANDY/issuetypes",
+                action="list_create_issue_types",
+                context={"projectKey": "KANDY"},
+            )
+    finally:
+        await injected.aclose()
+
+    assert excinfo.value.code == "jira_auth_failed"
+    assert seen_paths == [
+        "/ex/jira/cloud-abc/rest/api/3/issue/createmeta/KANDY/issuetypes",
+        "/ex/jira/cloud-abc/rest/api/3/myself",
+        "/ex/jira/cloud-abc/rest/api/3/project/search",
+    ]
+
 async def test_request_json_retries_retry_after_and_surfaces_rate_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1451,9 +1451,12 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "orchestration_mode" not in {
                 item["name"] for item in template_payload["inputs"]
             }
-            assert [step["skill"]["id"] for step in template.latest_version.steps] == [
+            assert [
+                (step.get("skill") or step.get("tool"))["id"]
+                for step in template.latest_version.steps
+            ] == [
                 "jira-issue-updater",
-                "auto",
+                "jira.check_blockers",
                 "auto",
                 "auto",
                 "moonspec-specify",
@@ -1487,8 +1490,18 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "MM-328" in expanded["steps"][0]["instructions"]
             assert "In Progress" in expanded["steps"][0]["instructions"]
             assert expanded["steps"][1]["title"] == "Check Jira blockers before implementation"
-            assert "Fetch Jira issue MM-328" in expanded["steps"][1]["instructions"]
-            assert "trusted Jira tool surface" in expanded["steps"][1]["instructions"]
+            assert expanded["steps"][1]["type"] == "tool"
+            assert expanded["steps"][1]["tool"]["id"] == "jira.check_blockers"
+            assert expanded["steps"][1]["targetIssueKey"] == "MM-328"
+            assert expanded["steps"][1]["blockerPreflight"] == {
+                "targetIssueKey": "MM-328",
+                "linkType": "Blocks",
+            }
+            assert "Jira issue MM-328" in expanded["steps"][1]["instructions"]
+            assert "deterministic trusted Jira blocker preflight" in expanded["steps"][1]["instructions"]
+            assert "inwardIssue" in expanded["steps"][1]["instructions"]
+            assert "outwardIssue" in expanded["steps"][1]["instructions"]
+            assert "MUST NOT block this orchestration" in expanded["steps"][1]["instructions"]
             assert "blocker" in expanded["steps"][1]["instructions"]
             assert "Done" in expanded["steps"][1]["instructions"]
             assert "non-blocker" in expanded["steps"][1]["instructions"]
