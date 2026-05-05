@@ -193,8 +193,22 @@ async function readErrorDetail(response: Response, fallback: string): Promise<st
 
 function safeDisplayText(text: string | null | undefined): string {
   return (text ?? '')
-    .replace(/(token|password|secret|api[_-]?key)=\S+/gi, '$1=[REDACTED]')
+    .replace(
+      /(["']?(?:token|password|secret|api[_-]?key)["']?)(\s*[:=]\s*)(["']?)[^"',\s]+(["']?)/gi,
+      '$1$2$3[REDACTED]$4',
+    )
     .replace(/\/home\/[^/\s]+\/\.(codex|claude)\/[^\s]+/gi, '[REDACTED_AUTH_PATH]');
+}
+
+function dispatchProviderProfileStorageEvent(value: string): void {
+  const storageEvent = new Event('storage') as StorageEvent;
+  Object.defineProperty(storageEvent, 'key', {
+    value: PROVIDER_PROFILE_REFRESH_STORAGE_KEY,
+  });
+  Object.defineProperty(storageEvent, 'newValue', {
+    value,
+  });
+  window.dispatchEvent(storageEvent);
 }
 
 function notifyProviderProfileRefresh(session: OAuthSessionResponse): void {
@@ -208,12 +222,7 @@ function notifyProviderProfileRefresh(session: OAuthSessionResponse): void {
     updatedAt: Date.now(),
   });
   window.localStorage.setItem(PROVIDER_PROFILE_REFRESH_STORAGE_KEY, value);
-  window.dispatchEvent(
-    new StorageEvent('storage', {
-      key: PROVIDER_PROFILE_REFRESH_STORAGE_KEY,
-      newValue: value,
-    }),
-  );
+  dispatchProviderProfileStorageEvent(value);
 }
 
 export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
@@ -297,6 +306,12 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       }
       const payload = (await response.json().catch(() => null)) as OAuthSessionResponse | null;
       if (payload?.session_id) {
+        if (action === 'reconnect' && payload.session_id !== sessionId) {
+          const url = new URL(window.location.href);
+          url.searchParams.set('session_id', payload.session_id);
+          window.location.href = url.toString();
+          return;
+        }
         refreshSessionFromResponse(payload);
       } else if (action === 'cancel') {
         setSession((current) =>
@@ -644,16 +659,6 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
                 disabled={actionPending !== null}
               >
                 Cancel
-              </button>
-            ) : null}
-            {['failed', 'cancelled', 'expired'].includes(session.status) ? (
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => runSessionAction('reconnect', 'Failed to retry OAuth session.')}
-                disabled={actionPending !== null}
-              >
-                Retry
               </button>
             ) : null}
             {['failed', 'cancelled', 'expired'].includes(session.status) ? (

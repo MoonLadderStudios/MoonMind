@@ -597,15 +597,17 @@ describe('ProviderProfilesManager form controls', () => {
     const { queryClient } = renderProviderProfilesManagerWithQuery([codexOauthProfile]);
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-    window.dispatchEvent(
-      new StorageEvent('storage', {
-        key: 'moonmind:provider-profile-updated',
-        newValue: JSON.stringify({
-          profileId: 'codex-oauth',
-          sessionId: 'oas_terminal_finalize',
-        }),
+    const storageEvent = new Event('storage');
+    Object.defineProperty(storageEvent, 'key', {
+      value: 'moonmind:provider-profile-updated',
+    });
+    Object.defineProperty(storageEvent, 'newValue', {
+      value: JSON.stringify({
+        profileId: 'codex-oauth',
+        sessionId: 'oas_terminal_finalize',
       }),
-    );
+    });
+    window.dispatchEvent(storageEvent);
 
     await waitFor(() => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: PROVIDER_PROFILE_QUERY_KEY });

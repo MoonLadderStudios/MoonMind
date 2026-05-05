@@ -150,7 +150,11 @@ beforeEach(() => {
   vi.stubGlobal('WebSocket', MockWebSocket);
   Object.defineProperty(window, 'location', {
     configurable: true,
-    value: { origin: 'http://localhost', search: '' },
+    value: {
+      href: 'http://localhost/oauth-terminal?session_id=session-1',
+      origin: 'http://localhost',
+      search: '?session_id=session-1',
+    },
   });
 });
 
@@ -249,7 +253,7 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     );
   });
 
-  it('shows recovery actions only for recoverable terminal sessions', async () => {
+  it('shows the recovery action only for recoverable terminal sessions', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -259,7 +263,8 @@ describe('OAuthTerminalPage clipboard behavior', () => {
             runtime_id: 'codex_cli',
             profile_id: 'codex-oauth',
             status: 'failed',
-            failure_reason: 'token=secret-value in /home/app/.codex/auth.json',
+            failure_reason:
+              '"token": "json-secret", password: plain-secret, api_key=key-secret in /home/app/.codex/auth.json',
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         ),
@@ -268,11 +273,55 @@ describe('OAuthTerminalPage clipboard behavior', () => {
 
     renderPage();
 
-    expect(await screen.findByText('token=[REDACTED] in [REDACTED_AUTH_PATH]')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(
+      await screen.findByText(
+        '"token": "[REDACTED]", password: [REDACTED], api_key=[REDACTED] in [REDACTED_AUTH_PATH]',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Finalize Provider Profile' })).toBeNull();
+  });
+
+  it('navigates to the replacement session returned by reconnect', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const href = String(url);
+        if (href.endsWith('/reconnect')) {
+          expect(init?.method).toBe('POST');
+          return new Response(
+            JSON.stringify({
+              session_id: 'session-2',
+              runtime_id: 'codex_cli',
+              profile_id: 'codex-oauth',
+              status: 'bridge_ready',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            session_id: 'session-1',
+            runtime_id: 'codex_cli',
+            profile_id: 'codex-oauth',
+            status: 'failed',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }),
+    );
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+
+    await waitFor(() => {
+      expect(window.location.href).toBe(
+        'http://localhost/oauth-terminal?session_id=session-2',
+      );
+    });
   });
 
   it('forwards browser paste events from the xterm helper textarea to the terminal bridge once', async () => {

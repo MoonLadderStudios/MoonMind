@@ -1,17 +1,32 @@
 [
   {
-    "id": 3190760474,
+    "id": 3191761388,
     "disposition": "addressed",
-    "rationale": "Factored the tasks-list results footer into a reusable control and rendered it for error and first-page empty states so the Live updates toggle remains available outside populated results. Added regression assertions for both states."
+    "rationale": "Replaced the ProviderProfilesManager test's StorageEvent constructor init object with a plain Event('storage') plus defined key/newValue properties."
   },
   {
-    "id": 4230728001,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary container with no separate actionable feedback beyond review comment 3190760474."
+    "id": 3191761395,
+    "disposition": "addressed",
+    "rationale": "Replaced oauth-terminal storage notification dispatch with a plain Event('storage') plus defined key/newValue properties."
   },
   {
-    "id": 4230739851,
+    "id": 3191763402,
+    "disposition": "addressed",
+    "rationale": "Reconnect actions now navigate to the returned replacement session_id when it differs from the current terminal session."
+  },
+  {
+    "id": 3191763417,
+    "disposition": "addressed",
+    "rationale": "Broadened safeDisplayText redaction to handle secret-like keys with colon or equals separators, including quoted JSON-style keys and values."
+  },
+  {
+    "id": 3191763424,
+    "disposition": "addressed",
+    "rationale": "Removed the duplicate Retry button from the terminal recovery actions and kept the Reconnect action."
+  },
+  {
+    "id": 4231808935,
     "disposition": "not-applicable",
-    "rationale": "Review explicitly states there is no feedback to address."
+    "rationale": "Broad review summary with no separate actionable request beyond the line comments already addressed."
   }
 ]
