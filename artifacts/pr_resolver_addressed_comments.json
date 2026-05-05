@@ -1,22 +1,17 @@
 [
   {
-    "id": 4376292553,
+    "id": 4376538255,
     "disposition": "not-applicable",
-    "rationale": "Quota warning issue comment is provider status noise and does not request a code change."
+    "rationale": "Quota warning from Gemini Code Assist; no code change requested."
   },
   {
-    "id": 3185847615,
+    "id": 4225283032,
     "disposition": "addressed",
-    "rationale": "Restored status, repository, and runtime filters outside the desktop-only table via mobile task filter controls with UI coverage."
+    "rationale": "Mobile task filter controls now render all active column filters, including Skill, Scheduled, Created, and Finished."
   },
   {
-    "id": 3185847617,
+    "id": 3186050185,
     "disposition": "addressed",
-    "rationale": "Expanded runtime filter options to include codex, claude, and codex_cloud alongside existing runtime identifiers with UI coverage."
-  },
-  {
-    "id": 4225064778,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary contains no separate actionable request beyond the line comments already addressed."
+    "rationale": "Runtime and Skill value-list popovers now expose include/exclude mode and preserve that mode when applying selected values."
   }
 ]
