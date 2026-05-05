@@ -3339,7 +3339,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   stroke-width: 3;
 }
 
-.queue-submit-primary--icon:not(:disabled):not([aria-disabled="true"]):hover
+.queue-submit-primary--icon:not(.queue-submit-primary--arrow-exit):not(:disabled):not([aria-disabled="true"]):hover
   .queue-submit-primary-arrow
   svg {
   animation: queue-submit-primary-arrow-cycle 460ms cubic-bezier(0.33, 0, 0.2, 1) both;

@@ -7021,7 +7021,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }, [isTemporalFormBlocked, showPrimaryCtaArrow]);
 
   function clearSubmitArrowExit(event: React.AnimationEvent<HTMLElement>) {
-    if (event.animationName === "queue-submit-primary-arrow-exit") {
+    if (
+      event.animationName === "queue-submit-primary-arrow-exit" &&
+      !isSubmitting
+    ) {
       setIsSubmitArrowExiting(false);
     }
   }
