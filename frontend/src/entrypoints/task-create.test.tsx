@@ -12471,7 +12471,7 @@ describe("Task Create submit arrow animation", () => {
     );
   });
 
-  it("clears the create arrow exit after its animation while submit is busy", async () => {
+  it("keeps the create arrow exited after submit until navigation", async () => {
     let resolveExecution: (response: Response) => void = () => {};
     const fetchSpy = vi
       .spyOn(window, "fetch")
@@ -12539,12 +12539,12 @@ describe("Task Create submit arrow animation", () => {
         ).toBe(true);
       });
 
-      await waitFor(() => {
-        expect(
-          createButton.classList.contains("queue-submit-primary--arrow-exit"),
-        ).toBe(false);
-      });
-    } finally {
+      await new Promise((resolve) => window.setTimeout(resolve, 280));
+
+      expect(
+        createButton.classList.contains("queue-submit-primary--arrow-exit"),
+      ).toBe(true);
+
       resolveExecution(
         new Response(
           JSON.stringify({
@@ -12561,6 +12561,16 @@ describe("Task Create submit arrow animation", () => {
           },
         ),
       );
+
+      await waitFor(() => {
+        expect(navigateTo).toHaveBeenCalledWith(
+          "/tasks/mm:workflow-123?source=temporal",
+        );
+        expect(
+          createButton.classList.contains("queue-submit-primary--arrow-exit"),
+        ).toBe(true);
+      });
+    } finally {
       unmount();
       fetchSpy.mockRestore();
       vi.mocked(navigateTo).mockReset();

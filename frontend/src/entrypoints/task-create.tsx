@@ -3089,6 +3089,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [submitRippleKey, setSubmitRippleKey] = useState(0);
   const [submitRippleRect, setSubmitRippleRect] = useState<DOMRect | null>(null);
   const [isSubmitArrowExiting, setIsSubmitArrowExiting] = useState(false);
+  const submitArrowExitHeldRef = useRef(false);
   const submitArrowExitTimeoutRef = useRef<number | null>(null);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
@@ -6005,34 +6006,40 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     submitExpansionInFlightRef.current = true;
     setIsSubmitting(true);
     setSubmitMessage(null);
+    holdSubmitArrowExitUntilNavigation();
 
     let submissionSteps = steps;
     let submissionAppliedTemplates = appliedTemplates;
     const clearSubmitBusy = () => {
       submitExpansionInFlightRef.current = false;
       setIsSubmitting(false);
+      releaseSubmitArrowExit();
     };
     const normalizedRepository = repository.trim() || defaultRepository;
     if (!normalizedRepository) {
       setSubmitMessage(
         "Repository is required because no system default repository is configured.",
       );
+      clearSubmitBusy();
       return;
     }
     if (!isValidRepositoryInput(normalizedRepository)) {
       setSubmitMessage(
         "Repository must be owner/repo, https://<host>/<path>, or git@<host>:<path> (token-free).",
       );
+      clearSubmitBusy();
       return;
     }
     if (selectedAttachmentFiles.length > 0 || persistedAttachmentRefs.length > 0) {
       if (!attachmentPolicy.enabled) {
         setSubmitMessage("Attachments are disabled for this runtime.");
+        clearSubmitBusy();
         return;
       }
       if (!attachmentTargetValidation.ok) {
         setAttachmentTargetErrors(attachmentTargetValidation.errors);
         setSubmitMessage(attachmentTargetValidation.messages.join(" "));
+        clearSubmitBusy();
         return;
       }
     }
@@ -6043,21 +6050,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setSubmitMessage(
         `Runtime must be one of: ${supportedTaskRuntimes.join(", ")}.`,
       );
+      clearSubmitBusy();
       return;
     }
 
     const normalizedPublishMode = normalizePublishModeForSubmit(publishMode);
     if (!["none", "branch", "pr"].includes(normalizedPublishMode)) {
       setSubmitMessage("Publish mode must be one of: none, branch, pr.");
+      clearSubmitBusy();
       return;
     }
 
     if (!Number.isInteger(priority)) {
       setSubmitMessage("Priority must be an integer.");
+      clearSubmitBusy();
       return;
     }
     if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
       setSubmitMessage("Max Attempts must be an integer >= 1.");
+      clearSubmitBusy();
       return;
     }
 
@@ -6346,6 +6357,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
     const uploadedObjectiveAttachments: StepAttachmentRef[] = [];
     const uploadedStepAttachments: Record<string, StepAttachmentRef[]> = {};
+    let didNavigateAfterCreate = false;
     try {
       if (selectedAttachmentFiles.length > 0) {
         type AttachmentUploadResult =
@@ -6939,6 +6951,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (!redirectPath) {
         throw new Error("Task was created but no redirect path was returned.");
       }
+      didNavigateAfterCreate = true;
       navigateTo(redirectPath);
     } catch (error) {
       const failure =
@@ -6973,6 +6986,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         setSubmitMessage(failure.message);
       }
     } finally {
+      if (didNavigateAfterCreate) {
+        return;
+      }
       clearSubmitBusy();
     }
   }
@@ -7026,11 +7042,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   useEffect(() => {
     if (!showPrimaryCtaArrow || isTemporalFormBlocked) {
+      submitArrowExitHeldRef.current = false;
       setIsSubmitArrowExiting(false);
     }
   }, [isTemporalFormBlocked, showPrimaryCtaArrow]);
 
   function clearSubmitArrowExit() {
+    if (submitArrowExitHeldRef.current) {
+      return;
+    }
     if (submitArrowExitTimeoutRef.current !== null) {
       window.clearTimeout(submitArrowExitTimeoutRef.current);
       submitArrowExitTimeoutRef.current = null;
@@ -7044,8 +7064,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     submitArrowExitTimeoutRef.current = window.setTimeout(() => {
       submitArrowExitTimeoutRef.current = null;
+      if (submitArrowExitHeldRef.current) {
+        return;
+      }
       setIsSubmitArrowExiting(false);
     }, 230);
+  }
+
+  function holdSubmitArrowExitUntilNavigation() {
+    submitArrowExitHeldRef.current = true;
+    if (submitArrowExitTimeoutRef.current !== null) {
+      window.clearTimeout(submitArrowExitTimeoutRef.current);
+      submitArrowExitTimeoutRef.current = null;
+    }
+    setIsSubmitArrowExiting(true);
+  }
+
+  function releaseSubmitArrowExit() {
+    submitArrowExitHeldRef.current = false;
+    clearSubmitArrowExit();
   }
 
   return (
