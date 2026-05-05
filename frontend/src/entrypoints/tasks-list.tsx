@@ -1239,13 +1239,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="stack">
-      <section className="task-list-control-deck" aria-labelledby="task-list-title">
-        <div className="toolbar">
-          <div>
-            <h2 className="page-title" id="task-list-title">Tasks List</h2>
-          </div>
-        </div>
-
+      <section className="task-list-control-deck" aria-label="Task list filters">
         {!listEnabled ? (
           <div className="notice error">Temporal task list is disabled in server configuration.</div>
         ) : null}
@@ -1309,25 +1303,33 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
         </div>
       </section>
 
-      {isLoading ? (
-        <p className="loading">Loading tasks...</p>
-      ) : isError ? (
-        <>
-          <div className="notice error">{(error as Error).message}</div>
-          {resultsFooter}
-        </>
-      ) : sortedItems.length === 0 && !hasPaginationContext ? (
-        <>
-          <p className="small">No tasks found for the current filters.</p>
-          {resultsFooter}
-        </>
-      ) : (
-        <section className="queue-layouts panel--data task-list-data-slab" aria-label="Task results">
-          {sortedItems.length === 0 ? (
-            <div className="card small">No tasks found for the current filters.</div>
-          ) : (
-            <>
-              <div className="queue-table-wrapper" data-layout="table">
+      <section
+        className="queue-layouts panel--data task-list-data-slab"
+        aria-labelledby="task-list-title"
+      >
+        <header className="task-list-results-header">
+          <h2 className="page-title" id="task-list-title">Tasks List</h2>
+        </header>
+        {isLoading ? (
+          <p className="loading task-list-empty-message">Loading tasks...</p>
+        ) : isError ? (
+          <>
+            <div className="notice error task-list-empty-message">{(error as Error).message}</div>
+            {resultsFooter}
+          </>
+        ) : sortedItems.length === 0 && !hasPaginationContext ? (
+          <>
+            <p className="small task-list-empty-message">No tasks found for the current filters.</p>
+            {resultsFooter}
+          </>
+        ) : sortedItems.length === 0 ? (
+          <>
+            <div className="card small task-list-empty-message">No tasks found for the current filters.</div>
+            {resultsFooter}
+          </>
+        ) : (
+          <>
+            <div className="queue-table-wrapper" data-layout="table">
                 <table>
                   <colgroup>
                     <col className="queue-table-column-id" />
@@ -1506,11 +1508,10 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       );
                     })}
               </ul>
+              {resultsFooter}
             </>
           )}
-          {resultsFooter}
         </section>
-      )}
     </div>
   );
 }
