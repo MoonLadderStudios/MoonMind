@@ -5,32 +5,32 @@
 
 ## Summary
 
-Complete the Tasks List runtime UI story for `MM-591` by closing the remaining gaps in mobile filter reachability, desktop filter keyboard/focus behavior, and live-update stability. Existing column-filter work already handles task-only visibility, legacy URL normalization, status/runtime/skill/repository/date filters, active chips, and desktop sort/filter separation. The implementation adds ID and Title text filters to the same column-filter model, exposes them in mobile controls, pauses list polling while a desktop filter editor is open, and returns focus after keyboard/dialog closure. Validation is focused in the existing Tasks List Vitest suite, with the full unit runner as final verification.
+Complete the Tasks List runtime UI story for `MM-591` by closing the remaining gaps in mobile filter reachability, desktop filter keyboard/focus behavior, and live-update stability. Current repo evidence shows the implementation now adds ID and Title text filters to the shared column-filter model, exposes them in mobile controls, pauses list polling while a desktop filter editor is open, and manages focus for keyboard/dialog closure. Validation is focused in the existing Tasks List Vitest suite, with the full unit runner as final verification.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | partial | `frontend/src/entrypoints/tasks-list.tsx` had mobile status/runtime/skill/repository/date filters but no ID or Title filters | add ID and Title text filters to shared filter model and mobile controls | UI unit |
-| FR-002 | implemented_unverified | existing `applyFilters()` resets cursor stack; mobile controls use it | extend mobile filter test to include ID/Title and task-scoped request URL | UI unit |
+| FR-001 | implemented_verified | `frontend/src/entrypoints/tasks-list.tsx` defines `taskId` and `title` text filters; `tasks-list.test.tsx` asserts mobile ID and Title controls plus canonical query params | preserve behavior | final UI validation |
+| FR-002 | implemented_verified | mobile filter test asserts task-scoped URL with ID/Title filters and no stale pagination cursor | preserve behavior | final UI validation |
 | FR-003 | implemented_verified | separate sort and filter buttons plus existing tests in `tasks-list.test.tsx` | preserve behavior | final UI validation |
-| FR-004 | partial | dialogs supported Escape/cancel but did not manage focus return | add focus-in/focus-return behavior and keyboard apply coverage | UI unit |
+| FR-004 | implemented_verified | `tasks-list.tsx` tracks the originating filter button and pending focus field; `tasks-list.test.tsx` verifies focus moves into the Title filter dialog | preserve behavior | final UI validation |
 | FR-005 | implemented_verified | existing staging tests cover cancel, Escape, outside click without requests | preserve behavior while changing close helper | final UI validation |
-| FR-006 | missing | no Enter-to-apply coverage found | add Enter handler for non-textarea dialog targets | UI unit |
-| FR-007 | partial | drafts are staged, but list polling continued while a popover was open | pause list refetch interval while a filter editor is open | UI unit / code inspection |
+| FR-006 | implemented_verified | `tasks-list.tsx` applies staged non-textarea filter edits on Enter; `tasks-list.test.tsx` verifies Title text filter Enter apply updates the URL | preserve behavior | final UI validation |
+| FR-007 | implemented_verified | `tasks-list.tsx` disables `refetchInterval` while `openFilter` is set, preserving staged editor state | preserve behavior | final UI validation / code inspection |
 | FR-008 | implemented_verified | active chips, filter accessible names, `aria-sort`, and status pill labels are covered by existing tests | preserve behavior | final UI validation |
 | FR-009 | implemented_verified | task scope normalization and absent workflow-kind controls are covered by existing tests | preserve behavior | final UI validation |
-| FR-010 | missing | no `MM-591` feature artifacts existed | create MoonSpec artifacts preserving Jira brief | artifact review |
-| SC-001 | partial | mobile controls test existed but missed ID/Title | extend mobile controls test | UI unit |
-| SC-002 | implemented_unverified | URL assertion covered status/repo/runtime | extend assertion for ID/Title and cursor omission | UI unit |
-| SC-003 | missing | no focus test found | add focus test | UI unit |
-| SC-004 | implemented_unverified | status staging covered Apply button only | add Enter apply text-filter test | UI unit |
+| FR-010 | implemented_verified | `spec.md`, `plan.md`, `tasks.md`, and `verification.md` preserve `MM-591` and the canonical Jira preset brief | preserve traceability | artifact review |
+| SC-001 | implemented_verified | mobile controls test asserts ID, Runtime, Skill, Repository, Status, Title, Scheduled, Created, and Finished controls | preserve behavior | final UI validation |
+| SC-002 | implemented_verified | mobile URL assertion includes task scope, ID/Title filters, status/runtime/repository filters, and omits stale cursor state | preserve behavior | final UI validation |
+| SC-003 | implemented_verified | focused UI test verifies a desktop Title filter dialog receives focus on open | preserve behavior | final UI validation |
+| SC-004 | implemented_verified | focused UI test verifies Enter applies staged Title text-filter changes | preserve behavior | final UI validation |
 | SC-005 | implemented_verified | existing workflow-kind tests | preserve behavior | final UI validation |
-| SC-006 | missing | no `MM-591` artifacts existed | preserve issue key in spec, plan, tasks, verification | artifact review |
+| SC-006 | implemented_verified | artifact review confirms `MM-591`, canonical preset brief, and source design IDs are preserved | preserve traceability | artifact review |
 | DESIGN-REQ-006 | implemented_verified | mobile card structure and details-action tests already exist | preserve behavior | final UI validation |
-| DESIGN-REQ-021 | partial | staged filters existed, polling pause missing | pause polling while editor is open | UI unit / code inspection |
-| DESIGN-REQ-022 | partial | sort/filter ARIA and Escape existed, focus/Enter gaps remained | add focus and Enter behavior | UI unit |
-| DESIGN-REQ-023 | partial | mobile parity existed for most fields, missing ID/Title | add ID/Title mobile filters | UI unit |
+| DESIGN-REQ-021 | implemented_verified | staged filters exist and polling is paused while a filter editor is open | preserve behavior | final UI validation / code inspection |
+| DESIGN-REQ-022 | implemented_verified | sort/filter ARIA, Escape/cancel staging, focus-in, focus-return helper, Enter apply, and non-color active indicators are present | preserve behavior | final UI validation |
+| DESIGN-REQ-023 | implemented_verified | mobile filters expose status, runtime, skill, repository, title, ID, and date filtering through task-scoped semantics | preserve behavior | final UI validation |
 
 ## Technical Context
 
