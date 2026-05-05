@@ -5,34 +5,34 @@
 
 ## Summary
 
-Implement the MM-586 runtime story by removing ordinary workflow-kind browsing from the Tasks List UI, normalizing legacy workflow-scope URLs to task-run visibility, showing a recoverable notice when unsupported workflow-scope state is ignored, and hardening the source-temporal execution list boundary so broad `scope`, `workflowType`, or `entry` parameters cannot widen ordinary task-list results. Current repo inspection found the table already excludes `Kind`, `Workflow Type`, and `Entry`, but the UI still exposes Scope/Workflow Type/Entry controls and the source-temporal API still honors `scope=all`; this run requires tests and implementation.
+Implement the MM-586 runtime story by keeping ordinary workflow-kind browsing out of the Tasks List UI, normalizing legacy workflow-scope URLs to task-run visibility, showing a recoverable notice when unsupported workflow-scope state is ignored, and hardening the source-temporal execution list boundary so broad `scope`, `workflowType`, or `entry` parameters cannot widen ordinary task-list results. Current repo inspection confirms the implementation and tests are now present: the table excludes `Kind`, `Workflow Type`, and `Entry`, the UI no longer exposes Scope/Workflow Type/Entry controls, legacy broad URL state is normalized, and the source-temporal API fails safe to task-run query semantics.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | partial | `frontend/src/entrypoints/tasks-list.tsx` defaults to `scope=tasks` but can widen via controls/URL | force task-run request semantics | UI + backend unit |
-| FR-002 | missing | UI renders `Scope`, `Workflow Type`, and `Entry` controls | remove ordinary workflow-kind controls | UI test |
-| FR-003 | partial | old URL params initialize broad list state | normalize unsafe params and show notice | UI test |
-| FR-004 | implemented_verified | table columns omit `Kind`, `Workflow Type`, and `Entry`; existing started-column regression nearby | preserve behavior, add focused assertion | UI test |
-| FR-005 | implemented_unverified | Status and Repository controls exist but are coupled to broad controls | verify preserved task filters after broad-control removal | UI test |
-| FR-006 | partial | `_normalize_temporal_list_scope()` supports all/user/system and source-temporal route appends broad filters | coerce ordinary source-temporal list to task scope and ignore widening filters | backend unit |
-| FR-007 | partial | non-admin owner scoping exists; broad workflow scope can still list all user-owned workflow types | prevent normal query params from widening beyond task runs | backend unit |
-| FR-008 | missing | no recoverable notice for ignored workflow-scope URL state | add notice when legacy workflow-scope params are ignored | UI test |
-| FR-009 | partial | URL sync can emit `scope`, `workflowType`, and `entry` | remove ignored workflow-scope params from emitted URL | UI test |
+| FR-001 | implemented_verified | `frontend/src/entrypoints/tasks-list.tsx` always sends `scope=tasks`; `frontend/src/entrypoints/tasks-list.test.tsx` asserts default and legacy request URLs | no new implementation | UI + backend unit |
+| FR-002 | implemented_verified | `frontend/src/entrypoints/tasks-list.tsx` renders only Status and Repository filters; UI tests assert `Scope`, `Workflow Type`, and `Entry` are absent | no new implementation | UI test |
+| FR-003 | implemented_verified | `hasUnsupportedWorkflowScopeState()` and URL sync normalize broad legacy params; UI test covers broad URL state | no new implementation | UI test |
+| FR-004 | implemented_verified | `TABLE_COLUMNS` omits `Kind`, `Workflow Type`, and `Entry`; UI tests assert forbidden headers are absent | no new implementation | UI test |
+| FR-005 | implemented_verified | Status and Repository controls remain in `tasks-list.tsx`; UI tests cover status and repo request behavior | no new implementation | UI test |
+| FR-006 | implemented_verified | `_normalize_temporal_list_scope()` returns task scope for recognized broad scopes; backend tests cover `scope=all` and system workflow params | no new implementation | backend unit |
+| FR-007 | implemented_verified | source-temporal query construction ignores broad workflow/entry params while preserving ordinary owner scoping; backend tests assert task-run query | no new implementation | backend unit |
+| FR-008 | implemented_verified | `ignoredWorkflowScopeState` renders recoverable notice; UI legacy URL test asserts notice | no new implementation | UI test |
+| FR-009 | implemented_verified | URL sync omits `scope`, `workflowType`, and `entry`; UI legacy URL test asserts normalized URL state | no new implementation | UI test |
 | FR-010 | implemented_verified | React text interpolation renders labels/values as text | preserve behavior | final verify |
-| FR-011 | implemented_unverified | this feature's artifacts preserve MM-586 | carry traceability through plan/tasks/verification | final verify |
-| SC-001 | missing | no test covers broad URL normalization | add UI request assertions | UI test |
-| SC-002 | missing | existing tests expect broad controls | replace with absence/preserved filter tests | UI test |
-| SC-003 | missing | no test covers recoverable notice or URL rewrite | add UI test | UI test |
-| SC-004 | implemented_unverified | columns currently exclude forbidden headers | add focused assertion tied to MM-586 | UI test |
-| SC-005 | missing | existing backend test expects `scope=all` raw query | update/add backend tests for fail-safe task query | backend unit |
-| SC-006 | implemented_unverified | artifacts in progress | final verification | final verify |
-| DESIGN-REQ-005 | partial | normal page can still browse workflow kinds | remove broad controls and harden request boundary | UI + backend unit |
-| DESIGN-REQ-008 | implemented_unverified | table columns are task-oriented | add focused assertion | UI test |
-| DESIGN-REQ-009 | partial | system/manifest URL params can affect requests | normalize URL/API parameters safely | UI + backend unit |
-| DESIGN-REQ-017 | partial | old `state`/`repo` work, broad params unsafe | preserve task filters and ignore broad params with notice | UI test |
-| DESIGN-REQ-025 | partial | owner scoping exists, but filter params can widen workflow kinds | enforce task boundary and preserve text rendering | backend + UI test |
+| FR-011 | implemented_verified | `spec.md`, `plan.md`, `tasks.md`, and `verification.md` preserve MM-586 | no new implementation | final verify |
+| SC-001 | implemented_verified | UI tests assert default and legacy request URLs remain task scoped | no new implementation | UI test |
+| SC-002 | implemented_verified | UI tests assert broad controls are absent and task filters remain | no new implementation | UI test |
+| SC-003 | implemented_verified | UI legacy URL test asserts recoverable notice and URL rewrite | no new implementation | UI test |
+| SC-004 | implemented_verified | UI tests assert forbidden headers are absent | no new implementation | UI test |
+| SC-005 | implemented_verified | backend tests assert `scope=all` and system workflow params fail safe to task-run query | no new implementation | backend unit |
+| SC-006 | implemented_verified | `verification.md` records source-design and MM-586 coverage | no new implementation | final verify |
+| DESIGN-REQ-005 | implemented_verified | UI control removal plus task-scoped request tests | no new implementation | UI + backend unit |
+| DESIGN-REQ-008 | implemented_verified | `TABLE_COLUMNS` and header assertions prove task-oriented columns | no new implementation | UI test |
+| DESIGN-REQ-009 | implemented_verified | frontend legacy URL normalization and backend broad-param fail-safe tests | no new implementation | UI + backend unit |
+| DESIGN-REQ-017 | implemented_verified | old broad URL handling preserves task filters and shows notice | no new implementation | UI test |
+| DESIGN-REQ-025 | implemented_verified | backend task boundary plus JSX text rendering evidence | no new implementation | backend + UI test |
 
 ## Technical Context
 
