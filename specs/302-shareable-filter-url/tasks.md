@@ -13,7 +13,7 @@
 
 - Unit tests: `./tools/test_unit.sh tests/unit/api/routers/test_executions.py`
 - Integration tests: `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -86,7 +86,7 @@
 
 - [X] T018 Update specs/302-shareable-filter-url/tasks.md task statuses after implementation evidence is complete
 - [X] T019 Run `./tools/test_unit.sh` for required unit-suite verification
-- [X] T020 Run `/speckit.verify` for specs/302-shareable-filter-url and record final verification evidence
+- [X] T020 Run `/moonspec-verify` for specs/302-shareable-filter-url and record final verification evidence
 
 ---
 
@@ -121,7 +121,7 @@
 3. Implement frontend URL parser/validation and backend query validation.
 4. Run focused frontend and API tests.
 5. Run full unit verification.
-6. Run final `/speckit.verify` equivalent and preserve MM-589 in the outcome.
+6. Run final `/moonspec-verify` equivalent and preserve MM-589 in the outcome.
 
 ---
 
