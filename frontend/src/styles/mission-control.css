@@ -1006,6 +1006,7 @@ tbody tr:hover {
 
 .task-list-footer-pagination {
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .queue-pagination {

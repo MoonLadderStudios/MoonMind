@@ -697,7 +697,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     setListCursor(previousCursor === undefined || previousCursor === '' ? null : previousCursor);
   };
 
-  const pageRangeSummary = pageEnd > 0 ? `${pageStart} - ${pageEnd}` : '0 - 0';
+  const pageRangeSummary = sortedItems.length > 0 ? `${pageStart} - ${pageEnd}` : '0 - 0';
   const totalEntriesSummary = countSummary ? `${countSummary} total entries` : '';
   const resultsFooter = (
     <div className="queue-results-toolbar task-list-results-footer">

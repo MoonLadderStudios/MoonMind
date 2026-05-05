@@ -1,27 +1,17 @@
 [
   {
-    "id": 4231522366,
+    "id": 3191819151,
+    "disposition": "addressed",
+    "rationale": "Changed page range summary to show 0 - 0 when the current page has no sorted items."
+  },
+  {
+    "id": 3191819160,
+    "disposition": "addressed",
+    "rationale": "Added flex-wrap to the task list footer pagination container for narrow layouts."
+  },
+  {
+    "id": 4231866388,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary; the actionable inline retrieval-gateway auth-source comment is tracked separately."
-  },
-  {
-    "id": 3191489788,
-    "disposition": "addressed",
-    "rationale": "Removed legacy worker_token from the scoped retrieval auth-source set and updated the scope error text to reference retrieval tokens."
-  },
-  {
-    "id": 3191505546,
-    "disposition": "addressed",
-    "rationale": "Allowed retrieval_gateway_auth_missing to use degraded local fallback and added regression coverage for that path."
-  },
-  {
-    "id": 3191505551,
-    "disposition": "addressed",
-    "rationale": "Changed retrieval gateway authorization so an authenticated OIDC user is accepted before scoped retrieval-token header validation and added regression coverage."
-  },
-  {
-    "id": 4231537621,
-    "disposition": "not-applicable",
-    "rationale": "Top-level Codex review wrapper; actionable inline comments from the review are tracked separately."
+    "rationale": "Bot review summary only; the actionable inline comments from that review were handled separately."
   }
 ]
