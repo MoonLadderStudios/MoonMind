@@ -432,6 +432,9 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).toContain('--mm-executing-letter-sweep-direction: 1');
     expect(missionControlCss).toContain('--mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32)');
     expect(missionControlCss).toContain('--mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, white 32%)');
+    expect(missionControlCss).toContain('--mm-executing-border-glint-outset: 1px');
+    expect(missionControlCss).toContain('--mm-executing-border-glint-width: 3px');
+    expect(missionControlCss).toContain('--mm-executing-border-glint-opacity: 0.95');
     expect(missionControlCss).toContain('--mm-executing-moving-light-gradient:');
 
     const shimmerBlock = cssRuleBlocks(
@@ -483,6 +486,9 @@ describe('Mission Control shared entry', () => {
     expect(shimmerAfterBlock).toContain('mask-composite: exclude');
     expect(shimmerAfterBlock).toContain('-webkit-mask-composite: xor');
     expect(shimmerAfterBlock).toContain('z-index: 2');
+    expect(shimmerAfterBlock).toContain('inset: calc(-1 * var(--mm-executing-border-glint-outset))');
+    expect(shimmerAfterBlock).toContain('padding: var(--mm-executing-border-glint-width)');
+    expect(shimmerAfterBlock).toContain('opacity: var(--mm-executing-border-glint-opacity)');
     expect(cssRuleBlock(missionControlCss, '.status-letter-wave')).toContain('z-index: 3');
     const glyphBlock = cssRuleBlock(missionControlCss, '.status-letter-wave__glyph');
     expect(glyphBlock).toContain('--mm-letter-phase');

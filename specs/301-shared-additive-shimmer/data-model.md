@@ -50,7 +50,7 @@ Purpose: A clipped visual region that exposes the shared light field.
 
 Fields:
 - `fill_mask`: Status-pill interior mask rendered through `::before`.
-- `border_mask`: Status-pill border ring mask rendered through `::after`.
+- `border_mask`: Status-pill border ring mask rendered through `::after`, widened to overlap the physical border plus a narrow inner edge while the host clips any outside extent.
 - `text_mask`: Label-shaped mask rendered through `.status-letter-wave::after`.
 - `glyph_pulse_fallback`: Existing per-glyph brightening fallback for unsupported text clipping.
 
