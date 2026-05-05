@@ -1,37 +1,17 @@
 [
   {
-    "id": 3185306869,
+    "id": 4376107040,
+    "disposition": "not-applicable",
+    "rationale": "Quota warning from gemini-code-assist; no code action requested."
+  },
+  {
+    "id": 4224910915,
+    "disposition": "not-applicable",
+    "rationale": "Top-level automated review summary with no actionable feedback."
+  },
+  {
+    "id": 3185711626,
     "disposition": "addressed",
-    "rationale": "Updated Jira story output creation so sourceIssueKey is only used as a parent fallback for Sub-task issue types; normal Story creation now uses create_issue even when sourceIssueKey is present."
-  },
-  {
-    "id": 4224468342,
-    "disposition": "not-applicable",
-    "rationale": "Automated Codex review summary only; the actionable child review comments are classified separately."
-  },
-  {
-    "id": 3185321828,
-    "disposition": "addressed",
-    "rationale": "Changed Sub-task validation to require a global fallback or every generated story to carry a parentIssueKey, preventing mixed parent coverage from passing validation."
-  },
-  {
-    "id": 4224484578,
-    "disposition": "not-applicable",
-    "rationale": "Automated review body summarizing the same actionable validation gap handled by comment 3185321828."
-  },
-  {
-    "id": 4224428280,
-    "disposition": "not-applicable",
-    "rationale": "Bot review stated it had no feedback to provide."
-  },
-  {
-    "id": 3185270091,
-    "disposition": "addressed",
-    "rationale": "The feedback commit restores single-ended inwardIssue blocker handling and updates direction tests/template text."
-  },
-  {
-    "id": 4224429496,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary wrapper; actionable child discussion 3185270091 was addressed separately."
+    "rationale": "Legacy workflow-scope URLs now drop stale nextPageToken before task-scoped fetching, with UI test coverage."
   }
 ]
