@@ -64,6 +64,72 @@ describe('Tasks List Entrypoint', () => {
     });
   });
 
+  it('separates desktop header sorting from filter popovers', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    const scheduledHeaderButton = await screen.findByRole('button', {
+      name: /Scheduled\. Sorted descending\. Activate to sort ascending\./i,
+    });
+    const repositoryFilterButton = screen.getByRole('button', {
+      name: /Filter Repository\. No filter applied\./i,
+    });
+
+    fireEvent.click(repositoryFilterButton);
+
+    expect(screen.getByRole('dialog', { name: 'Repository filter' })).toBeTruthy();
+    expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
+
+    fireEvent.click(scheduledHeaderButton);
+
+    await waitFor(() => {
+      expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
+    });
+    expect(screen.queryByRole('dialog', { name: 'Scheduled filter' })).toBeNull();
+  });
+
+  it('keeps task filters available outside the desktop-only table layout', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    fireEvent.change(screen.getByLabelText('Mobile Status filter value'), {
+      target: { value: 'completed' },
+    });
+    fireEvent.change(screen.getByLabelText('Mobile Repository filter value'), {
+      target: { value: 'owner/repo' },
+    });
+    fireEvent.change(screen.getByLabelText('Mobile Runtime filter value'), {
+      target: { value: 'codex_cloud' },
+    });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&state=completed&repo=owner%2Frepo&targetRuntime=codex_cloud',
+      );
+    });
+  });
+
+  it('offers every supported runtime identifier in the runtime filter', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
+
+    const runtimeFilter = screen.getByLabelText('Runtime filter value') as HTMLSelectElement;
+    expect(Array.from(runtimeFilter.options).map((option) => option.value)).toEqual([
+      '',
+      'codex_cli',
+      'codex',
+      'claude_code',
+      'claude',
+      'gemini_cli',
+      'jules',
+      'codex_cloud',
+    ]);
+  });
+
   it('keeps workflow-kind browsing controls out of the normal task list', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
@@ -265,13 +331,14 @@ describe('Tasks List Entrypoint', () => {
     expect((await screen.findAllByText('—')).length).toBeGreaterThan(0);
   });
 
-  it('reuses the trimmed filters for both the request and the query key', async () => {
+  it('reuses the trimmed repository column filter for both the request and the query key', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     const baselineCalls = fetchSpy.mock.calls.length;
 
-    fireEvent.change(screen.getByLabelText('Repository'), {
+    fireEvent.click(screen.getByRole('button', { name: /Filter Repository\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Repository filter value'), {
       target: { value: 'owner/repo' },
     });
 
@@ -281,24 +348,27 @@ describe('Tasks List Entrypoint', () => {
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
       '/api/executions?source=temporal&pageSize=50&scope=tasks&repo=owner%2Frepo',
     );
+    await screen.findAllByText('Example task');
 
-    fireEvent.change(screen.getByLabelText('Repository'), {
+    fireEvent.click(screen.getByRole('button', { name: /Repository filter: owner\/repo/i }));
+    fireEvent.change(screen.getByLabelText('Repository filter value'), {
       target: { value: 'owner/repo ' },
     });
 
-    const repositoryInput = screen.getByLabelText('Repository') as HTMLInputElement;
+    const repositoryInput = screen.getByLabelText('Repository filter value') as HTMLInputElement;
     await waitFor(() => {
       expect(repositoryInput.value).toBe('owner/repo ');
     });
     expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
   });
 
-  it('labels the lifecycle filter as status and exposes canonical status options', async () => {
+  it('labels the lifecycle column filter as status and exposes canonical status options', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
-    const statusFilter = screen.getByLabelText('Status') as HTMLSelectElement;
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    const statusFilter = screen.getByLabelText('Status filter value') as HTMLSelectElement;
     const options = Array.from(statusFilter.options).map((option) => option.value);
 
     expect(options).toEqual([
@@ -368,7 +438,7 @@ describe('Tasks List Entrypoint', () => {
     const scheduledHeader = tableWrapper?.querySelector<HTMLElement>('th');
 
     expect(controlDeck).toBeTruthy();
-    expect(controlDeck?.querySelector('form.task-list-control-grid')).toBeTruthy();
+    expect(controlDeck?.querySelector('form.task-list-control-grid')).toBeNull();
     expect(screen.queryByRole('button', { name: /^Kind\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Workflow Type\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Entry\./i })).toBeNull();
@@ -410,7 +480,7 @@ describe('Tasks List Entrypoint', () => {
     const controlGrid = controlDeck.querySelector<HTMLElement>('.task-list-control-grid');
     const tableWrapper = dataSlab.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
 
-    expect(controlGrid).toBeTruthy();
+    expect(controlGrid).toBeNull();
     expect(tableWrapper).toBeTruthy();
 
     const shellPanelStyles = getComputedStyle(shellPanel as HTMLElement);
@@ -419,11 +489,6 @@ describe('Tasks List Entrypoint', () => {
     expect(shellPanelStyles.boxShadow).toBe('none');
     expect(shellPanelStyles.paddingTop).toBe('0px');
     expect(shellPanelStyles.minHeight).toBe('0px');
-
-    const controlGridStyles = getComputedStyle(controlGrid as HTMLElement);
-    expect(controlGridStyles.width).toBe('100%');
-    expect(controlGridStyles.maxWidth).toBe('none');
-    expect(controlGridStyles.gridTemplateColumns).toBe('repeat(4, minmax(12rem, 1fr))');
 
     const dataSlabStyles = getComputedStyle(dataSlab);
     expect(dataSlabStyles.gap).toBe('0px');
@@ -436,24 +501,39 @@ describe('Tasks List Entrypoint', () => {
     expect(tableWrapperStyles.backgroundColor).toBe('rgba(0, 0, 0, 0)');
   });
 
-  it('shows active filter chips and clears filters from the control deck', async () => {
+  it('shows clickable active column filter chips and clears filters from the control deck', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'completed' } });
-    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'owner/repo' } });
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Status filter value'), { target: { value: 'completed' } });
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Repository\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Repository filter value'), { target: { value: 'owner/repo' } });
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Runtime filter value'), { target: { value: 'codex_cli' } });
 
     await waitFor(() => {
       const activeFilterText = document.querySelector('.task-list-filter-chips')?.textContent || '';
       expect(activeFilterText).toContain('completed');
       expect(activeFilterText).toContain('owner/repo');
+      expect(activeFilterText).toContain('Codex CLI');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Repository filter: owner/repo' }));
+    expect(screen.getByRole('dialog', { name: 'Repository filter' })).toBeTruthy();
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&state=completed&repo=owner%2Frepo&targetRuntime=codex_cli',
+      );
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
 
     await waitFor(() => {
-      expect((screen.getByLabelText('Status') as HTMLSelectElement).value).toBe('');
-      expect((screen.getByLabelText('Repository') as HTMLInputElement).value).toBe('');
+      fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+      expect((screen.getByLabelText('Status filter value') as HTMLSelectElement).value).toBe('');
     });
   });
 
