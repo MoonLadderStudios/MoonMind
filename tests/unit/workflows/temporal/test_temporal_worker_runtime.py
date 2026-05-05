@@ -280,6 +280,7 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
     }
     assert plan["nodes"][0]["inputs"]["selectedSkill"] == "jira.get_issue"
     assert plan["nodes"][0]["inputs"]["type"] == "tool"
+    assert plan["nodes"][0]["inputs"]["issueKey"] == "MM-559"
     assert plan["nodes"][0]["inputs"]["source"] == {
         "kind": "preset-derived",
         "presetId": "jira-flow",

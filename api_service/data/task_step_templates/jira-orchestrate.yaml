@@ -58,7 +58,11 @@ steps:
       linkType: Blocks
     tool:
       id: jira.check_blockers
-      args: {}
+      args:
+        targetIssueKey: "{{ inputs.jira_issue_key }}"
+        blockerPreflight:
+          targetIssueKey: "{{ inputs.jira_issue_key }}"
+          linkType: Blocks
   - title: Load Jira preset brief
     instructions: |-
       Fetch Jira issue {{ inputs.jira_issue_key }} through the trusted Jira tool surface.
