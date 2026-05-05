@@ -1502,6 +1502,13 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert expanded["steps"][1]["title"] == "Check Jira blockers before implementation"
             assert expanded["steps"][1]["type"] == "tool"
             assert expanded["steps"][1]["tool"]["id"] == "jira.check_blockers"
+            assert expanded["steps"][1]["tool"]["inputs"] == {
+                "targetIssueKey": "MM-328",
+                "blockerPreflight": {
+                    "targetIssueKey": "MM-328",
+                    "linkType": "Blocks",
+                },
+            }
             assert expanded["steps"][1]["targetIssueKey"] == "MM-328"
             assert expanded["steps"][1]["blockerPreflight"] == {
                 "targetIssueKey": "MM-328",
