@@ -57,6 +57,13 @@ class _ExecuteResult:
     def scalars(self) -> _ScalarRows:
         return _ScalarRows(self._rows)
 
+class _EmptyTemporalWorkflowIterator:
+    current_page: list[object] = []
+    next_page_token: bytes | None = None
+
+    async def fetch_next_page(self) -> None:
+        return None
+
 class _QueryHandle:
     def __init__(
         self,
@@ -298,6 +305,41 @@ def test_list_executions_rejects_non_admin_owner_type_override() -> None:
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "execution_forbidden"
     mock_service.list_executions.assert_not_awaited()
+
+def test_temporal_task_scope_ignores_broad_workflow_and_entry_filters() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        execute=AsyncMock()
+    )
+    temporal_client = _override_temporal_client(app)
+    temporal_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+    temporal_client.list_workflows = Mock(return_value=_EmptyTemporalWorkflowIterator())
+    user = _override_user_dependencies(app, is_superuser=False)
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "scope": "tasks",
+                "workflowType": "MoonMind.ProviderProfileManager",
+                "entry": "manifest",
+                "pageSize": 25,
+            },
+        )
+
+    assert response.status_code == 200
+    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    assert 'WorkflowType="MoonMind.Run"' in query
+    assert 'mm_entry="run"' in query
+    assert 'WorkflowType="MoonMind.ProviderProfileManager"' not in query
+    assert 'mm_entry="manifest"' not in query
+    assert f'mm_owner_id="{user.id}"' in query
+    temporal_client.list_workflows.assert_called_once()
+    assert temporal_client.list_workflows.call_args.kwargs["query"] == query
 
 def test_step_ledger_contract_models_serialize_using_public_aliases() -> None:
     progress = ExecutionProgressModel.model_validate(

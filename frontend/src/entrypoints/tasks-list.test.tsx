@@ -36,6 +36,11 @@ describe('Tasks List Entrypoint', () => {
     } as Response);
   });
 
+  function renderAt(path: string) {
+    window.history.pushState({}, 'Test', path);
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+  }
+
   it('announces the current sort state on table headers', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
@@ -64,43 +69,36 @@ describe('Tasks List Entrypoint', () => {
     });
   });
 
-  it('defaults to user task scope but exposes raw all-workflows scope', async () => {
+  it('uses the canonical task-run scope without broad workflow controls', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
-    const scopeFilter = screen.getByLabelText('Scope') as HTMLSelectElement;
-    expect(scopeFilter.value).toBe('tasks');
-    expect((screen.getByLabelText('Workflow Type') as HTMLSelectElement).disabled).toBe(true);
-
-    const baselineCalls = fetchSpy.mock.calls.length;
-    fireEvent.change(scopeFilter, { target: { value: 'all' } });
-
-    await waitFor(() => {
-      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
-    });
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=all',
+      '/api/executions?source=temporal&pageSize=50&scope=tasks',
     );
-    expect((screen.getByLabelText('Workflow Type') as HTMLSelectElement).disabled).toBe(false);
+    expect(screen.queryByLabelText('Scope')).toBeNull();
+    expect(screen.queryByLabelText('Workflow Type')).toBeNull();
+    expect(screen.queryByLabelText('Entry')).toBeNull();
   });
 
-  it('keeps explicit task scope in the URL when entry filters are active', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
+  it.each([
+    ['/tasks/list?scope=system', /broad workflow browsing/i],
+    ['/tasks/list?scope=all', /broad workflow browsing/i],
+    ['/tasks/list?workflowType=MoonMind.ProviderProfileManager', /broad workflow browsing/i],
+    ['/tasks/list?entry=manifest', /manifest workflows/i],
+  ])('fails safe for broad compatibility URL %s', async (path, noticePattern) => {
+    renderAt(path);
 
     await screen.findAllByText('Example task');
-    const baselineCalls = fetchSpy.mock.calls.length;
-
-    fireEvent.change(screen.getByLabelText('Entry'), { target: { value: 'run' } });
-
-    await waitFor(() => {
-      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
-    });
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&entry=run',
+      '/api/executions?source=temporal&pageSize=50&scope=tasks',
     );
-    expect(window.location.search).toContain('scope=tasks');
-    expect(window.location.search).toContain('entry=run');
+    expect(window.location.search).not.toContain('scope=system');
+    expect(window.location.search).not.toContain('scope=all');
+    expect(window.location.search).not.toContain('workflowType=');
+    expect(window.location.search).not.toContain('entry=');
+    expect(screen.getByText(noticePattern)).toBeTruthy();
   });
 
   it('renders active task-list pills with the shared shimmer selector contract while keeping inactive pills plain', async () => {
@@ -299,21 +297,106 @@ describe('Tasks List Entrypoint', () => {
     expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
   });
 
-  it('preserves the default task scope in shared URLs when entry filters are set', async () => {
+  it('keeps manifest compatibility URLs recoverable without ordinary broad rows', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-run',
+            source: 'temporal',
+            workflowType: 'MoonMind.Run',
+            title: 'Task run row',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            entry: 'run',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'manifest-row',
+            source: 'temporal',
+            workflowType: 'MoonMind.ManifestIngest',
+            title: 'Manifest ingest row',
+            status: 'running',
+            state: 'executing',
+            rawState: 'executing',
+            entry: 'manifest',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderAt('/tasks/list?entry=manifest');
+
+    expect(await screen.findByRole('link', { name: 'Task run row' })).toBeTruthy();
+    expect(screen.queryByText('Manifest ingest row')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open Manifests' }).getAttribute('href')).toBe(
+      '/tasks/manifests',
+    );
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks',
+    );
+  });
+
+  it('does not render broad workflow metadata or controls on ordinary task surfaces', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-run',
+            source: 'temporal',
+            workflowType: 'MoonMind.Run',
+            targetRuntime: 'codex_cli',
+            targetSkill: 'moonspec-implement',
+            title: 'Task run row',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            entry: 'run',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'system-row',
+            source: 'temporal',
+            workflowType: 'MoonMind.ProviderProfileManager',
+            title: 'System workflow row',
+            status: 'running',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'manifest-row',
+            source: 'temporal',
+            workflowType: 'MoonMind.ManifestIngest',
+            title: 'Manifest ingest row',
+            status: 'running',
+            state: 'executing',
+            rawState: 'executing',
+            entry: 'manifest',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
-    await screen.findAllByText('Example task');
-    const baselineCalls = fetchSpy.mock.calls.length;
-
-    fireEvent.change(screen.getByLabelText('Entry'), { target: { value: 'manifest' } });
-
-    await waitFor(() => {
-      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
-    });
-    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&entry=manifest',
-    );
-    expect(window.location.search).toBe('?scope=tasks&entry=manifest&limit=50');
+    expect(await screen.findByRole('link', { name: 'Task run row' })).toBeTruthy();
+    expect(screen.queryByText('System workflow row')).toBeNull();
+    expect(screen.queryByText('Manifest ingest row')).toBeNull();
+    expect(screen.queryByLabelText('Scope')).toBeNull();
+    expect(screen.queryByLabelText('Workflow Type')).toBeNull();
+    expect(screen.queryByLabelText('Entry')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Kind\./i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Workflow Type\./i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Entry\./i })).toBeNull();
+    expect(screen.queryByText('MoonMind.Run')).toBeNull();
+    expect(screen.queryByText('MoonMind.ProviderProfileManager')).toBeNull();
+    expect(screen.queryByText('manifest')).toBeNull();
   });
 
   it('labels the lifecycle filter as status and exposes canonical status options', async () => {

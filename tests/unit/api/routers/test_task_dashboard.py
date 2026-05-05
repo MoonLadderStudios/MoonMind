@@ -356,6 +356,20 @@ def test_react_tasks_list_and_detail_boot_include_dashboard_config(client: TestC
     assert detail.status_code == 200
     assert "dashboardConfig" in detail.text
 
+def test_tasks_list_route_uses_canonical_boot_payload(client: TestClient) -> None:
+    response = client.get("/tasks/list?scope=system&entry=manifest")
+
+    assert response.status_code == 200
+    boot_payload = _extract_boot_payload(response.text)
+
+    assert boot_payload["page"] == "tasks-list"
+    assert boot_payload["apiBase"] == "/api"
+    assert boot_payload["initialData"]["layout"]["dataWidePanel"] is True
+    dashboard_config = boot_payload["initialData"]["dashboardConfig"]
+    assert dashboard_config["initialPath"] == "/tasks/list"
+    assert dashboard_config["sources"]["temporal"]["list"].startswith("/api/")
+    assert dashboard_config["sources"]["temporal"]["detail"].startswith("/api/")
+
 def test_react_shell_renders_build_metadata_with_accurate_labels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

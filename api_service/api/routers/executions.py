@@ -285,6 +285,23 @@ def _normalize_temporal_list_scope(
     return cast(Literal["tasks", "user", "system", "all"], normalized)
 
 
+def _task_scope_temporal_filters(
+    temporal_scope: Literal["tasks", "user", "system", "all"],
+    *,
+    workflow_type: str | None,
+    entry: str | None,
+) -> tuple[str | None, str | None]:
+    if temporal_scope != "tasks":
+        return workflow_type, entry
+    return None, None
+
+
+def _is_task_scope_execution(record: object) -> bool:
+    workflow_type = _enum_value(getattr(record, "workflow_type", None))
+    entry = str(getattr(record, "entry", "") or "").strip().lower()
+    return workflow_type == "MoonMind.Run" and entry == "run"
+
+
 def _canonicalize_execution_identifier(raw_identifier: str) -> tuple[str, bool]:
     canonical = TemporalExecutionRecord.canonicalize_identifier(raw_identifier)
     return canonical, canonical != raw_identifier
@@ -4190,15 +4207,22 @@ async def list_executions(
                 workflow_type=workflow_type,
                 entry=entry,
             )
+            effective_workflow_type, effective_entry = _task_scope_temporal_filters(
+                temporal_scope,
+                workflow_type=workflow_type,
+                entry=entry,
+            )
             scope_query = _TEMPORAL_SCOPE_QUERIES[temporal_scope]
             if scope_query:
                 query_parts.append(scope_query)
-            if workflow_type:
-                query_parts.append(f'WorkflowType="{escape_val(workflow_type)}"')
+            if effective_workflow_type:
+                query_parts.append(
+                    f'WorkflowType="{escape_val(effective_workflow_type)}"'
+                )
             if state:
                 query_parts.append(f'mm_state="{escape_val(state)}"')
-            if entry:
-                query_parts.append(f'mm_entry="{escape_val(entry)}"')
+            if effective_entry:
+                query_parts.append(f'mm_entry="{escape_val(effective_entry)}"')
             if effective_owner_type:
                 query_parts.append(
                     f'mm_owner_type="{escape_val(effective_owner_type)}"'
@@ -4258,6 +4282,10 @@ async def list_executions(
                     from types import SimpleNamespace
 
                     record_obj = SimpleNamespace(**payload)
+                    if temporal_scope == "tasks" and not _is_task_scope_execution(
+                        record_obj
+                    ):
+                        continue
                     if (
                         not hasattr(record_obj, "updated_at")
                         or record_obj.updated_at is None
