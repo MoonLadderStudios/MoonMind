@@ -119,8 +119,8 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert blocker_step["type"] == "tool"
         assert blocker_step["tool"]["id"] == "jira.check_blockers"
         assert "deterministic trusted Jira blocker preflight" in blocker_step["instructions"]
-        assert "inwardIssue" in blocker_step["instructions"]
-        assert "outwardIssue" in blocker_step["instructions"]
+        assert "other issue as outwardIssue" in blocker_step["instructions"]
+        assert "other issue as inwardIssue" in blocker_step["instructions"]
         assert "Done" in blocker_step["instructions"]
         assert "non-blocker" in blocker_step["instructions"]
         assert "status cannot be determined" in blocker_step["instructions"]
