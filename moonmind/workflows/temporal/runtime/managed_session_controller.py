@@ -44,6 +44,7 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
 
 from .github_auth_broker import GitHubAuthBrokerManager
+from .git_auth import build_github_token_git_environment
 from .managed_session_store import ManagedSessionStore
 from .managed_session_supervisor import ManagedSessionSupervisor
 
@@ -59,10 +60,6 @@ _SENSITIVE_ENV_KEY_PATTERN = re.compile(
     r"(?i)(?:token|secret|password|key|credential|auth)"
 )
 _GIT_COMMAND_LOCALE = {"LC_ALL": "C", "LANG": "C"}
-_GITHUB_TOKEN_GIT_CREDENTIAL_HELPER = (
-    '!f() { test "$1" = get || exit 0; '
-    'echo username=x-access-token; echo password="$GITHUB_TOKEN"; }; f'
-)
 _SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
 _CONTAINER_LOG_EXCERPT_TAIL_LINES = 40
 _CONTAINER_LOG_EXCERPT_MAX_CHARS = 2000
@@ -783,18 +780,13 @@ class DockerCodexManagedSessionController:
             raise RuntimeError(str(exc)) from exc
         token = str(token or "").strip()
         if token:
-            env["GITHUB_TOKEN"] = token
-            env["GIT_TERMINAL_PROMPT"] = str(
-                request_env.get("GIT_TERMINAL_PROMPT") or "0"
-            )
             # Avoid depending on persistent per-user gh setup in the worker. The
             # clone happens before the managed agent container starts.
-            env["GIT_CONFIG_COUNT"] = "2"
-            env["GIT_CONFIG_KEY_0"] = "credential.https://github.com.helper"
-            env["GIT_CONFIG_VALUE_0"] = ""
-            env["GIT_CONFIG_KEY_1"] = "credential.https://github.com.helper"
-            env["GIT_CONFIG_VALUE_1"] = _GITHUB_TOKEN_GIT_CREDENTIAL_HELPER
-            return env
+            return build_github_token_git_environment(
+                token,
+                base_env=env,
+                terminal_prompt=str(request_env.get("GIT_TERMINAL_PROMPT") or "0"),
+            )
 
         terminal_prompt = str(request_env.get("GIT_TERMINAL_PROMPT") or "").strip()
         if terminal_prompt:

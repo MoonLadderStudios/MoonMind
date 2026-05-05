@@ -23,6 +23,7 @@ from moonmind.schemas.agent_runtime_models import (
 from moonmind.utils.logging import SecretRedactor
 
 from .github_auth_broker import GitHubAuthBrokerManager
+from .git_auth import build_github_token_git_environment
 from .store import ManagedRunStore
 from .log_streamer import RuntimeLogStreamer
 from .managed_api_key_resolve import resolve_github_token_for_launch
@@ -91,6 +92,29 @@ class ManagedRuntimeLauncher:
         if repo_path.exists():
             return str(repo_path.resolve())
         return None
+
+    @staticmethod
+    def _source_uses_github_https(source: str | None) -> bool:
+        normalized = str(source or "").strip().lower()
+        return normalized.startswith(("https://github.com/", "http://github.com/"))
+
+    @classmethod
+    def _request_workspace_needs_github_https_auth(
+        cls,
+        request: AgentExecutionRequest,
+        workspace_path: str | Path | None,
+    ) -> bool:
+        if workspace_path is not None:
+            return False
+        workspace_spec = (
+            request.workspace_spec
+            if isinstance(request.workspace_spec, dict)
+            else {}
+        )
+        repo_ref = workspace_spec.get("repository") or workspace_spec.get("repo")
+        if not isinstance(repo_ref, str):
+            return False
+        return cls._source_uses_github_https(cls._normalize_clone_source(repo_ref))
 
     def _emit_system_annotation(
         self,
@@ -190,18 +214,22 @@ class ManagedRuntimeLauncher:
         args: list[str],
         *,
         allow_failure: bool = False,
+        env: dict[str, str] | None = None,
     ) -> bool:
         process = await asyncio.create_subprocess_exec(
             "git",
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         stdout, stderr = await process.communicate()
         if process.returncode == 0:
             return True
 
-        redactor = SecretRedactor.from_environ()
+        redactor = SecretRedactor.from_environ(
+            extra_secrets=[str((env or {}).get("GITHUB_TOKEN") or "")]
+        )
         self._logger.warning(
             "git %s failed rc=%s stdout=%s stderr=%s",
             redactor.scrub(" ".join(args)),
@@ -219,6 +247,7 @@ class ManagedRuntimeLauncher:
         run_id: str,
         request: AgentExecutionRequest,
         workspace_path: str | None,
+        git_env: dict[str, str] | None = None,
     ) -> str | None:
         if workspace_path:
             return workspace_path
@@ -244,11 +273,18 @@ class ManagedRuntimeLauncher:
 
         run_workspace.parent.mkdir(parents=True, exist_ok=True)
         branch = self._extract_workspace_branch(workspace_spec)
+        command_env = (
+            git_env if self._source_uses_github_https(clone_source) else None
+        )
         clone_args: list[str] = ["clone"]
         if branch and not Path(clone_source).exists():
             clone_args.extend(["--branch", branch, "--single-branch"])
         clone_args.extend(["--", clone_source, str(run_workspace)])
-        cloned = await self._run_git_command(clone_args, allow_failure=True)
+        cloned = await self._run_git_command(
+            clone_args,
+            allow_failure=True,
+            env=command_env,
+        )
         if not cloned:
             return None
 
@@ -256,15 +292,18 @@ class ManagedRuntimeLauncher:
             checkout_ok = await self._run_git_command(
                 ["-C", str(run_workspace), "checkout", branch],
                 allow_failure=True,
+                env=command_env,
             )
             if not checkout_ok:
                 await self._run_git_command(
                     ["-C", str(run_workspace), "fetch", "origin", branch],
                     allow_failure=True,
+                    env=command_env,
                 )
                 await self._run_git_command(
                     ["-C", str(run_workspace), "checkout", "-B", branch, f"origin/{branch}"],
                     allow_failure=True,
+                    env=command_env,
                 )
         return str(run_workspace)
 
@@ -288,12 +327,14 @@ class ManagedRuntimeLauncher:
         self,
         *cmd: str,
         cwd: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            env=env,
         )
         stdout, stderr = await process.communicate()
         return (
@@ -306,10 +347,12 @@ class ManagedRuntimeLauncher:
         self,
         *cmd: str,
         cwd: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> None:
         returncode, stdout_text, stderr_text = await self._run_command(
             *cmd,
             cwd=cwd,
+            env=env,
         )
         if returncode == 0:
             return
@@ -327,6 +370,7 @@ class ManagedRuntimeLauncher:
         run_id: str,
         request: AgentExecutionRequest,
         workspace_path: str | Path | None,
+        git_env: dict[str, str] | None = None,
     ) -> str | None:
         if workspace_path is not None:
             resolved = Path(workspace_path).expanduser().resolve()
@@ -359,12 +403,17 @@ class ManagedRuntimeLauncher:
             or workspace_spec.get("branch")
             or ""
         ).strip()
+        command_env = git_env if self._source_uses_github_https(source) else None
 
         clone_cmd = ["git", "clone"]
         if branch:
             clone_cmd.extend(["--branch", branch, "--single-branch"])
         clone_cmd.extend([source, str(repo_path)])
-        await self._run_checked_command(*clone_cmd, cwd=str(workspace_root))
+        await self._run_checked_command(
+            *clone_cmd,
+            cwd=str(workspace_root),
+            env=command_env,
+        )
 
         new_branch = str(workspace_spec.get("targetBranch") or "").strip()
         if new_branch:
@@ -374,6 +423,7 @@ class ManagedRuntimeLauncher:
                 str(repo_path),
                 "checkout",
                 new_branch,
+                env=command_env,
             )
             if returncode != 0:
                 failure_detail = (stderr_text or stdout_text).lower()
@@ -382,7 +432,11 @@ class ManagedRuntimeLauncher:
                     or "pathspec" in failure_detail
                 )
                 if not branch_missing:
-                    redactor = SecretRedactor.from_environ()
+                    redactor = SecretRedactor.from_environ(
+                        extra_secrets=[
+                            str((command_env or {}).get("GITHUB_TOKEN") or "")
+                        ]
+                    )
                     detail = redactor.scrub(stderr_text or stdout_text or "no output")
                     rendered_cmd = " ".join(
                         shlex.quote(part)
@@ -405,6 +459,7 @@ class ManagedRuntimeLauncher:
                     "checkout",
                     "-b",
                     new_branch,
+                    env=command_env,
                 )
 
         return str(repo_path)
@@ -653,16 +708,31 @@ class ManagedRuntimeLauncher:
 
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
         strategy = get_strategy(profile.runtime_id)
+        launch_github_token = (
+            await resolve_github_token_for_launch()
+            if self._request_workspace_needs_github_https_auth(
+                request,
+                workspace_path,
+            )
+            else None
+        )
+        git_host_env = (
+            build_github_token_git_environment(launch_github_token)
+            if launch_github_token
+            else None
+        )
         resolved_workspace_path = await self._prepare_workspace_path(
             run_id=run_id,
             request=request,
             workspace_path=workspace_path,
+            git_env=git_host_env,
         )
         if resolved_workspace_path is None:
             resolved_workspace_path = await self._prepare_workspace(
                 run_id=run_id,
                 request=request,
                 workspace_path=workspace_path,
+                git_env=git_host_env,
             )
 
         # Phase 4 Materialization
@@ -808,6 +878,8 @@ class ManagedRuntimeLauncher:
             env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
 
         github_token = await resolve_github_token_for_launch(env_overrides)
+        if not github_token:
+            github_token = launch_github_token
         cleanup_paths: list[str] = list(materializer.generated_files)
         cleanup_paths.extend(reversed(materializer.generated_dirs))
         deferred_cleanup_paths: list[str] = []

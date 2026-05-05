@@ -230,6 +230,89 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
     assert captured_env["GITHUB_TOKEN"] == "ghp-runtime"
 
 @pytest.mark.asyncio
+async def test_launch_seeds_github_git_auth_before_initial_clone(
+    tmp_path, monkeypatch
+):
+    token = "ghp_private_clone_token"
+    store_root = tmp_path / "store"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(store_root))
+
+    async def _fake_resolve(*args, **kwargs):
+        return token
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    class _FakeProcess:
+        pid = 779
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    clone_envs: list[dict[str, str]] = []
+    clone_commands: list[tuple[object, ...]] = []
+
+    async def _fake_run_checked_command(self, *cmd, **kwargs):
+        if cmd[:2] == ("git", "clone"):
+            clone_commands.append(cmd)
+            env = kwargs.get("env")
+            assert isinstance(env, dict)
+            clone_envs.append(dict(env))
+            repo_path = Path(cmd[-1])
+            (repo_path / ".git").mkdir(parents=True)
+            (repo_path / ".git" / "config").write_text(
+                "[core]\n\trepositoryformatversion = 0\n",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._run_checked_command",
+        _fake_run_checked_command,
+    )
+
+    store = ManagedRunStore(store_root)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(command_template=["echo", "hello"])
+    request = _make_request(
+        workspace_spec={
+            "repository": "MoonLadderStudios/Tactics",
+            "startingBranch": "main",
+        }
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-private-clone",
+        request=request,
+        profile=profile,
+    )
+    await process.wait()
+    await launcher.cleanup_run_support("run-private-clone")
+
+    assert len(clone_commands) == 1
+    assert token not in " ".join(str(part) for part in clone_commands[0])
+    clone_env = clone_envs[0]
+    assert clone_env["GITHUB_TOKEN"] == token
+    assert clone_env["GIT_TERMINAL_PROMPT"] == "0"
+    assert clone_env["GIT_CONFIG_KEY_0"] == "credential.https://github.com.helper"
+    assert clone_env["GIT_CONFIG_VALUE_0"] == ""
+    assert clone_env["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
+    assert "$GITHUB_TOKEN" in clone_env["GIT_CONFIG_VALUE_1"]
+    assert token not in clone_env["GIT_CONFIG_VALUE_1"]
+
+@pytest.mark.asyncio
 async def test_launch_registers_generated_support_dir_for_cleanup(tmp_path, monkeypatch):
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")

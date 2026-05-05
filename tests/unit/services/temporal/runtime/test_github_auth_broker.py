@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
+import shutil
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -38,23 +39,30 @@ async def test_github_auth_broker_serves_token_and_cleans_socket():
     assert not Path(socket_path).exists()
 
 @pytest.mark.asyncio
-async def test_github_auth_broker_keeps_shared_mm_gh_root_traversable_only(tmp_path):
+async def test_github_auth_broker_keeps_shared_mm_gh_root_traversable_only():
     manager = GitHubAuthBrokerManager()
-    shared_root = tmp_path / "mm-gh"
+    # AF_UNIX socket paths are short on Linux; keep this test's path under /tmp
+    # so xdist's long per-worker tmp_path prefix does not exceed that limit.
+    short_base = Path("/tmp") / f"mm-gh-root-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    shared_root = short_base / "mm-gh"
     socket_dir = shared_root / "0123456789abcdef"
     socket_path = socket_dir / "github.sock"
 
-    await manager.start(
-        run_id="run-1",
-        token="ghp_testtoken123",
-        socket_path=str(socket_path),
-    )
+    try:
+        await manager.start(
+            run_id="run-1",
+            token="ghp_testtoken123",
+            socket_path=str(socket_path),
+        )
 
-    assert (shared_root.stat().st_mode & 0o777) == 0o711
-    assert (socket_dir.stat().st_mode & 0o777) == 0o700
-    assert (socket_path.stat().st_mode & 0o777) == 0o600
+        assert (shared_root.stat().st_mode & 0o777) == 0o711
+        assert (socket_dir.stat().st_mode & 0o777) == 0o700
+        assert (socket_path.stat().st_mode & 0o777) == 0o600
 
-    await manager.stop("run-1")
+        await manager.stop("run-1")
+    finally:
+        await manager.stop("run-1")
+        shutil.rmtree(short_base, ignore_errors=True)
 
 def test_run_gh_wrapper_clears_ambient_gh_token(
     monkeypatch: pytest.MonkeyPatch,
