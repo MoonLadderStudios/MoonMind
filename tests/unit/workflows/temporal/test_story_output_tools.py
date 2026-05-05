@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from moonmind.workflows.temporal.story_output_tools import (
+    check_jira_blockers,
     create_jira_issues_from_stories,
     create_jira_orchestrate_tasks_from_issue_mappings,
 )
@@ -17,6 +18,8 @@ class _FakeJiraService:
         self.link_requests: list[Any] = []
         self.search_requests: list[Any] = []
         self.search_response: Any = {"issues": []}
+        self.issue_responses: dict[str, Any] = {}
+        self.get_issue_requests: list[Any] = []
         self.existing_links: set[tuple[str, str]] = set()
         self.fail_link_after: int | None = None
 
@@ -41,6 +44,10 @@ class _FakeJiraService:
     async def search_issues(self, request):
         self.search_requests.append(request)
         return self.search_response
+
+    async def get_issue(self, request):
+        self.get_issue_requests.append(request)
+        return self.issue_responses.get(request.issue_key, {"key": request.issue_key})
 
     async def list_create_issue_types(self, request):
         return {
@@ -296,6 +303,36 @@ async def test_create_jira_issues_explains_protected_branch_handoff_failure():
                     "push_status": "protected_branch",
                     "push_branch": "main",
                 }
+            },
+            story_fetcher=fetcher,
+        )
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_explains_no_commit_handoff_failure():
+    async def fetcher(_repo: str, _ref: str, _path: str) -> str:
+        raise AssertionError("fetcher should not run for unpublished handoff")
+
+    with pytest.raises(ValueError, match="made no commits"):
+        await create_jira_issues_from_stories(
+            {
+                "repository": "MoonLadderStudios/Tactics",
+                "targetBranch": "breakdown-branch",
+                "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
+                "storyOutput": {
+                    "mode": "jira",
+                    "fallback": "fail",
+                    "jira": {
+                        "projectKey": "MM",
+                        "issueTypeId": "10001",
+                        "dependencyMode": "none",
+                    },
+                },
+            },
+            {
+                "previousOutputs": {
+                    "push_status": "no_commits",
+                    "push_branch": "breakdown-branch",
+                },
             },
             story_fetcher=fetcher,
         )
@@ -644,6 +681,149 @@ async def test_create_jira_issues_linear_blocker_chain_creates_adjacent_links():
         ("MM-2", "MM-3"),
     ]
     assert [item["status"] for item in jira["linkResults"]] == ["created", "created"]
+
+@pytest.mark.asyncio
+async def test_check_jira_blockers_ignores_outward_links_from_target_issue():
+    service = _FakeJiraService()
+    service.issue_responses["MM-1"] = {
+        "key": "MM-1",
+        "fields": {
+            "issuelinks": [
+                {
+                    "type": {
+                        "name": "Blocks",
+                        "outward": "blocks",
+                        "inward": "is blocked by",
+                    },
+                    "outwardIssue": {
+                        "key": "MM-2",
+                        "fields": {"status": {"name": "Backlog"}},
+                    },
+                }
+            ]
+        },
+    }
+
+    result = await check_jira_blockers(
+        {"targetIssueKey": "MM-1"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["blockingIssues"] == []
+    assert "no Jira blocker links" in result.outputs["summary"]
+    assert [request.issue_key for request in service.get_issue_requests] == ["MM-1"]
+
+@pytest.mark.asyncio
+async def test_check_jira_blockers_blocks_only_on_inward_unresolved_blocks_link():
+    service = _FakeJiraService()
+    service.issue_responses["MM-2"] = {
+        "key": "MM-2",
+        "fields": {
+            "issuelinks": [
+                {
+                    "type": {
+                        "name": "Blocks",
+                        "outward": "blocks",
+                        "inward": "is blocked by",
+                    },
+                    "inwardIssue": {
+                        "key": "MM-1",
+                        "fields": {"status": {"name": "Backlog"}},
+                    },
+                }
+            ]
+        },
+    }
+
+    result = await check_jira_blockers(
+        {"targetIssueKey": "MM-2"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["blockingIssues"] == [
+        {
+            "issueKey": "MM-1",
+            "status": "Backlog",
+            "statusKnown": True,
+            "linkType": "Blocks",
+            "relationship": "blocks",
+            "done": False,
+        }
+    ]
+    assert result.outputs["summary"] == (
+        "MM-2 is blocked by unresolved Jira issue(s): MM-1 (Backlog)."
+    )
+
+@pytest.mark.asyncio
+async def test_check_jira_blockers_fetches_missing_blocker_status_and_allows_done():
+    service = _FakeJiraService()
+    service.issue_responses["MM-2"] = {
+        "key": "MM-2",
+        "fields": {
+            "issuelinks": [
+                {
+                    "type": {"name": "Blocks"},
+                    "inwardIssue": {"key": "MM-1"},
+                }
+            ]
+        },
+    }
+    service.issue_responses["MM-1"] = {
+        "key": "MM-1",
+        "fields": {
+            "status": {
+                "name": "Closed",
+                "statusCategory": {"key": "done"},
+            }
+        },
+    }
+
+    result = await check_jira_blockers(
+        {"targetIssueKey": "MM-2"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["blockingIssues"] == []
+    assert result.outputs["resolvedBlockingIssues"][0]["issueKey"] == "MM-1"
+    assert result.outputs["resolvedBlockingIssues"][0]["done"] is True
+    assert [request.issue_key for request in service.get_issue_requests] == [
+        "MM-2",
+        "MM-1",
+    ]
+
+@pytest.mark.asyncio
+async def test_check_jira_blockers_respects_configured_link_type_name():
+    service = _FakeJiraService()
+    service.issue_responses["MM-2"] = {
+        "key": "MM-2",
+        "fields": {
+            "issuelinks": [
+                {
+                    "type": {
+                        "name": "Blocks",
+                        "outward": "blocks",
+                        "inward": "is blocked by",
+                    },
+                    "inwardIssue": {
+                        "key": "MM-1",
+                        "fields": {"status": {"name": "Backlog"}},
+                    },
+                }
+            ]
+        },
+    }
+
+    result = await check_jira_blockers(
+        {"targetIssueKey": "MM-2", "linkType": "Depends"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["blockingIssues"] == []
+    assert [request.issue_key for request in service.get_issue_requests] == ["MM-2"]
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_dependency_mode_none_skips_links():
