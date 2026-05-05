@@ -6006,7 +6006,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     submitExpansionInFlightRef.current = true;
     setIsSubmitting(true);
     setSubmitMessage(null);
-    holdSubmitArrowExitUntilNavigation();
 
     let submissionSteps = steps;
     let submissionAppliedTemplates = appliedTemplates;
@@ -6358,6 +6357,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const uploadedObjectiveAttachments: StepAttachmentRef[] = [];
     const uploadedStepAttachments: Record<string, StepAttachmentRef[]> = {};
     let didNavigateAfterCreate = false;
+    holdSubmitArrowExitUntilNavigation();
     try {
       if (selectedAttachmentFiles.length > 0) {
         type AttachmentUploadResult =
@@ -6951,8 +6951,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (!redirectPath) {
         throw new Error("Task was created but no redirect path was returned.");
       }
-      didNavigateAfterCreate = true;
       navigateTo(redirectPath);
+      didNavigateAfterCreate = true;
     } catch (error) {
       const failure =
         error instanceof Error ? error : new Error("Failed to create task.");
@@ -6986,10 +6986,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         setSubmitMessage(failure.message);
       }
     } finally {
-      if (didNavigateAfterCreate) {
-        return;
+      if (!didNavigateAfterCreate) {
+        clearSubmitBusy();
       }
-      clearSubmitBusy();
     }
   }
 

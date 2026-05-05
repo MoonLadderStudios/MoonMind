@@ -1,27 +1,32 @@
 [
   {
-    "id": 4231762096,
-    "disposition": "not-applicable",
-    "rationale": "Parent review summary only; actionable child comments are classified separately."
-  },
-  {
-    "id": 3191720998,
-    "disposition": "not-applicable",
-    "rationale": "The current session controller already imports both os and Mapping."
-  },
-  {
-    "id": 3191721033,
+    "id": 3191899346,
     "disposition": "addressed",
-    "rationale": "Added manifest type validation so non-object JSON fails with a controlled TemporalActivityRuntimeError."
+    "rationale": "Replaced the real-time 280ms sleep in the arrow submit test with a deterministic setTimeout spy that invokes the scheduled arrow-clear callback without waiting."
   },
   {
-    "id": 3191726001,
+    "id": 3191899348,
     "disposition": "addressed",
-    "rationale": "Added cleanup of the launched container when unrestricted Docker proxy network attachment fails."
+    "rationale": "Moved holdSubmitArrowExitUntilNavigation() to the post-validation submit phase, just before upload/create work begins, so validation branches no longer need to start the held arrow state."
   },
   {
-    "id": 4231767468,
+    "id": 3191899351,
+    "disposition": "addressed",
+    "rationale": "Removed the return from the finally block and changed cleanup to run only when navigation did not succeed."
+  },
+  {
+    "id": 4231951258,
+    "disposition": "addressed",
+    "rationale": "Addressed the summarized review items: deterministic timer control, later arrow-hold initialization, and no return from finally."
+  },
+  {
+    "id": 3191903182,
+    "disposition": "addressed",
+    "rationale": "Moved didNavigateAfterCreate assignment after navigateTo() and added regression coverage proving a thrown navigation clears submit busy state."
+  },
+  {
+    "id": 4231955105,
     "disposition": "not-applicable",
-    "rationale": "Parent Codex review wrapper only; actionable child feedback is classified separately."
+    "rationale": "Automated review wrapper with no additional actionable feedback beyond the inline comments."
   }
 ]

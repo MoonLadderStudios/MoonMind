@@ -8,7 +8,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
@@ -12473,6 +12473,21 @@ describe("Task Create submit arrow animation", () => {
 
   it("keeps the create arrow exited after submit until navigation", async () => {
     let resolveExecution: (response: Response) => void = () => {};
+    let scheduledArrowClear: (() => void) | null = null;
+    const originalSetTimeout = window.setTimeout.bind(window);
+    const setTimeoutSpy = vi
+      .spyOn(window, "setTimeout")
+      .mockImplementation((handler: TimerHandler, timeout?: number, ...args) => {
+        if (timeout === 230) {
+          scheduledArrowClear = () => {
+            if (typeof handler === "function") {
+              handler(...args);
+            }
+          };
+          return 1;
+        }
+        return originalSetTimeout(handler, timeout, ...args);
+      });
     const fetchSpy = vi
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL) => {
@@ -12539,7 +12554,10 @@ describe("Task Create submit arrow animation", () => {
         ).toBe(true);
       });
 
-      await new Promise((resolve) => window.setTimeout(resolve, 280));
+      expect(scheduledArrowClear).not.toBeNull();
+      act(() => {
+        scheduledArrowClear?.();
+      });
 
       expect(
         createButton.classList.contains("queue-submit-primary--arrow-exit"),
@@ -12570,6 +12588,82 @@ describe("Task Create submit arrow animation", () => {
           createButton.classList.contains("queue-submit-primary--arrow-exit"),
         ).toBe(true);
       });
+    } finally {
+      unmount();
+      fetchSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      vi.mocked(navigateTo).mockReset();
+    }
+  });
+
+  it("clears submit busy state when navigation throws after task creation", async () => {
+    const fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        switch (true) {
+          case url.startsWith("/api/tasks/skills"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
+            } as Response);
+          case url.startsWith("/api/task-step-templates"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ items: [] }),
+            } as Response);
+          case url.startsWith("/api/v1/provider-profiles"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => [],
+            } as Response);
+          case url === "/api/executions":
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  workflowId: "mm:workflow-123",
+                  runId: "run-123",
+                  namespace: "moonmind",
+                  redirectPath: "/tasks/mm:workflow-123?source=temporal",
+                }),
+                {
+                  status: 201,
+                  headers: {
+                    "Content-Type": "application/json",
+                  },
+                },
+              ),
+            );
+          default:
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({}),
+            } as Response);
+        }
+      });
+    vi.mocked(navigateTo).mockImplementation(() => {
+      throw new Error("Navigation blocked.");
+    });
+    const { unmount } = renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    try {
+      fireEvent.change(await screen.findByLabelText("Instructions"), {
+        target: { value: "Run end-to-end regression flow." },
+      });
+
+      const createButton = screen.getByRole("button", { name: "Create" });
+      fireEvent.click(createButton);
+
+      await waitFor(() => {
+        expect(navigateTo).toHaveBeenCalledWith(
+          "/tasks/mm:workflow-123?source=temporal",
+        );
+        expect(createButton.getAttribute("aria-busy")).toBe("false");
+        expect(
+          createButton.classList.contains("queue-submit-primary--arrow-exit"),
+        ).toBe(false);
+      });
+      expect(screen.getByText("Navigation blocked.")).toBeTruthy();
     } finally {
       unmount();
       fetchSpy.mockRestore();
