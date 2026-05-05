@@ -1,22 +1,17 @@
 [
   {
-    "id": 3190605674,
-    "disposition": "addressed",
-    "rationale": "Simplified the branch publish unknown check by removing the redundant _branch_published() condition."
-  },
-  {
-    "id": 4230555974,
+    "id": 4231449106,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary; the actionable line comments are tracked separately."
+    "rationale": "Gemini review summary explicitly said there was no feedback to address."
   },
   {
-    "id": 3190620124,
-    "disposition": "addressed",
-    "rationale": "Recorded report refs from mapped agent-run outputs as well as metadata and added regression coverage."
-  },
-  {
-    "id": 4230570929,
+    "id": 4231452898,
     "disposition": "not-applicable",
-    "rationale": "Automated review container comment; the actionable suggestions are tracked separately."
+    "rationale": "Codex top-level automated review boilerplate contained no actionable suggestion."
+  },
+  {
+    "id": 3191423155,
+    "disposition": "addressed",
+    "rationale": "Validated reportOutput.primaryPath after Markdown suffix normalization and added a regression test for the 512-character extensionless path case."
   }
 ]

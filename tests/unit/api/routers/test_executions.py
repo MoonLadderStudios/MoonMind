@@ -1562,6 +1562,40 @@ def test_create_task_report_output_defaults_primary_path_to_markdown_suffix(
     )
 
 
+def test_create_task_report_output_rejects_primary_path_over_limit_after_suffix(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    primary_path = "a" * 512
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "reportOutput": {
+                    "enabled": True,
+                    "required": True,
+                    "reportType": "agent_run_report",
+                    "primaryPath": primary_path,
+                },
+                "task": {
+                    "instructions": "Generate a report.",
+                    "runtime": {"mode": "codex"},
+                    "publish": {"mode": "none"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["message"] == (
+        "reportOutput.primaryPath must be 512 characters or fewer."
+    )
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_report_output_preserves_explicit_primary_path_suffix(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
