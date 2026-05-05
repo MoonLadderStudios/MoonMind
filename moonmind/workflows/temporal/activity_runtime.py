@@ -4133,6 +4133,11 @@ class TemporalAgentRuntimeActivities:
                 runtime_id=str(request.agent_id or "managed-runtime"),
                 mode=RuntimeMaterializationMode.HYBRID,
             )
+            self._validate_selected_skill_projection(
+                workspace=workspace,
+                selected_skill=selected_skill,
+                resolved_skillset=resolved_skillset,
+            )
         except TemporalActivityRuntimeError:
             raise
         except (RuntimeError, OSError, ValueError, ValidationError) as exc:
@@ -4141,6 +4146,61 @@ class TemporalAgentRuntimeActivities:
             ) from exc
 
         return True
+
+    @staticmethod
+    def _validate_selected_skill_projection(
+        *,
+        workspace: Path,
+        selected_skill: str,
+        resolved_skillset: ResolvedSkillSet,
+    ) -> None:
+        """Fail before launch if the runtime-visible active skill projection is absent."""
+
+        visible_skills_dir = workspace / ".agents" / "skills"
+        if not visible_skills_dir.exists() or not visible_skills_dir.is_dir():
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f".agents/skills projection is missing at {visible_skills_dir}"
+            )
+
+        selected_skill_doc = visible_skills_dir / selected_skill / "SKILL.md"
+        if not selected_skill_doc.exists() or not selected_skill_doc.is_file():
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"selected skill '{selected_skill}' is missing {selected_skill_doc}"
+            )
+
+        manifest_path = visible_skills_dir / "_manifest.json"
+        if not manifest_path.exists() or not manifest_path.is_file():
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"active skill manifest is missing at {manifest_path}"
+            )
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError) as exc:
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"active skill manifest is unreadable at {manifest_path}: {exc}"
+            ) from exc
+
+        snapshot_id = str(manifest.get("snapshot_id") or "").strip()
+        if snapshot_id != resolved_skillset.snapshot_id:
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                "active skill manifest snapshot_id does not match resolvedSkillsetRef "
+                f"({snapshot_id!r} != {resolved_skillset.snapshot_id!r})"
+            )
+        manifest_skills = {
+            str(entry.get("name") or "").strip()
+            for entry in manifest.get("skills", [])
+            if isinstance(entry, Mapping)
+        }
+        if selected_skill not in manifest_skills:
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"active skill manifest does not include selected skill '{selected_skill}'"
+            )
 
     async def _load_resolved_skillset(self, skillset_ref: str) -> ResolvedSkillSet:
         if self._artifact_service is None:

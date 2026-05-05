@@ -377,6 +377,90 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert control_calls[-1]["containerId"] == "container-1"
     assert control_calls[-1]["threadId"] == "thread-1"
 
+async def test_start_passes_managed_session_dood_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MOONMIND_WORKFLOW_DOCKER_MODE", "unrestricted")
+    monkeypatch.setenv("MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces_test")
+    binding = _binding()
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_path = workspace_root / binding.task_run_id / "repo"
+    launch_calls: list[Any] = []
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(request: Any) -> CodexManagedSessionHandle:
+        launch_calls.append(request)
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _send_turn(_request: Any) -> CodexManagedSessionTurnResponse:
+        return _turn_response(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _fetch_summary(_request: Any) -> CodexManagedSessionSummary:
+        return _summary(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _publish_artifacts(_request: Any) -> CodexManagedSessionArtifactsPublication:
+        return _publication(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed_runs"),
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=_async_noop,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_fetch_summary,
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(workspace_root),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+
+    launch_environment = launch_calls[0]["request"]["environment"]
+    assert launch_environment["MOONMIND_WORKDIR"] == str(workspace_root)
+    assert launch_environment["MOONMIND_JOB_ID"] == binding.task_run_id
+    assert (
+        launch_environment["MOONMIND_CONTAINER_WORKSPACE_VOLUME"]
+        == "agent_workspaces_test"
+    )
+    assert launch_environment["MOONMIND_WORKFLOW_DOCKER_MODE"] == "unrestricted"
+
 async def test_start_omits_large_inline_instruction_from_result_metadata(
     tmp_path: Path,
 ) -> None:

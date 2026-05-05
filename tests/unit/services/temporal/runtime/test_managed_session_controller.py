@@ -326,6 +326,84 @@ async def test_controller_uses_request_moonmind_url_for_docker_network(
     assert "local-network" in run_command
 
 @pytest.mark.asyncio
+async def test_controller_launch_unrestricted_session_exposes_docker_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
+    monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "docker-proxy-test")
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={
+            "MOONMIND_URL": "http://api:8000",
+            "MOONMIND_WORKFLOW_DOCKER_MODE": "unrestricted",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if command[:3] == ("docker", "network", "connect"):
+            return 0, "", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        docker_host="tcp://docker-proxy:2375",
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    run_command = commands[1]
+    assert "DOCKER_HOST=tcp://docker-proxy:2375" in run_command
+    assert "SYSTEM_DOCKER_HOST=tcp://docker-proxy:2375" in run_command
+    assert "MOONMIND_WORKFLOW_DOCKER_MODE=unrestricted" in run_command
+    assert commands[2] == (
+        "docker",
+        "network",
+        "connect",
+        "docker-proxy-test",
+        "ctr-1",
+    )
+
+@pytest.mark.asyncio
 async def test_controller_replaces_blank_request_moonmind_url(
     tmp_path: Path,
 ) -> None:

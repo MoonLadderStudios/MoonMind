@@ -2670,6 +2670,79 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_fails_before_launch_when_projection_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    managed_root = tmp_path / "agent_jobs"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(managed_root))
+    workspace = managed_root / "job-1" / "repo"
+    workspace.mkdir(parents=True)
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-pr-resolver",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="pr-resolver",
+                version="1.0.0",
+                content_ref="art-pr-resolver-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.BUILT_IN
+                ),
+            )
+        ],
+    )
+    artifact_service = _StaticArtifactService(
+        {
+            "art-pr-resolver-snapshot": resolved_skillset.model_dump_json().encode(
+                "utf-8"
+            ),
+            "art-pr-resolver-body": b"active resolver body\n",
+        }
+    )
+
+    class _NoopMaterializer:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def materialize(self, **_kwargs: Any) -> None:
+            return None
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "AgentSkillMaterializer",
+        _NoopMaterializer,
+    )
+    activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match=r"\.agents/skills projection is missing",
+    ):
+        await activities.agent_runtime_prepare_turn_instructions(
+            {
+                "request": {
+                    "agentKind": "managed",
+                    "agentId": "codex",
+                    "correlationId": "corr-1",
+                    "idempotencyKey": "idem-1",
+                    "resolvedSkillsetRef": "art-pr-resolver-snapshot",
+                    "parameters": {
+                        "instructions": "Resolve the PR.",
+                        "metadata": {
+                            "moonmind": {
+                                "selectedSkill": "pr-resolver",
+                            },
+                        },
+                    },
+                },
+                "workspacePath": str(workspace),
+            }
+        )
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_preserves_checked_in_skills_before_projection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
