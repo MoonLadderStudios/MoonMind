@@ -160,6 +160,81 @@ afterEach(() => {
 });
 
 describe('OAuthTerminalPage clipboard behavior', () => {
+  it('renders the session projection and finalizes through the shared OAuth endpoint', async () => {
+    const storageSetItem = vi.spyOn(window.localStorage.__proto__, 'setItem');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const href = String(url);
+        if (href.endsWith('/terminal/attach')) {
+          return new Response(
+            JSON.stringify({
+              session_id: 'session-1',
+              terminal_session_id: 'terminal-1',
+              terminal_bridge_id: 'bridge-1',
+              websocket_url: '/ws/oauth/terminal',
+              attach_token: 'attach-token',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (href.endsWith('/finalize')) {
+          expect(init?.method).toBe('POST');
+          expect(init?.body).toBeUndefined();
+          return new Response(
+            JSON.stringify({
+              session_id: 'session-1',
+              runtime_id: 'codex_cli',
+              profile_id: 'codex-oauth',
+              status: 'succeeded',
+              profile_summary: {
+                profile_id: 'codex-oauth',
+                runtime_id: 'codex_cli',
+                provider_id: 'openai',
+                provider_label: 'OpenAI',
+                credential_source: 'oauth_volume',
+                runtime_materialization_mode: 'oauth_home',
+                account_label: 'Codex Team',
+                enabled: true,
+                is_default: false,
+                rate_limit_policy: 'backoff',
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            session_id: 'session-1',
+            runtime_id: 'codex_cli',
+            profile_id: 'codex-oauth',
+            status: 'awaiting_user',
+            terminal_session_id: 'terminal-1',
+            terminal_bridge_id: 'bridge-1',
+            session_transport: 'moonmind_pty_ws',
+            profile_summary: null,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }),
+    );
+
+    renderPage();
+    await waitForSocket();
+
+    expect(await screen.findByText('codex-oauth')).toBeTruthy();
+    expect(screen.getByText('codex cli')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Finalize Provider Profile' }));
+
+    expect(await screen.findByText('Codex Team')).toBeTruthy();
+    expect(screen.getAllByText('Succeeded').length).toBeGreaterThan(0);
+    expect(storageSetItem).toHaveBeenCalledWith(
+      'moonmind:provider-profile-updated',
+      expect.stringContaining('codex-oauth'),
+    );
+  });
+
   it('forwards browser paste events from the xterm helper textarea to the terminal bridge once', async () => {
     renderPage();
     const socket = await waitForSocket();

@@ -580,7 +580,7 @@ async def oauth_terminal_websocket(
             bridge=bridge,
         )
 
-@router.post("/{session_id}/finalize")
+@router.post("/{session_id}/finalize", response_model=OAuthSessionResponse)
 async def finalize_oauth_session(
     session_id: str,
     db: AsyncSession = Depends(get_async_session),
@@ -595,9 +595,30 @@ async def finalize_oauth_session(
     session_obj = result.scalars().first()
     if not session_obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-        
+
+    if session_obj.status == OAuthSessionStatus.SUCCEEDED:
+        profile = await _get_profile_for_session(
+            db, session_obj, current_user=current_user
+        )
+        return _oauth_session_response(session_obj, profile=profile)
+
+    if session_obj.status == OAuthSessionStatus.REGISTERING_PROFILE:
+        profile = await _get_profile_for_session(
+            db, session_obj, current_user=current_user
+        )
+        if profile is not None:
+            session_obj.status = OAuthSessionStatus.SUCCEEDED
+            session_obj.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+            await db.refresh(session_obj)
+            return _oauth_session_response(session_obj, profile=profile)
+
     if session_obj.status not in [OAuthSessionStatus.AWAITING_USER, OAuthSessionStatus.VERIFYING]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot finalize session in {session_obj.status.name} state")
+
+    session_obj.status = OAuthSessionStatus.VERIFYING
+    await db.commit()
+    await db.refresh(session_obj)
 
     try:
         from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
@@ -646,9 +667,6 @@ async def finalize_oauth_session(
             detail=session_obj.failure_reason,
         )
 
-    session_obj.status = OAuthSessionStatus.SUCCEEDED
-    session_obj.completed_at = datetime.now(timezone.utc)
-    
     profile_result = await db.execute(
         select(ManagedAgentProviderProfile).where(
             ManagedAgentProviderProfile.profile_id == session_obj.profile_id
@@ -716,9 +734,15 @@ async def finalize_oauth_session(
             detail=str(exc),
         ) from exc
 
+    session_obj.status = OAuthSessionStatus.REGISTERING_PROFILE
+    await db.commit()
+    await db.refresh(session_obj)
+
+    profile_obj: ManagedAgentProviderProfile
     if existing_profile:
         for key, value in profile_data.items():
             setattr(existing_profile, key, value)
+        profile_obj = existing_profile
     else:
         new_profile = ManagedAgentProviderProfile(
             profile_id=session_obj.profile_id,
@@ -726,14 +750,21 @@ async def finalize_oauth_session(
             **profile_data
         )
         db.add(new_profile)
+        profile_obj = new_profile
 
     await db.commit()
-    
+
     await sync_provider_profile_manager(session=db, runtime_id=session_obj.runtime_id)
+
+    session_obj.status = OAuthSessionStatus.SUCCEEDED
+    session_obj.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(session_obj)
+
     await _stop_oauth_auth_runner(session_obj)
     await _complete_oauth_session_workflow(session_obj.session_id)
-    
-    return {"status": "succeeded"}
+
+    return _oauth_session_response(session_obj, profile=profile_obj)
 
 async def _stop_oauth_auth_runner(session_obj: ManagedAgentOAuthSession) -> None:
     if not session_obj.container_name:

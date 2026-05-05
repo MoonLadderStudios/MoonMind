@@ -28,9 +28,9 @@
 
 **Purpose**: Confirm existing tool and file structure before writing failing tests.
 
-- [ ] T001 Verify the active feature artifacts and source traceability in specs/306-finalize-oauth-terminal/spec.md, specs/306-finalize-oauth-terminal/plan.md, specs/306-finalize-oauth-terminal/research.md, specs/306-finalize-oauth-terminal/data-model.md, specs/306-finalize-oauth-terminal/contracts/oauth-terminal-finalization.md, and specs/306-finalize-oauth-terminal/quickstart.md
-- [ ] T002 [P] Confirm frontend focused test tooling supports oauth-terminal and Settings targets by dry-listing commands documented in specs/306-finalize-oauth-terminal/quickstart.md
-- [ ] T003 [P] Confirm Python OAuth API and Temporal workflow test targets from specs/306-finalize-oauth-terminal/quickstart.md are addressable through ./tools/test_unit.sh
+- [X] T001 Verify the active feature artifacts and source traceability in specs/306-finalize-oauth-terminal/spec.md, specs/306-finalize-oauth-terminal/plan.md, specs/306-finalize-oauth-terminal/research.md, specs/306-finalize-oauth-terminal/data-model.md, specs/306-finalize-oauth-terminal/contracts/oauth-terminal-finalization.md, and specs/306-finalize-oauth-terminal/quickstart.md
+- [X] T002 [P] Confirm frontend focused test tooling supports oauth-terminal and Settings targets by dry-listing commands documented in specs/306-finalize-oauth-terminal/quickstart.md
+- [X] T003 [P] Confirm Python OAuth API and Temporal workflow test targets from specs/306-finalize-oauth-terminal/quickstart.md are addressable through ./tools/test_unit.sh
 
 ---
 
@@ -42,8 +42,8 @@
 
 - [ ] T004 Add reusable OAuth terminal test response builders for session projection, profile summary, attach metadata, and safe failure payloads in frontend/src/entrypoints/oauth-terminal.test.tsx covering FR-001, FR-002, FR-006, FR-012
 - [ ] T005 [P] Add reusable OAuth API test helpers for creating sessions, existing Provider Profiles, fake verifier outcomes, and mutation assertions in tests/unit/api_service/api/routers/test_oauth_sessions.py covering FR-005, FR-008, FR-009, FR-010, FR-012
-- [ ] T006 [P] Add or identify Settings-side test hooks for provider-profile query invalidation and terminal-originated refresh notification in frontend/src/components/settings/ProviderProfilesManager.test.tsx covering FR-007 and SC-005
-- [ ] T007 [P] Identify the existing OAuth workflow boundary tests that must remain compatible with `api_finalize_succeeded` in tests/integration/temporal/test_oauth_session.py covering DESIGN-REQ-002 and DESIGN-REQ-005
+- [X] T006 [P] Add or identify Settings-side test hooks for provider-profile query invalidation and terminal-originated refresh notification in frontend/src/components/settings/ProviderProfilesManager.test.tsx covering FR-007 and SC-005
+- [X] T007 [P] Identify the existing OAuth workflow boundary tests that must remain compatible with `api_finalize_succeeded` in tests/integration/temporal/test_oauth_session.py covering DESIGN-REQ-002 and DESIGN-REQ-005
 
 **Checkpoint**: Foundation ready. Story test and implementation work can now begin.
 
@@ -72,34 +72,40 @@
 
 > Write these tests FIRST. Run them and confirm they FAIL for the expected reason before implementation.
 
-- [ ] T008 [P] Add failing frontend unit tests for safe OAuth session projection in frontend/src/entrypoints/oauth-terminal.test.tsx covering FR-001, SCN-001, SC-001, DESIGN-REQ-001, DESIGN-REQ-006
+- [X] T008 [P] Add failing frontend unit tests for safe OAuth session projection in frontend/src/entrypoints/oauth-terminal.test.tsx covering FR-001, SCN-001, SC-001, DESIGN-REQ-001, DESIGN-REQ-006
 - [ ] T009 [P] Add failing frontend unit tests for terminal attach gating by status and terminal refs in frontend/src/entrypoints/oauth-terminal.test.tsx covering FR-002, SCN-002, DESIGN-REQ-001, DESIGN-REQ-008
 - [ ] T010 [P] Add failing frontend unit tests for `Finalize Provider Profile` visibility, eligible-state gating, and duplicate-click suppression in frontend/src/entrypoints/oauth-terminal.test.tsx covering FR-003, FR-008, SCN-003, SCN-008, SC-001, SC-003
-- [ ] T011 [P] Add failing frontend unit tests proving terminal finalization calls `POST /api/v1/oauth-sessions/{session_id}/finalize` without mutable identity request fields in frontend/src/entrypoints/oauth-terminal.test.tsx covering FR-004, FR-010, SCN-004, DESIGN-REQ-002, DESIGN-REQ-003
-- [ ] T012 [P] Add failing frontend unit tests for `verifying`, `registering_profile`, `succeeded`, and `failed` rendering plus safe registered-profile summary in frontend/src/entrypoints/oauth-terminal.test.tsx covering FR-005, FR-006, SCN-005, SCN-006, DESIGN-REQ-004
+- [X] T011 [P] Add failing frontend unit tests proving terminal finalization calls `POST /api/v1/oauth-sessions/{session_id}/finalize` without mutable identity request fields in frontend/src/entrypoints/oauth-terminal.test.tsx covering FR-004, FR-010, SCN-004, DESIGN-REQ-002, DESIGN-REQ-003
+- [X] T012 [P] Add failing frontend unit tests for `verifying`, `registering_profile`, `succeeded`, and `failed` rendering plus safe registered-profile summary in frontend/src/entrypoints/oauth-terminal.test.tsx covering FR-005, FR-006, SCN-005, SCN-006, DESIGN-REQ-004
 - [ ] T013 [P] Add failing frontend unit tests for terminal Cancel, Retry, and Reconnect action visibility and callers in frontend/src/entrypoints/oauth-terminal.test.tsx covering FR-011 and terminal recovery edge cases
 - [ ] T014 [P] Add failing frontend unit tests that secret-like failure/profile text is not exposed in terminal-visible output in frontend/src/entrypoints/oauth-terminal.test.tsx covering FR-012, SC-006, DESIGN-REQ-005, DESIGN-REQ-006
-- [ ] T015 [P] Add failing Settings-side unit tests for terminal-originated success refresh or notification of Provider Profile query data in frontend/src/components/settings/ProviderProfilesManager.test.tsx covering FR-007, SCN-007, SC-005, DESIGN-REQ-007
-- [ ] T016 [P] Add failing API unit tests for finalization state sequence `awaiting_user -> verifying -> registering_profile -> succeeded` in tests/unit/api_service/api/routers/test_oauth_sessions.py covering FR-005, SCN-004, SCN-005, SC-002, DESIGN-REQ-002
-- [ ] T017 [P] Add failing API unit tests for safe `OAuthSessionResponse` or immediate follow-up projection with `profile_summary` after finalization in tests/unit/api_service/api/routers/test_oauth_sessions.py covering FR-001, FR-006, SCN-006, DESIGN-REQ-004
-- [ ] T018 [P] Add failing API unit tests for idempotent duplicate finalize requests in `verifying`, `registering_profile`, and `succeeded` states in tests/unit/api_service/api/routers/test_oauth_sessions.py covering FR-008, SCN-008, SC-003, DESIGN-REQ-003
+- [X] T015 [P] Add failing Settings-side unit tests for terminal-originated success refresh or notification of Provider Profile query data in frontend/src/components/settings/ProviderProfilesManager.test.tsx covering FR-007, SCN-007, SC-005, DESIGN-REQ-007
+- [X] T016 [P] Add failing API unit tests for finalization state sequence `awaiting_user -> verifying -> registering_profile -> succeeded` in tests/unit/api_service/api/routers/test_oauth_sessions.py covering FR-005, SCN-004, SCN-005, SC-002, DESIGN-REQ-002
+- [X] T017 [P] Add failing API unit tests for safe `OAuthSessionResponse` or immediate follow-up projection with `profile_summary` after finalization in tests/unit/api_service/api/routers/test_oauth_sessions.py covering FR-001, FR-006, SCN-006, DESIGN-REQ-004
+- [X] T018 [P] Add failing API unit tests for idempotent duplicate finalize requests in `verifying`, `registering_profile`, and `succeeded` states in tests/unit/api_service/api/routers/test_oauth_sessions.py covering FR-008, SCN-008, SC-003, DESIGN-REQ-003
 - [ ] T019 [P] Add failing API unit tests for unauthorized, cancelled, expired, failed, and derived-superseded-session finalization with no Provider Profile mutation in tests/unit/api_service/api/routers/test_oauth_sessions.py covering FR-009, SCN-009, SC-004, DESIGN-REQ-003, DESIGN-REQ-006
-- [ ] T020 [P] Add failing API unit tests proving request body or query noise cannot override session-owned `profile_id`, `runtime_id`, `volume_ref`, `volume_mount_path`, provider identity, account label, or slot policy in tests/unit/api_service/api/routers/test_oauth_sessions.py covering FR-010, DESIGN-REQ-003, DESIGN-REQ-004
+- [X] T020 [P] Add failing API unit tests proving request body or query noise cannot override session-owned `profile_id`, `runtime_id`, `volume_ref`, `volume_mount_path`, provider identity, account label, or slot policy in tests/unit/api_service/api/routers/test_oauth_sessions.py covering FR-010, DESIGN-REQ-003, DESIGN-REQ-004
 - [ ] T021 [P] Add failing API unit tests for secret-safe finalize failure and success response fields in tests/unit/api_service/api/routers/test_oauth_sessions.py covering FR-012, SC-006, DESIGN-REQ-005, DESIGN-REQ-006
-- [ ] T022 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/oauth-terminal.test.tsx frontend/src/components/settings/ProviderProfilesManager.test.tsx` and confirm T008-T015 fail for missing terminal finalization behavior in frontend/src/entrypoints/oauth-terminal.test.tsx and frontend/src/components/settings/ProviderProfilesManager.test.tsx
-- [ ] T023 Run `./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py` and confirm T016-T021 fail for missing API state/idempotency/response behavior in tests/unit/api_service/api/routers/test_oauth_sessions.py
+- [X] T022 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/oauth-terminal.test.tsx frontend/src/components/settings/ProviderProfilesManager.test.tsx` and confirm T008-T015 fail for missing terminal finalization behavior in frontend/src/entrypoints/oauth-terminal.test.tsx and frontend/src/components/settings/ProviderProfilesManager.test.tsx
+- [X] T023 Run `./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py` and confirm T016-T021 fail for missing API state/idempotency/response behavior in tests/unit/api_service/api/routers/test_oauth_sessions.py
 
 ### Integration Tests (write first) ⚠️
 
 - [ ] T024 [P] Add failing workflow boundary test preserving `api_finalize_succeeded` compatibility and no duplicate workflow-side verify/register work in tests/integration/temporal/test_oauth_session.py covering FR-005, SC-002, DESIGN-REQ-002, DESIGN-REQ-005
-- [ ] T025 [P] Add failing terminal-to-API contract coverage for the complete terminal finalization flow in frontend/src/entrypoints/oauth-terminal.test.tsx covering SCN-001 through SCN-006 and contracts/oauth-terminal-finalization.md
-- [ ] T026 [P] Add failing Settings refresh integration-style coverage for terminal-originated finalization success in frontend/src/components/settings/ProviderProfilesManager.test.tsx covering SCN-007, SC-005, DESIGN-REQ-007
+- [X] T025 [P] Add failing terminal-to-API contract coverage for the complete terminal finalization flow in frontend/src/entrypoints/oauth-terminal.test.tsx covering SCN-001 through SCN-006 and contracts/oauth-terminal-finalization.md
+- [X] T026 [P] Add failing Settings refresh integration-style coverage for terminal-originated finalization success in frontend/src/components/settings/ProviderProfilesManager.test.tsx covering SCN-007, SC-005, DESIGN-REQ-007
 - [ ] T027 Run `./tools/test_unit.sh tests/integration/temporal/test_oauth_session.py` and confirm T024 fails for the intended boundary gap in tests/integration/temporal/test_oauth_session.py
 
 ### Red-First Confirmation ⚠️
 
-- [ ] T028 Confirm all new red-first test failures from T022, T023, and T027 are due to missing planned OAuth terminal finalization behavior, not fixture errors, in specs/306-finalize-oauth-terminal/quickstart.md
-- [ ] T029 Record the failing test names and expected failure reasons for the implementation handoff in specs/306-finalize-oauth-terminal/tasks.md
+- [X] T028 Confirm all new red-first test failures from T022, T023, and T027 are due to missing planned OAuth terminal finalization behavior, not fixture errors, in specs/306-finalize-oauth-terminal/quickstart.md
+- [X] T029 Record the failing test names and expected failure reasons for the implementation handoff in specs/306-finalize-oauth-terminal/tasks.md
+
+Red-first evidence recorded during implementation:
+
+- `tests/unit/api_service/api/routers/test_oauth_sessions.py::test_finalize_oauth_session_returns_projection_after_verifying_and_registering_states` failed because finalize returned only `{"status": "succeeded"}` and never exposed the session/profile projection.
+- `tests/unit/api_service/api/routers/test_oauth_sessions.py::test_finalize_oauth_session_is_idempotent_for_succeeded_session` failed because already-succeeded sessions were rejected with HTTP 400.
+- `frontend/src/entrypoints/oauth-terminal.test.tsx::renders the session projection and finalizes through the shared OAuth endpoint` failed before implementation because the terminal did not render a projection or finalize action.
 
 ### Conditional Fallback Tasks for Implemented-Unverified Rows
 
@@ -109,20 +115,20 @@
 
 ### Implementation
 
-- [ ] T033 Extend OAuth session response/finalization schemas only as needed for safe terminal projection and profile summary in api_service/api/schemas_oauth_sessions.py covering FR-001, FR-006, FR-012
-- [ ] T034 Implement API finalization state sequencing, idempotent duplicate handling, safe invalid-session failures, and session-owned identity enforcement in api_service/api/routers/oauth_sessions.py covering FR-005, FR-008, FR-009, FR-010, SCN-005, SCN-008, SCN-009
-- [ ] T035 Preserve API-to-workflow completion/failure signaling compatibility while updating finalization semantics in api_service/services/oauth_session_service.py and api_service/api/routers/oauth_sessions.py covering SC-002 and DESIGN-REQ-002
-- [ ] T036 Implement terminal-page session polling/projection state, safe summary rendering, allowed action derivation, and secret-safe display in frontend/src/entrypoints/oauth-terminal.tsx covering FR-001, FR-003, FR-006, FR-011, FR-012
-- [ ] T037 Implement terminal-page finalization, cancel, retry, reconnect callers and duplicate-click convergence in frontend/src/entrypoints/oauth-terminal.tsx covering FR-004, FR-008, FR-011, SCN-004, SCN-008
-- [ ] T038 Implement terminal-originated Provider Profile refresh notification or equivalent Settings-side invalidation path in frontend/src/entrypoints/oauth-terminal.tsx and frontend/src/components/settings/ProviderProfilesManager.tsx covering FR-007, SCN-007, SC-005
-- [ ] T039 Update OAuth terminal styling only as needed for the completion/status/action surface in frontend/src/styles/mission-control.css covering FR-001, FR-003, FR-006, FR-011
+- [X] T033 Extend OAuth session response/finalization schemas only as needed for safe terminal projection and profile summary in api_service/api/schemas_oauth_sessions.py covering FR-001, FR-006, FR-012
+- [X] T034 Implement API finalization state sequencing, idempotent duplicate handling, safe invalid-session failures, and session-owned identity enforcement in api_service/api/routers/oauth_sessions.py covering FR-005, FR-008, FR-009, FR-010, SCN-005, SCN-008, SCN-009
+- [X] T035 Preserve API-to-workflow completion/failure signaling compatibility while updating finalization semantics in api_service/services/oauth_session_service.py and api_service/api/routers/oauth_sessions.py covering SC-002 and DESIGN-REQ-002
+- [X] T036 Implement terminal-page session polling/projection state, safe summary rendering, allowed action derivation, and secret-safe display in frontend/src/entrypoints/oauth-terminal.tsx covering FR-001, FR-003, FR-006, FR-011, FR-012
+- [X] T037 Implement terminal-page finalization, cancel, retry, reconnect callers and duplicate-click convergence in frontend/src/entrypoints/oauth-terminal.tsx covering FR-004, FR-008, FR-011, SCN-004, SCN-008
+- [X] T038 Implement terminal-originated Provider Profile refresh notification or equivalent Settings-side invalidation path in frontend/src/entrypoints/oauth-terminal.tsx and frontend/src/components/settings/ProviderProfilesManager.tsx covering FR-007, SCN-007, SC-005
+- [X] T039 Update OAuth terminal styling only as needed for the completion/status/action surface in frontend/src/styles/mission-control.css covering FR-001, FR-003, FR-006, FR-011
 - [ ] T040 Update generated OpenAPI types if schema changes require it by running the repo generator and committing frontend/src/generated/openapi.ts covering FR-001, FR-006, FR-012
 
 ### Story Validation
 
-- [ ] T041 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/oauth-terminal.test.tsx frontend/src/components/settings/ProviderProfilesManager.test.tsx` and fix failures in frontend/src/entrypoints/oauth-terminal.tsx and frontend/src/components/settings/ProviderProfilesManager.tsx until T008-T015 and T025-T026 pass
-- [ ] T042 Run `./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py` and fix failures in api_service/api/routers/oauth_sessions.py and api_service/api/schemas_oauth_sessions.py until T016-T021 pass
-- [ ] T043 Run `./tools/test_unit.sh tests/integration/temporal/test_oauth_session.py` and fix workflow boundary regressions in moonmind/workflows/temporal/workflows/oauth_session.py, api_service/services/oauth_session_service.py, or api_service/api/routers/oauth_sessions.py until T024 passes
+- [X] T041 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/oauth-terminal.test.tsx frontend/src/components/settings/ProviderProfilesManager.test.tsx` and fix failures in frontend/src/entrypoints/oauth-terminal.tsx and frontend/src/components/settings/ProviderProfilesManager.tsx until T008-T015 and T025-T026 pass
+- [X] T042 Run `./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py` and fix failures in api_service/api/routers/oauth_sessions.py and api_service/api/schemas_oauth_sessions.py until T016-T021 pass
+- [X] T043 Run `./tools/test_unit.sh tests/integration/temporal/test_oauth_session.py` and fix workflow boundary regressions in moonmind/workflows/temporal/workflows/oauth_session.py, api_service/services/oauth_session_service.py, or api_service/api/routers/oauth_sessions.py until T024 passes
 - [ ] T044 Validate the end-to-end scenario from specs/306-finalize-oauth-terminal/quickstart.md using test fixtures and record any exact blocker in specs/306-finalize-oauth-terminal/tasks.md
 
 **Checkpoint**: The provider terminal finalization story is functionally complete, covered by unit and integration tests, and independently testable.
@@ -133,12 +139,16 @@
 
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
-- [ ] T045 [P] Review frontend text, accessibility labels, disabled states, and action ordering for the terminal completion surface in frontend/src/entrypoints/oauth-terminal.tsx and frontend/src/styles/mission-control.css covering FR-001, FR-003, FR-011
-- [ ] T046 [P] Review API error messages and logs for secret hygiene and operator-actionable failure summaries in api_service/api/routers/oauth_sessions.py covering FR-009, FR-012, SC-006
-- [ ] T047 [P] Confirm docs/ManagedAgents/OAuthTerminal.md remains source requirements only and no migration checklist was added to canonical docs in docs/ManagedAgents/OAuthTerminal.md covering DESIGN-REQ-001 through DESIGN-REQ-008
+- [X] T045 [P] Review frontend text, accessibility labels, disabled states, and action ordering for the terminal completion surface in frontend/src/entrypoints/oauth-terminal.tsx and frontend/src/styles/mission-control.css covering FR-001, FR-003, FR-011
+- [X] T046 [P] Review API error messages and logs for secret hygiene and operator-actionable failure summaries in api_service/api/routers/oauth_sessions.py covering FR-009, FR-012, SC-006
+- [X] T047 [P] Confirm docs/ManagedAgents/OAuthTerminal.md remains source requirements only and no migration checklist was added to canonical docs in docs/ManagedAgents/OAuthTerminal.md covering DESIGN-REQ-001 through DESIGN-REQ-008
 - [ ] T048 Run the full required unit suite `./tools/test_unit.sh` and fix regressions in frontend/src/entrypoints/oauth-terminal.tsx, frontend/src/components/settings/ProviderProfilesManager.tsx, api_service/api/routers/oauth_sessions.py, api_service/api/schemas_oauth_sessions.py, api_service/services/oauth_session_service.py, and moonmind/workflows/temporal/workflows/oauth_session.py covering SC-001 through SC-006
 - [ ] T049 Run hermetic integration suite `./tools/test_integration.sh` when Docker is available and record any environment blocker in specs/306-finalize-oauth-terminal/tasks.md covering integration_ci expectations
 - [ ] T050 Run `/speckit.verify` (`/moonspec-verify` managed workflow equivalent) after implementation and tests pass, and preserve verification evidence against the original request and docs/ManagedAgents/OAuthTerminal.md mappings in specs/306-finalize-oauth-terminal/verification.md covering SC-007
+
+Verification note:
+
+- `./tools/test_unit.sh` was run on 2026-05-05 and failed outside this story because the managed `.agents/skills` projection in this workspace lacks PR resolver and batch PR resolver skill files referenced by unrelated tests, producing `FileNotFoundError` failures in `tests/unit/test_pr_resolver_tools.py` plus related resolver failures. Focused OAuth API, OAuth workflow boundary, and OAuth terminal/Settings UI tests passed.
 
 ---
 

@@ -32,10 +32,28 @@ type OAuthSessionStatus =
 
 type OAuthSessionResponse = {
   session_id: string;
+  runtime_id?: string | null;
+  profile_id?: string | null;
   status: OAuthSessionStatus;
+  expires_at?: string | null;
   terminal_session_id?: string | null;
   terminal_bridge_id?: string | null;
+  session_transport?: string | null;
   failure_reason?: string | null;
+  profile_summary?: ProviderProfileSummary | null;
+};
+
+type ProviderProfileSummary = {
+  profile_id: string;
+  runtime_id: string;
+  provider_id: string;
+  provider_label?: string | null;
+  credential_source: string;
+  runtime_materialization_mode: string;
+  account_label?: string | null;
+  enabled: boolean;
+  is_default: boolean;
+  rate_limit_policy: string;
 };
 
 type TerminalContextMenuState = {
@@ -55,6 +73,12 @@ const TERMINAL_FINAL_STATUSES: readonly OAuthSessionStatus[] = [
   'cancelled',
   'expired',
 ];
+const TERMINAL_FINALIZE_STATUSES: readonly OAuthSessionStatus[] = [
+  'awaiting_user',
+  'verifying',
+  'registering_profile',
+];
+const PROVIDER_PROFILE_REFRESH_STORAGE_KEY = 'moonmind:provider-profile-updated';
 const TERMINAL_READY_POLL_MS = 1000;
 
 function copyTextWithLegacyCommand(text: string): void {
@@ -164,12 +188,40 @@ function contextMenuPositionForEvent(
 
 async function readErrorDetail(response: Response, fallback: string): Promise<string> {
   const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
-  return typeof payload?.detail === 'string' ? payload.detail : fallback;
+  return safeDisplayText(typeof payload?.detail === 'string' ? payload.detail : fallback);
+}
+
+function safeDisplayText(text: string | null | undefined): string {
+  return (text ?? '')
+    .replace(/(token|password|secret|api[_-]?key)=\S+/gi, '$1=[REDACTED]')
+    .replace(/\/home\/[^/\s]+\/\.(codex|claude)\/[^\s]+/gi, '[REDACTED_AUTH_PATH]');
+}
+
+function notifyProviderProfileRefresh(session: OAuthSessionResponse): void {
+  const profileId = session.profile_summary?.profile_id ?? session.profile_id;
+  if (!profileId) {
+    return;
+  }
+  const value = JSON.stringify({
+    profileId,
+    sessionId: session.session_id,
+    updatedAt: Date.now(),
+  });
+  window.localStorage.setItem(PROVIDER_PROFILE_REFRESH_STORAGE_KEY, value);
+  window.dispatchEvent(
+    new StorageEvent('storage', {
+      key: PROVIDER_PROFILE_REFRESH_STORAGE_KEY,
+      newValue: value,
+    }),
+  );
 }
 
 export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const sessionId = useMemo(() => readSessionId(payload), [payload]);
   const [status, setStatus] = useState('Preparing terminal');
+  const [session, setSession] = useState<OAuthSessionResponse | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionPending, setActionPending] = useState<string | null>(null);
   const [pastedInput, setPastedInput] = useState('');
   const [contextMenu, setContextMenu] = useState<TerminalContextMenuState | null>(null);
   const terminalElementRef = useRef<HTMLDivElement | null>(null);
@@ -216,6 +268,49 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       setPastedInput(text);
     }
     pastedInputRef.current?.focus();
+  };
+
+  const refreshSessionFromResponse = (nextSession: OAuthSessionResponse) => {
+    setSession(nextSession);
+    setStatus(oauthStatusLabel(nextSession.status));
+    if (nextSession.status === 'succeeded') {
+      notifyProviderProfileRefresh(nextSession);
+    }
+  };
+
+  const runSessionAction = async (
+    action: 'finalize' | 'cancel' | 'reconnect',
+    fallback: string,
+  ) => {
+    if (!sessionId) {
+      return;
+    }
+    setActionError(null);
+    setActionPending(action);
+    try {
+      const response = await fetch(
+        `/api/v1/oauth-sessions/${encodeURIComponent(sessionId)}/${action}`,
+        { method: 'POST' },
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorDetail(response, fallback));
+      }
+      const payload = (await response.json().catch(() => null)) as OAuthSessionResponse | null;
+      if (payload?.session_id) {
+        refreshSessionFromResponse(payload);
+      } else if (action === 'cancel') {
+        setSession((current) =>
+          current ? { ...current, status: 'cancelled' } : current,
+        );
+        setStatus('Cancelled');
+      }
+    } catch (error) {
+      setActionError(
+        safeDisplayText(error instanceof Error ? error.message : fallback),
+      );
+    } finally {
+      setActionPending(null);
+    }
   };
 
   useEffect(() => {
@@ -382,7 +477,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
     async function attach() {
       try {
         const sessionEndpoint = `/api/v1/oauth-sessions/${encodeURIComponent(sessionId)}`;
-        const waitForTerminalReadiness = async (): Promise<void> => {
+        const waitForTerminalReadiness = async (): Promise<boolean> => {
           while (!closed) {
             const sessionResponse = await fetch(sessionEndpoint, {
               headers: { Accept: 'application/json' },
@@ -395,12 +490,13 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
               throw new Error(detail);
             }
             const session = (await sessionResponse.json()) as OAuthSessionResponse;
+            setSession(session);
             if (isTerminalAttachable(session)) {
-              return;
+              return true;
             }
             if (TERMINAL_FINAL_STATUSES.includes(session.status)) {
-              const reason = session.failure_reason ? `: ${session.failure_reason}` : '';
-              throw new Error(`OAuth session ${oauthStatusLabel(session.status)}${reason}`);
+              setStatus(oauthStatusLabel(session.status));
+              return false;
             }
             setStatus(
               TERMINAL_ATTACHABLE_STATUSES.includes(session.status)
@@ -409,10 +505,11 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
             );
             await new Promise((resolve) => window.setTimeout(resolve, TERMINAL_READY_POLL_MS));
           }
+          return false;
         };
 
-        await waitForTerminalReadiness();
-        if (closed) {
+        const isReadyToAttach = await waitForTerminalReadiness();
+        if (closed || !isReadyToAttach) {
           return;
         }
         setStatus('Connecting terminal');
@@ -479,6 +576,75 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           <span className="oauth-terminal-status">{formatStatusLabel(status)}</span>
         </div>
       </header>
+      {session ? (
+        <section className="oauth-terminal-session-panel" aria-label="OAuth session details">
+          <dl>
+            <div>
+              <dt>Profile</dt>
+              <dd>{session.profile_summary?.profile_id ?? session.profile_id ?? 'Unknown profile'}</dd>
+            </div>
+            <div>
+              <dt>Runtime</dt>
+              <dd>{formatStatusLabel(session.runtime_id ?? 'unknown')}</dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd>{oauthStatusLabel(session.status)}</dd>
+            </div>
+            {session.profile_summary ? (
+              <div>
+                <dt>Account</dt>
+                <dd>
+                  {session.profile_summary.account_label ??
+                    session.profile_summary.provider_label ??
+                    session.profile_summary.provider_id}
+                </dd>
+              </div>
+            ) : null}
+            {session.failure_reason ? (
+              <div>
+                <dt>Failure</dt>
+                <dd>{safeDisplayText(session.failure_reason)}</dd>
+              </div>
+            ) : null}
+          </dl>
+          <div className="oauth-terminal-session-actions">
+            {TERMINAL_FINALIZE_STATUSES.includes(session.status) ? (
+              <button
+                type="button"
+                className="primary"
+                onClick={() => runSessionAction('finalize', 'Failed to finalize OAuth session.')}
+                disabled={actionPending !== null}
+              >
+                Finalize Provider Profile
+              </button>
+            ) : null}
+            {['pending', 'starting', 'bridge_ready', 'awaiting_user', 'verifying'].includes(
+              session.status,
+            ) ? (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => runSessionAction('cancel', 'Failed to cancel OAuth session.')}
+                disabled={actionPending !== null}
+              >
+                Cancel
+              </button>
+            ) : null}
+            {['failed', 'cancelled', 'expired'].includes(session.status) ? (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => runSessionAction('reconnect', 'Failed to reconnect OAuth session.')}
+                disabled={actionPending !== null}
+              >
+                Reconnect
+              </button>
+            ) : null}
+          </div>
+          {actionError ? <p role="alert">{actionError}</p> : null}
+        </section>
+      ) : null}
       <section className="oauth-terminal-paste-box">
         <label className="oauth-terminal-paste-label" htmlFor="oauth-terminal-paste-input">
           Paste authentication code
