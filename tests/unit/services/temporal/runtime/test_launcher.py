@@ -636,10 +636,13 @@ def test_build_github_socket_path_stays_short_for_long_workspace_paths(tmp_path)
         run_id="run-github-secret-ref-1",
         support_root=str(support_root),
     )
+    path = Path(socket_path)
 
     assert len(socket_path.encode("utf-8")) < 80
     assert str(support_root) not in socket_path
-    assert socket_path.endswith(".sock")
+    assert path.name == "github.sock"
+    assert path.parent.parent == Path("/tmp") / "mm-gh"
+    assert len(path.parent.name) == 16
 
 def test_persist_gh_config_uses_support_root_for_repo_workspace(tmp_path):
     run_root = tmp_path / "run-1"
@@ -1976,7 +1979,7 @@ async def test_launch_privilege_drop_chowns_github_broker_socket_for_claude_code
         passthrough_env_keys=[],
     )
 
-    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+    _record, process, _cleanup, deferred_cleanup = await launcher.launch(
         run_id="claude-gh-run",
         request=_make_request(),
         profile=profile,
@@ -1995,13 +1998,20 @@ async def test_launch_privilege_drop_chowns_github_broker_socket_for_claude_code
         }
     ]
     socket_path = Path(github_auth_brokers.starts[0]["socket_path"])
+    assert socket_path.parent.parent == Path("/tmp") / "mm-gh"
     assert (
         "chown",
         "app:app",
         str(socket_path.parent),
         str(socket_path),
     ) in chown_calls
+    assert not any(
+        call == ("chown", "app:app", str(socket_path.parent.parent), str(socket_path))
+        or call == ("chown", "app:app", str(socket_path.parent.parent))
+        for call in chown_calls
+    )
     assert ("chown", "-R", "app:app", str(workspace_root.parent)) in chown_calls
+    assert str(socket_path.parent) in deferred_cleanup
     assert "GITHUB_TOKEN" not in captured_launch_env
     assert captured_launch_env["PATH"].startswith(
         str(workspace_root.parent / ".moonmind" / "bin")

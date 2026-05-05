@@ -129,7 +129,7 @@ class ManagedRuntimeLauncher:
         if support_root:
             material = f"{Path(support_root).resolve()}::{run_id}"
         digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
-        return str(socket_root / f"{digest}.sock")
+        return str(socket_root / digest / "github.sock")
 
     async def _make_github_broker_accessible_to_app(
         self,
@@ -835,6 +835,7 @@ class ManagedRuntimeLauncher:
                         socket_path=github_socket_path,
                     )
                 deferred_cleanup_paths.append(github_socket_path)
+                deferred_cleanup_paths.append(str(Path(github_socket_path).parent))
                 if self._runtime_requires_direct_github_env(profile.runtime_id):
                     env_overrides["GITHUB_TOKEN"] = github_token
                     env_overrides.setdefault("GIT_TERMINAL_PROMPT", "0")

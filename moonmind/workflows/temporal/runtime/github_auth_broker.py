@@ -57,6 +57,10 @@ class GitHubAuthBrokerManager:
         await self.stop(run_id)
 
         path = Path(socket_path)
+        shared_root = path.parent.parent
+        if shared_root.name == "mm-gh":
+            shared_root.mkdir(parents=True, exist_ok=True, mode=0o711)
+            shared_root.chmod(0o711)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         path.parent.chmod(0o700)
         try:

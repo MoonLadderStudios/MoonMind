@@ -484,7 +484,7 @@ class DockerCodexManagedSessionController:
         if support_root:
             material = f"{Path(support_root).resolve()}::{run_id}"
         digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
-        return str(resolved_socket_root / f"{digest}.sock")
+        return str(resolved_socket_root / digest / "github.sock")
 
     @staticmethod
     def _record_status_from_handle_status(status: str) -> ManagedSessionRecordStatus:

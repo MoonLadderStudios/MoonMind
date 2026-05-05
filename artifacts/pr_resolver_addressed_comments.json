@@ -1,12 +1,22 @@
 [
   {
-    "id": 3184131746,
+    "id": 3185322350,
     "disposition": "addressed",
-    "rationale": "Extracted the preset/skill instruction-label decision into usesGenericInstructionsLabel(stepType)."
+    "rationale": "Changed GitHub broker socket paths to use per-run subdirectories under /tmp/mm-gh and only chown the run-specific socket directory plus socket, leaving the shared root unowned by the run user."
   },
   {
-    "id": 4223053049,
+    "id": 4224485088,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; its actionable suggestion is covered by review comment 3184131746."
+    "rationale": "Review summary comment; the actionable security concern is tracked and addressed by review comments 3185322350 and 3185327508."
+  },
+  {
+    "id": 3185327508,
+    "disposition": "addressed",
+    "rationale": "Moved broker sockets from the shared /tmp/mm-gh root into digest-named per-run directories, prevented shared-root chowning, and added launcher/session/broker tests for the isolated path and ownership behavior."
+  },
+  {
+    "id": 4224490494,
+    "disposition": "not-applicable",
+    "rationale": "Automated review wrapper comment without separate actionable feedback beyond review comment 3185327508."
   }
 ]
