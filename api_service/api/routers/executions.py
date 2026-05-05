@@ -4153,6 +4153,7 @@ async def list_executions(
     entry: Optional[str] = Query(None, alias="entry"),
     repo: Optional[str] = Query(None, alias="repo"),
     integration: Optional[str] = Query(None, alias="integration"),
+    target_runtime: Optional[str] = Query(None, alias="targetRuntime"),
     scope: Optional[str] = Query(None, alias="scope"),
     page_size: int = Query(50, alias="pageSize", ge=1, le=200),
     next_page_token: Optional[str] = Query(None, alias="nextPageToken"),
@@ -4233,6 +4234,10 @@ async def list_executions(
                 query_parts.append(f'mm_repo="{escape_val(repo)}"')
             if integration:
                 query_parts.append(f'mm_integration="{escape_val(integration)}"')
+            if target_runtime:
+                query_parts.append(
+                    f'mm_target_runtime="{escape_val(target_runtime)}"'
+                )
 
             query_str = " AND ".join(query_parts) if query_parts else ""
 

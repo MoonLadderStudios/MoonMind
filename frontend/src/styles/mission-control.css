@@ -554,6 +554,64 @@ h1 {
   box-shadow: var(--mm-control-focus-ring);
 }
 
+.task-list-compound-header-cell {
+  position: relative;
+}
+
+.task-list-compound-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.task-list-column-filter-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  min-height: 1.65rem;
+  padding: 0.12rem 0.32rem;
+  border: 1px solid transparent;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: rgb(var(--mm-muted));
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: none;
+}
+
+.task-list-column-filter-button:hover,
+.task-list-column-filter-button:focus-visible,
+.task-list-column-filter-button.is-active {
+  border-color: var(--mm-control-border);
+  background: var(--mm-control-shell);
+  color: rgb(var(--mm-accent));
+  box-shadow: var(--mm-control-focus-ring);
+  transform: none;
+  filter: none;
+}
+
+.task-list-header-filter-popover {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 8;
+  width: min(18rem, 70vw);
+  padding: 0.65rem;
+  border: 1px solid rgb(var(--mm-border) / 0.84);
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-panel) / 0.98);
+  box-shadow: 0 18px 42px -28px rgb(var(--mm-ink) / 0.7);
+}
+
+.task-list-header-filter-control {
+  width: 100%;
+}
+
 .stack {
   display: grid;
   gap: 0.9rem;
@@ -734,6 +792,21 @@ h1 {
   padding: 0.16rem 0.52rem;
   font-size: 0.78rem;
   box-shadow: inset 0 1px 0 var(--mm-glass-edge);
+}
+
+button.task-list-filter-chip {
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.2;
+}
+
+button.task-list-filter-chip:hover,
+button.task-list-filter-chip:focus-visible {
+  border-color: rgb(var(--mm-accent) / 0.7);
+  color: rgb(var(--mm-accent));
+  transform: none;
+  filter: none;
+  box-shadow: var(--mm-control-focus-ring);
 }
 
 .task-list-filter-chip strong {
@@ -1861,6 +1934,43 @@ button.secondary:hover {
   border-color: rgb(var(--mm-accent));
   box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
   transform: scale(var(--mm-control-hover-scale));
+}
+
+button.task-list-column-filter-button,
+button.task-list-filter-chip {
+  transform: none;
+  filter: none;
+}
+
+button.task-list-column-filter-button {
+  border-color: transparent;
+  background: transparent;
+  color: rgb(var(--mm-muted));
+  box-shadow: none;
+}
+
+button.task-list-column-filter-button:hover,
+button.task-list-column-filter-button:focus-visible,
+button.task-list-column-filter-button.is-active {
+  border-color: var(--mm-control-border);
+  background: var(--mm-control-shell);
+  color: rgb(var(--mm-accent));
+  box-shadow: var(--mm-control-focus-ring);
+}
+
+button.task-list-filter-chip {
+  border-color: var(--mm-control-border);
+  background: var(--mm-control-shell);
+  color: rgb(var(--mm-ink));
+  box-shadow: inset 0 1px 0 var(--mm-glass-edge);
+}
+
+button.task-list-filter-chip:hover,
+button.task-list-filter-chip:focus-visible {
+  border-color: rgb(var(--mm-accent) / 0.7);
+  background: var(--mm-control-shell);
+  color: rgb(var(--mm-accent));
+  box-shadow: var(--mm-control-focus-ring);
 }
 
 .button {

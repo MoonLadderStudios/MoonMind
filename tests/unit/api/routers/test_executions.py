@@ -284,6 +284,47 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
     assert kwargs["page_size"] == 25
     assert kwargs["next_page_token"] == "token-123"
 
+def test_list_executions_temporal_query_includes_target_runtime_filter() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "scope": "tasks",
+                "targetRuntime": "codex_cli",
+            },
+        )
+
+    assert response.status_code == 200
+    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    assert 'WorkflowType="MoonMind.Run"' in query
+    assert 'mm_entry="run"' in query
+    assert 'mm_target_runtime="codex_cli"' in query
+    temporal_client.list_workflows.assert_called_once()
+    assert (
+        temporal_client.list_workflows.call_args.kwargs["query"]
+        == temporal_client.count_workflows.await_args.kwargs["query"]
+    )
+
 def test_list_executions_rejects_non_admin_owner_type_override() -> None:
     app = FastAPI()
     app.include_router(router)

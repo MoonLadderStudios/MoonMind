@@ -32,6 +32,7 @@ const TEMPORAL_STATUSES = [
   'failed',
   'canceled',
 ] as const;
+const RUNTIME_FILTER_OPTIONS = ['codex_cli', 'claude_code', 'gemini_cli', 'jules'] as const;
 const TASK_WORKFLOW_TYPE = 'MoonMind.Run';
 const TASK_ENTRY = 'run';
 
@@ -47,7 +48,11 @@ const TABLE_COLUMNS = [
   ['createdAt', 'Created'],
   ['closedAt', 'Finished'],
 ] as const;
+type TableColumn = (typeof TABLE_COLUMNS)[number];
+type TableField = TableColumn[0];
+type FilterField = TableField;
 const VALID_TABLE_SORT_FIELDS = new Set<string>([...TABLE_COLUMNS.map((column) => column[0]), 'integration']);
+const ACTIVE_FILTER_FIELDS = new Set<string>(['status', 'repository', 'targetRuntime']);
 
 const ExecutionRowSchema = z
   .object({
@@ -182,6 +187,8 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const [ignoredWorkflowScopeState] = useState(() => hasUnsupportedWorkflowScopeState(initial));
   const [temporalState, setTemporalState] = useState(() => (initial.get('state') || '').toLowerCase());
   const [repository, setRepository] = useState(() => initial.get('repo') || '');
+  const [targetRuntime, setTargetRuntime] = useState(() => initial.get('targetRuntime') || '');
+  const [openFilter, setOpenFilter] = useState<FilterField | null>(null);
   const [pageSize, setPageSize] = useState(() => parsePageSize(initial.get('limit')));
   const [listCursor, setListCursor] = useState<string | null>(() =>
     ignoredWorkflowScopeState ? null : initial.get('nextPageToken')?.trim() || null,
@@ -195,11 +202,13 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     return 'desc';
   });
   const normalizedRepository = repository.trim();
+  const normalizedTargetRuntime = targetRuntime.trim();
 
   const syncUrl = useCallback(() => {
     const params = new URLSearchParams();
     if (temporalState) params.set('state', temporalState);
     if (normalizedRepository) params.set('repo', normalizedRepository);
+    if (normalizedTargetRuntime) params.set('targetRuntime', normalizedTargetRuntime);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('nextPageToken', listCursor);
     if (sortField !== 'scheduledFor' || sortDir !== 'desc') {
@@ -210,6 +219,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   }, [
     temporalState,
     normalizedRepository,
+    normalizedTargetRuntime,
     pageSize,
     listCursor,
     sortField,
@@ -226,6 +236,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     pageSize,
     temporalState,
     normalizedRepository,
+    normalizedTargetRuntime,
     listCursor,
   ] as const;
 
@@ -240,6 +251,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       if (listCursor) params.set('nextPageToken', listCursor);
       if (temporalState) params.set('state', temporalState);
       if (normalizedRepository) params.set('repo', normalizedRepository);
+      if (normalizedTargetRuntime) params.set('targetRuntime', normalizedTargetRuntime);
       const response = await fetch(`${payload.apiBase}/executions?${params}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.statusText}`);
@@ -318,20 +330,125 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   ]
     .filter(Boolean)
     .join(' · ');
+  const filterValueForField = useCallback(
+    (field: string): string => {
+      if (field === 'status') return temporalState;
+      if (field === 'repository') return normalizedRepository;
+      if (field === 'targetRuntime') return normalizedTargetRuntime;
+      return '';
+    },
+    [normalizedRepository, normalizedTargetRuntime, temporalState],
+  );
   const activeFilters = useMemo(
     () =>
       [
-        temporalState ? ['Status', temporalState] : null,
-        normalizedRepository ? ['Repository', normalizedRepository] : null,
-      ].filter((filter): filter is [string, string] => Boolean(filter)),
-    [temporalState, normalizedRepository],
+        temporalState ? { field: 'status' as FilterField, label: 'Status', value: temporalState } : null,
+        normalizedRepository
+          ? { field: 'repository' as FilterField, label: 'Repository', value: normalizedRepository }
+          : null,
+        normalizedTargetRuntime
+          ? {
+              field: 'targetRuntime' as FilterField,
+              label: 'Runtime',
+              value: formatRuntimeLabel(normalizedTargetRuntime),
+            }
+          : null,
+      ].filter(
+        (filter): filter is { field: FilterField; label: string; value: string } => Boolean(filter),
+      ),
+    [temporalState, normalizedRepository, normalizedTargetRuntime],
   );
   const hasActiveFilters = activeFilters.length > 0;
   const clearFilters = useCallback(() => {
     setTemporalState('');
     setRepository('');
+    setTargetRuntime('');
+    setOpenFilter(null);
     resetToFirstPage();
   }, [resetToFirstPage]);
+
+  const filterAccessibilityLabel = (field: string, label: string): string => {
+    const value = filterValueForField(field);
+    if (!ACTIVE_FILTER_FIELDS.has(field)) return `Filter ${label}. No filter available.`;
+    if (!value) return `Filter ${label}. No filter applied.`;
+    return `Filter ${label}. Filter active: ${field === 'targetRuntime' ? formatRuntimeLabel(value) : value}.`;
+  };
+
+  const renderFilterPopover = (field: FilterField, label: string) => {
+    if (openFilter !== field) return null;
+
+    let control;
+    if (field === 'status') {
+      control = (
+        <label className="queue-inline-filter task-list-header-filter-control">
+          Status filter value
+          <select
+            value={temporalState}
+            disabled={!listEnabled}
+            onChange={(event) => {
+              setTemporalState(event.target.value.toLowerCase());
+              resetToFirstPage();
+            }}
+          >
+            <option value="">All Statuses</option>
+            {TEMPORAL_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+        </label>
+      );
+    } else if (field === 'repository') {
+      control = (
+        <label className="queue-inline-filter task-list-header-filter-control">
+          Repository filter value
+          <input
+            type="text"
+            value={repository}
+            disabled={!listEnabled}
+            placeholder="owner/repo"
+            onChange={(event) => {
+              setRepository(event.target.value);
+              resetToFirstPage();
+            }}
+          />
+        </label>
+      );
+    } else if (field === 'targetRuntime') {
+      const runtimeOptions = normalizedTargetRuntime
+        ? Array.from(new Set([normalizedTargetRuntime, ...RUNTIME_FILTER_OPTIONS]))
+        : [...RUNTIME_FILTER_OPTIONS];
+      control = (
+        <label className="queue-inline-filter task-list-header-filter-control">
+          Runtime filter value
+          <select
+            value={targetRuntime}
+            disabled={!listEnabled}
+            onChange={(event) => {
+              setTargetRuntime(event.target.value);
+              resetToFirstPage();
+            }}
+          >
+            <option value="">All Runtimes</option>
+            {runtimeOptions.map((runtime) => (
+              <option key={runtime} value={runtime}>
+                {formatRuntimeLabel(runtime)}
+              </option>
+            ))}
+          </select>
+        </label>
+      );
+    } else {
+      control = <p className="small">No filter is available for {label} yet.</p>;
+    }
+
+    return (
+      <div className="task-list-header-filter-popover" role="dialog" aria-label={`${label} filter`}>
+        {control}
+      </div>
+    );
+  };
 
   return (
     <div className="stack">
@@ -367,48 +484,20 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           </div>
         ) : null}
 
-        <form className="task-list-control-grid" onSubmit={(event) => event.preventDefault()}>
-          <label>
-            Status
-            <select
-              value={temporalState}
-              disabled={!listEnabled}
-              onChange={(event) => {
-                setTemporalState(event.target.value.toLowerCase());
-                resetToFirstPage();
-              }}
-            >
-              <option value="">All Statuses</option>
-              {TEMPORAL_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Repository
-            <input
-              type="text"
-              value={repository}
-              disabled={!listEnabled}
-              placeholder="owner/repo"
-              onChange={(event) => {
-                setRepository(event.target.value);
-                resetToFirstPage();
-              }}
-            />
-          </label>
-        </form>
-
         <div className="task-list-filter-row" aria-live="polite">
           {hasActiveFilters ? (
             <div className="task-list-filter-chips" aria-label="Active filters">
-              {activeFilters.map(([label, value]) => (
-                <span className="task-list-filter-chip" key={`${label}:${value}`}>
+              {activeFilters.map(({ field, label, value }) => (
+                <button
+                  type="button"
+                  className="task-list-filter-chip"
+                  key={`${label}:${value}`}
+                  onClick={() => setOpenFilter(field)}
+                  aria-label={`${label} filter: ${value}`}
+                >
                   <span>{label}</span>
                   <strong>{value}</strong>
-                </span>
+                </button>
               ))}
             </div>
           ) : (
@@ -488,17 +577,31 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       {TABLE_COLUMNS.map(([field, label]) => {
                         const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
                         return (
-                          <th key={field} aria-sort={ariaSort}>
-                            <button
-                              type="button"
-                              className="table-sort-button"
-                              onClick={() => onHeaderClick(field)}
-                              aria-label={ariaLabel}
-                            >
-                              {label}
-                              {sortIndicator(field)}
-                              <span className="sr-only">{sortHint}</span>
-                            </button>
+                          <th key={field} aria-sort={ariaSort} className="task-list-compound-header-cell">
+                            <div className="task-list-compound-header">
+                              <button
+                                type="button"
+                                className="table-sort-button"
+                                onClick={() => onHeaderClick(field)}
+                                aria-label={ariaLabel}
+                              >
+                                {label}
+                                {sortIndicator(field)}
+                                <span className="sr-only">{sortHint}</span>
+                              </button>
+                              <button
+                                type="button"
+                                className={`task-list-column-filter-button${
+                                  filterValueForField(field) ? ' is-active' : ''
+                                }`}
+                                onClick={() => setOpenFilter((current) => (current === field ? null : field))}
+                                aria-label={filterAccessibilityLabel(field, label)}
+                                aria-expanded={openFilter === field}
+                              >
+                                <span aria-hidden="true">Filter</span>
+                              </button>
+                            </div>
+                            {renderFilterPopover(field, label)}
                           </th>
                         );
                       })}
