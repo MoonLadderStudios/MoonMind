@@ -1,17 +1,12 @@
 [
   {
-    "id": 3191819151,
+    "id": 3192062411,
     "disposition": "addressed",
-    "rationale": "Changed page range summary to show 0 - 0 when the current page has no sorted items."
+    "rationale": "Combined the two sortedItems.length === 0 branches into a single block that toggles the inner element on hasPaginationContext, removing the duplicated resultsFooter."
   },
   {
-    "id": 3191819160,
-    "disposition": "addressed",
-    "rationale": "Added flex-wrap to the task list footer pagination container for narrow layouts."
-  },
-  {
-    "id": 4231866388,
+    "id": 4232119181,
     "disposition": "not-applicable",
-    "rationale": "Bot review summary only; the actionable inline comments from that review were handled separately."
+    "rationale": "Summary review body referencing the inline suggestion already addressed; no additional action required."
   }
 ]

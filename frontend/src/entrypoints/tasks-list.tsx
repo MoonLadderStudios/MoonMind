@@ -1317,14 +1317,13 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             <div className="notice error task-list-empty-message">{(error as Error).message}</div>
             {resultsFooter}
           </>
-        ) : sortedItems.length === 0 && !hasPaginationContext ? (
-          <>
-            <p className="small task-list-empty-message">No tasks found for the current filters.</p>
-            {resultsFooter}
-          </>
         ) : sortedItems.length === 0 ? (
           <>
-            <div className="card small task-list-empty-message">No tasks found for the current filters.</div>
+            {!hasPaginationContext ? (
+              <p className="small task-list-empty-message">No tasks found for the current filters.</p>
+            ) : (
+              <div className="card small task-list-empty-message">No tasks found for the current filters.</div>
+            )}
             {resultsFooter}
           </>
         ) : (
