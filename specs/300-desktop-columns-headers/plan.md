@@ -7,45 +7,45 @@
 
 ## Summary
 
-Tasks List already has the desired task-oriented desktop columns, default scheduled sort, timestamp/string/status sort rules, status pills, and dependency summaries. The missing behavior is the compound header interaction model: separate sort and filter targets in every visible header, header popovers for status/repository/runtime filters, clickable filter chips, and runtime filter propagation through the task-scoped Temporal list request. Implementation will update the existing React entrypoint and its CSS, add Vitest coverage for desktop header behavior, and add FastAPI route coverage for the new `targetRuntime` filter.
+Tasks List now has the desired task-oriented desktop columns, default scheduled sort, timestamp/string/status sort rules, status pills, dependency summaries, compound header sort/filter targets, header popovers for status/repository/runtime filters, clickable filter chips, and runtime filter propagation through the task-scoped Temporal list request. The implementation updated the existing React entrypoint and CSS, added Vitest coverage for desktop header behavior, and added FastAPI route coverage for the new `targetRuntime` filter.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | implemented_verified | `frontend/src/entrypoints/tasks-list.tsx` `TABLE_COLUMNS`; existing tests cover columns | preserve | UI unit |
-| FR-002 | implemented_verified | existing tests assert Kind, Workflow Type, Entry, Started absent | preserve | UI unit |
-| FR-003 | missing | current header is one sort button only | add reusable compound header | UI unit |
-| FR-004 | implemented_unverified | existing sort tests cover label sorting but not popover separation | extend tests around compound headers | UI unit |
-| FR-005 | missing | no header filter target exists | add filter buttons/popovers | UI unit |
-| FR-006 | implemented_unverified | existing `aria-sort` tests cover sort buttons | preserve through compound header refactor | UI unit |
-| FR-007 | implemented_verified | `sortRows`, `TIMESTAMP_SORT_FIELDS`, default sort state, existing scheduled sort test | preserve | UI unit |
-| FR-008 | partial | status/repository filters exist in top controls; runtime filter absent | move filters to header popovers and add runtime filter | UI unit + API route |
-| FR-009 | partial | chips render but are not clickable | make chips buttons that open matching filter | UI unit |
-| FR-010 | partial | clear filters handles status/repository only | include runtime and pagination reset | UI unit |
-| FR-011 | implemented_verified | status pill, links, date formatting, dependency summary tests exist | preserve | UI unit |
-| FR-012 | implemented_verified | existing scope normalization tests and task-scoped request | preserve while adding runtime filter | UI unit + API route |
-| FR-013 | missing | new MoonSpec artifacts required | preserve MM-587 in artifacts and verification | final verify |
-| SC-001 | implemented_unverified | existing tests cover most columns | keep explicit coverage | UI unit |
-| SC-002 | missing | no filter popover to guard against | add regression test | UI unit |
-| SC-003 | missing | no filter popover target exists | add regression test | UI unit |
-| SC-004 | partial | chips are display-only | add clickable chip tests | UI unit |
-| SC-005 | missing | API route lacks `targetRuntime` query filter | add API test and route filter | API unit |
-| SC-006 | missing | new artifacts needed | final verification report | final verify |
-| DESIGN-REQ-006 | implemented_verified | row model and dependency summary tests | preserve | UI unit |
-| DESIGN-REQ-007 | implemented_verified | table sort/format tests | preserve | UI unit |
-| DESIGN-REQ-008 | partial | top filters still present | move status/repository to header and add runtime | UI unit |
-| DESIGN-REQ-010 | implemented_verified | no excluded columns | preserve | UI unit |
-| DESIGN-REQ-011 | missing | compound controls absent | add reusable control | UI unit |
-| DESIGN-REQ-027 | implemented_verified | no system workflow browsing or multi-sort controls | preserve | UI unit |
+| FR-001 | implemented_verified | `frontend/src/entrypoints/tasks-list.tsx` `TABLE_COLUMNS`; UI tests cover columns | no new implementation | UI unit |
+| FR-002 | implemented_verified | UI tests assert Kind, Workflow Type, Entry, and Started absent | no new implementation | UI unit |
+| FR-003 | implemented_verified | compound header controls in `frontend/src/entrypoints/tasks-list.tsx`; UI test covers separate targets | no new implementation | UI unit |
+| FR-004 | implemented_verified | UI test confirms sort label changes sort without opening a filter popover | no new implementation | UI unit |
+| FR-005 | implemented_verified | UI test confirms filter target opens matching popover without changing sort | no new implementation | UI unit |
+| FR-006 | implemented_verified | `aria-sort` and sort indicator tests pass after compound header refactor | no new implementation | UI unit |
+| FR-007 | implemented_verified | `sortRows`, `TIMESTAMP_SORT_FIELDS`, default sort state, and scheduled sort test | no new implementation | UI unit |
+| FR-008 | implemented_verified | status, repository, and runtime filters are available through header popovers | no new implementation | UI unit + API route |
+| FR-009 | implemented_verified | active filter chips are buttons and reopen matching popovers | no new implementation | UI unit |
+| FR-010 | implemented_verified | clear filters includes status, repository, runtime, and pagination reset | no new implementation | UI unit |
+| FR-011 | implemented_verified | status pill, links, date formatting, runtime labels, and dependency summary tests pass | no new implementation | UI unit |
+| FR-012 | implemented_verified | legacy scope normalization tests pass; runtime filter remains task-scoped | no new implementation | UI unit + API route |
+| FR-013 | implemented_verified | MM-587 is preserved in spec, plan, tasks, and verification artifacts | no new implementation | final verify |
+| SC-001 | implemented_verified | UI tests cover default and excluded columns | no new implementation | UI unit |
+| SC-002 | implemented_verified | UI test covers sort target without popover | no new implementation | UI unit |
+| SC-003 | implemented_verified | UI test covers filter target without sort change | no new implementation | UI unit |
+| SC-004 | implemented_verified | UI test covers clickable status, repository, and runtime chips | no new implementation | UI unit |
+| SC-005 | implemented_verified | API route test confirms `mm_target_runtime` query with task scope | no new implementation | API unit |
+| SC-006 | implemented_verified | `verification.md` preserves MM-587 and source design IDs | no new implementation | final verify |
+| DESIGN-REQ-006 | implemented_verified | row model and dependency summary tests pass | no new implementation | UI unit |
+| DESIGN-REQ-007 | implemented_verified | table sort/format tests pass | no new implementation | UI unit |
+| DESIGN-REQ-008 | implemented_verified | column header filters and active chips replace top status/repository filters | no new implementation | UI unit |
+| DESIGN-REQ-010 | implemented_verified | desired columns preserved; excluded columns absent | no new implementation | UI unit |
+| DESIGN-REQ-011 | implemented_verified | compound controls, sort/filter separation, `aria-sort`, and single-sort behavior covered | no new implementation | UI unit |
+| DESIGN-REQ-027 | implemented_verified | no system workflow browsing or multi-sort controls introduced | no new implementation | UI unit |
 
 ## Technical Context
 
 - **Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 for FastAPI route tests.
 - **Primary Dependencies**: React, TanStack Query, Vitest, Testing Library, FastAPI, pytest.
 - **Storage**: No new persistent storage.
-- **Unit Testing**: `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx`; API route coverage through pytest.
-- **Integration Testing**: UI entrypoint render tests and FastAPI route-boundary test cover the user workflow and API request shape.
+- **Unit Testing**: `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/tasks-list.test.tsx`; API route coverage through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py`.
+- **Integration Testing**: UI entrypoint render tests and FastAPI route-boundary test cover the user workflow and API request shape; full repository validation uses `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`.
 - **Target Platform**: Browser Mission Control Tasks List and MoonMind API.
 - **Project Type**: Existing full-stack web app.
 - **Performance Goals**: Header filtering must not add extra fetches except when filter state changes; current-page sorting stays client-side.
