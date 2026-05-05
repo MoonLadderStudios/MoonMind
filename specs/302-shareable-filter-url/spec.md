@@ -72,7 +72,7 @@ Requirements
 Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-589 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
 """
 
-<!-- Moon Spec specs contain exactly one independently testable user story. Use /speckit.breakdown for technical designs that contain multiple stories. -->
+<!-- Moon Spec specs contain exactly one independently testable user story. Use /moonspec-breakdown for technical designs that contain multiple stories. -->
 
 ## User Story - Shareable Task Filter URLs
 
