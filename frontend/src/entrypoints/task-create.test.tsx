@@ -12471,7 +12471,7 @@ describe("Task Create submit arrow animation", () => {
     );
   });
 
-  it("keeps the create arrow exit active while submit is busy", async () => {
+  it("clears the create arrow exit after its animation while submit is busy", async () => {
     let resolveExecution: (response: Response) => void = () => {};
     const fetchSpy = vi
       .spyOn(window, "fetch")
@@ -12539,14 +12539,11 @@ describe("Task Create submit arrow animation", () => {
         ).toBe(true);
       });
 
-      const arrowIcon = arrow?.querySelector("svg");
-      expect(arrowIcon).not.toBeNull();
-      fireEvent.animationEnd(arrowIcon as SVGElement, {
-        animationName: "queue-submit-primary-arrow-exit",
+      await waitFor(() => {
+        expect(
+          createButton.classList.contains("queue-submit-primary--arrow-exit"),
+        ).toBe(false);
       });
-      expect(
-        createButton.classList.contains("queue-submit-primary--arrow-exit"),
-      ).toBe(true);
     } finally {
       resolveExecution(
         new Response(
