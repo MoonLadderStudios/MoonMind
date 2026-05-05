@@ -246,7 +246,7 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Finalize Provider Profile' }));
 
     expect(await screen.findByText('Codex Team')).toBeTruthy();
-    expect(screen.getAllByText('Succeeded').length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('Succeeded')).length).toBeGreaterThan(0);
     expect(storageSetItem).toHaveBeenCalledWith(
       'moonmind:provider-profile-updated',
       expect.stringContaining('codex-oauth'),
