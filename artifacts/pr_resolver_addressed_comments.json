@@ -1,12 +1,17 @@
 [
   {
-    "id": 3185533683,
-    "disposition": "addressed",
-    "rationale": "Replaced the transient absolute workspace path in specs/298-tasks-list-canonical-route-shell/verification.md with the repository-relative spec path."
+    "id": 4224428280,
+    "disposition": "not-applicable",
+    "rationale": "Bot review stated it had no feedback to provide."
   },
   {
-    "id": 4224708869,
+    "id": 3185270091,
+    "disposition": "addressed",
+    "rationale": "The feedback commit restores single-ended inwardIssue blocker handling and updates direction tests/template text."
+  },
+  {
+    "id": 4224429496,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the single actionable path portability comment is tracked separately and addressed."
+    "rationale": "Automated review summary wrapper; actionable child discussion 3185270091 was addressed separately."
   }
 ]

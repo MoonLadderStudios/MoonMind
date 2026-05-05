@@ -683,39 +683,7 @@ async def test_create_jira_issues_linear_blocker_chain_creates_adjacent_links():
     assert [item["status"] for item in jira["linkResults"]] == ["created", "created"]
 
 @pytest.mark.asyncio
-async def test_check_jira_blockers_ignores_outward_links_from_target_issue():
-    service = _FakeJiraService()
-    service.issue_responses["MM-1"] = {
-        "key": "MM-1",
-        "fields": {
-            "issuelinks": [
-                {
-                    "type": {
-                        "name": "Blocks",
-                        "outward": "blocks",
-                        "inward": "is blocked by",
-                    },
-                    "outwardIssue": {
-                        "key": "MM-2",
-                        "fields": {"status": {"name": "Backlog"}},
-                    },
-                }
-            ]
-        },
-    }
-
-    result = await check_jira_blockers(
-        {"targetIssueKey": "MM-1"},
-        jira_service_factory=lambda: service,
-    )
-
-    assert result.outputs["decision"] == "continue"
-    assert result.outputs["blockingIssues"] == []
-    assert "no Jira blocker links" in result.outputs["summary"]
-    assert [request.issue_key for request in service.get_issue_requests] == ["MM-1"]
-
-@pytest.mark.asyncio
-async def test_check_jira_blockers_blocks_only_on_inward_unresolved_blocks_link():
+async def test_check_jira_blockers_blocks_on_single_inward_unresolved_blocks_link():
     service = _FakeJiraService()
     service.issue_responses["MM-2"] = {
         "key": "MM-2",
@@ -755,6 +723,39 @@ async def test_check_jira_blockers_blocks_only_on_inward_unresolved_blocks_link(
     assert result.outputs["summary"] == (
         "MM-2 is blocked by unresolved Jira issue(s): MM-1 (Backlog)."
     )
+    assert [request.issue_key for request in service.get_issue_requests] == ["MM-2"]
+
+@pytest.mark.asyncio
+async def test_check_jira_blockers_ignores_single_outward_links_from_target_issue():
+    service = _FakeJiraService()
+    service.issue_responses["MM-1"] = {
+        "key": "MM-1",
+        "fields": {
+            "issuelinks": [
+                {
+                    "type": {
+                        "name": "Blocks",
+                        "outward": "blocks",
+                        "inward": "is blocked by",
+                    },
+                    "outwardIssue": {
+                        "key": "MM-2",
+                        "fields": {"status": {"name": "Backlog"}},
+                    },
+                }
+            ]
+        },
+    }
+
+    result = await check_jira_blockers(
+        {"targetIssueKey": "MM-1"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["blockingIssues"] == []
+    assert "no Jira blocker links" in result.outputs["summary"]
+    assert [request.issue_key for request in service.get_issue_requests] == ["MM-1"]
 
 @pytest.mark.asyncio
 async def test_check_jira_blockers_fetches_missing_blocker_status_and_allows_done():

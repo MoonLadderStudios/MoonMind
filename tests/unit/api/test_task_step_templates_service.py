@@ -1499,8 +1499,8 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             }
             assert "Jira issue MM-328" in expanded["steps"][1]["instructions"]
             assert "deterministic trusted Jira blocker preflight" in expanded["steps"][1]["instructions"]
-            assert "inwardIssue" in expanded["steps"][1]["instructions"]
-            assert "outwardIssue" in expanded["steps"][1]["instructions"]
+            assert "other issue as outwardIssue" in expanded["steps"][1]["instructions"]
+            assert "other issue as inwardIssue" in expanded["steps"][1]["instructions"]
             assert "MUST NOT block this orchestration" in expanded["steps"][1]["instructions"]
             assert "blocker" in expanded["steps"][1]["instructions"]
             assert "Done" in expanded["steps"][1]["instructions"]
