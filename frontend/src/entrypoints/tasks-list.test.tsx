@@ -848,8 +848,17 @@ describe('Tasks List Entrypoint', () => {
 
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
-    expect(await screen.findByText('Page 1 · 1-1 · 21')).toBeTruthy();
-    expect(document.querySelector('.task-list-results-footer')?.textContent).toContain('Page 1 · 1-1 · 21');
+    expect(await screen.findByText('1 - 1')).toBeTruthy();
+    expect(screen.getByText('21 total entries')).toBeTruthy();
+    const footer = document.querySelector('.task-list-results-footer');
+    const liveBlock = footer?.querySelector('.task-list-footer-live');
+    const paginationBlock = footer?.querySelector('.task-list-footer-pagination');
+    const paginationSummary = footer?.querySelector('.task-list-footer-page-summary');
+    expect(liveBlock?.contains(screen.getByLabelText('Live updates'))).toBe(true);
+    expect(liveBlock?.textContent).toContain('Polling every 5s');
+    expect(paginationBlock?.contains(screen.getByLabelText('Show'))).toBe(true);
+    expect(paginationSummary?.textContent).toContain('1 - 1');
+    expect(paginationSummary?.textContent).toContain('21 total entries');
     expect(screen.getByRole('button', { name: 'Previous page' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Next page' })).toBeTruthy();
   });
