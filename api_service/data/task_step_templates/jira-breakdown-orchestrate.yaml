@@ -1,6 +1,6 @@
 slug: jira-breakdown-orchestrate
 title: Jira Breakdown and Orchestrate
-description: Break a broad Jira or design input into stories, create Jira Story issues, then create dependent Jira Orchestrate tasks for each generated story.
+description: Break a broad Jira or design input into stories, create Jira issues, then create dependent Jira Orchestrate tasks for each generated issue.
 scope: global
 version: 1.0.0
 tags:
@@ -69,12 +69,14 @@ steps:
       args: {}
       requiredCapabilities:
         - git
-  - title: Create Jira stories
+  - title: Create Jira issues
     instructions: |-
       Create one Jira {{ inputs.jira_issue_type }} issue in project {{ inputs.jira_project_key }} for each story from the generated MoonSpec breakdown.
 
       Use the runtime-provided story breakdown JSON path.
       Every Jira issue must include the Source Document path from the story breakdown.
+      {% if inputs.source_issue_key %}Source Jira issue key: {{ inputs.source_issue_key }}.{% endif %}
+      {% if inputs.source_issue_key and inputs.jira_issue_type | lower in ["sub-task", "subtask", "sub task"] %}Create each generated Jira issue as a sub-task of {{ inputs.source_issue_key }}.{% endif %}
       {% if inputs.jira_board_id %}Selected Jira board ID: {{ inputs.jira_board_id }}.{% endif %}
       Dependency mode: {{ inputs.jira_dependency_mode }}.
       If dependency mode is linear_blocker_chain, create an ordered blocker chain so each later story is blocked by the immediately preceding story.
@@ -87,6 +89,7 @@ steps:
         projectKey: "{{ inputs.jira_project_key }}"
         issueTypeName: "{{ inputs.jira_issue_type }}"
         boardId: "{{ inputs.jira_board_id }}"
+        sourceIssueKey: "{{ inputs.source_issue_key }}"
         dependencyMode: "{{ inputs.jira_dependency_mode }}"
     skill:
       id: story.create_jira_issues
