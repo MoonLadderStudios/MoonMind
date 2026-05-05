@@ -58,19 +58,23 @@ const TABLE_COLUMNS = [
 ] as const;
 type TableColumn = (typeof TABLE_COLUMNS)[number];
 type FilterField =
+  | 'taskId'
   | 'status'
   | 'repository'
   | 'targetRuntime'
   | 'targetSkill'
+  | 'title'
   | 'scheduledFor'
   | 'createdAt'
   | 'closedAt';
 const VALID_TABLE_SORT_FIELDS = new Set<string>([...TABLE_COLUMNS.map((column) => column[0]), 'integration']);
 const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
+  'taskId',
   'status',
   'repository',
   'targetRuntime',
   'targetSkill',
+  'title',
   'scheduledFor',
   'createdAt',
   'closedAt',
@@ -80,12 +84,15 @@ function isFilterField(field: string): field is FilterField {
 }
 type ValueFilter = { mode: 'include' | 'exclude'; values: string[]; blank?: 'include' | 'exclude' | '' };
 type RepositoryFilter = ValueFilter & { exactText?: string };
+type TextFilter = { contains?: string };
 type DateFilter = { from?: string; to?: string; blank?: 'include' | 'exclude' | '' };
 type ColumnFilters = {
+  taskId: TextFilter;
   status: ValueFilter;
   repository: RepositoryFilter;
   targetRuntime: ValueFilter;
   targetSkill: ValueFilter;
+  title: TextFilter;
   scheduledFor: DateFilter;
   createdAt: DateFilter;
   closedAt: DateFilter;
@@ -235,10 +242,12 @@ function emptyValueFilter(): ValueFilter {
 
 function emptyFilters(): ColumnFilters {
   return {
+    taskId: {},
     status: emptyValueFilter(),
     repository: { ...emptyValueFilter(), exactText: '' },
     targetRuntime: emptyValueFilter(),
     targetSkill: emptyValueFilter(),
+    title: {},
     scheduledFor: {},
     createdAt: {},
     closedAt: {},
@@ -298,6 +307,8 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
   } else {
     filters.repository = { mode: 'include', values: repoIn, exactText: repoExact, blank: '' };
   }
+  filters.taskId = { contains: params.get('taskIdContains') || params.get('taskId') || '' };
+  filters.title = { contains: params.get('titleContains') || '' };
 
   const runtimeIn = splitParam(params, 'targetRuntimeIn');
   const runtimeNotIn = splitParam(params, 'targetRuntimeNotIn');
@@ -365,6 +376,7 @@ function appendDateParams(
 }
 
 function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
+  if (filters.taskId.contains?.trim()) params.set('taskIdContains', filters.taskId.contains.trim());
   appendValueParams(params, filters.status, 'stateIn', 'stateNotIn');
   if (filters.repository.exactText?.trim()) {
     params.set('repoExact', filters.repository.exactText.trim());
@@ -372,6 +384,7 @@ function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
   appendValueParams(params, filters.repository, 'repoIn', 'repoNotIn', 'repoBlank');
   appendValueParams(params, filters.targetRuntime, 'targetRuntimeIn', 'targetRuntimeNotIn', 'targetRuntimeBlank');
   appendValueParams(params, filters.targetSkill, 'targetSkillIn', 'targetSkillNotIn', 'targetSkillBlank');
+  if (filters.title.contains?.trim()) params.set('titleContains', filters.title.contains.trim());
   appendDateParams(params, filters.scheduledFor, 'scheduledFrom', 'scheduledTo', 'scheduledBlank');
   appendDateParams(params, filters.createdAt, 'createdFrom', 'createdTo');
   appendDateParams(params, filters.closedAt, 'finishedFrom', 'finishedTo', 'finishedBlank');
@@ -394,6 +407,7 @@ function filterSummary(field: FilterField, filters: ColumnFilters): string {
     const suffix = filter.values.length > 1 ? ` +${filter.values.length - 1}` : '';
     return `${filter.mode === 'exclude' ? 'not ' : ''}${first}${suffix}`;
   };
+  if (field === 'taskId') return filters.taskId.contains?.trim() || '';
   if (field === 'status') return summarizeValues(filters.status, formatStatusLabel);
   if (field === 'targetRuntime') return summarizeValues(filters.targetRuntime, formatRuntimeLabel);
   if (field === 'targetSkill') return summarizeValues(filters.targetSkill);
@@ -401,6 +415,7 @@ function filterSummary(field: FilterField, filters: ColumnFilters): string {
     if (filters.repository.exactText?.trim()) return filters.repository.exactText.trim();
     return summarizeValues(filters.repository);
   }
+  if (field === 'title') return filters.title.contains?.trim() || '';
   const dateFilter = field === 'scheduledFor' ? filters.scheduledFor : field === 'createdAt' ? filters.createdAt : filters.closedAt;
   if (dateFilter.blank === 'include' && !dateFilter.from && !dateFilter.to) return 'blank';
   if (dateFilter.blank === 'exclude' && !dateFilter.from && !dateFilter.to) return 'not blank';
@@ -428,7 +443,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
   const [hasEditedFilters, setHasEditedFilters] = useState(false);
   const [openFilter, setOpenFilter] = useState<FilterField | null>(null);
+  const [pendingFocusField, setPendingFocusField] = useState<FilterField | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  const filterTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [pageSize, setPageSize] = useState(() => parsePageSize(initial.get('limit')));
   const [listCursor, setListCursor] = useState<string | null>(() =>
     ignoredWorkflowScopeState ? null : initial.get('nextPageToken')?.trim() || null,
@@ -496,7 +513,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       }
       return ExecutionListResponseSchema.parse(await response.json());
     },
-    refetchInterval: liveUpdates && listEnabled ? listPollMs : false,
+    refetchInterval: liveUpdates && listEnabled && !openFilter ? listPollMs : false,
   });
 
   const openFacet = facetForFilterField(openFilter);
@@ -529,6 +546,37 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     setDraftFilters(filters);
   }, [openFilter, filters]);
 
+  const closeFilter = useCallback((nextDraftFilters = filters, fieldToFocus = openFilter) => {
+    const fallback = fieldToFocus
+      ? document.querySelector<HTMLButtonElement>(
+          `.task-list-column-filter-button[data-filter-field="${fieldToFocus}"]`,
+        )
+      : null;
+    (filterTriggerRef.current?.isConnected ? filterTriggerRef.current : fallback)?.focus();
+    setOpenFilter(null);
+    setDraftFilters(nextDraftFilters);
+    setPendingFocusField(fieldToFocus);
+  }, [filters, openFilter]);
+
+  useEffect(() => {
+    if (openFilter || !pendingFocusField) return;
+    const fallback = document.querySelector<HTMLButtonElement>(
+      `.task-list-column-filter-button[data-filter-field="${pendingFocusField}"]`,
+    );
+    (filterTriggerRef.current?.isConnected ? filterTriggerRef.current : fallback)?.focus();
+    setPendingFocusField(null);
+  }, [openFilter, pendingFocusField]);
+
+  useEffect(() => {
+    if (!openFilter) return;
+    window.requestAnimationFrame(() => {
+      const firstControl = popoverRef.current?.querySelector<HTMLElement>(
+        'input:not([disabled]), select:not([disabled]), button:not([disabled])',
+      );
+      firstControl?.focus();
+    });
+  }, [openFilter]);
+
   useEffect(() => {
     if (!openFilter) return;
     const onPointerDown = (event: MouseEvent) => {
@@ -536,12 +584,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       const targetElement = event.target as Element | null;
       if (target && popoverRef.current?.contains(target)) return;
       if (targetElement?.closest('.task-list-column-filter-button, .task-list-filter-chip-open')) return;
-      setOpenFilter(null);
-      setDraftFilters(filters);
+      closeFilter(filters, openFilter);
     };
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [openFilter, filters]);
+  }, [closeFilter, openFilter, filters]);
 
   const sortedItems = useMemo(() => {
     const items = data?.items || [];
@@ -643,15 +690,22 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   }, []);
 
   const applyFilters = useCallback(
-    (nextFilters: ColumnFilters) => {
+    (nextFilters: ColumnFilters, focusField: FilterField | null = openFilter) => {
       setHasEditedFilters(true);
       setFilters(nextFilters);
       setDraftFilters(nextFilters);
-      setOpenFilter(null);
+      closeFilter(nextFilters, focusField);
       resetToFirstPage();
     },
-    [resetToFirstPage],
+    [closeFilter, openFilter, resetToFirstPage],
   );
+
+  const updateDraftText = (field: 'taskId' | 'title', value: string) => {
+    setDraftFilters((current) => ({
+      ...current,
+      [field]: { contains: value },
+    }));
+  };
 
   const updateDraftValue = (field: 'status' | 'targetRuntime' | 'targetSkill', value: string) => {
     setDraftFilters((current) => ({
@@ -764,6 +818,28 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
   const renderFilterControl = (field: FilterField, labelPrefix = '') => {
     const isMobile = Boolean(labelPrefix);
+    if (field === 'taskId' || field === 'title') {
+      const label = field === 'taskId' ? 'ID' : 'Title';
+      const draft = isMobile ? filters[field] : draftFilters[field];
+      return (
+        <div className="queue-inline-filter task-list-header-filter-control">
+          <label>
+            {labelPrefix}{label} filter value
+            <input
+              type="text"
+              value={draft.contains || ''}
+              disabled={!listEnabled}
+              placeholder={field === 'taskId' ? 'task id' : 'title text'}
+              onChange={(event) => {
+              if (isMobile) applyFilters({ ...filters, [field]: { contains: event.target.value } }, null);
+                else updateDraftText(field, event.target.value);
+              }}
+            />
+          </label>
+        </div>
+      );
+    }
+
     if (field === 'status') {
       const selected = isMobile ? filters.status.values[0] || '' : draftFilters.status.values[0] || '';
       return (
@@ -870,7 +946,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               disabled={!listEnabled}
               onChange={(event) => {
                 const mode = event.target.value as ValueFilter['mode'];
-                if (isMobile) applyFilters({ ...filters, targetRuntime: { ...filters.targetRuntime, mode } });
+                if (isMobile) applyFilters({ ...filters, targetRuntime: { ...filters.targetRuntime, mode } }, null);
                 else updateDraftValueMode('targetRuntime', mode);
               }}
             >
@@ -913,7 +989,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               disabled={!listEnabled}
               onChange={(event) => {
                 const mode = event.target.value as ValueFilter['mode'];
-                if (isMobile) applyFilters({ ...filters, targetSkill: { ...filters.targetSkill, mode } });
+                if (isMobile) applyFilters({ ...filters, targetSkill: { ...filters.targetSkill, mode } }, null);
                 else updateDraftValueMode('targetSkill', mode);
               }}
             >
@@ -933,7 +1009,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     targetSkill: event.target.value
                       ? { ...filters.targetSkill, values: [event.target.value], blank: '' }
                       : emptyValueFilter(),
-                  });
+                  }, null);
                 } else {
                   updateDraftValue('targetSkill', event.target.value);
                 }
@@ -1021,8 +1097,14 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
         ref={popoverRef}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
-            setDraftFilters(filters);
-            setOpenFilter(null);
+            closeFilter(filters, field);
+          }
+          if (event.key === 'Enter' && event.target instanceof HTMLElement) {
+            const tagName = event.target.tagName.toLowerCase();
+            if (tagName !== 'textarea' && !event.defaultPrevented) {
+              event.preventDefault();
+              applyFilters(draftFilters, field);
+            }
           }
         }}
       >
@@ -1034,10 +1116,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               className="secondary"
               onClick={() => {
                 const next = { ...draftFilters };
-                if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
+                if (field === 'taskId' || field === 'title') next[field] = {};
+                else if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
                 else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
                 else next[field] = emptyValueFilter();
-                applyFilters(next);
+                applyFilters(next, field);
               }}
               disabled={!listEnabled}
             >
@@ -1047,8 +1130,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               type="button"
               className="secondary"
               onClick={() => {
-                setDraftFilters(filters);
-                setOpenFilter(null);
+                closeFilter(filters, field);
               }}
               aria-label={`Cancel ${label} filter`}
             >
@@ -1056,7 +1138,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             </button>
             <button
               type="button"
-              onClick={() => applyFilters(draftFilters)}
+              onClick={() => applyFilters(draftFilters, field)}
               disabled={!listEnabled}
               aria-label={`Apply ${label} filter`}
             >
@@ -1117,9 +1199,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                   <button
                     type="button"
                     className="task-list-filter-chip-open"
+                    data-filter-field={field}
                     onMouseDown={(event) => event.stopPropagation()}
                     onClick={(event) => {
                       event.stopPropagation();
+                      filterTriggerRef.current = event.currentTarget;
                       setOpenFilter(field);
                     }}
                     aria-label={`${label} filter: ${value}`}
@@ -1132,7 +1216,8 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     className="task-list-filter-chip-remove"
                     onClick={() => {
                       const next = { ...filters };
-                      if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
+                      if (field === 'taskId' || field === 'title') next[field] = {};
+                      else if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
                       else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
                       else next[field] = emptyValueFilter();
                       applyFilters(next);
@@ -1244,10 +1329,19 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                                 className={`task-list-column-filter-button${
                                   filterValueForField(field) ? ' is-active' : ''
                                 }`}
+                                data-filter-field={field}
+                                ref={
+                                  filterField && pendingFocusField === filterField
+                                    ? (node) => node?.focus()
+                                    : undefined
+                                }
                                 onMouseDown={(event) => event.stopPropagation()}
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  if (filterField) toggleFilter(filterField);
+                                  if (filterField) {
+                                    filterTriggerRef.current = event.currentTarget;
+                                    toggleFilter(filterField);
+                                  }
                                 }}
                                 aria-label={filterAccessibilityLabel(field, label)}
                                 aria-expanded={filterField ? openFilter === filterField : false}
