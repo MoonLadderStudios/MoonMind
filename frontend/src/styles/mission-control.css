@@ -584,7 +584,7 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 1.75rem;
+  width: 1.75rem;
   min-height: 1.65rem;
   padding: 0.12rem 0.32rem;
   border: 1px solid transparent;
@@ -606,6 +606,13 @@ h1 {
   box-shadow: var(--mm-control-focus-ring);
   transform: none;
   filter: none;
+}
+
+.task-list-column-filter-icon {
+  display: block;
+  width: 0.85rem;
+  height: 0.85rem;
+  fill: currentColor;
 }
 
 .task-list-header-filter-popover {
@@ -965,6 +972,23 @@ tbody tr:hover {
 .task-list-data-slab .queue-results-toolbar {
   padding: 0.85rem 1rem;
   border-bottom: 1px solid rgb(var(--mm-border) / 0.28);
+}
+
+.task-list-data-slab .task-list-results-footer {
+  border-top: 1px solid rgb(var(--mm-border) / 0.28);
+  border-bottom: 0;
+}
+
+.task-list-footer-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.task-list-footer-live-toggle {
+  flex: 0 0 auto;
 }
 
 .queue-pagination {
@@ -1374,6 +1398,10 @@ tr[data-proposal-id].proposal-consuming td {
   .queue-pagination {
     align-items: stretch;
     margin-left: 0;
+    width: 100%;
+  }
+
+  .task-list-footer-summary {
     width: 100%;
   }
 

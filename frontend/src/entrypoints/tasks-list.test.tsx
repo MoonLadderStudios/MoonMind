@@ -64,9 +64,10 @@ describe('Tasks List Entrypoint', () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
+    expect(screen.getByLabelText('Live updates')).toBeTruthy();
   });
 
-  it('keeps Clear filters available on an empty first page with active filters', async () => {
+  it('keeps active filter chips visible on an empty first page with active filters', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('stateIn=completed')) {
@@ -103,7 +104,9 @@ describe('Tasks List Entrypoint', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
 
     expect(await screen.findByText('No tasks found for the current filters.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Clear filters' }).getAttribute('disabled')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
+    expect(screen.getByLabelText('Live updates')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull();
   });
 
   it('announces the current sort state on table headers', async () => {
@@ -326,7 +329,7 @@ describe('Tasks List Entrypoint', () => {
     expect(executionListCalls().length).toBe(baselineCalls);
   });
 
-  it('recovers from contradictory canonical URL filters after filters are cleared', async () => {
+  it('does not render the removed clear-filters recovery action for contradictory canonical URL filters', async () => {
     const baselineCalls = executionListCalls().length;
     window.history.pushState(
       {},
@@ -338,17 +341,7 @@ describe('Tasks List Entrypoint', () => {
 
     expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
     expect(executionListCalls().length).toBe(baselineCalls);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
-
-    await waitFor(() => {
-      expect(executionListCalls().length).toBe(baselineCalls + 1);
-    });
-    expect(screen.queryByText('Cannot combine stateIn and stateNotIn.')).toBeNull();
-    expect(lastExecutionListUrl()).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks',
-    );
-    expect(window.location.search).toBe('?limit=50');
+    expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull();
   });
 
   it('renders active task-list pills with the shared shimmer selector contract while keeping inactive pills plain', async () => {
@@ -833,7 +826,7 @@ describe('Tasks List Entrypoint', () => {
     expect(screen.getAllByText('Example task').length).toBeGreaterThan(0);
   });
 
-  it('renders pagination as arrow buttons beside the table summary', async () => {
+  it('renders pagination controls in the table footer', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -856,6 +849,7 @@ describe('Tasks List Entrypoint', () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     expect(await screen.findByText('Page 1 · 1-1 · 21')).toBeTruthy();
+    expect(document.querySelector('.task-list-results-footer')?.textContent).toContain('Page 1 · 1-1 · 21');
     expect(screen.getByRole('button', { name: 'Previous page' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Next page' })).toBeTruthy();
   });
@@ -877,12 +871,13 @@ describe('Tasks List Entrypoint', () => {
     expect(screen.queryByRole('button', { name: /^Entry\./i })).toBeNull();
 
     expect(controlDeck?.classList.contains('panel--controls')).toBe(false);
-    expect(
-      controlDeck?.querySelector('.task-list-utility-cluster')?.contains(screen.getByLabelText('Live updates')),
-    ).toBe(true);
-    expect(screen.getByText('Showing all task executions.')).toBeTruthy();
+    expect(controlDeck?.querySelector('.task-list-utility-cluster')).toBeNull();
+    expect(dataSlab?.querySelector('.task-list-results-footer')?.contains(screen.getByLabelText('Live updates'))).toBe(
+      true,
+    );
+    expect(screen.queryByText('Showing all task executions.')).toBeNull();
     expect(dataSlab).toBeTruthy();
-    expect(dataSlab?.querySelector('.queue-results-toolbar')).toBeTruthy();
+    expect(dataSlab?.querySelector('.task-list-results-footer')).toBeTruthy();
     const pageSizeSelect = screen.getByLabelText('Show');
     const pageSizeLabel = pageSizeSelect.closest('label');
     expect(pageSizeLabel?.classList.contains('queue-page-size-selector')).toBe(true);
@@ -934,7 +929,7 @@ describe('Tasks List Entrypoint', () => {
     expect(tableWrapperStyles.backgroundColor).toBe('rgba(0, 0, 0, 0)');
   });
 
-  it('shows clickable active column filter chips and clears filters from the control deck', async () => {
+  it('shows clickable active column filter chips and removes individual filters from the chip row', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
@@ -965,7 +960,7 @@ describe('Tasks List Entrypoint', () => {
       );
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Status filter' }));
 
     await waitFor(() => {
       fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
