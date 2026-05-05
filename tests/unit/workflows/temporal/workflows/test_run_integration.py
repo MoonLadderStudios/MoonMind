@@ -1187,7 +1187,7 @@ def test_determine_publish_completion_fails_when_pr_publish_creates_no_pr(
     assert message == "publishMode 'pr' requested but no PR was created"
     assert publish_failure is True
 
-def test_determine_publish_completion_allows_integration_pr_without_local_pr_url(
+def test_determine_publish_completion_requires_integration_pr_url(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
     mock_run_workflow._integration = "jules"
@@ -1196,9 +1196,127 @@ def test_determine_publish_completion_allows_integration_pr_without_local_pr_url
         parameters={"publishMode": "pr"}
     )
 
+    assert status == "failed"
+    assert message == "publishMode 'pr' requested but no PR was created"
+    assert publish_failure is True
+
+def test_determine_publish_completion_succeeds_when_pr_was_created_after_skips(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._integration = "jules"
+    mock_run_workflow._publish_status = "published"
+    mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/123"
+    mock_run_workflow._publish_context["pullRequestUrl"] = (
+        "https://github.com/org/repo/pull/123"
+    )
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
     assert status == "success"
-    assert message == "Workflow completed successfully"
+    assert "Pull request: https://github.com/org/repo/pull/123" in message
     assert publish_failure is False
+
+def test_determine_publish_completion_requires_merge_when_requested(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/123"
+    mock_run_workflow._publish_status = "published"
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-1"},
+        }
+    )
+
+    assert status == "failed"
+    assert message == "merge automation requested but PR was not merged"
+    assert publish_failure is True
+
+def test_determine_publish_completion_accepts_completed_merge_outcome(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/123"
+    mock_run_workflow._publish_status = "published"
+    mock_run_workflow._publish_context["mergeAutomationStatus"] = "merged"
+
+    status, _message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-1"},
+        }
+    )
+
+    assert status == "success"
+    assert publish_failure is False
+
+def test_determine_publish_completion_requires_requested_report(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "none",
+            "reportOutput": {"enabled": True, "required": True},
+        }
+    )
+
+    assert status == "failed"
+    assert message == "reportOutput requested but no final report was created"
+    assert publish_failure is True
+
+def test_record_execution_context_tracks_created_report(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result={
+            "outputs": {"summary": "Report published."},
+            "metadata": {"primaryReportRef": "art_report_1"},
+        },
+    )
+
+    status, _message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "none",
+            "reportOutput": {"enabled": True, "required": True},
+        }
+    )
+
+    assert mock_run_workflow._report_created is True
+    assert mock_run_workflow._report_ref == "art_report_1"
+    assert status == "success"
+    assert publish_failure is False
+
+
+def test_record_execution_context_tracks_mapped_agent_run_report(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = mock_run_workflow._map_agent_run_result(
+        {
+            "summary": "Report published.",
+            "metadata": {"primaryReportRef": "art_report_2"},
+        }
+    )
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result=execution_result,
+    )
+
+    status, _message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "none",
+            "reportOutput": {"enabled": True, "required": True},
+        }
+    )
+
+    assert mock_run_workflow._report_created is True
+    assert mock_run_workflow._report_ref == "art_report_2"
+    assert status == "success"
+    assert publish_failure is False
+
 
 def test_determine_publish_completion_includes_operator_summary_for_report_runs(
     mock_run_workflow: MoonMindRunWorkflow,

@@ -1,17 +1,22 @@
 [
   {
-    "id": 3190760474,
+    "id": 3190605674,
     "disposition": "addressed",
-    "rationale": "Factored the tasks-list results footer into a reusable control and rendered it for error and first-page empty states so the Live updates toggle remains available outside populated results. Added regression assertions for both states."
+    "rationale": "Simplified the branch publish unknown check by removing the redundant _branch_published() condition."
   },
   {
-    "id": 4230728001,
+    "id": 4230555974,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary container with no separate actionable feedback beyond review comment 3190760474."
+    "rationale": "Automated review summary; the actionable line comments are tracked separately."
   },
   {
-    "id": 4230739851,
+    "id": 3190620124,
+    "disposition": "addressed",
+    "rationale": "Recorded report refs from mapped agent-run outputs as well as metadata and added regression coverage."
+  },
+  {
+    "id": 4230570929,
     "disposition": "not-applicable",
-    "rationale": "Review explicitly states there is no feedback to address."
+    "rationale": "Automated review container comment; the actionable suggestions are tracked separately."
   }
 ]
