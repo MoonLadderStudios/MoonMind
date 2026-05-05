@@ -119,6 +119,13 @@ async def authorize_retrieval_request(
             ),
         )
 
+    if getattr(user, "id", None) is not None:
+        return RetrievalAuthContext(
+            auth_source="oidc",
+            allowed_repositories=(),
+            capabilities=("rag",),
+        )
+
     token = retrieval_token_header
     configured_token = str(os.getenv("MOONMIND_RETRIEVAL_TOKEN", "")).strip()
     if token and configured_token:
@@ -136,13 +143,6 @@ async def authorize_retrieval_request(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="RetrievalGateway token is not configured.",
-        )
-
-    if getattr(user, "id", None) is not None:
-        return RetrievalAuthContext(
-            auth_source="oidc",
-            allowed_repositories=(),
-            capabilities=("rag",),
         )
 
     token = _bearer_token(authorization_header)
@@ -176,7 +176,7 @@ def _requested_repo(payload: RetrievalQuery) -> str:
     return ""
 
 def _enforce_repo_scope(payload: RetrievalQuery, auth: RetrievalAuthContext) -> None:
-    scoped_auth_sources = {"retrieval_token", "worker_token"}
+    scoped_auth_sources = {"retrieval_token"}
     if auth.auth_source not in scoped_auth_sources or not auth.allowed_repositories:
         return
     repo = _requested_repo(payload)
@@ -184,7 +184,7 @@ def _enforce_repo_scope(payload: RetrievalQuery, auth: RetrievalAuthContext) -> 
     if repo and repo not in allowed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Repository '{repo}' is not permitted for this worker token.",
+            detail=f"Repository '{repo}' is not permitted for this retrieval token.",
         )
 
 @router.get("/health")

@@ -271,6 +271,20 @@ async def test_authorize_with_valid_user() -> None:
 
 
 @pytest.mark.asyncio
+async def test_authorize_prefers_valid_user_over_scoped_token_header() -> None:
+    user = SimpleNamespace(id="user_1")
+
+    result = await authorize_retrieval_request(
+        worker_token_header=None,
+        retrieval_token_header="stale-token",
+        authorization_header=None,
+        user=user,  # type: ignore
+    )
+
+    assert result.auth_source == "oidc"
+
+
+@pytest.mark.asyncio
 async def test_authorize_prefers_valid_user_over_bearer_retrieval_token_fallback() -> None:
     user = SimpleNamespace(id="user_1")
 

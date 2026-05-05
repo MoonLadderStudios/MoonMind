@@ -1,22 +1,27 @@
 [
   {
-    "id": 3190605674,
-    "disposition": "addressed",
-    "rationale": "Simplified the branch publish unknown check by removing the redundant _branch_published() condition."
-  },
-  {
-    "id": 4230555974,
+    "id": 4231522366,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary; the actionable line comments are tracked separately."
+    "rationale": "Top-level automated review summary; the actionable inline retrieval-gateway auth-source comment is tracked separately."
   },
   {
-    "id": 3190620124,
+    "id": 3191489788,
     "disposition": "addressed",
-    "rationale": "Recorded report refs from mapped agent-run outputs as well as metadata and added regression coverage."
+    "rationale": "Removed legacy worker_token from the scoped retrieval auth-source set and updated the scope error text to reference retrieval tokens."
   },
   {
-    "id": 4230570929,
+    "id": 3191505546,
+    "disposition": "addressed",
+    "rationale": "Allowed retrieval_gateway_auth_missing to use degraded local fallback and added regression coverage for that path."
+  },
+  {
+    "id": 3191505551,
+    "disposition": "addressed",
+    "rationale": "Changed retrieval gateway authorization so an authenticated OIDC user is accepted before scoped retrieval-token header validation and added regression coverage."
+  },
+  {
+    "id": 4231537621,
     "disposition": "not-applicable",
-    "rationale": "Automated review container comment; the actionable suggestions are tracked separately."
+    "rationale": "Top-level Codex review wrapper; actionable inline comments from the review are tracked separately."
   }
 ]
