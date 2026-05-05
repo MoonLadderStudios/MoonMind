@@ -1,7 +1,7 @@
 # MoonSpec Verification Report
 
 **Feature**: Tasks List Canonical Route and Shell
-**Spec**: `/work/agent_jobs/mm:c6f4f56b-60a7-464f-9d64-d330a95473f5/repo/specs/298-tasks-list-canonical-route-shell/spec.md`
+**Spec**: specs/298-tasks-list-canonical-route-shell/spec.md
 **Original Request Source**: `spec.md` Input preserving canonical Jira preset brief for `MM-585`
 **Verdict**: FULLY_IMPLEMENTED
 **Confidence**: HIGH
