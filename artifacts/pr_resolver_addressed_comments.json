@@ -1,12 +1,12 @@
 [
   {
-    "id": 3184131746,
+    "id": 3184548974,
     "disposition": "addressed",
-    "rationale": "Extracted the preset/skill instruction-label decision into usesGenericInstructionsLabel(stepType)."
+    "rationale": "Refactored the task-create fetch mock to use a path-based switch while preserving the delayed /api/executions response behavior."
   },
   {
-    "id": 4223053049,
+    "id": 4223560263,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; its actionable suggestion is covered by review comment 3184131746."
+    "rationale": "Broad review summary duplicated the actionable inline mock-refactor feedback and did not request a separate code change."
   }
 ]

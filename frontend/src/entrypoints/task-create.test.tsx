@@ -12477,33 +12477,32 @@ describe("Task Create submit arrow animation", () => {
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.startsWith("/api/tasks/skills")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
-          } as Response);
+        switch (true) {
+          case url.startsWith("/api/tasks/skills"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
+            } as Response);
+          case url.startsWith("/api/task-step-templates"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ items: [] }),
+            } as Response);
+          case url.startsWith("/api/v1/provider-profiles"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => [],
+            } as Response);
+          case url === "/api/executions":
+            return new Promise<Response>((resolve) => {
+              resolveExecution = resolve;
+            });
+          default:
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({}),
+            } as Response);
         }
-        if (url.startsWith("/api/task-step-templates")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ items: [] }),
-          } as Response);
-        }
-        if (url.startsWith("/api/v1/provider-profiles")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => [],
-          } as Response);
-        }
-        if (url === "/api/executions") {
-          return new Promise<Response>((resolve) => {
-            resolveExecution = resolve;
-          });
-        }
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({}),
-        } as Response);
       });
     const { unmount } = renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
