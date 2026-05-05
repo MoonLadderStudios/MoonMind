@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import secrets
 from dataclasses import dataclass
 from typing import Dict, Optional
 
@@ -50,9 +52,13 @@ class RetrievalQuery(BaseModel):
                 f"Unsupported retrieval filter keys: {joined}. Allowed keys: repo, repository."
             )
 
-        if not any(str(self.filters.get(key, "")).strip() for key in allowed_filters):
+        has_scope_filter = any(
+            str(self.filters.get(key, "")).strip() for key in allowed_filters
+        )
+        if not has_scope_filter:
             raise ValueError(
-                "Session-issued retrieval requires a repo or repository filter to bound corpus scope."
+                "Session-issued retrieval requires a repo or repository "
+                "filter to bound corpus scope."
             )
         return self
 
@@ -74,18 +80,62 @@ def _bearer_token(authorization_header: Optional[str]) -> Optional[str]:
         return None
     return token.strip()
 
+def _configured_retrieval_token_context(
+    *,
+    token: str,
+    configured_token: str,
+) -> RetrievalAuthContext | None:
+    if not secrets.compare_digest(token, configured_token):
+        return None
+    allowed_repositories = tuple(
+        item.strip()
+        for item in os.getenv(
+            "MOONMIND_RETRIEVAL_ALLOWED_REPOSITORIES",
+            "",
+        ).split(",")
+        if item.strip()
+    )
+    return RetrievalAuthContext(
+        auth_source="retrieval_token",
+        allowed_repositories=allowed_repositories,
+        capabilities=("rag",),
+    )
+
 async def authorize_retrieval_request(
     worker_token_header: Optional[str] = Header(None, alias="X-MoonMind-Worker-Token"),
+    retrieval_token_header: Optional[str] = Header(
+        None,
+        alias="X-MoonMind-Retrieval-Token",
+    ),
     authorization_header: Optional[str] = Header(None, alias="Authorization"),
     user: Optional[User] = Depends(get_current_user_optional()),
 ) -> RetrievalAuthContext:
-    token = worker_token_header or _bearer_token(authorization_header)
-    if token:
-        # TODO(phase-4): Re-implement worker token auth with Temporal-native resolver.
-        # Queue-based AgentQueueService was removed in Phase 3.5.
+    if worker_token_header:
         raise HTTPException(
-            status_code=401,
-            detail="Worker token authentication is temporarily unavailable.",
+            status_code=status.HTTP_410_GONE,
+            detail=(
+                "Worker token authentication has been removed. "
+                "Use OIDC or a scoped RetrievalGateway token."
+            ),
+        )
+
+    token = retrieval_token_header
+    configured_token = str(os.getenv("MOONMIND_RETRIEVAL_TOKEN", "")).strip()
+    if token and configured_token:
+        context = _configured_retrieval_token_context(
+            token=token,
+            configured_token=configured_token,
+        )
+        if context is not None:
+            return context
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid RetrievalGateway token.",
+        )
+    if token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="RetrievalGateway token is not configured.",
         )
 
     if getattr(user, "id", None) is not None:
@@ -93,6 +143,24 @@ async def authorize_retrieval_request(
             auth_source="oidc",
             allowed_repositories=(),
             capabilities=("rag",),
+        )
+
+    token = _bearer_token(authorization_header)
+    if token and configured_token:
+        context = _configured_retrieval_token_context(
+            token=token,
+            configured_token=configured_token,
+        )
+        if context is not None:
+            return context
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid RetrievalGateway token.",
+        )
+    if token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="RetrievalGateway token is not configured.",
         )
 
     raise HTTPException(
@@ -108,7 +176,8 @@ def _requested_repo(payload: RetrievalQuery) -> str:
     return ""
 
 def _enforce_repo_scope(payload: RetrievalQuery, auth: RetrievalAuthContext) -> None:
-    if auth.auth_source != "worker_token" or not auth.allowed_repositories:
+    scoped_auth_sources = {"retrieval_token", "worker_token"}
+    if auth.auth_source not in scoped_auth_sources or not auth.allowed_repositories:
         return
     repo = _requested_repo(payload)
     allowed = set(auth.allowed_repositories)
