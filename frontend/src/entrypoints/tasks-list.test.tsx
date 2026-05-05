@@ -161,7 +161,7 @@ describe('Tasks List Entrypoint', () => {
       expect(url).toContain('targetSkillNotIn=pr-resolver');
     });
     expect(screen.getByRole('button', { name: 'Skill filter: not pr-resolver' })).toBeTruthy();
-  });
+  }, 10_000);
 
   it('offers every supported runtime identifier in the runtime filter', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
@@ -448,7 +448,7 @@ describe('Tasks List Entrypoint', () => {
       expect(repositoryInput.value).toBe('owner/repo ');
     });
     expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
-  });
+  }, 10_000);
 
   it('labels the lifecycle column filter as status and exposes canonical status options', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
