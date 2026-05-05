@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BootPayload } from '../boot/parseBootPayload';
 import { SecretManager } from '../components/secrets/SecretManager';
@@ -12,6 +12,62 @@ import {
   ProviderProfilesManager,
   type ProviderProfile,
 } from '../components/settings/ProviderProfilesManager';
+
+function ProvidersKeyIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="8" cy="14" r="3.5" />
+      <path d="M10.5 12L20 4" />
+      <path d="M17 7l2 2" />
+      <path d="M14 10l2 2" />
+    </svg>
+  );
+}
+
+function UserWorkspaceIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="8" r="3.5" />
+      <path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6" />
+    </svg>
+  );
+}
+
+function OperationsGearIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
+    </svg>
+  );
+}
 
 interface ProfileData {
   id?: string | number;
@@ -35,24 +91,32 @@ interface SecretsListResponse {
   items: SecretMetadata[];
 }
 
-const SETTINGS_SECTIONS = [
+const SETTINGS_SECTIONS: ReadonlyArray<{
+  id: 'providers-secrets' | 'user-workspace' | 'operations';
+  label: string;
+  description: string;
+  Icon: () => ReactElement;
+}> = [
   {
     id: 'providers-secrets',
     label: 'Providers & Secrets',
     description:
       'Configure provider profiles, managed secrets, and the bindings that make runtimes launchable.',
+    Icon: ProvidersKeyIcon,
   },
   {
     id: 'user-workspace',
     label: 'User / Workspace',
     description:
       'Hold user-scoped and workspace-scoped settings as Mission Control exposes more of the broader configuration model.',
+    Icon: UserWorkspaceIcon,
   },
   {
     id: 'operations',
     label: 'Operations',
     description:
       'Keep worker pause, drain, quiesce, and related operational controls under Settings.',
+    Icon: OperationsGearIcon,
   },
 ] as const;
 
@@ -150,8 +214,9 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
     enabled: section === 'providers-secrets',
   });
 
+  const fallbackSection = SETTINGS_SECTIONS[0]!;
   const currentSection =
-    SETTINGS_SECTIONS.find((candidate) => candidate.id === section) ?? SETTINGS_SECTIONS[0];
+    SETTINGS_SECTIONS.find((candidate) => candidate.id === section) ?? fallbackSection;
 
   const handleSelectSection = (nextSection: SettingsSectionId) => {
     if (nextSection === section) {
@@ -175,27 +240,33 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       </header>
 
       <section className="rounded-[2rem] border border-mm-border/80 bg-transparent p-3 shadow-sm">
-        <fieldset className="queue-step-type-field">
-          <legend className="sr-only">Settings section</legend>
-          <div className="queue-step-type-options w-full">
-            {SETTINGS_SECTIONS.map((candidate) => (
-              <label
-                key={candidate.id}
-                className="queue-step-type-option"
-                title={candidate.description}
-              >
-                <input
-                  type="radio"
-                  name="settings-section"
-                  value={candidate.id}
-                  checked={candidate.id === section}
-                  onChange={() => handleSelectSection(candidate.id)}
-                />
-                <span className="queue-step-type-option-label">
-                  {candidate.label}
-                </span>
-              </label>
-            ))}
+        <fieldset className="settings-nav-field">
+          <legend className="sr-only">Settings Section</legend>
+          <div className="settings-nav-options">
+            {SETTINGS_SECTIONS.map((candidate) => {
+              const Icon = candidate.Icon;
+              return (
+                <label
+                  key={candidate.id}
+                  className="settings-nav-option"
+                  title={candidate.description}
+                >
+                  <input
+                    type="radio"
+                    name="settings-section"
+                    value={candidate.id}
+                    checked={candidate.id === section}
+                    onChange={() => handleSelectSection(candidate.id)}
+                  />
+                  <span className="settings-nav-option-icon">
+                    <Icon />
+                  </span>
+                  <span className="settings-nav-option-label">
+                    {candidate.label}
+                  </span>
+                </label>
+              );
+            })}
           </div>
         </fieldset>
       </section>

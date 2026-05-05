@@ -148,6 +148,9 @@ from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_r
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
 )
+from moonmind.workflows.temporal.story_output_tools import (
+    JIRA_CHECK_BLOCKERS_TOOL_NAME,
+)
 
 class CmdRes:
     def __init__(self, stdout_bytes: bytes):
@@ -971,6 +974,54 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
                 },
             },
             "security": {"allowed_roles": ["admin", "security_operator"]},
+        }
+
+    if name == JIRA_CHECK_BLOCKERS_TOOL_NAME:
+        return {
+            "name": name,
+            "version": version,
+            "description": (
+                "Check whether a Jira issue is blocked by unresolved inbound "
+                "Blocks links using trusted Jira data."
+            ),
+            "inputs": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "targetIssueKey": {"type": "string"},
+                        "issueKey": {"type": "string"},
+                        "jiraIssueKey": {"type": "string"},
+                        "blockerPreflight": {"type": "object"},
+                    },
+                    "additionalProperties": True,
+                }
+            },
+            "outputs": {
+                "schema": {
+                    "type": "object",
+                    "required": ["targetIssueKey", "decision", "summary"],
+                    "properties": {
+                        "targetIssueKey": {"type": "string"},
+                        "decision": {"type": "string", "enum": ["continue", "blocked"]},
+                        "blockingIssues": {"type": "array"},
+                        "resolvedBlockingIssues": {"type": "array"},
+                        "summary": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                }
+            },
+            "executor": {
+                "activity_type": "mm.tool.execute",
+                "selector": {"mode": "by_capability"},
+            },
+            "requirements": {"capabilities": ["integration:jira"]},
+            "policies": {
+                "timeouts": {
+                    "start_to_close_seconds": 60,
+                    "schedule_to_close_seconds": 120,
+                },
+                "retries": {"max_attempts": 1},
+            },
         }
 
     if name == "story.create_jira_issues":

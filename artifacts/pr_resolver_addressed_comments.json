@@ -18,5 +18,20 @@
     "id": 4224484578,
     "disposition": "not-applicable",
     "rationale": "Automated review body summarizing the same actionable validation gap handled by comment 3185321828."
+  },
+  {
+    "id": 4224428280,
+    "disposition": "not-applicable",
+    "rationale": "Bot review stated it had no feedback to provide."
+  },
+  {
+    "id": 3185270091,
+    "disposition": "addressed",
+    "rationale": "The feedback commit restores single-ended inwardIssue blocker handling and updates direction tests/template text."
+  },
+  {
+    "id": 4224429496,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary wrapper; actionable child discussion 3185270091 was addressed separately."
   }
 ]
