@@ -8,7 +8,7 @@
 
 | ID | Result | Evidence |
 | --- | --- | --- |
-| FR-001, SCN-001, SC-001, DESIGN-REQ-001 | PASS | `frontend/src/styles/mission-control.css` defines `--mm-executing-moving-light-gradient`; shared fill, border, and text mask selectors use that gradient and `mm-status-pill-shimmer`; `frontend/src/entrypoints/mission-control.test.tsx` passed. |
+| FR-001, SCN-001, SC-001, DESIGN-REQ-001 | PASS | `frontend/src/styles/mission-control.css` defines `--mm-executing-moving-light-gradient`; shared fill, border, and text mask selectors use that gradient and `mm-status-pill-shimmer`; the border mask now uses explicit out-set/width/opacity tokens so the glint overlaps the physical border instead of reading as an interior hairline; `frontend/src/entrypoints/mission-control.test.tsx` passed. |
 | FR-002, SCN-002, SC-002 | PASS | `ExecutionStatusPill.tsx` exposes `data-label`; `.status-letter-wave::after` clips the shared gradient to text; entrypoint render tests preserve glyph labels. |
 | FR-003, SCN-006, DESIGN-REQ-005 | PASS | `executionStatusPillProps()` remains the selector boundary; helper and render tests confirm active-only shimmer metadata. |
 | FR-004, SCN-004, SC-003, DESIGN-REQ-004 | PASS | Reduced-motion CSS disables decorative animation while preserving static active treatment; CSS contract tests passed. |

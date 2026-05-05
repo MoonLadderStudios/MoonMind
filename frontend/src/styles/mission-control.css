@@ -55,6 +55,9 @@
   --mm-executing-sweep-layer-offset-y: -10%;
   --mm-executing-sweep-core-opacity: 0.34;
   --mm-executing-sweep-halo-opacity: 0.14;
+  --mm-executing-border-glint-outset: 1px;
+  --mm-executing-border-glint-width: 3px;
+  --mm-executing-border-glint-opacity: 0.95;
   --mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration);
   --mm-executing-letter-sweep-start-ratio: 0.2;
   --mm-executing-letter-sweep-travel-ratio: 0.18;
@@ -1502,9 +1505,10 @@ tr[data-proposal-id].proposal-consuming td {
 .status-running.is-executing::after,
 .status-running.is-planning::after {
   z-index: 2;
+  inset: calc(-1 * var(--mm-executing-border-glint-outset));
   border-radius: inherit;
-  padding: 1px;
-  opacity: 0.82;
+  padding: var(--mm-executing-border-glint-width);
+  opacity: var(--mm-executing-border-glint-opacity);
   mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
