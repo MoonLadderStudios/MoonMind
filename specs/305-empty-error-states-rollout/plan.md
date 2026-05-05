@@ -5,7 +5,7 @@
 
 ## Summary
 
-Complete the final Tasks List column-filter rollout story for `MM-592` by verifying and, where needed, tightening recoverable loading, API error, empty first-page, empty later-page, facet failure, invalid-filter, old-control removal, and non-goal safety behavior. Current repo evidence shows most behavior exists in `frontend/src/entrypoints/tasks-list.tsx` and `frontend/src/entrypoints/tasks-list.test.tsx`; the main gap is regression coverage for loading/API-error/empty-first-page recovery and structured API error detail rendering. Implementation will be TDD-first in the existing Tasks List Vitest suite, with no new persistence and no canonical docs changes.
+Complete the final Tasks List column-filter rollout story for `MM-592` by verifying recoverable loading, API error, empty first-page, empty later-page, facet failure, invalid-filter, old-control removal, and non-goal safety behavior. Current repo evidence now shows the story is implemented and verified in `frontend/src/entrypoints/tasks-list.tsx` and `frontend/src/entrypoints/tasks-list.test.tsx`: final regression coverage exists for loading/API-error/empty-first-page recovery, and structured API error detail rendering is implemented. The plan remains frontend-focused, with no new persistence and no canonical docs changes.
 
 ## Requirement Status
 
