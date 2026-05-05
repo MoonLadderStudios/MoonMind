@@ -2,27 +2,27 @@
 
 ## FR-001 / SC-001 - Loading State
 
-Decision: Treat as implemented but unverified for MM-592 and add a focused UI regression test.
-Evidence: `frontend/src/entrypoints/tasks-list.tsx` renders `<p className="loading">Loading tasks...</p>` while the list query is loading.
-Rationale: The behavior exists, but MM-592 requires final rollout regression evidence.
-Alternatives considered: Code change was rejected unless the test exposes a regression.
-Test implications: UI unit.
+Decision: Treat as implemented and verified for MM-592.
+Evidence: `frontend/src/entrypoints/tasks-list.tsx` renders `<p className="loading">Loading tasks...</p>` while the list query is loading, and `frontend/src/entrypoints/tasks-list.test.tsx` verifies the pending request state.
+Rationale: MM-592 requires final rollout regression evidence, and focused UI validation now covers it.
+Alternatives considered: Additional code change was rejected because the existing behavior passed the new regression test.
+Test implications: UI unit covered and passing.
 
 ## FR-002 / FR-009 / SC-002 / SC-006 - Structured List API Errors
 
-Decision: Treat as partial and add structured API error parsing for failed list responses.
-Evidence: `tasks-list.tsx` currently throws `Failed to fetch: ${response.statusText}` for list failures. Local validation errors are already displayed, but structured API detail from failed list responses is discarded.
+Decision: Treat as implemented and verified after adding structured API error parsing for failed list responses.
+Evidence: `tasks-list.tsx` now derives sanitized messages from structured response payloads before falling back to status text, and `tasks-list.test.tsx` verifies `detail.message` rendering.
 Rationale: MM-592 requires visible API errors and invalid filter parameter recovery with structured messages when available.
 Alternatives considered: Keeping generic `statusText` was rejected because FastAPI validation responses already provide safer, more actionable detail.
-Test implications: UI unit with a red-first structured error response.
+Test implications: UI unit covered with red-first evidence and passing validation.
 
 ## FR-003 / FR-004 / SC-003 - Empty First Page Recovery
 
-Decision: Treat as implemented but unverified and add a focused test with active filters.
-Evidence: `tasks-list.tsx` renders `No tasks found for the current filters.` for an empty first page and keeps the control deck with `Clear filters` above the result state.
-Rationale: Existing tests cover empty later pages but not the first-page active-filter recovery path.
+Decision: Treat as implemented and verified with a focused active-filter empty-state test.
+Evidence: `tasks-list.tsx` renders `No tasks found for the current filters.` for an empty first page and keeps the control deck with `Clear filters` above the result state; `tasks-list.test.tsx` verifies the active-filter recovery path.
+Rationale: Existing tests covered empty later pages; MM-592 now also has first-page active-filter recovery evidence.
 Alternatives considered: Moving the Clear filters button into the empty panel was rejected because the current active filter row is already the consistent recovery location.
-Test implications: UI unit.
+Test implications: UI unit covered and passing.
 
 ## FR-005 / FR-006 / SC-004 - Empty Later Page and Pagination
 
@@ -58,16 +58,16 @@ Test implications: Final UI validation only.
 
 ## FR-012 / DESIGN-REQ-026 - Final Regression Gate
 
-Decision: Treat as partial until loading, API error, and empty-first-page tests are added and passing.
-Evidence: Existing tests already cover many final rollout behaviors, but MM-592-specific final recovery cases are incomplete.
-Rationale: The Jira brief explicitly makes regression evidence a rollout gate.
+Decision: Treat as implemented and verified.
+Evidence: Existing tests cover many final rollout behaviors, and MM-592-specific loading, structured API error, and empty-first-page recovery tests now pass.
+Rationale: The Jira brief explicitly makes regression evidence a rollout gate, and the focused plus full unit validation evidence satisfies that gate.
 Alternatives considered: Relying on code inspection alone was rejected.
-Test implications: UI unit plus final verification.
+Test implications: UI unit plus final verification completed.
 
 ## FR-013 / SC-008 / DESIGN-REQ-028 - Traceability
 
 Decision: Preserve MM-592 and source design IDs through all MoonSpec artifacts and final verification.
-Evidence: `spec.md` and `plan.md` preserve MM-592 and DESIGN-REQ-006, DESIGN-REQ-024, DESIGN-REQ-026, DESIGN-REQ-027, and DESIGN-REQ-028.
+Evidence: `spec.md`, `plan.md`, `tasks.md`, `verification.md`, and this research artifact preserve MM-592 and DESIGN-REQ-006, DESIGN-REQ-024, DESIGN-REQ-026, DESIGN-REQ-027, and DESIGN-REQ-028.
 Rationale: Downstream verification, commit text, and PR metadata need the Jira key.
 Alternatives considered: Referencing only the artifact path was rejected because final verification needs the source key visible in each artifact.
-Test implications: Artifact review.
+Test implications: Artifact review completed.
