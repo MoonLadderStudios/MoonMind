@@ -1,5 +1,25 @@
 [
   {
+    "id": 3185322350,
+    "disposition": "addressed",
+    "rationale": "Changed GitHub broker socket paths to use per-run subdirectories under /tmp/mm-gh and only chown the run-specific socket directory plus socket, leaving the shared root unowned by the run user."
+  },
+  {
+    "id": 4224485088,
+    "disposition": "not-applicable",
+    "rationale": "Review summary comment; the actionable security concern is tracked and addressed by review comments 3185322350 and 3185327508."
+  },
+  {
+    "id": 3185327508,
+    "disposition": "addressed",
+    "rationale": "Moved broker sockets from the shared /tmp/mm-gh root into digest-named per-run directories, prevented shared-root chowning, and added launcher/session/broker tests for the isolated path and ownership behavior."
+  },
+  {
+    "id": 4224490494,
+    "disposition": "not-applicable",
+    "rationale": "Automated review wrapper comment without separate actionable feedback beyond review comment 3185327508."
+  },
+  {
     "id": 4376107040,
     "disposition": "not-applicable",
     "rationale": "Quota warning from gemini-code-assist; no code action requested."
