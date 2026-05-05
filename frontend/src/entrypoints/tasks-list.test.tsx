@@ -373,7 +373,7 @@ describe('Tasks List Entrypoint', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
 
-    const waitingPills = screen.getAllByText('waiting_on_dependencies');
+    const waitingPills = screen.getAllByText('AWAITING TASK');
     expect(waitingPills.length).toBeGreaterThan(0);
     for (const pill of waitingPills) {
       expect(pill.closest('span')?.dataset.effect).toBeUndefined();
@@ -383,7 +383,7 @@ describe('Tasks List Entrypoint', () => {
       document.querySelectorAll<HTMLElement>('.queue-table-cell-status span.status, .queue-card-status span.status'),
     );
 
-    const awaitingPills = nonExecutingStatusPills.filter((pill) => pill.textContent === 'awaiting_external');
+    const awaitingPills = nonExecutingStatusPills.filter((pill) => pill.textContent === 'awaiting external');
     expect(awaitingPills.length).toBeGreaterThan(0);
     for (const pill of awaitingPills) {
       expect(pill.dataset.effect).toBeUndefined();
@@ -488,6 +488,7 @@ describe('Tasks List Entrypoint', () => {
     fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
     const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
     const options = Array.from(statusFilter.options).map((option) => option.value);
+    const optionLabels = Array.from(statusFilter.options).map((option) => option.textContent);
 
     expect(options).toEqual([
       '',
@@ -499,6 +500,21 @@ describe('Tasks List Entrypoint', () => {
       'executing',
       'proposals',
       'awaiting_external',
+      'finalizing',
+      'completed',
+      'failed',
+      'canceled',
+    ]);
+    expect(optionLabels).toEqual([
+      'All Statuses',
+      'scheduled',
+      'initializing',
+      'AWAITING TASK',
+      'planning',
+      'AWAITING SLOT',
+      'executing',
+      'proposals',
+      'awaiting external',
       'finalizing',
       'completed',
       'failed',

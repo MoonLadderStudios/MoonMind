@@ -4,6 +4,7 @@ import '@xterm/xterm/css/xterm.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { formatStatusLabel } from '../utils/formatters';
 
 type OAuthTerminalInitialData = {
   sessionId?: string;
@@ -475,7 +476,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           <button type="button" className="secondary" onClick={pasteClipboardToTerminal}>
             Paste from clipboard
           </button>
-          <span className="oauth-terminal-status">{status}</span>
+          <span className="oauth-terminal-status">{formatStatusLabel(status)}</span>
         </div>
       </header>
       <section className="oauth-terminal-paste-box">

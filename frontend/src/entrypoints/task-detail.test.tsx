@@ -418,7 +418,7 @@ describe('Task Detail Entrypoint', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
 
-    const waitingPill = await screen.findByText('waiting_on_dependencies');
+    const waitingPill = await screen.findByText('AWAITING TASK');
     expect(waitingPill.closest('span')?.dataset.effect).toBeUndefined();
   });
 
