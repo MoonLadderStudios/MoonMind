@@ -31,3 +31,9 @@ PASS. The artifacts describe exactly one runtime story, preserve the original MM
 
 - Temporal visibility query capabilities may constrain contains/text matching; implementation must validate this with tests and fail structurally rather than emitting raw query failures.
 - Full hermetic integration tests may require Docker availability in the managed runtime.
+
+## Validation
+
+- `scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks`: unavailable in this checkout; active feature was resolved from `.specify/feature.json`.
+- Direct artifact check: PASS. `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/executions-list-facets.md`, `quickstart.md`, `tasks.md`, and `checklists/requirements.md` were re-read for source preservation, one-story scope, requirement coverage, task order, test strategy, and unresolved placeholders.
+- Coverage scan: PASS. FR-001 through FR-008, SC-001 through SC-007, DESIGN-REQ-006, DESIGN-REQ-019, DESIGN-REQ-020, and DESIGN-REQ-025 remain mapped through plan and tasks.
