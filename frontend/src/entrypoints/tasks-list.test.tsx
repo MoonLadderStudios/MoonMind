@@ -848,10 +848,61 @@ describe('Tasks List Entrypoint', () => {
 
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
-    expect(await screen.findByText('Page 1 · 1-1 · 21')).toBeTruthy();
-    expect(document.querySelector('.task-list-results-footer')?.textContent).toContain('Page 1 · 1-1 · 21');
+    expect(await screen.findByText('1 - 1')).toBeTruthy();
+    expect(screen.getByText('21 total entries')).toBeTruthy();
+    const footer = document.querySelector('.task-list-results-footer');
+    const liveBlock = footer?.querySelector('.task-list-footer-live');
+    const paginationBlock = footer?.querySelector('.task-list-footer-pagination');
+    const paginationSummary = footer?.querySelector('.task-list-footer-page-summary');
+    expect(liveBlock?.contains(screen.getByLabelText('Live updates'))).toBe(true);
+    expect(liveBlock?.textContent).toContain('Polling every 5s');
+    expect(paginationBlock?.contains(screen.getByLabelText('Show'))).toBe(true);
+    expect(getComputedStyle(paginationBlock as Element).flexWrap).toBe('wrap');
+    expect(paginationSummary?.textContent).toContain('1 - 1');
+    expect(paginationSummary?.textContent).toContain('21 total entries');
     expect(screen.getByRole('button', { name: 'Previous page' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Next page' })).toBeTruthy();
+  });
+
+  it('shows an empty range summary on an empty page beyond the first page', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('nextPageToken=next-token')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [],
+            count: 21,
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              taskId: 'task-123',
+              source: 'temporal',
+              title: 'Example task',
+              status: 'completed',
+              state: 'succeeded',
+              rawState: 'succeeded',
+              createdAt: '2026-03-28T00:00:00Z',
+            },
+          ],
+          nextPageToken: 'next-token',
+          count: 21,
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findByText('1 - 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+
+    expect(await screen.findByText('0 - 0')).toBeTruthy();
+    expect(screen.getByText('21 total entries')).toBeTruthy();
   });
 
   it('uses the Mission Control control deck and data slab composition', async () => {

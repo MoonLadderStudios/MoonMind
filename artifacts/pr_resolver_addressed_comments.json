@@ -1,57 +1,17 @@
 [
   {
-    "id": 3191761388,
+    "id": 3191819151,
     "disposition": "addressed",
-    "rationale": "Replaced the ProviderProfilesManager test's StorageEvent constructor init object with a plain Event('storage') plus defined key/newValue properties."
+    "rationale": "Changed page range summary to show 0 - 0 when the current page has no sorted items."
   },
   {
-    "id": 3191761395,
+    "id": 3191819160,
     "disposition": "addressed",
-    "rationale": "Replaced oauth-terminal storage notification dispatch with a plain Event('storage') plus defined key/newValue properties."
+    "rationale": "Added flex-wrap to the task list footer pagination container for narrow layouts."
   },
   {
-    "id": 3191763402,
-    "disposition": "addressed",
-    "rationale": "Reconnect actions now navigate to the returned replacement session_id when it differs from the current terminal session."
-  },
-  {
-    "id": 3191763417,
-    "disposition": "addressed",
-    "rationale": "Broadened safeDisplayText redaction to handle secret-like keys with colon or equals separators, including quoted JSON-style keys and values."
-  },
-  {
-    "id": 3191763424,
-    "disposition": "addressed",
-    "rationale": "Removed the duplicate Retry button from the terminal recovery actions and kept the Reconnect action."
-  },
-  {
-    "id": 4231808935,
+    "id": 4231866388,
     "disposition": "not-applicable",
-    "rationale": "Broad review summary with no separate actionable request beyond the line comments already addressed."
-  },
-  {
-    "id": 4231762096,
-    "disposition": "not-applicable",
-    "rationale": "Parent review summary only; actionable child comments are classified separately."
-  },
-  {
-    "id": 3191720998,
-    "disposition": "not-applicable",
-    "rationale": "The current session controller already imports both os and Mapping."
-  },
-  {
-    "id": 3191721033,
-    "disposition": "addressed",
-    "rationale": "Added manifest type validation so non-object JSON fails with a controlled TemporalActivityRuntimeError."
-  },
-  {
-    "id": 3191726001,
-    "disposition": "addressed",
-    "rationale": "Added cleanup of the launched container when unrestricted Docker proxy network attachment fails."
-  },
-  {
-    "id": 4231767468,
-    "disposition": "not-applicable",
-    "rationale": "Parent Codex review wrapper only; actionable child feedback is classified separately."
+    "rationale": "Bot review summary only; the actionable inline comments from that review were handled separately."
   }
 ]

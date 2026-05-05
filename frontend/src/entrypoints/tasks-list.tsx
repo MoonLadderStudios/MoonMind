@@ -697,24 +697,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     setListCursor(previousCursor === undefined || previousCursor === '' ? null : previousCursor);
   };
 
-  const pageSummary = [
-    `Page ${pageIndex + 1}`,
-    pageEnd > 0 ? `${pageStart}-${pageEnd}` : null,
-    countSummary || null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const pageRangeSummary = sortedItems.length > 0 ? `${pageStart} - ${pageEnd}` : '0 - 0';
+  const totalEntriesSummary = countSummary ? `${countSummary} total entries` : '';
   const resultsFooter = (
     <div className="queue-results-toolbar task-list-results-footer">
-      <div className="task-list-footer-summary">
-        <span className="small">{pageSummary}</span>
-        <span className="small">
-          {liveUpdates && listEnabled
-            ? `Polling every ${Math.round(listPollMs / 1000)}s`
-            : 'Updates paused to keep selections stable.'}
-        </span>
-      </div>
-      <div className="queue-pagination">
+      <div className="task-list-footer-live">
         <label className="queue-inline-toggle toolbar-live-toggle task-list-footer-live-toggle">
           <input
             type="checkbox"
@@ -724,6 +711,13 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           />
           Live updates
         </label>
+        <span className="small">
+          {liveUpdates && listEnabled
+            ? `Polling every ${Math.round(listPollMs / 1000)}s`
+            : 'Updates paused to keep selections stable.'}
+        </span>
+      </div>
+      <div className="queue-pagination task-list-footer-pagination">
         <PageSizeSelector
           pageSize={pageSize}
           disabled={!listEnabled}
@@ -732,6 +726,10 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             resetToFirstPage();
           }}
         />
+        <div className="task-list-footer-page-summary" aria-label="Pagination summary">
+          <span className="small">{pageRangeSummary}</span>
+          {totalEntriesSummary ? <span className="small">{totalEntriesSummary}</span> : null}
+        </div>
         <nav aria-label="Pagination" style={{ display: 'inline-flex', gap: '0.45rem' }}>
           <button
             type="button"
