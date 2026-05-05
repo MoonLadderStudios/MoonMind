@@ -36,6 +36,12 @@ def _normalize_payload(payload: Any) -> dict[str, Any]:
     dump_method = getattr(payload, 'model_dump', getattr(payload, 'dict', None))
     return dump_method() if dump_method else payload
 
+async def _immediate_wait_condition(
+    predicate: Callable[[], bool],
+    **_kwargs: Any,
+) -> None:
+    assert predicate() is True
+
 @pytest.fixture
 def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     workflow = MoonMindRunWorkflow()
@@ -45,6 +51,11 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "upsert_search_attributes",
@@ -461,6 +472,11 @@ async def test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activ
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
     monkeypatch.setattr(
         run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
         "now",
         lambda: datetime.now(timezone.utc),
     )
@@ -568,6 +584,11 @@ async def test_run_execution_stage_skips_integration_after_merge_automation_canc
         "patched",
         lambda patch_id: patch_id == "run-conditional-registry-read-v1",
     )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
     monkeypatch.setattr(workflow, "_maybe_start_merge_gate", fake_maybe_start_merge_gate)
     monkeypatch.setattr(workflow, "_run_integration_stage", fake_run_integration_stage)
 
@@ -577,6 +598,41 @@ async def test_run_execution_stage_skips_integration_after_merge_automation_canc
     )
 
     assert integration_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_wait_if_paused_uses_legacy_gate_when_patch_marker_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._paused = True
+    wait_calls = 0
+
+    async def fake_wait_condition(
+        predicate: Callable[[], bool],
+        **_kwargs: Any,
+    ) -> None:
+        nonlocal wait_calls
+        assert predicate() is False
+        wait_calls += 1
+        workflow._paused = False
+        assert predicate() is True
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+
+    await workflow._wait_if_paused_at_safe_boundary()
+
+    assert wait_calls == 1
+    assert workflow._paused is False
 
 
 @pytest.mark.asyncio

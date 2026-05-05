@@ -1372,6 +1372,7 @@ class MoonMindRunWorkflow:
 
     async def _wait_if_paused_at_safe_boundary(self) -> None:
         if not workflow.patched(RUN_PAUSE_SAFE_BOUNDARIES_PATCH):
+            await workflow.wait_condition(lambda: not self._paused)
             return
         if not self._paused:
             return

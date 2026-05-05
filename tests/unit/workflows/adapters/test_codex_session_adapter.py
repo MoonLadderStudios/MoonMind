@@ -451,7 +451,7 @@ async def test_start_omits_large_inline_instruction_from_result_metadata(
     assert len(result.metadata["instructionRefSha256"]) == 64
     assert "instructionRef" not in result.metadata
 
-async def test_start_rejects_completed_codex_turn_with_usage_limit_summary(
+async def test_start_preserves_completed_codex_turn_with_usage_limit_summary(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
@@ -522,20 +522,21 @@ async def test_start_rejects_completed_codex_turn_with_usage_limit_summary(
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
 
-    with pytest.raises(CodexSessionRunFailedError) as excinfo:
-        await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+    handle = await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+    result = await adapter.fetch_result(handle.run_id)
 
-    result = excinfo.value.agent_run_result
-    assert result.failure_class == "integration_error"
-    assert result.provider_error_code == "429"
-    assert result.retry_recommendation == "retry_after_cooldown"
-    assert result.metadata["providerFailure"]["providerErrorCode"] == "429"
+    assert handle.status == "completed"
+    assert result.summary == quota_summary
+    assert result.failure_class is None
+    assert result.provider_error_code is None
+    assert result.retry_recommendation is None
+    assert "providerFailure" not in result.metadata
 
     persisted_record = run_store.load(binding.task_run_id)
     assert persisted_record is not None
-    assert persisted_record.status == "failed"
-    assert persisted_record.failure_class == "integration_error"
-    assert persisted_record.provider_error_code == "429"
+    assert persisted_record.status == "completed"
+    assert persisted_record.failure_class is None
+    assert persisted_record.provider_error_code is None
 
 async def test_start_passes_oauth_profile_auth_target_to_launch_session(
     tmp_path: Path,
