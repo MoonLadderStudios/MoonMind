@@ -99,11 +99,16 @@ describe('Tasks List Entrypoint', () => {
 
     await screen.findAllByText('Example task');
 
+    expect(screen.getByLabelText('Mobile ID filter value')).toBeTruthy();
     expect(screen.getByLabelText('Mobile Skill filter value')).toBeTruthy();
+    expect(screen.getByLabelText('Mobile Title filter value')).toBeTruthy();
     expect(screen.getByLabelText('Mobile Scheduled from')).toBeTruthy();
     expect(screen.getByLabelText('Mobile Created from')).toBeTruthy();
     expect(screen.getByLabelText('Mobile Finished blank values')).toBeTruthy();
 
+    fireEvent.change(screen.getByLabelText('Mobile ID filter value'), {
+      target: { value: 'task-123' },
+    });
     fireEvent.change(screen.getByLabelText('Mobile Status filter value'), {
       target: { value: 'completed' },
     });
@@ -113,10 +118,13 @@ describe('Tasks List Entrypoint', () => {
     fireEvent.change(screen.getByLabelText('Mobile Runtime filter value'), {
       target: { value: 'codex_cloud' },
     });
+    fireEvent.change(screen.getByLabelText('Mobile Title filter value'), {
+      target: { value: 'Example' },
+    });
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cloud',
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&taskIdContains=task-123&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
       );
     });
   });
@@ -560,6 +568,70 @@ describe('Tasks List Entrypoint', () => {
     fireEvent.mouseDown(document.body);
     expect(screen.queryByRole('dialog', { name: 'Status filter' })).toBeNull();
     expect(executionListCalls().length).toBe(baselineCalls);
+  });
+
+  it('moves focus into column filter dialogs and applies staged text filters with Enter', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const titleFilterButton = screen.getByRole('button', {
+      name: /Filter Title\. No filter applied\./i,
+    });
+
+    fireEvent.click(titleFilterButton);
+
+    const titleInput = (await screen.findByLabelText('Title filter value')) as HTMLInputElement;
+    await waitFor(() => {
+      expect(document.activeElement).toBe(titleInput);
+    });
+
+    fireEvent.change(titleInput, { target: { value: 'Example' } });
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Title filter' }), { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(lastExecutionListUrl()).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&titleContains=Example',
+      );
+      expect(screen.queryByRole('dialog', { name: 'Title filter' })).toBeNull();
+      expect(
+        screen.getByRole('button', { name: /Filter Title\. Filter active: Example\./i }),
+      ).toBeTruthy();
+    });
+  });
+
+  it('does not apply staged filters when Enter is pressed on popover action buttons', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const baselineCalls = executionListCalls().length;
+
+    fireEvent.click(screen.getByRole('button', { name: /Filter Title\. No filter applied\./i }));
+    fireEvent.change(await screen.findByLabelText('Title filter value'), { target: { value: 'Example' } });
+    const clearButton = screen.getByRole('button', { name: 'Clear' });
+    clearButton.focus();
+
+    fireEvent.keyDown(clearButton, { key: 'Enter' });
+
+    expect(executionListCalls().length).toBe(baselineCalls);
+    expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&pageSize=50&scope=tasks');
+    expect(screen.getByRole('dialog', { name: 'Title filter' })).toBeTruthy();
+  });
+
+  it('keeps mobile filter focus from jumping to a stale desktop trigger', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const desktopStatusFilter = screen.getByRole('button', {
+      name: /Filter Status\. No filter applied\./i,
+    });
+    fireEvent.click(desktopStatusFilter);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel Status filter' }));
+
+    const mobileStatusFilter = screen.getByLabelText('Mobile Status filter value') as HTMLSelectElement;
+    mobileStatusFilter.focus();
+    fireEvent.change(mobileStatusFilter, { target: { value: 'completed' } });
+
+    expect(document.activeElement).toBe(mobileStatusFilter);
   });
 
   it('applies status exclude semantics and removes only the selected chip', async () => {

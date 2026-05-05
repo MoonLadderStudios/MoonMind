@@ -219,6 +219,8 @@ Key diagnostics:
 - N/A; no persistence or data-store changes. (301-shared-additive-shimmer)
 - TypeScript/React for Mission Control UI; Python 3.12 for FastAPI route tests. + React, TanStack Query, Zod, Vitest, Testing Library, FastAPI, pytest, Temporal visibility query helpers. (301-column-filter-popovers)
 - No new persistent storage; filter state is URL/query state and component state only. (301-column-filter-popovers)
+- TypeScript/React for Mission Control UI; Python 3.12 remains present but is not part of this story + React, TanStack Query, Zod, Vitest, Testing Library, existing Mission Control CSS (304-mobile-accessibility-live-update-stability)
+- N/A; filter state is URL/query state and component state only (304-mobile-accessibility-live-update-stability)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

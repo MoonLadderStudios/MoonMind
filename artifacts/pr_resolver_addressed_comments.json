@@ -1,17 +1,27 @@
 [
   {
-    "id": 4376998426,
-    "disposition": "not-applicable",
-    "rationale": "Quota warning issue comment from an automated reviewer; no code action requested."
-  },
-  {
-    "id": 3186457670,
+    "id": 3186820408,
     "disposition": "addressed",
-    "rationale": "Cleared the submit arrow exit state after the exit animation duration even while submission remains busy, and updated the create-page regression test."
+    "rationale": "Restricted dialog Enter-to-apply handling so Enter on popover action buttons is not intercepted, with a regression test for staged filters remaining unapplied from action-button keydown."
   },
   {
-    "id": 4225768669,
+    "id": 4226183005,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary container; actionable child review comment 3186457670 was handled separately."
+    "rationale": "Automated review summary wrapper; no standalone code action beyond the linked review comments."
+  },
+  {
+    "id": 3186821781,
+    "disposition": "addressed",
+    "rationale": "Excluded button targets from the popover Enter key apply path and covered the accessibility behavior in Tasks List tests."
+  },
+  {
+    "id": 3186821798,
+    "disposition": "addressed",
+    "rationale": "Guarded closeFilter focus restoration behind a non-null field target and added a mobile regression test to prevent stale desktop trigger focus."
+  },
+  {
+    "id": 4226184254,
+    "disposition": "not-applicable",
+    "rationale": "Broad review summary; the concrete keyboard and focus findings from the summary were addressed in the linked line comments."
   }
 ]
