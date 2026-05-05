@@ -11,19 +11,19 @@ Implement MM-589 by tightening the existing Tasks List URL parser, URL writer, a
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | implemented_unverified | `frontend/src/entrypoints/tasks-list.tsx` uses `replaceUrlQuery` and `syncUrl` | add targeted URL normalization coverage | frontend unit |
-| FR-002 | partial | legacy `state` and `repo` parse exists; URL currently writes `repoExact` | add tests for legacy task-safe links and adjust canonical exact repo behavior if needed | frontend unit |
-| FR-003 | implemented_unverified | canonical params are emitted by `appendFilterParams` | add coverage for raw runtime values and canonical URL/API state | frontend unit |
-| FR-004 | partial | comma parsing exists via `splitParam`; repeated values are not parsed | add repeated-value parsing in frontend and backend | frontend unit + API unit |
-| FR-005 | missing | frontend chooses one mode; API currently accepts include and exclude together | add clear frontend/API validation errors | frontend unit + API unit |
-| FR-006 | implemented_unverified | unsupported workflow scope detection and backend task scope filtering exist | add explicit tests for system/all/manifest fail-safe behavior | frontend unit + API unit |
-| FR-007 | partial | filter changes reset cursors; page-size behavior needs explicit verification | add page-size cursor reset coverage and fix if failing | frontend unit |
-| FR-008 | implemented_unverified | runtime chips use `formatRuntimeLabel` while URL uses raw values | preserve and extend tests | frontend unit |
-| FR-009 | implemented_verified | MM-589 preserved in `spec.md` input | preserve in final verification and commit/PR metadata | final verify |
-| DESIGN-REQ-006 | partial | URL sync and pagination reset exist | strengthen tests for page-size reset | frontend unit |
-| DESIGN-REQ-016 | implemented_unverified | URL holds page size/cursor/sort/filter state | targeted URL-state tests | frontend unit |
-| DESIGN-REQ-017 | implemented_unverified | UI and API task-scope guards exist | fail-safe tests | frontend unit + API unit |
-| DESIGN-REQ-018 | partial | canonical include/exclude exists but repeated values and contradiction errors need work | implement parser/validation updates | frontend unit + API unit |
+| FR-001 | implemented_verified | `frontend/src/entrypoints/tasks-list.tsx` URL sync; `frontend/src/entrypoints/tasks-list.test.tsx` page-size cursor reset | no new implementation | final verify |
+| FR-002 | implemented_verified | legacy workflow-scope URL test in `frontend/src/entrypoints/tasks-list.test.tsx` | no new implementation | final verify |
+| FR-003 | implemented_verified | `appendFilterParams` and repeated-runtime frontend test preserve canonical raw values | no new implementation | final verify |
+| FR-004 | implemented_verified | `splitParamValues`, `raw_query_values`, repeated frontend/API tests | no new implementation | final verify |
+| FR-005 | implemented_verified | `validateInitialFilterParams`, `validate_non_contradictory`, contradiction frontend/API tests | no new implementation | final verify |
+| FR-006 | implemented_verified | unsupported workflow-scope UI behavior and API task-scope assertions | no new implementation | final verify |
+| FR-007 | implemented_verified | page-size cursor reset test plus existing filter reset behavior | no new implementation | final verify |
+| FR-008 | implemented_verified | runtime chip labeling test and existing `formatRuntimeLabel` behavior | no new implementation | final verify |
+| FR-009 | implemented_verified | MM-589 preserved in `spec.md`, `tasks.md`, and `verification.md` | no new implementation | final verify |
+| DESIGN-REQ-006 | implemented_verified | URL sync and cursor reset tests | no new implementation | final verify |
+| DESIGN-REQ-016 | implemented_verified | canonical URL state tests | no new implementation | final verify |
+| DESIGN-REQ-017 | implemented_verified | legacy fail-safe tests | no new implementation | final verify |
+| DESIGN-REQ-018 | implemented_verified | repeated-value and contradiction validation tests | no new implementation | final verify |
 
 ## Technical Context
 
