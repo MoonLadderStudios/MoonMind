@@ -15,14 +15,14 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm `.specify/feature.json` points at `specs/304-mobile-accessibility-live-update-stability/` and that `specs/304-mobile-accessibility-live-update-stability/spec.md` preserves the `MM-591` Jira preset brief. (FR-010, SC-006)
-- [ ] T002 Confirm `specs/304-mobile-accessibility-live-update-stability/plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/tasks-list-filter-behavior.md` exist before story task execution. (FR-010, SC-006)
-- [ ] T003 Confirm `frontend/src/entrypoints/tasks-list.tsx` and `frontend/src/entrypoints/tasks-list.test.tsx` are the only source/test files required by the implementation plan. (FR-001 through FR-009)
+- [X] T001 Confirm `.specify/feature.json` points at `specs/304-mobile-accessibility-live-update-stability/` and that `specs/304-mobile-accessibility-live-update-stability/spec.md` preserves the `MM-591` Jira preset brief. (FR-010, SC-006)
+- [X] T002 Confirm `specs/304-mobile-accessibility-live-update-stability/plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/tasks-list-filter-behavior.md` exist before story task execution. (FR-010, SC-006)
+- [X] T003 Confirm `frontend/src/entrypoints/tasks-list.tsx` and `frontend/src/entrypoints/tasks-list.test.tsx` are the only source/test files required by the implementation plan. (FR-001 through FR-009)
 
 ## Phase 2: Foundational
 
-- [ ] T004 Inspect `docs/UI/TasksListPage.md` sections 5.7, 14, 15, and 16 and confirm the source mappings in `specs/304-mobile-accessibility-live-update-stability/spec.md`. (DESIGN-REQ-006, DESIGN-REQ-021, DESIGN-REQ-022, DESIGN-REQ-023)
-- [ ] T005 Inspect existing task-only query, filter parsing, URL serialization, and mobile card behavior in `frontend/src/entrypoints/tasks-list.tsx` before adding tests. (FR-001 through FR-009)
+- [X] T004 Inspect `docs/UI/TasksListPage.md` sections 5.7, 14, 15, and 16 and confirm the source mappings in `specs/304-mobile-accessibility-live-update-stability/spec.md`. (DESIGN-REQ-006, DESIGN-REQ-021, DESIGN-REQ-022, DESIGN-REQ-023)
+- [X] T005 Inspect existing task-only query, filter parsing, URL serialization, and mobile card behavior in `frontend/src/entrypoints/tasks-list.tsx` before adding tests. (FR-001 through FR-009)
 
 ## Phase 3: Story - Stable Accessible Task Filters
 
@@ -38,38 +38,38 @@
 
 ### Unit Tests
 
-- [ ] T006 Add or preserve the mobile filter reachability test in `frontend/src/entrypoints/tasks-list.test.tsx` for ID, Runtime, Skill, Repository, Status, Title, Scheduled, Created, and Finished controls. (FR-001, SC-001, DESIGN-REQ-023)
-- [ ] T007 Add or preserve the mobile filter URL test in `frontend/src/entrypoints/tasks-list.test.tsx` for task-scoped `taskIdContains`, `titleContains`, status, runtime, repository, and stale-cursor omission. (FR-002, SC-002, DESIGN-REQ-023)
-- [ ] T008 Add or preserve the desktop filter keyboard test in `frontend/src/entrypoints/tasks-list.test.tsx` for focus-in and Enter-to-apply behavior. (FR-004, FR-006, SC-003, SC-004, DESIGN-REQ-022)
-- [ ] T009 Preserve staging, Escape, outside-click, active-chip, status-label, workflow-kind, and mobile-card guardrail tests in `frontend/src/entrypoints/tasks-list.test.tsx`. (FR-003, FR-005, FR-008, FR-009, DESIGN-REQ-006, DESIGN-REQ-021, DESIGN-REQ-022)
+- [X] T006 Add or preserve the mobile filter reachability test in `frontend/src/entrypoints/tasks-list.test.tsx` for ID, Runtime, Skill, Repository, Status, Title, Scheduled, Created, and Finished controls. (FR-001, SC-001, DESIGN-REQ-023)
+- [X] T007 Add or preserve the mobile filter URL test in `frontend/src/entrypoints/tasks-list.test.tsx` for task-scoped `taskIdContains`, `titleContains`, status, runtime, repository, and stale-cursor omission. (FR-002, SC-002, DESIGN-REQ-023)
+- [X] T008 Add or preserve the desktop filter keyboard test in `frontend/src/entrypoints/tasks-list.test.tsx` for focus-in and Enter-to-apply behavior. (FR-004, FR-006, SC-003, SC-004, DESIGN-REQ-022)
+- [X] T009 Preserve staging, Escape, outside-click, active-chip, status-label, workflow-kind, and mobile-card guardrail tests in `frontend/src/entrypoints/tasks-list.test.tsx`. (FR-003, FR-005, FR-008, FR-009, DESIGN-REQ-006, DESIGN-REQ-021, DESIGN-REQ-022)
 
 ### Integration Tests
 
-- [ ] T010 Add or preserve UI integration-style component coverage in `frontend/src/entrypoints/tasks-list.test.tsx` that renders the Tasks List, applies mobile filters, and verifies the resulting `/api/executions` request remains task-scoped. (Acceptance scenarios 1, 2, 7; FR-001, FR-002, FR-009)
-- [ ] T011 Add or preserve UI integration-style component coverage in `frontend/src/entrypoints/tasks-list.test.tsx` that opens a desktop filter dialog, stages a text filter, applies it with Enter, and verifies the request URL. (Acceptance scenarios 3, 5; FR-004, FR-006)
-- [ ] T012 Add or preserve UI integration-style component coverage in `frontend/src/entrypoints/tasks-list.test.tsx` that verifies cancel, Escape, and outside-click dismissal do not submit staged filter changes. (Acceptance scenario 4; FR-005)
+- [X] T010 Add or preserve UI integration-style component coverage in `frontend/src/entrypoints/tasks-list.test.tsx` that renders the Tasks List, applies mobile filters, and verifies the resulting `/api/executions` request remains task-scoped. (Acceptance scenarios 1, 2, 7; FR-001, FR-002, FR-009)
+- [X] T011 Add or preserve UI integration-style component coverage in `frontend/src/entrypoints/tasks-list.test.tsx` that opens a desktop filter dialog, stages a text filter, applies it with Enter, and verifies the request URL. (Acceptance scenarios 3, 5; FR-004, FR-006)
+- [X] T012 Add or preserve UI integration-style component coverage in `frontend/src/entrypoints/tasks-list.test.tsx` that verifies cancel, Escape, and outside-click dismissal do not submit staged filter changes. (Acceptance scenario 4; FR-005)
 
 ### Red-First Confirmation
 
 - [ ] T013 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` after T006-T012 and before T015-T018 to confirm newly authored or replayed tests fail for the intended reason on an unimplemented baseline. (FR-001 through FR-009)
-- [ ] T014 Record red-first or already-verified status in `specs/304-mobile-accessibility-live-update-stability/verification.md`; in the current workspace, cite the existing passing test evidence because `plan.md` marks all tracked rows `implemented_verified`. (SC-006)
+- [X] T014 Record red-first or already-verified status in `specs/304-mobile-accessibility-live-update-stability/verification.md`; in the current workspace, cite the existing passing test evidence because `plan.md` marks all tracked rows `implemented_verified`. (SC-006)
 
 ### Implementation
 
-- [ ] T015 Add or preserve `taskId` and `title` text filters in `frontend/src/entrypoints/tasks-list.tsx` across filter types, empty state, parsing, URL serialization, summaries, active chips, desktop popovers, and mobile controls. (FR-001, FR-002, DESIGN-REQ-023)
-- [ ] T016 Add or preserve desktop filter focus management and Enter-to-apply handling in `frontend/src/entrypoints/tasks-list.tsx`. (FR-004, FR-006, DESIGN-REQ-022)
-- [ ] T017 Add or preserve the live-update stability guard in `frontend/src/entrypoints/tasks-list.tsx` so list refetch intervals pause while a filter editor is open. (FR-007, DESIGN-REQ-021)
-- [ ] T018 Preserve task-only scope enforcement, workflow-kind fail-safe behavior, active filter indicators, and mobile-card visibility in `frontend/src/entrypoints/tasks-list.tsx`. (FR-003, FR-008, FR-009, DESIGN-REQ-006)
+- [X] T015 Add or preserve `taskId` and `title` text filters in `frontend/src/entrypoints/tasks-list.tsx` across filter types, empty state, parsing, URL serialization, summaries, active chips, desktop popovers, and mobile controls. (FR-001, FR-002, DESIGN-REQ-023)
+- [X] T016 Add or preserve desktop filter focus management and Enter-to-apply handling in `frontend/src/entrypoints/tasks-list.tsx`. (FR-004, FR-006, DESIGN-REQ-022)
+- [X] T017 Add or preserve the live-update stability guard in `frontend/src/entrypoints/tasks-list.tsx` so list refetch intervals pause while a filter editor is open. (FR-007, DESIGN-REQ-021)
+- [X] T018 Preserve task-only scope enforcement, workflow-kind fail-safe behavior, active filter indicators, and mobile-card visibility in `frontend/src/entrypoints/tasks-list.tsx`. (FR-003, FR-008, FR-009, DESIGN-REQ-006)
 
 ### Story Validation
 
-- [ ] T019 Run focused unit and UI integration validation with `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` and record the result in `specs/304-mobile-accessibility-live-update-stability/verification.md`. (FR-001 through FR-010, SC-001 through SC-006)
+- [X] T019 Run focused unit and UI integration validation with `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` and record the result in `specs/304-mobile-accessibility-live-update-stability/verification.md`. (FR-001 through FR-010, SC-001 through SC-006)
 - [ ] T020 Run final repository unit validation with `./tools/test_unit.sh` and record the result in `specs/304-mobile-accessibility-live-update-stability/verification.md`. (FR-001 through FR-010, SC-001 through SC-006)
 
 ## Phase 4: Polish And Verification
 
-- [ ] T021 Review `specs/304-mobile-accessibility-live-update-stability/contracts/tasks-list-filter-behavior.md` against `frontend/src/entrypoints/tasks-list.tsx` and `frontend/src/entrypoints/tasks-list.test.tsx` to confirm public UI behavior remains aligned. (FR-001 through FR-009)
-- [ ] T022 Review `specs/304-mobile-accessibility-live-update-stability/quickstart.md` and confirm it lists the focused and final validation commands for the story. (SC-001 through SC-006)
+- [X] T021 Review `specs/304-mobile-accessibility-live-update-stability/contracts/tasks-list-filter-behavior.md` against `frontend/src/entrypoints/tasks-list.tsx` and `frontend/src/entrypoints/tasks-list.test.tsx` to confirm public UI behavior remains aligned. (FR-001 through FR-009)
+- [X] T022 Review `specs/304-mobile-accessibility-live-update-stability/quickstart.md` and confirm it lists the focused and final validation commands for the story. (SC-001 through SC-006)
 - [ ] T023 Run `/speckit.verify` and update `specs/304-mobile-accessibility-live-update-stability/verification.md` with final comparison against the original `MM-591` preset brief. (FR-010, SC-006)
 
 ## Dependencies and Execution Order

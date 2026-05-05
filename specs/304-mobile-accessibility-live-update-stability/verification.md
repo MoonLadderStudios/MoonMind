@@ -2,11 +2,13 @@
 
 **Feature**: `specs/304-mobile-accessibility-live-update-stability`  
 **Original Request Source**: `spec.md` Input preserving `MM-591` Jira preset brief  
-**Verdict**: FULLY_IMPLEMENTED
+**Verdict**: IMPLEMENTED_WITH_VALIDATION_BLOCKER
 
 ## Verification Summary
 
 The implementation satisfies the `MM-591` runtime UI story. Tasks List mobile controls now include ID and Title filters in addition to existing status, runtime, skill, repository, and date filters. Desktop filter dialogs focus the first control on open, support Enter-to-apply for staged filter edits, keep staged changes out of requests until committed, and pause list polling while a filter editor is open. Existing task-only visibility protections remain in place.
+
+Current direct story validation passes. The repository wrapper/full unit command is blocked in this managed run by unrelated tests that load repo `.agents/skills` files which are absent under the active managed skill snapshot.
 
 ## Requirement Coverage
 
@@ -37,11 +39,13 @@ The implementation satisfies the `MM-591` runtime UI story. Tasks List mobile co
 | Command | Result |
 | --- | --- |
 | `node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/tasks-list.test.tsx` | PASS: 31 tests passed |
-| `./tools/test_unit.sh` | PASS: Python unit suite passed (`4344 passed, 1 xpassed, 16 subtests passed`); frontend Vitest passed (`20 files passed, 302 tests passed, 223 skipped`) |
+| `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` | FAIL: Python unit phase failed before UI target due unrelated missing `.agents/skills/*` files required by PR-resolver skill tests in this managed active-snapshot workspace. |
+| `./tools/test_unit.sh` | NOT RERUN after focused wrapper failure; expected to hit the same unrelated `.agents/skills/*` blocker until the active skill projection/test fixture mismatch is resolved. |
 | `node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json` | PASS |
 
 ## Notes
 
-- The full unit runner emitted existing warnings, including `HTMLCanvasElement.getContext()` jsdom notices and Python deprecation warnings, but exited successfully.
+- Red-first failure evidence cannot be reproduced in the current workspace without reverting already-implemented behavior. The current `plan.md` marks all tracked rows `implemented_verified`, so this implementation pass preserves existing test evidence and records the managed-snapshot blocker.
+- The focused wrapper emitted existing Python warnings before failing on unrelated missing skill files.
 - `npm run ui:typecheck` could not find `tsc` through the npm script PATH in this managed shell; invoking the same local binary directly passed.
 - Compose-backed integration was not required for this frontend-only story.
