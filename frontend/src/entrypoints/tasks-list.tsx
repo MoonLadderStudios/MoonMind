@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 
@@ -60,7 +60,27 @@ type TableColumn = (typeof TABLE_COLUMNS)[number];
 type TableField = TableColumn[0];
 type FilterField = TableField;
 const VALID_TABLE_SORT_FIELDS = new Set<string>([...TABLE_COLUMNS.map((column) => column[0]), 'integration']);
-const ACTIVE_FILTER_FIELDS = new Set<string>(['status', 'repository', 'targetRuntime']);
+const ACTIVE_FILTER_FIELDS = new Set<string>([
+  'status',
+  'repository',
+  'targetRuntime',
+  'targetSkill',
+  'scheduledFor',
+  'createdAt',
+  'closedAt',
+]);
+type ValueFilter = { mode: 'include' | 'exclude'; values: string[]; blank?: 'include' | 'exclude' | '' };
+type RepositoryFilter = ValueFilter & { exactText?: string };
+type DateFilter = { from?: string; to?: string; blank?: 'include' | 'exclude' | '' };
+type ColumnFilters = {
+  status: ValueFilter;
+  repository: RepositoryFilter;
+  targetRuntime: ValueFilter;
+  targetSkill: ValueFilter;
+  scheduledFor: DateFilter;
+  createdAt: DateFilter;
+  closedAt: DateFilter;
+};
 
 const ExecutionRowSchema = z
   .object({
@@ -182,6 +202,155 @@ function replaceUrlQuery(params: URLSearchParams) {
   window.history.replaceState({}, '', queryText ? `${path}?${queryText}` : path);
 }
 
+function emptyValueFilter(): ValueFilter {
+  return { mode: 'include', values: [], blank: '' };
+}
+
+function emptyFilters(): ColumnFilters {
+  return {
+    status: emptyValueFilter(),
+    repository: { ...emptyValueFilter(), exactText: '' },
+    targetRuntime: emptyValueFilter(),
+    targetSkill: emptyValueFilter(),
+    scheduledFor: {},
+    createdAt: {},
+    closedAt: {},
+  };
+}
+
+function uniqueValues(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.map((value) => (value || '').trim()).filter(Boolean)));
+}
+
+function splitParam(value: string | null): string[] {
+  return uniqueValues((value || '').split(','));
+}
+
+function parseInitialFilters(params: URLSearchParams): ColumnFilters {
+  const filters = emptyFilters();
+  const stateIn = splitParam(params.get('stateIn'));
+  const stateNotIn = splitParam(params.get('stateNotIn'));
+  const legacyState = (params.get('state') || '').trim().toLowerCase();
+  if (stateNotIn.length > 0) {
+    filters.status = { mode: 'exclude', values: stateNotIn, blank: '' };
+  } else if (stateIn.length > 0 || legacyState) {
+    filters.status = { mode: 'include', values: stateIn.length > 0 ? stateIn : [legacyState], blank: '' };
+  }
+
+  const repoIn = splitParam(params.get('repoIn'));
+  const repoNotIn = splitParam(params.get('repoNotIn'));
+  const repoExact = (params.get('repoExact') || params.get('repo') || '').trim();
+  if (repoNotIn.length > 0) {
+    filters.repository = { mode: 'exclude', values: repoNotIn, exactText: repoExact, blank: '' };
+  } else {
+    filters.repository = { mode: 'include', values: repoIn, exactText: repoExact, blank: '' };
+  }
+
+  const runtimeIn = splitParam(params.get('targetRuntimeIn'));
+  const runtimeNotIn = splitParam(params.get('targetRuntimeNotIn'));
+  const legacyRuntime = (params.get('targetRuntime') || '').trim();
+  if (runtimeNotIn.length > 0) {
+    filters.targetRuntime = { mode: 'exclude', values: runtimeNotIn, blank: '' };
+  } else if (runtimeIn.length > 0 || legacyRuntime) {
+    filters.targetRuntime = {
+      mode: 'include',
+      values: runtimeIn.length > 0 ? runtimeIn : [legacyRuntime],
+      blank: '',
+    };
+  }
+
+  const skillIn = splitParam(params.get('targetSkillIn'));
+  const skillNotIn = splitParam(params.get('targetSkillNotIn'));
+  if (skillNotIn.length > 0) {
+    filters.targetSkill = { mode: 'exclude', values: skillNotIn, blank: '' };
+  } else if (skillIn.length > 0) {
+    filters.targetSkill = { mode: 'include', values: skillIn, blank: '' };
+  }
+
+  filters.scheduledFor = {
+    from: params.get('scheduledFrom') || '',
+    to: params.get('scheduledTo') || '',
+    blank: (params.get('scheduledBlank') as DateFilter['blank']) || '',
+  };
+  filters.createdAt = {
+    from: params.get('createdFrom') || '',
+    to: params.get('createdTo') || '',
+  };
+  filters.closedAt = {
+    from: params.get('finishedFrom') || '',
+    to: params.get('finishedTo') || '',
+    blank: (params.get('finishedBlank') as DateFilter['blank']) || '',
+  };
+  return filters;
+}
+
+function appendValueParams(
+  params: URLSearchParams,
+  filter: ValueFilter,
+  includeParam: string,
+  excludeParam: string,
+  blankParam?: string,
+) {
+  if (filter.values.length > 0) {
+    params.set(filter.mode === 'exclude' ? excludeParam : includeParam, filter.values.join(','));
+  }
+  if (blankParam && filter.blank) {
+    params.set(blankParam, filter.blank);
+  }
+}
+
+function appendDateParams(
+  params: URLSearchParams,
+  filter: DateFilter,
+  fromParam: string,
+  toParam: string,
+  blankParam?: string,
+) {
+  if (filter.from) params.set(fromParam, filter.from);
+  if (filter.to) params.set(toParam, filter.to);
+  if (blankParam && filter.blank) params.set(blankParam, filter.blank);
+}
+
+function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
+  appendValueParams(params, filters.status, 'stateIn', 'stateNotIn');
+  if (filters.repository.exactText?.trim()) {
+    params.set('repoExact', filters.repository.exactText.trim());
+  }
+  appendValueParams(params, filters.repository, 'repoIn', 'repoNotIn', 'repoBlank');
+  appendValueParams(params, filters.targetRuntime, 'targetRuntimeIn', 'targetRuntimeNotIn', 'targetRuntimeBlank');
+  appendValueParams(params, filters.targetSkill, 'targetSkillIn', 'targetSkillNotIn', 'targetSkillBlank');
+  appendDateParams(params, filters.scheduledFor, 'scheduledFrom', 'scheduledTo', 'scheduledBlank');
+  appendDateParams(params, filters.createdAt, 'createdFrom', 'createdTo');
+  appendDateParams(params, filters.closedAt, 'finishedFrom', 'finishedTo', 'finishedBlank');
+}
+
+function filterSummary(field: FilterField, filters: ColumnFilters): string {
+  const summarizeValues = (filter: ValueFilter, formatter = (value: string) => value) => {
+    if (filter.blank === 'include' && filter.values.length === 0) return 'blank';
+    if (filter.blank === 'exclude' && filter.values.length === 0) return 'not blank';
+    if (filter.values.length === 0) return '';
+    const first = formatter(filter.values[0]);
+    const suffix = filter.values.length > 1 ? ` +${filter.values.length - 1}` : '';
+    return `${filter.mode === 'exclude' ? 'not ' : ''}${first}${suffix}`;
+  };
+  if (field === 'status') return summarizeValues(filters.status);
+  if (field === 'targetRuntime') return summarizeValues(filters.targetRuntime, formatRuntimeLabel);
+  if (field === 'targetSkill') return summarizeValues(filters.targetSkill);
+  if (field === 'repository') {
+    if (filters.repository.exactText?.trim()) return filters.repository.exactText.trim();
+    return summarizeValues(filters.repository);
+  }
+  const dateFilter = field === 'scheduledFor' ? filters.scheduledFor : field === 'createdAt' ? filters.createdAt : filters.closedAt;
+  if (dateFilter.blank === 'include' && !dateFilter.from && !dateFilter.to) return 'blank';
+  if (dateFilter.blank === 'exclude' && !dateFilter.from && !dateFilter.to) return 'not blank';
+  const parts = [];
+  if (dateFilter.from) parts.push(`from ${dateFilter.from}`);
+  if (dateFilter.to) parts.push(`to ${dateFilter.to}`);
+  if (dateFilter.blank === 'include') parts.push('blank');
+  if (dateFilter.blank === 'exclude') parts.push('not blank');
+  return parts.join(', ');
+}
+
 export function TasksListPage({ payload }: { payload: BootPayload }) {
   const dashboardCfg = useMemo(() => readListDashboardConfig(payload), [payload.initialData]);
   const listPollMs = useMemo(() => {
@@ -193,10 +362,10 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
   const [ignoredWorkflowScopeState] = useState(() => hasUnsupportedWorkflowScopeState(initial));
-  const [temporalState, setTemporalState] = useState(() => (initial.get('state') || '').toLowerCase());
-  const [repository, setRepository] = useState(() => initial.get('repo') || '');
-  const [targetRuntime, setTargetRuntime] = useState(() => initial.get('targetRuntime') || '');
+  const [filters, setFilters] = useState(() => parseInitialFilters(initial));
+  const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
   const [openFilter, setOpenFilter] = useState<FilterField | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
   const [pageSize, setPageSize] = useState(() => parsePageSize(initial.get('limit')));
   const [listCursor, setListCursor] = useState<string | null>(() =>
     ignoredWorkflowScopeState ? null : initial.get('nextPageToken')?.trim() || null,
@@ -209,14 +378,10 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     if (initialSortDir === 'asc' || initialSortDir === 'desc') return initialSortDir;
     return 'desc';
   });
-  const normalizedRepository = repository.trim();
-  const normalizedTargetRuntime = targetRuntime.trim();
 
   const syncUrl = useCallback(() => {
     const params = new URLSearchParams();
-    if (temporalState) params.set('state', temporalState);
-    if (normalizedRepository) params.set('repo', normalizedRepository);
-    if (normalizedTargetRuntime) params.set('targetRuntime', normalizedTargetRuntime);
+    appendFilterParams(params, filters);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('nextPageToken', listCursor);
     if (sortField !== 'scheduledFor' || sortDir !== 'desc') {
@@ -225,9 +390,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     }
     replaceUrlQuery(params);
   }, [
-    temporalState,
-    normalizedRepository,
-    normalizedTargetRuntime,
+    filters,
     pageSize,
     listCursor,
     sortField,
@@ -242,9 +405,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     'tasks-list',
     'temporal',
     pageSize,
-    temporalState,
-    normalizedRepository,
-    normalizedTargetRuntime,
+    filters,
     listCursor,
   ] as const;
 
@@ -257,9 +418,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       params.set('pageSize', String(pageSize));
       params.set('scope', 'tasks');
       if (listCursor) params.set('nextPageToken', listCursor);
-      if (temporalState) params.set('state', temporalState);
-      if (normalizedRepository) params.set('repo', normalizedRepository);
-      if (normalizedTargetRuntime) params.set('targetRuntime', normalizedTargetRuntime);
+      appendFilterParams(params, filters);
       const response = await fetch(`${payload.apiBase}/executions?${params}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.statusText}`);
@@ -268,6 +427,25 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     },
     refetchInterval: liveUpdates && listEnabled ? listPollMs : false,
   });
+
+  useEffect(() => {
+    if (!openFilter) return;
+    setDraftFilters(filters);
+  }, [openFilter, filters]);
+
+  useEffect(() => {
+    if (!openFilter) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      const targetElement = event.target as Element | null;
+      if (target && popoverRef.current?.contains(target)) return;
+      if (targetElement?.closest('.task-list-column-filter-button, .task-list-filter-chip-open')) return;
+      setOpenFilter(null);
+      setDraftFilters(filters);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [openFilter, filters]);
 
   const sortedItems = useMemo(() => {
     const items = data?.items || [];
@@ -340,69 +518,151 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     .join(' · ');
   const filterValueForField = useCallback(
     (field: string): string => {
-      if (field === 'status') return temporalState;
-      if (field === 'repository') return normalizedRepository;
-      if (field === 'targetRuntime') return normalizedTargetRuntime;
-      return '';
+      if (!ACTIVE_FILTER_FIELDS.has(field)) return '';
+      return filterSummary(field as FilterField, filters);
     },
-    [normalizedRepository, normalizedTargetRuntime, temporalState],
+    [filters],
   );
   const activeFilters = useMemo(
     () =>
-      [
-        temporalState ? { field: 'status' as FilterField, label: 'Status', value: temporalState } : null,
-        normalizedRepository
-          ? { field: 'repository' as FilterField, label: 'Repository', value: normalizedRepository }
-          : null,
-        normalizedTargetRuntime
-          ? {
-              field: 'targetRuntime' as FilterField,
-              label: 'Runtime',
-              value: formatRuntimeLabel(normalizedTargetRuntime),
-            }
-          : null,
-      ].filter(
+      TABLE_COLUMNS.map(([field, label]) => {
+        if (!ACTIVE_FILTER_FIELDS.has(field)) return null;
+        const value = filterSummary(field, filters);
+        return value ? { field, label, value } : null;
+      }).filter(
         (filter): filter is { field: FilterField; label: string; value: string } => Boolean(filter),
       ),
-    [temporalState, normalizedRepository, normalizedTargetRuntime],
+    [filters],
   );
   const hasActiveFilters = activeFilters.length > 0;
   const clearFilters = useCallback(() => {
-    setTemporalState('');
-    setRepository('');
-    setTargetRuntime('');
+    setFilters(emptyFilters());
+    setDraftFilters(emptyFilters());
     setOpenFilter(null);
     resetToFirstPage();
   }, [resetToFirstPage]);
+  const toggleFilter = useCallback((field: FilterField) => {
+    setOpenFilter((current) => (current === field ? null : field));
+  }, []);
+
+  const applyFilters = useCallback(
+    (nextFilters: ColumnFilters) => {
+      setFilters(nextFilters);
+      setDraftFilters(nextFilters);
+      setOpenFilter(null);
+      resetToFirstPage();
+    },
+    [resetToFirstPage],
+  );
+
+  const updateDraftValue = (field: 'status' | 'targetRuntime' | 'targetSkill', value: string) => {
+    setDraftFilters((current) => ({
+      ...current,
+      [field]: value ? { mode: 'include', values: [value], blank: '' } : emptyValueFilter(),
+    }));
+  };
+
+  const updateDraftRepository = (value: string) => {
+    setDraftFilters((current) => ({
+      ...current,
+      repository: { ...current.repository, mode: 'include', values: [], exactText: value },
+    }));
+  };
+
+  const updateDraftDate = (field: 'scheduledFor' | 'createdAt' | 'closedAt', patch: DateFilter) => {
+    setDraftFilters((current) => ({ ...current, [field]: { ...current[field], ...patch } }));
+  };
+
+  const applyMobileValue = (field: 'status' | 'targetRuntime', value: string) => {
+    applyFilters({
+      ...filters,
+      [field]: value ? { mode: 'include', values: [value], blank: '' } : emptyValueFilter(),
+    });
+  };
+
+  const applyMobileRepository = (value: string) => {
+    applyFilters({
+      ...filters,
+      repository: { ...filters.repository, mode: 'include', values: [], exactText: value },
+    });
+  };
 
   const filterAccessibilityLabel = (field: string, label: string): string => {
     const value = filterValueForField(field);
     if (!ACTIVE_FILTER_FIELDS.has(field)) return `Filter ${label}. No filter available.`;
     if (!value) return `Filter ${label}. No filter applied.`;
-    return `Filter ${label}. Filter active: ${field === 'targetRuntime' ? formatRuntimeLabel(value) : value}.`;
+    return `Filter ${label}. Filter active: ${value}.`;
+  };
+
+  const valueOptionsForField = (field: FilterField): string[] => {
+    if (field === 'status') return [...TEMPORAL_STATUSES];
+    if (field === 'targetRuntime') {
+      return uniqueValues([
+        ...filters.targetRuntime.values,
+        ...draftFilters.targetRuntime.values,
+        ...RUNTIME_FILTER_OPTIONS,
+      ]);
+    }
+    if (field === 'targetSkill') {
+      return uniqueValues([
+        ...filters.targetSkill.values,
+        ...draftFilters.targetSkill.values,
+        ...(data?.items || []).flatMap((row) => [row.targetSkill, ...(row.taskSkills || [])]),
+      ]);
+    }
+    if (field === 'repository') {
+      return uniqueValues([
+        ...filters.repository.values,
+        ...draftFilters.repository.values,
+        ...(data?.items || []).map((row) => row.repository),
+      ]);
+    }
+    return [];
   };
 
   const renderFilterControl = (field: FilterField, labelPrefix = '') => {
+    const isMobile = Boolean(labelPrefix);
     if (field === 'status') {
+      const selected = isMobile ? filters.status.values[0] || '' : draftFilters.status.values[0] || '';
       return (
-        <label className="queue-inline-filter task-list-header-filter-control">
-          {labelPrefix}Status filter value
-          <select
-            value={temporalState}
-            disabled={!listEnabled}
-            onChange={(event) => {
-              setTemporalState(event.target.value.toLowerCase());
-              resetToFirstPage();
-            }}
-          >
-            <option value="">All Statuses</option>
-            {TEMPORAL_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="queue-inline-filter task-list-header-filter-control">
+          <label>
+            {labelPrefix}Status filter value
+            <select
+              value={selected}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                const value = event.target.value.toLowerCase();
+                if (isMobile) applyMobileValue('status', value);
+                else updateDraftValue('status', value);
+              }}
+            >
+              <option value="">All Statuses</option>
+              {TEMPORAL_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </label>
+          {!isMobile ? (
+            <label className="task-list-filter-checkbox">
+              <input
+                type="checkbox"
+                checked={draftFilters.status.mode === 'exclude' && draftFilters.status.values.includes('canceled')}
+                onChange={(event) => {
+                  setDraftFilters((current) => ({
+                    ...current,
+                    status: event.target.checked
+                      ? { mode: 'exclude', values: ['canceled'], blank: '' }
+                      : emptyValueFilter(),
+                  }));
+                }}
+              />
+              Exclude canceled
+            </label>
+          ) : null}
+        </div>
       );
     }
 
@@ -412,31 +672,54 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           {labelPrefix}Repository filter value
           <input
             type="text"
-            value={repository}
+            value={isMobile ? filters.repository.exactText || '' : draftFilters.repository.exactText || ''}
             disabled={!listEnabled}
             placeholder="owner/repo"
             onChange={(event) => {
-              setRepository(event.target.value);
-              resetToFirstPage();
+              if (isMobile) applyMobileRepository(event.target.value);
+              else updateDraftRepository(event.target.value);
             }}
           />
+          {!isMobile && valueOptionsForField('repository').length > 0 ? (
+            <select
+              aria-label="Repository value selection"
+              value={draftFilters.repository.values[0] || ''}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                setDraftFilters((current) => ({
+                  ...current,
+                  repository: {
+                    ...current.repository,
+                    mode: 'include',
+                    values: event.target.value ? [event.target.value] : [],
+                    exactText: event.target.value ? '' : current.repository.exactText,
+                  },
+                }));
+              }}
+            >
+              <option value="">Repository values</option>
+              {valueOptionsForField('repository').map((repo) => (
+                <option key={repo} value={repo}>
+                  {repo}
+                </option>
+              ))}
+            </select>
+          ) : null}
         </label>
       );
     }
 
     if (field === 'targetRuntime') {
-      const runtimeOptions = normalizedTargetRuntime
-        ? Array.from(new Set([normalizedTargetRuntime, ...RUNTIME_FILTER_OPTIONS]))
-        : [...RUNTIME_FILTER_OPTIONS];
+      const runtimeOptions = valueOptionsForField('targetRuntime');
       return (
         <label className="queue-inline-filter task-list-header-filter-control">
           {labelPrefix}Runtime filter value
           <select
-            value={targetRuntime}
+            value={isMobile ? filters.targetRuntime.values[0] || '' : draftFilters.targetRuntime.values[0] || ''}
             disabled={!listEnabled}
             onChange={(event) => {
-              setTargetRuntime(event.target.value);
-              resetToFirstPage();
+              if (isMobile) applyMobileValue('targetRuntime', event.target.value);
+              else updateDraftValue('targetRuntime', event.target.value);
             }}
           >
             <option value="">All Runtimes</option>
@@ -447,6 +730,85 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             ))}
           </select>
         </label>
+      );
+    }
+
+    if (field === 'targetSkill') {
+      const skillOptions = valueOptionsForField('targetSkill');
+      return (
+        <label className="queue-inline-filter task-list-header-filter-control">
+          {labelPrefix}Skill filter value
+          <select
+            value={isMobile ? filters.targetSkill.values[0] || '' : draftFilters.targetSkill.values[0] || ''}
+            disabled={!listEnabled}
+            onChange={(event) => {
+              if (isMobile) {
+                applyFilters({
+                  ...filters,
+                  targetSkill: event.target.value
+                    ? { mode: 'include', values: [event.target.value], blank: '' }
+                    : emptyValueFilter(),
+                });
+              } else {
+                updateDraftValue('targetSkill', event.target.value);
+              }
+            }}
+          >
+            <option value="">All Skills</option>
+            {skillOptions.map((skill) => (
+              <option key={skill} value={skill}>
+                {skill}
+              </option>
+            ))}
+          </select>
+        </label>
+      );
+    }
+
+    if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') {
+      const label = field === 'scheduledFor' ? 'Scheduled' : field === 'createdAt' ? 'Created' : 'Finished';
+      const draft = isMobile ? filters[field] : draftFilters[field];
+      return (
+        <div className="queue-inline-filter task-list-header-filter-control">
+          <label>
+            {labelPrefix}{label} from
+            <input
+              type="date"
+              value={draft.from || ''}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                if (!isMobile) updateDraftDate(field, { from: event.target.value });
+              }}
+            />
+          </label>
+          <label>
+            {labelPrefix}{label} to
+            <input
+              type="date"
+              value={draft.to || ''}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                if (!isMobile) updateDraftDate(field, { to: event.target.value });
+              }}
+            />
+          </label>
+          {field !== 'createdAt' ? (
+            <label>
+              {labelPrefix}{label} blank values
+              <select
+                value={draft.blank || ''}
+                disabled={!listEnabled}
+                onChange={(event) => {
+                  if (!isMobile) updateDraftDate(field, { blank: event.target.value as DateFilter['blank'] });
+                }}
+              >
+                <option value="">Ignore blanks</option>
+                <option value="include">Include blanks</option>
+                <option value="exclude">Exclude blanks</option>
+              </select>
+            </label>
+          ) : null}
+        </div>
       );
     }
 
@@ -461,8 +823,56 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     );
 
     return (
-      <div className="task-list-header-filter-popover" role="dialog" aria-label={`${label} filter`}>
+      <div
+        className="task-list-header-filter-popover"
+        role="dialog"
+        aria-label={`${label} filter`}
+        ref={popoverRef}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            setDraftFilters(filters);
+            setOpenFilter(null);
+          }
+        }}
+      >
         {control}
+        {ACTIVE_FILTER_FIELDS.has(field) ? (
+          <div className="task-list-filter-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                const next = { ...draftFilters };
+                if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
+                else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
+                else next[field] = emptyValueFilter();
+                applyFilters(next);
+              }}
+              disabled={!listEnabled}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setDraftFilters(filters);
+                setOpenFilter(null);
+              }}
+              aria-label={`Cancel ${label} filter`}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => applyFilters(draftFilters)}
+              disabled={!listEnabled}
+              aria-label={`Apply ${label} filter`}
+            >
+              Apply
+            </button>
+          </div>
+        ) : null}
       </div>
     );
   };
@@ -505,16 +915,35 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           {hasActiveFilters ? (
             <div className="task-list-filter-chips" aria-label="Active filters">
               {activeFilters.map(({ field, label, value }) => (
-                <button
-                  type="button"
-                  className="task-list-filter-chip"
-                  key={`${label}:${value}`}
-                  onClick={() => setOpenFilter(field)}
-                  aria-label={`${label} filter: ${value}`}
-                >
-                  <span>{label}</span>
-                  <strong>{value}</strong>
-                </button>
+                <span className="task-list-filter-chip" key={`${label}:${value}`}>
+                  <button
+                    type="button"
+                    className="task-list-filter-chip-open"
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setOpenFilter(field);
+                    }}
+                    aria-label={`${label} filter: ${value}`}
+                  >
+                    <span>{label}</span>
+                    <strong>{value}</strong>
+                  </button>
+                  <button
+                    type="button"
+                    className="task-list-filter-chip-remove"
+                    onClick={() => {
+                      const next = { ...filters };
+                      if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
+                      else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
+                      else next[field] = emptyValueFilter();
+                      applyFilters(next);
+                    }}
+                    aria-label={`Remove ${label} filter`}
+                  >
+                    ×
+                  </button>
+                </span>
               ))}
             </div>
           ) : (
@@ -616,7 +1045,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                                 className={`task-list-column-filter-button${
                                   filterValueForField(field) ? ' is-active' : ''
                                 }`}
-                                onClick={() => setOpenFilter((current) => (current === field ? null : field))}
+                                onMouseDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  toggleFilter(field);
+                                }}
                                 aria-label={filterAccessibilityLabel(field, label)}
                                 aria-expanded={openFilter === field}
                               >
