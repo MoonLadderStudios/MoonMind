@@ -12470,6 +12470,96 @@ describe("Task Create submit arrow animation", () => {
       /\.queue-submit-primary-ripple\s*\{[^}]*animation:\s*queue-submit-primary-ripple\s+620ms\s+cubic-bezier\(0\.22,\s*0\.61,\s*0\.36,\s*1\)\s+forwards;/s,
     );
   });
+
+  it("keeps the create arrow exit active while submit is busy", async () => {
+    let resolveExecution: (response: Response) => void = () => {};
+    const fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        switch (true) {
+          case url.startsWith("/api/tasks/skills"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
+            } as Response);
+          case url.startsWith("/api/task-step-templates"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ items: [] }),
+            } as Response);
+          case url.startsWith("/api/v1/provider-profiles"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => [],
+            } as Response);
+          case url === "/api/executions":
+            return new Promise<Response>((resolve) => {
+              resolveExecution = resolve;
+            });
+          default:
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({}),
+            } as Response);
+        }
+      });
+    const { unmount } = renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    try {
+      fireEvent.change(await screen.findByLabelText("Instructions"), {
+        target: { value: "Run end-to-end regression flow." },
+      });
+
+      const createButton = screen.getByRole("button", { name: "Create" });
+      const arrow = createButton.querySelector<HTMLElement>(
+        "[data-submit-arrow='right']",
+      );
+      expect(arrow).not.toBeNull();
+
+      fireEvent.pointerDown(createButton, { button: 0 });
+      await waitFor(() => {
+        expect(
+          createButton.classList.contains("queue-submit-primary--arrow-exit"),
+        ).toBe(true);
+      });
+
+      fireEvent.click(createButton);
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledWith(
+          "/api/executions",
+          expect.objectContaining({
+            method: "POST",
+          }),
+        );
+        expect(createButton.getAttribute("aria-busy")).toBe("true");
+        expect(
+          createButton.classList.contains("queue-submit-primary--arrow-exit"),
+        ).toBe(true);
+      });
+    } finally {
+      resolveExecution(
+        new Response(
+          JSON.stringify({
+            workflowId: "mm:workflow-123",
+            runId: "run-123",
+            namespace: "moonmind",
+            redirectPath: "/tasks/mm:workflow-123?source=temporal",
+          }),
+          {
+            status: 201,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          },
+        ),
+      );
+      unmount();
+      fetchSpy.mockRestore();
+      vi.mocked(navigateTo).mockReset();
+    }
+  });
 });
 
 describe("Task Create MM-578 Preset expansion", () => {
@@ -12718,6 +12808,329 @@ describe("Task Create MM-578 Preset expansion", () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
+  });
+
+  it("defaults parent publish mode to none when selecting Jira Breakdown and Orchestrate as a Preset step", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "jira-breakdown-orchestrate",
+                scope: "global",
+                title: "Jira Breakdown and Orchestrate",
+                description: "Create dependent Jira Orchestrate tasks.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/task-step-templates/jira-breakdown-orchestrate?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "jira-breakdown-orchestrate",
+            scope: "global",
+            title: "Jira Breakdown and Orchestrate",
+            description: "Create dependent Jira Orchestrate tasks.",
+            latestVersion: "1.0.0",
+            version: "1.0.0",
+            inputs: [
+              {
+                name: "feature_request",
+                label: "Declarative Design Path or Text",
+                type: "markdown",
+                required: true,
+              },
+              {
+                name: "publish_mode",
+                label: "Publish Mode",
+                type: "enum",
+                required: true,
+                default: "pr_with_merge_automation",
+                options: ["pr", "pr_with_merge_automation"],
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/task-step-templates/jira-breakdown-orchestrate:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                title: "Break down declarative design",
+                instructions: "Break down the feature request.",
+                skill: { id: "moonspec-breakdown", args: {} },
+              },
+              {
+                id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                title: "Create Jira stories",
+                instructions: "Create Jira stories.",
+                skill: { id: "story.create_jira_issues", args: {} },
+              },
+              {
+                id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                title: "Create dependent Jira Orchestrate tasks",
+                instructions: "Create one Jira Orchestrate task per story.",
+                skill: { id: "story.create_jira_orchestrate_tasks", args: {} },
+                jiraOrchestration: {
+                  task: {
+                    repository: "MoonLadderStudios/MoonMind",
+                    runtime: { mode: "codex_cli" },
+                    publish: {
+                      mode: "pr",
+                      mergeAutomation: { enabled: true },
+                    },
+                  },
+                },
+              },
+            ],
+            appliedTemplate: {
+              slug: "jira-breakdown-orchestrate",
+              version: "1.0.0",
+            },
+            capabilities: ["git"],
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const taskPublishSelect = () =>
+      screen
+        .getAllByLabelText("Publish Mode")
+        .find(
+          (element): element is HTMLSelectElement =>
+            element instanceof HTMLSelectElement &&
+            element.getAttribute("name") === "publishMode",
+        ) as HTMLSelectElement;
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Break down and orchestrate MM-600." },
+    });
+    selectStepType(step, "Preset");
+    const stepPresetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        Array.from(stepPresetSelect.options).some(
+          (option) =>
+            option.text === "Jira Breakdown and Orchestrate (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    expect(taskPublishSelect().value).toBe("pr");
+    fireEvent.change(stepPresetSelect, {
+      target: { value: "global::::jira-breakdown-orchestrate" },
+    });
+
+    await waitFor(() => {
+      expect(taskPublishSelect().value).toBe("none");
+    });
+    expect(taskPublishSelect().disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest();
+    const payload = request.payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(payload.publishMode).toBe("none");
+    expect(payload).not.toHaveProperty("mergeAutomation");
+    expect(task.publish).toMatchObject({ mode: "none" });
+    expect(
+      ((task.steps as Array<Record<string, unknown>>)[2]?.jiraOrchestration as {
+        task?: { publish?: Record<string, unknown> };
+      }).task?.publish,
+    ).toEqual({ mode: "pr", mergeAutomation: { enabled: true } });
+  });
+
+  it("does not force none publish mode from stale Jira Breakdown preset provenance", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "jira-breakdown-orchestrate",
+                scope: "global",
+                title: "Jira Breakdown and Orchestrate",
+                description: "Create dependent Jira Orchestrate tasks.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/task-step-templates/jira-breakdown-orchestrate?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "jira-breakdown-orchestrate",
+            scope: "global",
+            title: "Jira Breakdown and Orchestrate",
+            description: "Create dependent Jira Orchestrate tasks.",
+            latestVersion: "1.0.0",
+            version: "1.0.0",
+            inputs: [
+              {
+                name: "feature_request",
+                label: "Declarative Design Path or Text",
+                type: "markdown",
+                required: true,
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/task-step-templates/jira-breakdown-orchestrate:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                title: "Break down declarative design",
+                instructions: "Break down the feature request.",
+                skill: { id: "moonspec-breakdown", args: {} },
+              },
+              {
+                id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                title: "Create Jira stories",
+                instructions: "Create Jira stories.",
+                skill: { id: "story.create_jira_issues", args: {} },
+              },
+              {
+                id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                title: "Create dependent Jira Orchestrate tasks",
+                instructions: "Create one Jira Orchestrate task per story.",
+                skill: { id: "story.create_jira_orchestrate_tasks", args: {} },
+              },
+            ],
+            appliedTemplate: {
+              slug: "jira-breakdown-orchestrate",
+              version: "1.0.0",
+            },
+            capabilities: ["git"],
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const taskPublishSelect = () =>
+      screen
+        .getAllByLabelText("Publish Mode")
+        .find(
+          (element): element is HTMLSelectElement =>
+            element instanceof HTMLSelectElement &&
+            element.getAttribute("name") === "publishMode",
+        ) as HTMLSelectElement;
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Start from the combined preset." },
+    });
+    selectStepType(step, "Preset");
+    const stepPresetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        Array.from(stepPresetSelect.options).some(
+          (option) =>
+            option.text === "Jira Breakdown and Orchestrate (Global)",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(stepPresetSelect, {
+      target: { value: "global::::jira-breakdown-orchestrate" },
+    });
+    await waitFor(() => {
+      expect(taskPublishSelect().value).toBe("none");
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    expect(
+      await screen.findByDisplayValue("Break down the feature request."),
+    ).toBeTruthy();
+
+    while (screen.getAllByRole("button", { name: "Remove step" }).length > 1) {
+      fireEvent.click(
+        screen.getAllByRole("button", { name: "Remove step" }).at(-1)!,
+      );
+    }
+    const remainingStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(remainingStep).getByLabelText("Instructions"), {
+      target: { value: "Implement this as a normal PR-publishing task." },
+    });
+
+    await waitFor(() => {
+      expect(taskPublishSelect().disabled).toBe(false);
+    });
+    fireEvent.change(taskPublishSelect(), {
+      target: { value: "pr_with_merge_automation" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest();
+    const payload = request.payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(payload.publishMode).toBe("pr");
+    expect(payload.mergeAutomation).toEqual({ enabled: true });
+    expect(task.publish).toEqual({ mode: "pr" });
+    expect(task).not.toHaveProperty("appliedStepTemplates");
   });
 
   it("expands generated preset steps into editable executable steps", async () => {

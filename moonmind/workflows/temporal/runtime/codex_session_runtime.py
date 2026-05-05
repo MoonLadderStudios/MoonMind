@@ -1165,7 +1165,10 @@ class CodexManagedSessionRuntime:
             recovered_error = self._extract_turn_error_from_logs(vendor_turn_id)
             if recovered_error:
                 return "failed", recovered_error
-            return "completed", None
+            return (
+                "failed",
+                "codex app-server task_complete produced no assistant output",
+            )
         if scan.assistant_text:
             return "completed", None
         return None
@@ -1194,7 +1197,10 @@ class CodexManagedSessionRuntime:
             recovered_error = self._extract_turn_error_from_logs(vendor_turn_id)
             if recovered_error:
                 return "failed", recovered_error
-            return "completed", None
+            return (
+                "failed",
+                "codex app-server task_complete produced no assistant output",
+            )
         return "failed", "codex app-server turn/completed produced no assistant output"
 
     def _resolved_rollout_path(

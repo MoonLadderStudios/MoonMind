@@ -1081,7 +1081,16 @@ async def test_import_seed_templates_skips_existing(tmp_path):
             )
             assert created_count_second == 0
 
-async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
+async def test_seed_catalog_includes_jira_breakdown_preset(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", None)
+    monkeypatch.setattr(
+        settings.atlassian.jira,
+        "jira_project_defaults_by_repository",
+        None,
+    )
     seed_dir = (
         Path(__file__).resolve().parents[3]
         / "api_service"
@@ -1262,6 +1271,7 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                     "projectKey": "GAME",
                     "issueTypeName": "Story",
                     "boardId": "",
+                    "sourceIssueKey": "GAME-404",
                     "dependencyMode": "linear_blocker_chain",
                 },
             }
@@ -1451,9 +1461,12 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "orchestration_mode" not in {
                 item["name"] for item in template_payload["inputs"]
             }
-            assert [step["skill"]["id"] for step in template.latest_version.steps] == [
+            assert [
+                (step.get("skill") or step.get("tool"))["id"]
+                for step in template.latest_version.steps
+            ] == [
                 "jira-issue-updater",
-                "auto",
+                "jira.check_blockers",
                 "auto",
                 "auto",
                 "moonspec-specify",
@@ -1487,8 +1500,18 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "MM-328" in expanded["steps"][0]["instructions"]
             assert "In Progress" in expanded["steps"][0]["instructions"]
             assert expanded["steps"][1]["title"] == "Check Jira blockers before implementation"
-            assert "Fetch Jira issue MM-328" in expanded["steps"][1]["instructions"]
-            assert "trusted Jira tool surface" in expanded["steps"][1]["instructions"]
+            assert expanded["steps"][1]["type"] == "tool"
+            assert expanded["steps"][1]["tool"]["id"] == "jira.check_blockers"
+            assert expanded["steps"][1]["targetIssueKey"] == "MM-328"
+            assert expanded["steps"][1]["blockerPreflight"] == {
+                "targetIssueKey": "MM-328",
+                "linkType": "Blocks",
+            }
+            assert "Jira issue MM-328" in expanded["steps"][1]["instructions"]
+            assert "deterministic trusted Jira blocker preflight" in expanded["steps"][1]["instructions"]
+            assert "other issue as outwardIssue" in expanded["steps"][1]["instructions"]
+            assert "other issue as inwardIssue" in expanded["steps"][1]["instructions"]
+            assert "MUST NOT block this orchestration" in expanded["steps"][1]["instructions"]
             assert "blocker" in expanded["steps"][1]["instructions"]
             assert "Done" in expanded["steps"][1]["instructions"]
             assert "non-blocker" in expanded["steps"][1]["instructions"]
@@ -1591,6 +1614,7 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
                 "projectKey": "MM",
                 "issueTypeName": "Story",
                 "boardId": "84",
+                "sourceIssueKey": "MM-404",
                 "dependencyMode": "linear_blocker_chain",
             }
             downstream = expanded["steps"][2]
@@ -1607,6 +1631,50 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
             assert downstream["jiraOrchestration"]["traceability"]["sourceIssueKey"] == (
                 "MM-404"
             )
+
+async def test_jira_breakdown_orchestrate_can_create_source_subtasks(tmp_path):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            expanded = await service.expand_template(
+                slug="jira-breakdown-orchestrate",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": "docs/Designs/RuntimeTypes.md",
+                    "jira_project_key": "MM",
+                    "jira_issue_type": "Sub-task",
+                    "jira_dependency_mode": "linear_blocker_chain",
+                    "publish_mode": "pr",
+                    "source_issue_key": "MM-404",
+                },
+                context={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                },
+            )
+
+            jira_step = expanded["steps"][1]
+            assert "Create each generated Jira issue as a sub-task of MM-404" in (
+                jira_step["instructions"]
+            )
+            assert jira_step["storyOutput"]["jira"] == {
+                "projectKey": "MM",
+                "issueTypeName": "Sub-task",
+                "boardId": "",
+                "sourceIssueKey": "MM-404",
+                "dependencyMode": "linear_blocker_chain",
+            }
 
 async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
     tmp_path,

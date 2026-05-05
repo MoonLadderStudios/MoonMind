@@ -39,10 +39,11 @@ steps:
       id: jira-issue-updater
       args: {}
   - title: Check Jira blockers before implementation
+    type: tool
     instructions: |-
-      Fetch Jira issue {{ inputs.jira_issue_key }} through the trusted Jira tool surface before any MoonSpec implementation work starts.
+      Check Jira issue {{ inputs.jira_issue_key }} through the deterministic trusted Jira blocker preflight before any MoonSpec implementation work starts.
 
-      Inspect Jira issue links or relationships for blockers where another issue blocks {{ inputs.jira_issue_key }}. If blocker status is not embedded in the first response, fetch each linked blocking issue through the trusted Jira tool surface before deciding whether to continue.
+      Jira Blocks direction is strict for Jira GET issue responses: when the target issue response exposes the other issue as inwardIssue and the link type says the inward relationship is "is blocked by", that other issue blocks {{ inputs.jira_issue_key }}. When the target issue response exposes the other issue as outwardIssue and the link type says the outward relationship is "blocks", {{ inputs.jira_issue_key }} blocks a later issue and that link MUST NOT block this orchestration.
 
       Ignore non-blocker issue links for the blocker decision.
 
@@ -51,8 +52,12 @@ steps:
       If any blocking issue is not Done, or if a blocker relationship exists but blocker status cannot be determined from trusted Jira data, stop the orchestration immediately. Report a blocked outcome in the required JSON format (targetIssueKey, decision, blockingIssues, summary) and do not proceed to any subsequent steps, including brief loading, classification, or MoonSpec implementation. Include {{ inputs.jira_issue_key }} as the targetIssueKey.
 
       Do not use raw Jira credentials, web scraping, hardcoded transition IDs, or prompt text alone to decide blocker state.
-    skill:
-      id: auto
+    targetIssueKey: "{{ inputs.jira_issue_key }}"
+    blockerPreflight:
+      targetIssueKey: "{{ inputs.jira_issue_key }}"
+      linkType: Blocks
+    tool:
+      id: jira.check_blockers
       args: {}
   - title: Load Jira preset brief
     instructions: |-

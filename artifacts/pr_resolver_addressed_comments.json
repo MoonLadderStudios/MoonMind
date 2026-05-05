@@ -18,5 +18,20 @@
     "id": 4224490494,
     "disposition": "not-applicable",
     "rationale": "Automated review wrapper comment without separate actionable feedback beyond review comment 3185327508."
+  },
+  {
+    "id": 4376107040,
+    "disposition": "not-applicable",
+    "rationale": "Quota warning from gemini-code-assist; no code action requested."
+  },
+  {
+    "id": 4224910915,
+    "disposition": "not-applicable",
+    "rationale": "Top-level automated review summary with no actionable feedback."
+  },
+  {
+    "id": 3185711626,
+    "disposition": "addressed",
+    "rationale": "Legacy workflow-scope URLs now drop stale nextPageToken before task-scoped fetching, with UI test coverage."
   }
 ]
