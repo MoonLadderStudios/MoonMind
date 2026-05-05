@@ -57,10 +57,16 @@ const TABLE_COLUMNS = [
   ['closedAt', 'Finished'],
 ] as const;
 type TableColumn = (typeof TABLE_COLUMNS)[number];
-type TableField = TableColumn[0];
-type FilterField = TableField;
+type FilterField =
+  | 'status'
+  | 'repository'
+  | 'targetRuntime'
+  | 'targetSkill'
+  | 'scheduledFor'
+  | 'createdAt'
+  | 'closedAt';
 const VALID_TABLE_SORT_FIELDS = new Set<string>([...TABLE_COLUMNS.map((column) => column[0]), 'integration']);
-const ACTIVE_FILTER_FIELDS = new Set<string>([
+const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
   'status',
   'repository',
   'targetRuntime',
@@ -69,6 +75,9 @@ const ACTIVE_FILTER_FIELDS = new Set<string>([
   'createdAt',
   'closedAt',
 ]);
+function isFilterField(field: string): field is FilterField {
+  return ACTIVE_FILTER_FIELDS.has(field as FilterField);
+}
 type ValueFilter = { mode: 'include' | 'exclude'; values: string[]; blank?: 'include' | 'exclude' | '' };
 type RepositoryFilter = ValueFilter & { exactText?: string };
 type DateFilter = { from?: string; to?: string; blank?: 'include' | 'exclude' | '' };
@@ -329,7 +338,7 @@ function filterSummary(field: FilterField, filters: ColumnFilters): string {
     if (filter.blank === 'include' && filter.values.length === 0) return 'blank';
     if (filter.blank === 'exclude' && filter.values.length === 0) return 'not blank';
     if (filter.values.length === 0) return '';
-    const first = formatter(filter.values[0]);
+    const first = formatter(filter.values[0]!);
     const suffix = filter.values.length > 1 ? ` +${filter.values.length - 1}` : '';
     return `${filter.mode === 'exclude' ? 'not ' : ''}${first}${suffix}`;
   };
@@ -518,19 +527,19 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     .join(' · ');
   const filterValueForField = useCallback(
     (field: string): string => {
-      if (!ACTIVE_FILTER_FIELDS.has(field)) return '';
-      return filterSummary(field as FilterField, filters);
+      if (!isFilterField(field)) return '';
+      return filterSummary(field, filters);
     },
     [filters],
   );
   const activeFilters = useMemo(
     () =>
       TABLE_COLUMNS.map(([field, label]) => {
-        if (!ACTIVE_FILTER_FIELDS.has(field)) return null;
+        if (!isFilterField(field)) return null;
         const value = filterSummary(field, filters);
         return value ? { field, label, value } : null;
       }).filter(
-        (filter): filter is { field: FilterField; label: string; value: string } => Boolean(filter),
+        (filter): filter is { field: FilterField; label: TableColumn[1]; value: string } => Boolean(filter),
       ),
     [filters],
   );
@@ -558,7 +567,14 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const updateDraftValue = (field: 'status' | 'targetRuntime' | 'targetSkill', value: string) => {
     setDraftFilters((current) => ({
       ...current,
-      [field]: value ? { mode: 'include', values: [value], blank: '' } : emptyValueFilter(),
+      [field]: value ? { ...current[field], values: [value], blank: '' } : emptyValueFilter(),
+    }));
+  };
+
+  const updateDraftValueMode = (field: 'targetRuntime' | 'targetSkill', mode: ValueFilter['mode']) => {
+    setDraftFilters((current) => ({
+      ...current,
+      [field]: { ...current[field], mode },
     }));
   };
 
@@ -576,7 +592,12 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const applyMobileValue = (field: 'status' | 'targetRuntime', value: string) => {
     applyFilters({
       ...filters,
-      [field]: value ? { mode: 'include', values: [value], blank: '' } : emptyValueFilter(),
+      [field]:
+        value && field === 'targetRuntime'
+          ? { ...filters.targetRuntime, values: [value], blank: '' }
+          : value
+            ? { mode: 'include', values: [value], blank: '' }
+            : emptyValueFilter(),
     });
   };
 
@@ -587,9 +608,16 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     });
   };
 
+  const applyMobileDate = (field: 'scheduledFor' | 'createdAt' | 'closedAt', patch: DateFilter) => {
+    applyFilters({
+      ...filters,
+      [field]: { ...filters[field], ...patch },
+    });
+  };
+
   const filterAccessibilityLabel = (field: string, label: string): string => {
     const value = filterValueForField(field);
-    if (!ACTIVE_FILTER_FIELDS.has(field)) return `Filter ${label}. No filter available.`;
+    if (!isFilterField(field)) return `Filter ${label}. No filter available.`;
     if (!value) return `Filter ${label}. No filter applied.`;
     return `Filter ${label}. Filter active: ${value}.`;
   };
@@ -692,7 +720,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     ...current.repository,
                     mode: 'include',
                     values: event.target.value ? [event.target.value] : [],
-                    exactText: event.target.value ? '' : current.repository.exactText,
+                    exactText: event.target.value ? '' : current.repository.exactText || '',
                   },
                 }));
               }}
@@ -711,57 +739,93 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
     if (field === 'targetRuntime') {
       const runtimeOptions = valueOptionsForField('targetRuntime');
+      const draft = isMobile ? filters.targetRuntime : draftFilters.targetRuntime;
       return (
-        <label className="queue-inline-filter task-list-header-filter-control">
-          {labelPrefix}Runtime filter value
-          <select
-            value={isMobile ? filters.targetRuntime.values[0] || '' : draftFilters.targetRuntime.values[0] || ''}
-            disabled={!listEnabled}
-            onChange={(event) => {
-              if (isMobile) applyMobileValue('targetRuntime', event.target.value);
-              else updateDraftValue('targetRuntime', event.target.value);
-            }}
-          >
-            <option value="">All Runtimes</option>
-            {runtimeOptions.map((runtime) => (
-              <option key={runtime} value={runtime}>
-                {formatRuntimeLabel(runtime)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="queue-inline-filter task-list-header-filter-control">
+          <label>
+            {labelPrefix}Runtime filter mode
+            <select
+              value={draft.mode}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                const mode = event.target.value as ValueFilter['mode'];
+                if (isMobile) applyFilters({ ...filters, targetRuntime: { ...filters.targetRuntime, mode } });
+                else updateDraftValueMode('targetRuntime', mode);
+              }}
+            >
+              <option value="include">Include selected</option>
+              <option value="exclude">Exclude selected</option>
+            </select>
+          </label>
+          <label>
+            {labelPrefix}Runtime filter value
+            <select
+              value={draft.values[0] || ''}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                if (isMobile) applyMobileValue('targetRuntime', event.target.value);
+                else updateDraftValue('targetRuntime', event.target.value);
+              }}
+            >
+              <option value="">All Runtimes</option>
+              {runtimeOptions.map((runtime) => (
+                <option key={runtime} value={runtime}>
+                  {formatRuntimeLabel(runtime)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       );
     }
 
     if (field === 'targetSkill') {
       const skillOptions = valueOptionsForField('targetSkill');
+      const draft = isMobile ? filters.targetSkill : draftFilters.targetSkill;
       return (
-        <label className="queue-inline-filter task-list-header-filter-control">
-          {labelPrefix}Skill filter value
-          <select
-            value={isMobile ? filters.targetSkill.values[0] || '' : draftFilters.targetSkill.values[0] || ''}
-            disabled={!listEnabled}
-            onChange={(event) => {
-              if (isMobile) {
-                applyFilters({
-                  ...filters,
-                  targetSkill: event.target.value
-                    ? { mode: 'include', values: [event.target.value], blank: '' }
-                    : emptyValueFilter(),
-                });
-              } else {
-                updateDraftValue('targetSkill', event.target.value);
-              }
-            }}
-          >
-            <option value="">All Skills</option>
-            {skillOptions.map((skill) => (
-              <option key={skill} value={skill}>
-                {skill}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="queue-inline-filter task-list-header-filter-control">
+          <label>
+            {labelPrefix}Skill filter mode
+            <select
+              value={draft.mode}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                const mode = event.target.value as ValueFilter['mode'];
+                if (isMobile) applyFilters({ ...filters, targetSkill: { ...filters.targetSkill, mode } });
+                else updateDraftValueMode('targetSkill', mode);
+              }}
+            >
+              <option value="include">Include selected</option>
+              <option value="exclude">Exclude selected</option>
+            </select>
+          </label>
+          <label>
+            {labelPrefix}Skill filter value
+            <select
+              value={draft.values[0] || ''}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                if (isMobile) {
+                  applyFilters({
+                    ...filters,
+                    targetSkill: event.target.value
+                      ? { ...filters.targetSkill, values: [event.target.value], blank: '' }
+                      : emptyValueFilter(),
+                  });
+                } else {
+                  updateDraftValue('targetSkill', event.target.value);
+                }
+              }}
+            >
+              <option value="">All Skills</option>
+              {skillOptions.map((skill) => (
+                <option key={skill} value={skill}>
+                  {skill}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       );
     }
 
@@ -777,7 +841,8 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               value={draft.from || ''}
               disabled={!listEnabled}
               onChange={(event) => {
-                if (!isMobile) updateDraftDate(field, { from: event.target.value });
+                if (isMobile) applyMobileDate(field, { from: event.target.value });
+                else updateDraftDate(field, { from: event.target.value });
               }}
             />
           </label>
@@ -788,7 +853,8 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               value={draft.to || ''}
               disabled={!listEnabled}
               onChange={(event) => {
-                if (!isMobile) updateDraftDate(field, { to: event.target.value });
+                if (isMobile) applyMobileDate(field, { to: event.target.value });
+                else updateDraftDate(field, { to: event.target.value });
               }}
             />
           </label>
@@ -799,7 +865,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                 value={draft.blank || ''}
                 disabled={!listEnabled}
                 onChange={(event) => {
-                  if (!isMobile) updateDraftDate(field, { blank: event.target.value as DateFilter['blank'] });
+                  const blank = event.target.value as NonNullable<DateFilter['blank']>;
+                  if (isMobile) applyMobileDate(field, { blank });
+                  else updateDraftDate(field, { blank });
                 }}
               >
                 <option value="">Ignore blanks</option>
@@ -836,7 +904,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
         }}
       >
         {control}
-        {ACTIVE_FILTER_FIELDS.has(field) ? (
+        {isFilterField(field) ? (
           <div className="task-list-filter-actions">
             <button
               type="button"
@@ -959,9 +1027,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           </button>
         </div>
         <div className="task-list-mobile-filter-controls" aria-label="Mobile task filters">
-          {renderFilterControl('status', 'Mobile ')}
-          {renderFilterControl('repository', 'Mobile ')}
-          {renderFilterControl('targetRuntime', 'Mobile ')}
+          {TABLE_COLUMNS.map(([field]) =>
+            isFilterField(field) ? <div key={field}>{renderFilterControl(field, 'Mobile ')}</div> : null,
+          )}
         </div>
       </section>
 
@@ -1027,6 +1095,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     <tr>
                       {TABLE_COLUMNS.map(([field, label]) => {
                         const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
+                        const filterField = isFilterField(field) ? field : null;
                         return (
                           <th key={field} aria-sort={ariaSort} className="task-list-compound-header-cell">
                             <div className="task-list-compound-header">
@@ -1048,15 +1117,15 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                                 onMouseDown={(event) => event.stopPropagation()}
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  toggleFilter(field);
+                                  if (filterField) toggleFilter(filterField);
                                 }}
                                 aria-label={filterAccessibilityLabel(field, label)}
-                                aria-expanded={openFilter === field}
+                                aria-expanded={filterField ? openFilter === filterField : false}
                               >
                                 <span aria-hidden="true">Filter</span>
                               </button>
                             </div>
-                            {renderFilterPopover(field, label)}
+                            {filterField ? renderFilterPopover(filterField, label) : null}
                           </th>
                         );
                       })}

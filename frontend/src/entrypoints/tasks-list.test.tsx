@@ -94,6 +94,11 @@ describe('Tasks List Entrypoint', () => {
 
     await screen.findAllByText('Example task');
 
+    expect(screen.getByLabelText('Mobile Skill filter value')).toBeTruthy();
+    expect(screen.getByLabelText('Mobile Scheduled from')).toBeTruthy();
+    expect(screen.getByLabelText('Mobile Created from')).toBeTruthy();
+    expect(screen.getByLabelText('Mobile Finished blank values')).toBeTruthy();
+
     fireEvent.change(screen.getByLabelText('Mobile Status filter value'), {
       target: { value: 'completed' },
     });
@@ -109,6 +114,53 @@ describe('Tasks List Entrypoint', () => {
         '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cloud',
       );
     });
+  });
+
+  it('applies runtime and skill exclude modes from value-list popovers', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-123',
+            source: 'temporal',
+            title: 'Example task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            targetRuntime: 'codex_cli',
+            targetSkill: 'pr-resolver',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Runtime filter mode'), { target: { value: 'exclude' } });
+    fireEvent.change(screen.getByLabelText('Runtime filter value'), { target: { value: 'codex_cli' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Runtime filter' }));
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toContain('targetRuntimeNotIn=codex_cli');
+    });
+    expect(screen.getByRole('button', { name: 'Runtime filter: not Codex CLI' })).toBeTruthy();
+    await screen.findAllByText('Example task');
+
+    fireEvent.click(screen.getByRole('button', { name: /Filter Skill\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Skill filter mode'), { target: { value: 'exclude' } });
+    fireEvent.change(screen.getByLabelText('Skill filter value'), { target: { value: 'pr-resolver' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Skill filter' }));
+
+    await waitFor(() => {
+      const url = fetchSpy.mock.calls.at(-1)?.[0];
+      expect(url).toContain('targetRuntimeNotIn=codex_cli');
+      expect(url).toContain('targetSkillNotIn=pr-resolver');
+    });
+    expect(screen.getByRole('button', { name: 'Skill filter: not pr-resolver' })).toBeTruthy();
   });
 
   it('offers every supported runtime identifier in the runtime filter', async () => {
