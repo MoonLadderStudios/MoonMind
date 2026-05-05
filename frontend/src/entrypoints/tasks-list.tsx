@@ -396,10 +396,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
-  const [filterValidationErrors] = useState(() => validateInitialFilterParams(initial));
+  const initialFilterValidationErrors = useMemo(() => validateInitialFilterParams(initial), [initial]);
   const [ignoredWorkflowScopeState] = useState(() => hasUnsupportedWorkflowScopeState(initial));
   const [filters, setFilters] = useState(() => parseInitialFilters(initial));
   const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
+  const [hasEditedFilters, setHasEditedFilters] = useState(false);
   const [openFilter, setOpenFilter] = useState<FilterField | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const [pageSize, setPageSize] = useState(() => parsePageSize(initial.get('limit')));
@@ -414,6 +415,12 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     if (initialSortDir === 'asc' || initialSortDir === 'desc') return initialSortDir;
     return 'desc';
   });
+  const filterValidationErrors = useMemo(() => {
+    if (!hasEditedFilters) return initialFilterValidationErrors;
+    const params = new URLSearchParams();
+    appendFilterParams(params, filters);
+    return validateInitialFilterParams(params);
+  }, [filters, hasEditedFilters, initialFilterValidationErrors]);
 
   const syncUrl = useCallback(() => {
     if (filterValidationErrors.length > 0) return;
@@ -574,6 +581,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   );
   const hasActiveFilters = activeFilters.length > 0;
   const clearFilters = useCallback(() => {
+    setHasEditedFilters(true);
     setFilters(emptyFilters());
     setDraftFilters(emptyFilters());
     setOpenFilter(null);
@@ -585,6 +593,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
   const applyFilters = useCallback(
     (nextFilters: ColumnFilters) => {
+      setHasEditedFilters(true);
       setFilters(nextFilters);
       setDraftFilters(nextFilters);
       setOpenFilter(null);

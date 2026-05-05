@@ -4217,12 +4217,6 @@ async def list_executions(
             def escape_val(v: str) -> str:
                 return v.replace('"', '\\"')
 
-            def raw_query_values(alias: str, fallback: str | None) -> list[str]:
-                values = request.query_params.getlist(alias)
-                if not values and fallback is not None:
-                    values = [fallback]
-                return values
-
             def split_csv(raw: str | list[str] | None) -> list[str]:
                 if not raw:
                     return []
@@ -4236,6 +4230,12 @@ async def list_executions(
                             seen.add(value)
                             values.append(value)
                 return values
+
+            def raw_query_values(alias: str, fallback: str | None) -> list[str]:
+                values = request.query_params.getlist(alias)
+                if not values and fallback is not None:
+                    values = [fallback]
+                return split_csv(values)
 
             def validate_non_contradictory(
                 include_alias: str,

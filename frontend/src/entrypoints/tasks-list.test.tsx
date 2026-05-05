@@ -248,6 +248,31 @@ describe('Tasks List Entrypoint', () => {
     expect(fetchSpy.mock.calls.length).toBe(baselineCalls);
   });
 
+  it('recovers from contradictory canonical URL filters after filters are cleared', async () => {
+    const baselineCalls = fetchSpy.mock.calls.length;
+    window.history.pushState(
+      {},
+      'Recover contradictory filters',
+      '/tasks/list?stateIn=completed&stateNotIn=canceled',
+    );
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
+    expect(fetchSpy.mock.calls.length).toBe(baselineCalls);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+    });
+    expect(screen.queryByText('Cannot combine stateIn and stateNotIn.')).toBeNull();
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks',
+    );
+    expect(window.location.search).toBe('?limit=50');
+  });
+
   it('renders active task-list pills with the shared shimmer selector contract while keeping inactive pills plain', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
