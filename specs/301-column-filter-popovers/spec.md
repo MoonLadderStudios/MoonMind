@@ -1,8 +1,8 @@
 # Feature Specification: Column Filter Popovers, Chips, and Selection Semantics
 
-**Feature Branch**: `301-column-filter-popovers`  
-**Created**: 2026-05-05  
-**Status**: Draft  
+**Feature Branch**: `301-column-filter-popovers`
+**Created**: 2026-05-05
+**Status**: Draft
 **Input**: User description: """
 Use the Jira preset brief for MM-588 as the canonical Moon Spec orchestration input.
 

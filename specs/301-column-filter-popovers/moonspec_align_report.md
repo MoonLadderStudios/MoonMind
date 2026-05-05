@@ -1,7 +1,7 @@
 # MoonSpec Alignment Report: Column Filter Popovers
 
-**Feature**: `301-column-filter-popovers`  
-**Date**: 2026-05-05  
+**Feature**: `301-column-filter-popovers`
+**Date**: 2026-05-05
 **Source**: `MM-588` canonical Jira preset brief preserved in `spec.md`
 
 ## Updated

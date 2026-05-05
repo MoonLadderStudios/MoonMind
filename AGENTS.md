@@ -215,6 +215,8 @@ Key diagnostics:
 - Existing settings, managed secret, workflow history, and artifact stores only; no new persistent tables planned (294-github-token-permissions)
 - Python 3.12; TypeScript/React for Mission Control UI + React, TanStack Query, FastAPI, Pydantic v2, existing task-template expansion service, existing Temporal task contract models (295-submit-preset-auto-expansion)
 - Existing task input snapshots and artifact store only; no new persistent storage (295-submit-preset-auto-expansion)
+- TypeScript/React for Mission Control UI; CSS for visual effect; Python 3.12 remains present in the repository but is not part of this story. + React, existing Mission Control stylesheet, Vitest, Testing Library, PostCSS test helpers, existing `executionStatusPillProps()` helper. (301-shared-additive-shimmer)
+- N/A; no persistence or data-store changes. (301-shared-additive-shimmer)
 - TypeScript/React for Mission Control UI; Python 3.12 for FastAPI route tests. + React, TanStack Query, Zod, Vitest, Testing Library, FastAPI, pytest, Temporal visibility query helpers. (301-column-filter-popovers)
 - No new persistent storage; filter state is URL/query state and component state only. (301-column-filter-popovers)
 

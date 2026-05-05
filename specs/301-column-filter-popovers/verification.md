@@ -1,10 +1,10 @@
 # MoonSpec Verification Report
 
-**Feature**: 301-column-filter-popovers  
-**Spec**: `/work/agent_jobs/mm:0b4c4f3c-79e1-43cd-bfef-fa744b477c67/repo/specs/301-column-filter-popovers/spec.md`  
-**Original Request Source**: MM-588 canonical Jira preset brief preserved in `spec.md` `Input`  
-**Verdict**: FULLY_IMPLEMENTED  
-**Confidence**: HIGH  
+**Feature**: 301-column-filter-popovers
+**Spec**: `/work/agent_jobs/mm:0b4c4f3c-79e1-43cd-bfef-fa744b477c67/repo/specs/301-column-filter-popovers/spec.md`
+**Original Request Source**: MM-588 canonical Jira preset brief preserved in `spec.md` `Input`
+**Verdict**: FULLY_IMPLEMENTED
+**Confidence**: HIGH
 
 ## Test Results
 

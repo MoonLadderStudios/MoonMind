@@ -46,7 +46,7 @@ export function ExecutionStatusPill({ status }: { status: string | null | undefi
 
   return (
     <span {...pillProps} aria-label={label}>
-      <span className="status-letter-wave" aria-hidden="true">
+      <span className="status-letter-wave" aria-hidden="true" data-label={label}>
         {glyphs.map((glyph, index) => {
           return (
             <span
