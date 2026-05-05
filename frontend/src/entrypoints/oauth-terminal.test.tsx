@@ -209,10 +209,22 @@ describe('OAuthTerminalPage clipboard behavior', () => {
             runtime_id: 'codex_cli',
             profile_id: 'codex-oauth',
             status: 'awaiting_user',
+            expires_at: '2026-05-05T22:00:00Z',
             terminal_session_id: 'terminal-1',
             terminal_bridge_id: 'bridge-1',
             session_transport: 'moonmind_pty_ws',
-            profile_summary: null,
+            profile_summary: {
+              profile_id: 'codex-oauth',
+              runtime_id: 'codex_cli',
+              provider_id: 'openai',
+              provider_label: 'OpenAI',
+              credential_source: 'oauth_volume',
+              runtime_materialization_mode: 'oauth_home',
+              account_label: 'Codex Team',
+              enabled: false,
+              is_default: false,
+              rate_limit_policy: 'backoff',
+            },
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
@@ -224,6 +236,8 @@ describe('OAuthTerminalPage clipboard behavior', () => {
 
     expect(await screen.findByText('codex-oauth')).toBeTruthy();
     expect(screen.getByText('codex cli')).toBeTruthy();
+    expect(screen.getByText('OpenAI')).toBeTruthy();
+    expect(screen.getByText('2026-05-05T22:00:00Z')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Finalize Provider Profile' }));
 
@@ -233,6 +247,32 @@ describe('OAuthTerminalPage clipboard behavior', () => {
       'moonmind:provider-profile-updated',
       expect.stringContaining('codex-oauth'),
     );
+  });
+
+  it('shows recovery actions only for recoverable terminal sessions', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            session_id: 'session-1',
+            runtime_id: 'codex_cli',
+            profile_id: 'codex-oauth',
+            status: 'failed',
+            failure_reason: 'token=secret-value in /home/app/.codex/auth.json',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText('token=[REDACTED] in [REDACTED_AUTH_PATH]')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Finalize Provider Profile' })).toBeNull();
   });
 
   it('forwards browser paste events from the xterm helper textarea to the terminal bridge once', async () => {

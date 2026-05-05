@@ -593,6 +593,21 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
             </div>
             {session.profile_summary ? (
               <div>
+                <dt>Provider</dt>
+                <dd>
+                  {session.profile_summary.provider_label ??
+                    session.profile_summary.provider_id}
+                </dd>
+              </div>
+            ) : null}
+            {session.expires_at ? (
+              <div>
+                <dt>Expiry</dt>
+                <dd>{session.expires_at}</dd>
+              </div>
+            ) : null}
+            {session.profile_summary ? (
+              <div>
                 <dt>Account</dt>
                 <dd>
                   {session.profile_summary.account_label ??
@@ -629,6 +644,16 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
                 disabled={actionPending !== null}
               >
                 Cancel
+              </button>
+            ) : null}
+            {['failed', 'cancelled', 'expired'].includes(session.status) ? (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => runSessionAction('reconnect', 'Failed to retry OAuth session.')}
+                disabled={actionPending !== null}
+              >
+                Retry
               </button>
             ) : null}
             {['failed', 'cancelled', 'expired'].includes(session.status) ? (
