@@ -24,10 +24,10 @@
 
 **Purpose**: Confirm the existing frontend test and documentation surfaces are ready for one-story verification.
 
-- [ ] T001 Verify the active feature artifact set exists in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/spec.md`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/plan.md`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/research.md`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/data-model.md`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/contracts/status-pill-shimmer.md`, and `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/quickstart.md`
-- [ ] T002 Confirm the spec contains exactly one `## User Story -` section and no unresolved clarification markers in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/spec.md`
-- [ ] T003 [P] Confirm frontend dependencies and local binaries needed by quickstart commands exist or can be prepared by `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/tools/test_unit.sh`
-- [ ] T004 [P] Confirm npm-script PATH fallback guidance is documented for managed workspaces in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/quickstart.md`
+- [X] T001 Verify the active feature artifact set exists in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/spec.md`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/plan.md`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/research.md`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/data-model.md`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/contracts/status-pill-shimmer.md`, and `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/quickstart.md`
+- [X] T002 Confirm the spec contains exactly one `## User Story -` section and no unresolved clarification markers in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/spec.md`
+- [X] T003 [P] Confirm frontend dependencies and local binaries needed by quickstart commands exist or can be prepared by `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/tools/test_unit.sh`
+- [X] T004 [P] Confirm npm-script PATH fallback guidance is documented for managed workspaces in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/quickstart.md`
 
 ---
 
@@ -37,10 +37,10 @@
 
 **CRITICAL**: No story validation work should begin until this phase confirms the target files and contracts are present.
 
-- [ ] T005 Verify the shared status metadata boundary remains `executionStatusPillProps()` in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/utils/executionStatusPillClasses.ts` for FR-003, FR-008, and DESIGN-REQ-005
-- [ ] T006 Verify active label rendering still flows through `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/components/ExecutionStatusPill.tsx` for FR-002 and FR-008
-- [ ] T007 Verify the shared shimmer visual contract remains centralized in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/styles/mission-control.css` for FR-001 through FR-006 and DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-004
-- [ ] T008 Verify the canonical desired-state documentation remains in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/docs/UI/EffectShimmerSweep.md` for FR-007 and DESIGN-REQ-003
+- [X] T005 Verify the shared status metadata boundary remains `executionStatusPillProps()` in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/utils/executionStatusPillClasses.ts` for FR-003, FR-008, and DESIGN-REQ-005
+- [X] T006 Verify active label rendering still flows through `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/components/ExecutionStatusPill.tsx` for FR-002 and FR-008
+- [X] T007 Verify the shared shimmer visual contract remains centralized in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/styles/mission-control.css` for FR-001 through FR-006 and DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-004
+- [X] T008 Verify the canonical desired-state documentation remains in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/docs/UI/EffectShimmerSweep.md` for FR-007 and DESIGN-REQ-003
 
 **Checkpoint**: Foundation ready. Story tests and implementation evidence validation can proceed.
 
@@ -63,34 +63,34 @@
 
 ### Unit Tests (verify first)
 
-- [ ] T009 [P] Verify unit CSS contract coverage for FR-001, FR-002, FR-004, FR-005, FR-006, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SC-001, SC-002, SC-003, SC-004, DESIGN-REQ-001, DESIGN-REQ-002, and DESIGN-REQ-004 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/mission-control.test.tsx`
-- [ ] T010 [P] Verify non-active state isolation and selector boundary coverage for FR-003, FR-008, SCN-006, and DESIGN-REQ-005 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/utils/executionStatusPillClasses.test.ts`
-- [ ] T011 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/utils/executionStatusPillClasses.test.ts` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` and record unit verification evidence for FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, SC-001, SC-002, SC-003, and SC-004
+- [X] T009 [P] Verify unit CSS contract coverage for FR-001, FR-002, FR-004, FR-005, FR-006, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SC-001, SC-002, SC-003, SC-004, DESIGN-REQ-001, DESIGN-REQ-002, and DESIGN-REQ-004 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/mission-control.test.tsx`
+- [X] T010 [P] Verify non-active state isolation and selector boundary coverage for FR-003, FR-008, SCN-006, and DESIGN-REQ-005 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/utils/executionStatusPillClasses.test.ts`
+- [X] T011 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/utils/executionStatusPillClasses.test.ts` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` and record unit verification evidence for FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, SC-001, SC-002, SC-003, and SC-004
 
 ### Integration Tests (verify first)
 
-- [ ] T012 [P] Verify task-list table and card render coverage for active status metadata, labels, glyph spans, and non-active isolation in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/tasks-list.test.tsx` for FR-003, FR-008, SCN-002, SCN-006, and DESIGN-REQ-005
-- [ ] T013 [P] Verify task-detail render coverage for active status metadata, labels, glyph spans, and non-active isolation in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/task-detail.test.tsx` for FR-003, FR-008, SCN-002, SCN-006, and DESIGN-REQ-005
-- [ ] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/task-detail.test.tsx` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` and record integration verification evidence for list, card, and detail surfaces
+- [X] T012 [P] Verify task-list table and card render coverage for active status metadata, labels, glyph spans, and non-active isolation in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/tasks-list.test.tsx` for FR-003, FR-008, SCN-002, SCN-006, and DESIGN-REQ-005
+- [X] T013 [P] Verify task-detail render coverage for active status metadata, labels, glyph spans, and non-active isolation in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/task-detail.test.tsx` for FR-003, FR-008, SCN-002, SCN-006, and DESIGN-REQ-005
+- [X] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/task-detail.test.tsx` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` and record integration verification evidence for list, card, and detail surfaces
 
 ### Red-First Confirmation
 
-- [ ] T015 Confirm red-first provenance for FR-001, FR-002, FR-004, FR-005, FR-006, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SC-001, SC-002, SC-003, and SC-004 by documenting that the assertions in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/mission-control.test.tsx` would fail against the pre-shared-light-field implementation
-- [ ] T016 Confirm red-first provenance for FR-003, FR-008, SCN-002, SCN-006, and DESIGN-REQ-005 by documenting that the assertions in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/tasks-list.test.tsx`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/task-detail.test.tsx`, and `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/utils/executionStatusPillClasses.test.ts` would fail if active shimmer metadata or glyph label rendering regressed
+- [X] T015 Confirm red-first provenance for FR-001, FR-002, FR-004, FR-005, FR-006, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SC-001, SC-002, SC-003, and SC-004 by documenting that the assertions in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/mission-control.test.tsx` would fail against the pre-shared-light-field implementation
+- [X] T016 Confirm red-first provenance for FR-003, FR-008, SCN-002, SCN-006, and DESIGN-REQ-005 by documenting that the assertions in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/tasks-list.test.tsx`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/entrypoints/task-detail.test.tsx`, and `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/utils/executionStatusPillClasses.test.ts` would fail if active shimmer metadata or glyph label rendering regressed
 
 ### Implementation Evidence
 
-- [ ] T017 Verify shared light-field implementation evidence for FR-001, FR-002, FR-004, FR-005, FR-006, DESIGN-REQ-001, DESIGN-REQ-002, and DESIGN-REQ-004 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/styles/mission-control.css`
-- [ ] T018 Verify active label implementation evidence for FR-002 and FR-008 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/components/ExecutionStatusPill.tsx`
-- [ ] T019 Verify selector-boundary implementation evidence for FR-003, FR-008, and DESIGN-REQ-005 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/utils/executionStatusPillClasses.ts`
-- [ ] T020 Verify documentation implementation evidence for FR-007, SC-005, and DESIGN-REQ-003 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/docs/UI/EffectShimmerSweep.md`
-- [ ] T021 If any verification task T009 through T020 fails, update the specific failing file among `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/styles/mission-control.css`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/components/ExecutionStatusPill.tsx`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/utils/executionStatusPillClasses.ts`, or `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/docs/UI/EffectShimmerSweep.md` only enough to restore the mapped FR, SCN, SC, or DESIGN-REQ evidence
+- [X] T017 Verify shared light-field implementation evidence for FR-001, FR-002, FR-004, FR-005, FR-006, DESIGN-REQ-001, DESIGN-REQ-002, and DESIGN-REQ-004 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/styles/mission-control.css`
+- [X] T018 Verify active label implementation evidence for FR-002 and FR-008 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/components/ExecutionStatusPill.tsx`
+- [X] T019 Verify selector-boundary implementation evidence for FR-003, FR-008, and DESIGN-REQ-005 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/utils/executionStatusPillClasses.ts`
+- [X] T020 Verify documentation implementation evidence for FR-007, SC-005, and DESIGN-REQ-003 in `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/docs/UI/EffectShimmerSweep.md`
+- [X] T021 If any verification task T009 through T020 fails, update the specific failing file among `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/styles/mission-control.css`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/components/ExecutionStatusPill.tsx`, `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/frontend/src/utils/executionStatusPillClasses.ts`, or `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/docs/UI/EffectShimmerSweep.md` only enough to restore the mapped FR, SCN, SC, or DESIGN-REQ evidence
 
 ### Story Validation
 
-- [ ] T022 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` and confirm full dashboard coverage remains green for FR-001 through FR-008
-- [ ] T023 Run `node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` and confirm TypeScript validation remains green for FR-008
-- [ ] T024 Run `node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` and confirm lint validation remains green for the touched frontend files
+- [X] T022 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` and confirm full dashboard coverage remains green for FR-001 through FR-008
+- [X] T023 Run `node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` and confirm TypeScript validation remains green for FR-008
+- [X] T024 Run `node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` and confirm lint validation remains green for the touched frontend files
 
 **Checkpoint**: The one story is fully validated by unit evidence, integration evidence, implementation evidence, typecheck, lint, and documentation evidence.
 
@@ -100,11 +100,11 @@
 
 **Purpose**: Strengthen the completed story without adding scope.
 
-- [ ] T025 [P] Confirm `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/plan.md` still marks only evidence-backed `implemented_verified` rows and does not hide missing work for FR-001 through FR-008
-- [ ] T026 [P] Confirm `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/contracts/status-pill-shimmer.md` maps the host, shared light-field, text, fallback, and verification contracts to existing tests
-- [ ] T027 [P] Confirm `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/quickstart.md` contains the focused unit, focused integration, full dashboard, typecheck, lint, and manual validation commands
-- [ ] T028 Run `git diff --check` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` before final verification
-- [ ] T029 Run `/speckit.verify` for `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer` after implementation evidence and tests pass, and record the final verdict in the verification artifact
+- [X] T025 [P] Confirm `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/plan.md` still marks only evidence-backed `implemented_verified` rows and does not hide missing work for FR-001 through FR-008
+- [X] T026 [P] Confirm `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/contracts/status-pill-shimmer.md` maps the host, shared light-field, text, fallback, and verification contracts to existing tests
+- [X] T027 [P] Confirm `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer/quickstart.md` contains the focused unit, focused integration, full dashboard, typecheck, lint, and manual validation commands
+- [X] T028 Run `git diff --check` from `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo` before final verification
+- [X] T029 Run `/speckit.verify` for `/work/agent_jobs/mm:0fc1399c-3b5a-43d5-abe4-f58413039e6c/repo/specs/301-shared-additive-shimmer` after implementation evidence and tests pass, and record the final verdict in the verification artifact
 
 ---
 
