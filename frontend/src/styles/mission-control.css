@@ -61,6 +61,19 @@
   --mm-executing-letter-sweep-direction: 1;
   --mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32);
   --mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, white 32%);
+  --mm-executing-moving-light-gradient:
+    linear-gradient(
+      var(--mm-executing-sweep-angle),
+      transparent 0 36%,
+      rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity)) 50%,
+      transparent 64%
+    ),
+    linear-gradient(
+      var(--mm-executing-sweep-angle),
+      transparent 0 44%,
+      rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity)) 50%,
+      transparent 56%
+    );
   --mm-font-headline: var(--mm-font-sans);
   --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
@@ -1405,19 +1418,19 @@ tr[data-proposal-id].proposal-consuming td {
   overflow: hidden;
   isolation: isolate;
   background-color: rgb(var(--mm-accent-2) / 0.14);
-  background-image:
-    linear-gradient(
-      var(--mm-executing-sweep-angle),
-      transparent 0 36%,
-      rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity)) 50%,
-      transparent 64%
-    ),
-    linear-gradient(
-      var(--mm-executing-sweep-angle),
-      transparent 0 44%,
-      rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity)) 50%,
-      transparent 56%
-    );
+}
+
+.status-running[data-effect="shimmer-sweep"]::before,
+.status-running.is-executing::before,
+.status-running.is-planning::before,
+.status-running[data-effect="shimmer-sweep"]::after,
+.status-running.is-executing::after,
+.status-running.is-planning::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: var(--mm-executing-moving-light-gradient);
   background-repeat: no-repeat;
   background-size:
     calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) var(--mm-executing-sweep-band-height),
@@ -1426,6 +1439,42 @@ tr[data-proposal-id].proposal-consuming td {
     var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y),
     calc(var(--mm-executing-sweep-start-x) + var(--mm-executing-sweep-layer-offset-x)) calc(var(--mm-executing-sweep-start-y) + var(--mm-executing-sweep-layer-offset-y));
   animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite;
+  mix-blend-mode: plus-lighter;
+}
+
+.status-running[data-effect="shimmer-sweep"]::before,
+.status-running.is-executing::before,
+.status-running.is-planning::before {
+  z-index: 1;
+  opacity: 0.62;
+}
+
+.status-running[data-effect="shimmer-sweep"]::after,
+.status-running.is-executing::after,
+.status-running.is-planning::after {
+  z-index: 2;
+  border-radius: inherit;
+  padding: 1px;
+  opacity: 0.82;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+}
+
+@supports not (mix-blend-mode: plus-lighter) {
+  .status-running[data-effect="shimmer-sweep"]::before,
+  .status-running.is-executing::before,
+  .status-running.is-planning::before,
+  .status-running[data-effect="shimmer-sweep"]::after,
+  .status-running.is-executing::after,
+  .status-running.is-planning::after {
+    mix-blend-mode: screen;
+  }
 }
 
 @keyframes mm-status-pill-shimmer {
@@ -1450,7 +1499,7 @@ tr[data-proposal-id].proposal-consuming td {
 
 .status-letter-wave {
   position: relative;
-  z-index: 2;
+  z-index: 3;
   display: inline-flex;
   align-items: center;
   color: inherit;
@@ -1461,6 +1510,51 @@ tr[data-proposal-id].proposal-consuming td {
 .status-running.is-executing .status-letter-wave,
 .status-running.is-planning .status-letter-wave {
   color: inherit;
+}
+
+.status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
+.status-running.is-executing .status-letter-wave::after,
+.status-running.is-planning .status-letter-wave::after {
+  content: attr(data-label);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: var(--mm-executing-moving-light-gradient);
+  background-repeat: no-repeat;
+  background-size:
+    calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) var(--mm-executing-sweep-band-height),
+    calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-core-width-multiplier)) var(--mm-executing-sweep-band-height);
+  background-position:
+    var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y),
+    calc(var(--mm-executing-sweep-start-x) + var(--mm-executing-sweep-layer-offset-x)) calc(var(--mm-executing-sweep-start-y) + var(--mm-executing-sweep-layer-offset-y));
+  animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  filter: brightness(1.35);
+  mix-blend-mode: plus-lighter;
+}
+
+@supports not ((background-clip: text) or (-webkit-background-clip: text)) {
+  .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
+  .status-running.is-executing .status-letter-wave::after,
+  .status-running.is-planning .status-letter-wave::after {
+    content: none;
+  }
+
+  .status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
+  .status-running.is-executing .status-letter-wave__glyph,
+  .status-running.is-planning .status-letter-wave__glyph {
+    animation-name: mm-executing-letter-brighten;
+    animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms));
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+    animation-delay: calc(
+      var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms)) *
+      (var(--mm-letter-phase) - 0.22)
+    );
+  }
 }
 
 .status-letter-wave__glyph {
@@ -1487,14 +1581,7 @@ tr[data-proposal-id].proposal-consuming td {
 .status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
 .status-running.is-executing .status-letter-wave__glyph,
 .status-running.is-planning .status-letter-wave__glyph {
-  animation-name: mm-executing-letter-brighten;
-  animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms));
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
-  animation-delay: calc(
-    var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms)) *
-    (var(--mm-letter-phase) - 0.22)
-  );
+  animation: none;
 }
 
 @keyframes mm-executing-letter-brighten {
@@ -1524,11 +1611,24 @@ tr[data-proposal-id].proposal-consuming td {
   .status-running[data-effect="shimmer-sweep"],
   .status-running.is-executing,
   .status-running.is-planning {
-    animation: none;
+    background-image: var(--mm-executing-moving-light-gradient);
+    background-repeat: no-repeat;
     background-position:
       50% 50%,
       calc(50% + (var(--mm-executing-sweep-layer-offset-x) / 2)) calc(50% + (var(--mm-executing-sweep-layer-offset-y) / 2));
     background-size: 160% var(--mm-executing-sweep-band-height), 140% var(--mm-executing-sweep-band-height);
+  }
+
+  .status-running[data-effect="shimmer-sweep"]::before,
+  .status-running.is-executing::before,
+  .status-running.is-planning::before,
+  .status-running[data-effect="shimmer-sweep"]::after,
+  .status-running.is-executing::after,
+  .status-running.is-planning::after,
+  .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
+  .status-running.is-executing .status-letter-wave::after,
+  .status-running.is-planning .status-letter-wave::after {
+    animation: none;
   }
 
   .status-letter-wave__glyph {
@@ -1542,6 +1642,12 @@ tr[data-proposal-id].proposal-consuming td {
   .status-running.is-planning .status-letter-wave {
     text-shadow: none;
   }
+
+  .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
+  .status-running.is-executing .status-letter-wave::after,
+  .status-running.is-planning .status-letter-wave::after {
+    content: none;
+  }
 }
 
 @media (forced-colors: active) {
@@ -1550,6 +1656,19 @@ tr[data-proposal-id].proposal-consuming td {
   .status-running.is-planning .status-letter-wave {
     color: ButtonText;
     background-image: none;
+  }
+
+  .status-running[data-effect="shimmer-sweep"]::before,
+  .status-running.is-executing::before,
+  .status-running.is-planning::before,
+  .status-running[data-effect="shimmer-sweep"]::after,
+  .status-running.is-executing::after,
+  .status-running.is-planning::after,
+  .status-running[data-effect="shimmer-sweep"] .status-letter-wave::after,
+  .status-running.is-executing .status-letter-wave::after,
+  .status-running.is-planning .status-letter-wave::after {
+    animation: none;
+    content: none;
   }
 
   .status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph,

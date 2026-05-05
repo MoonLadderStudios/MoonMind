@@ -12,7 +12,6 @@ This document covers **only** the shimmer sweep effect in isolation.
 
 It does not define:
 - status color mapping for other workflow states
-- border-glint or lens-flare variants
 - task row layout changes
 - icon changes
 - polling or live-update behavior
@@ -63,7 +62,9 @@ principles:
 
 ## Visual Model
 
-The effect is composed of three layers, with an optional fourth foreground text layer on hosts that can safely render the label as glyph spans.
+The executing shimmer is a shared additive light field. The fill, border, and text treatments are masks of the same moving light field, not independent animations. Text brightening and border glint must remain phase-locked to the physical sweep and should visually brighten only where the sweep overlaps the glyph or border region.
+
+The effect is composed of one base layer and one moving light field exposed through three masks.
 
 ```yaml
 layers:
@@ -72,25 +73,35 @@ layers:
     opacity_behavior: constant
     motion: none
 
-  sweep_band:
-    role: moving luminous diagonal band
+  shared_light_field:
+    role: moving luminous diagonal band with subtle trailing halo
     shape: soft-edged stripe
     travel: top-left-to-bottom-right
     angle_deg: -18
     blend_intent: brighten, not wash out
 
-  trailing_halo:
-    role: soft atmospheric bloom behind the sweep band
-    shape: wider and dimmer than the core band
-    travel: locked_to_sweep_band
-    emphasis: subtle
+  fill_mask:
+    role: broad interior shimmer across the pill fill
+    source: shared_light_field
+    blend_intent: additive_light
 
-  text_brightening:
-    role: foreground glyph emphasis as the sweep crosses the label
-    shape: short per-glyph brightness pulse with neighboring halo
-    travel: visually_aligned_to_sweep_band
+  border_mask:
+    role: border-ring glint where the shared light field crosses the pill edge
+    source: shared_light_field
+    blend_intent: additive_light
+
+  text_mask:
+    role: foreground glyph shimmer where the shared light field crosses the label
+    source: shared_light_field
+    clipping: visible_label_glyphs
     emphasis: subtle
     required_for_hosts_with_glyph_markup: true
+
+  glyph_pulse_fallback:
+    role: compatibility fallback when clipped text masks or additive compositing are unavailable
+    travel: visually_aligned_to_sweep_band
+    emphasis: subtle
+    default_path: false
 ```
 
 ## Motion Profile
@@ -130,11 +141,12 @@ motion:
 
   foreground_text:
     timing_source: physical_sweep_center
+    preferred: shared_light_field_clipped_to_text
     first_glyph_phase_ratio: 0.20
     last_glyph_phase_ratio: 0.38
     glyph_pulse_duration_ratio: 0.05
     idle_tail_present: true
-    note: matching cycle duration alone is insufficient because background-position percentage travel is measured against the oversized background image; the foreground wave must complete quickly, then remain inactive until the next outer cycle
+    fallback_note: matching cycle duration alone is insufficient for the fallback glyph pulse because background-position percentage travel is measured against the oversized background image; the foreground wave must complete quickly, then remain inactive until the next outer cycle
 ```
 
 ## Theme Binding
@@ -267,13 +279,15 @@ implementation_shape:
     note: oversized CSS background layers may need inverse background-position values so the visible sweep starts at the top-left and exits at the bottom-right
 
   overlay_elements:
-    - ::before as trailing_halo
-    - ::after as sweep_band
+    - ::before as fill_mask of shared_light_field
+    - ::after as border_mask of shared_light_field
 
   text_strategy:
     text_must_render_above_overlay: true
-    text_color_shift_during_pass: minimal_only
+    preferred: text_mask_clipped_to_visible_label_using_shared_light_field
+    text_color_shift_during_pass: overlap_only
     glyph_brightening:
+      role: compatibility_fallback
       strategy: split_visible_label_into_grapheme_spans
       animation: css_only
       timing: faster_active_sweep_inside_shared_outer_cycle
@@ -299,7 +313,8 @@ acceptance_criteria:
   - the shimmer produces no measurable layout shift
   - one complete shimmer sweep occurs roughly every 2.2 seconds with no center pause or idle delay
   - the brightest moment occurs near the center of the pill, not at the edges
-  - supported glyph-rendered hosts brighten letters in sequence on the same timing as the sweep
+  - fill, border, and text shimmer are phase-locked masks of the same moving light field
+  - supported glyph-rendered hosts brighten text only where the shared light field overlaps visible glyphs
   - the effect looks intentional in both light and dark themes
   - reduced-motion users see a static active treatment with no animated sweep
   - non-executing states never inherit the shimmer accidentally
@@ -334,7 +349,6 @@ effect_tokens:
 non_goals:
   - spinning_indicators
   - pulsing_whole_pill_opacity
-  - animated_border_glint
   - multi_color_rainbow_motion
   - progress_percentage_visualization
   - execution_time_estimation
