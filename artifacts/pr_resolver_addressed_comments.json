@@ -1,32 +1,12 @@
 [
   {
-    "id": 3191899346,
+    "id": 3192062411,
     "disposition": "addressed",
-    "rationale": "Replaced the real-time 280ms sleep in the arrow submit test with a deterministic setTimeout spy that invokes the scheduled arrow-clear callback without waiting."
+    "rationale": "Combined the two sortedItems.length === 0 branches into a single block that toggles the inner element on hasPaginationContext, removing the duplicated resultsFooter."
   },
   {
-    "id": 3191899348,
-    "disposition": "addressed",
-    "rationale": "Moved holdSubmitArrowExitUntilNavigation() to the post-validation submit phase, just before upload/create work begins, so validation branches no longer need to start the held arrow state."
-  },
-  {
-    "id": 3191899351,
-    "disposition": "addressed",
-    "rationale": "Removed the return from the finally block and changed cleanup to run only when navigation did not succeed."
-  },
-  {
-    "id": 4231951258,
-    "disposition": "addressed",
-    "rationale": "Addressed the summarized review items: deterministic timer control, later arrow-hold initialization, and no return from finally."
-  },
-  {
-    "id": 3191903182,
-    "disposition": "addressed",
-    "rationale": "Moved didNavigateAfterCreate assignment after navigateTo() and added regression coverage proving a thrown navigation clears submit busy state."
-  },
-  {
-    "id": 4231955105,
+    "id": 4232119181,
     "disposition": "not-applicable",
-    "rationale": "Automated review wrapper with no additional actionable feedback beyond the inline comments."
+    "rationale": "Summary review body referencing the inline suggestion already addressed; no additional action required."
   }
 ]

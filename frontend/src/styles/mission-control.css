@@ -977,6 +977,26 @@ tbody tr:hover {
   border-bottom: 1px solid rgb(var(--mm-border) / 0.28);
 }
 
+.task-list-results-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid rgb(var(--mm-border) / 0.28);
+  background: rgb(var(--mm-panel) / 0.85);
+}
+
+.task-list-results-header .page-title {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: 0.01em;
+}
+
+.task-list-empty-message {
+  margin: 0;
+  padding: 1rem;
+}
+
 .task-list-data-slab .task-list-results-footer {
   border-top: 1px solid rgb(var(--mm-border) / 0.28);
   border-bottom: 0;
