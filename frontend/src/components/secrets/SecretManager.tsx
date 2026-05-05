@@ -1,6 +1,8 @@
 import { FormEvent, useState } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
+import { formatStatusLabel } from '../../utils/formatters';
+
 interface SecretMetadata {
   slug: string;
   secretRef?: string;
@@ -158,7 +160,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
     if (status === 'rotated') {
       return <span className="badge badge-neutral">Rotated</span>;
     }
-    return <span className="badge badge-error">{status}</span>;
+    return <span className="badge badge-error">{formatStatusLabel(status)}</span>;
   };
 
   const copySecretRef = async (secretRef: string) => {

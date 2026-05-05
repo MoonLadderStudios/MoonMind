@@ -451,6 +451,93 @@ async def test_start_omits_large_inline_instruction_from_result_metadata(
     assert len(result.metadata["instructionRefSha256"]) == 64
     assert "instructionRef" not in result.metadata
 
+async def test_start_preserves_completed_codex_turn_with_usage_limit_summary(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    quota_summary = (
+        "You've hit your usage limit. To get more access now, send a request "
+        "to your admin or try again at 4:45 AM."
+    )
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=AsyncMock(),
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=AsyncMock(
+            return_value=_turn_response(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+                assistant_text=quota_summary,
+            )
+        ),
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(
+            return_value=_summary(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+                last_assistant_text=quota_summary,
+            )
+        ),
+        publish_remote_artifacts=AsyncMock(
+            return_value=_publication(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    handle = await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+    result = await adapter.fetch_result(handle.run_id)
+
+    assert handle.status == "completed"
+    assert result.summary == quota_summary
+    assert result.failure_class is None
+    assert result.provider_error_code is None
+    assert result.retry_recommendation is None
+    assert "providerFailure" not in result.metadata
+
+    persisted_record = run_store.load(binding.task_run_id)
+    assert persisted_record is not None
+    assert persisted_record.status == "completed"
+    assert persisted_record.failure_class is None
+    assert persisted_record.provider_error_code is None
+
 async def test_start_passes_oauth_profile_auth_target_to_launch_session(
     tmp_path: Path,
 ) -> None:

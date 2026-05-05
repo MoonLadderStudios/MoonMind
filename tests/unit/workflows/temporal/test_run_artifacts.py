@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
@@ -12,6 +12,12 @@ def _normalize_payload(payload: Any) -> dict[str, Any]:
         return payload
     dump_method = getattr(payload, 'model_dump', getattr(payload, 'dict', None))
     return dump_method() if dump_method else payload
+
+async def _immediate_wait_condition(
+    predicate: Callable[[], bool],
+    **_kwargs: Any,
+) -> None:
+    assert predicate() is True
 
 def test_initialize_from_payload_captures_input_and_plan_refs(
     monkeypatch: pytest.MonkeyPatch,
@@ -648,6 +654,11 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
         },
     )
     monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
         MoonMindRunWorkflow,
         "_maybe_bind_task_scoped_session",
         fake_bind_task_scoped_session,
@@ -785,6 +796,11 @@ async def test_run_execution_stage_preserves_registry_read_for_unpatched_histori
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: False)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},

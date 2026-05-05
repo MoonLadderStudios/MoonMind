@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
+import { formatStatusLabel } from '../../utils/formatters';
+
 export interface ProviderProfile {
   profile_id: string;
   runtime_id: string;
@@ -479,7 +481,7 @@ function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
 
   return {
     kind: 'claude_credentials',
-    statusLabel: commandBehaviorString(profile, 'auth_status_label'),
+    statusLabel: formatStatusLabel(commandBehaviorString(profile, 'auth_status_label'), ''),
     actions: claudeCredentialActions(profile),
     readiness: normalizeReadinessMetadata(commandBehaviorValue(profile, 'auth_readiness')),
   };
@@ -662,7 +664,7 @@ export function ProviderProfilesManager({
         step: 'ready',
         token: '',
         failureReason: null,
-        statusLabel: result.status_label ?? result.statusLabel ?? current.statusLabel,
+        statusLabel: formatStatusLabel(result.status_label ?? result.statusLabel ?? current.statusLabel, ''),
         readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
       }));
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
@@ -1568,7 +1570,7 @@ export function ProviderProfilesManager({
                     : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
                 }`}
               >
-                {step}
+                {formatStatusLabel(step)}
               </span>
             ))}
           </div>
@@ -1612,13 +1614,13 @@ export function ProviderProfilesManager({
 
           {['validating_token', 'saving_secret', 'updating_profile'].includes(claudeEnrollment.step) ? (
             <div className="mt-5 rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-950/30 p-4 text-sm font-medium text-sky-800 dark:text-sky-300">
-              Processing Anthropic API key enrollment: {claudeEnrollment.step}
+              Processing Anthropic API key enrollment: {formatStatusLabel(claudeEnrollment.step)}
             </div>
           ) : null}
 
           {claudeEnrollment.step === 'ready' ? (
             <div className="mt-5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 p-4 text-sm font-medium text-emerald-800 dark:text-emerald-300">
-              {claudeEnrollment.statusLabel ?? 'Anthropic API key ready'}
+              {formatStatusLabel(claudeEnrollment.statusLabel ?? 'Anthropic API key ready')}
             </div>
           ) : null}
 

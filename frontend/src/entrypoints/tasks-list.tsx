@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
-import { formatRuntimeLabel, formatTaskSkills } from '../utils/formatters';
+import { formatRuntimeLabel, formatStatusLabel, formatTaskSkills } from '../utils/formatters';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 
@@ -123,6 +123,24 @@ const ExecutionListResponseSchema = z.object({
 });
 
 type ExecutionRow = z.infer<typeof ExecutionRowSchema>;
+
+const ExecutionFacetResponseSchema = z.object({
+  facet: z.enum(['status', 'targetRuntime', 'targetSkill', 'repository', 'integration']),
+  items: z.array(
+    z.object({
+      value: z.string(),
+      label: z.string(),
+      count: z.number(),
+    }),
+  ),
+  blankCount: z.number().nullable().optional(),
+  countMode: z.string().optional(),
+  truncated: z.boolean().optional(),
+  nextPageToken: z.string().nullable().optional(),
+  source: z.string().optional(),
+});
+
+type ExecutionFacetResponse = z.infer<typeof ExecutionFacetResponseSchema>;
 
 function readListDashboardConfig(payload: BootPayload): ListDashboardConfig | undefined {
   const raw = payload.initialData as { dashboardConfig?: ListDashboardConfig } | undefined;
@@ -359,6 +377,14 @@ function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
   appendDateParams(params, filters.closedAt, 'finishedFrom', 'finishedTo', 'finishedBlank');
 }
 
+function facetForFilterField(field: FilterField | null): ExecutionFacetResponse['facet'] | null {
+  if (field === 'status') return 'status';
+  if (field === 'targetRuntime') return 'targetRuntime';
+  if (field === 'targetSkill') return 'targetSkill';
+  if (field === 'repository') return 'repository';
+  return null;
+}
+
 function filterSummary(field: FilterField, filters: ColumnFilters): string {
   const summarizeValues = (filter: ValueFilter, formatter = (value: string) => value) => {
     if (filter.blank === 'include' && filter.values.length === 0) return 'blank';
@@ -368,7 +394,7 @@ function filterSummary(field: FilterField, filters: ColumnFilters): string {
     const suffix = filter.values.length > 1 ? ` +${filter.values.length - 1}` : '';
     return `${filter.mode === 'exclude' ? 'not ' : ''}${first}${suffix}`;
   };
-  if (field === 'status') return summarizeValues(filters.status);
+  if (field === 'status') return summarizeValues(filters.status, formatStatusLabel);
   if (field === 'targetRuntime') return summarizeValues(filters.targetRuntime, formatRuntimeLabel);
   if (field === 'targetSkill') return summarizeValues(filters.targetSkill);
   if (field === 'repository') {
@@ -471,6 +497,31 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       return ExecutionListResponseSchema.parse(await response.json());
     },
     refetchInterval: liveUpdates && listEnabled ? listPollMs : false,
+  });
+
+  const openFacet = facetForFilterField(openFilter);
+  const {
+    data: facetData,
+    isError: isFacetError,
+    isFetching: isFacetFetching,
+  } = useQuery({
+    queryKey: ['tasks-list-facet', openFacet, filters] as const,
+    enabled: listEnabled && filterValidationErrors.length === 0 && Boolean(openFacet),
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set('source', 'temporal');
+      params.set('facet', openFacet as string);
+      params.set('pageSize', '50');
+      params.set('scope', 'tasks');
+      appendFilterParams(params, filters);
+      const response = await fetch(`${payload.apiBase}/executions/facets?${params}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch facets: ${response.statusText}`);
+      }
+      return ExecutionFacetResponseSchema.parse(await response.json());
+    },
+    staleTime: listPollMs,
+    retry: false,
   });
 
   useEffect(() => {
@@ -661,11 +712,16 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   };
 
   const valueOptionsForField = (field: FilterField): string[] => {
-    if (field === 'status') return [...TEMPORAL_STATUSES];
+    const facetValues =
+      facetData && facetForFilterField(field) === facetData.facet
+        ? facetData.items.map((item) => item.value)
+        : [];
+    if (field === 'status') return uniqueValues([...facetValues, ...TEMPORAL_STATUSES]);
     if (field === 'targetRuntime') {
       return uniqueValues([
         ...filters.targetRuntime.values,
         ...draftFilters.targetRuntime.values,
+        ...facetValues,
         ...RUNTIME_FILTER_OPTIONS,
       ]);
     }
@@ -673,6 +729,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       return uniqueValues([
         ...filters.targetSkill.values,
         ...draftFilters.targetSkill.values,
+        ...facetValues,
         ...(data?.items || []).flatMap((row) => [row.targetSkill, ...(row.taskSkills || [])]),
       ]);
     }
@@ -680,10 +737,29 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       return uniqueValues([
         ...filters.repository.values,
         ...draftFilters.repository.values,
+        ...facetValues,
         ...(data?.items || []).map((row) => row.repository),
       ]);
     }
     return [];
+  };
+
+  const renderFacetNotice = (field: FilterField) => {
+    if (facetForFilterField(field) !== openFacet) return null;
+    if (isFacetError) {
+      return (
+        <p className="small task-list-facet-notice" role="status">
+          Facet values unavailable. Showing current page values only.
+        </p>
+      );
+    }
+    if (isFacetFetching) {
+      return <p className="small task-list-facet-notice">Loading facet values...</p>;
+    }
+    if (facetData?.truncated) {
+      return <p className="small task-list-facet-notice">Facet values truncated by the server.</p>;
+    }
+    return null;
   };
 
   const renderFilterControl = (field: FilterField, labelPrefix = '') => {
@@ -706,7 +782,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               <option value="">All Statuses</option>
               {TEMPORAL_STATUSES.map((status) => (
                 <option key={status} value={status}>
-                  {status}
+                  {formatStatusLabel(status)}
                 </option>
               ))}
             </select>
@@ -728,50 +804,57 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               Exclude canceled
             </label>
           ) : null}
+          {renderFacetNotice('status')}
         </div>
       );
     }
 
     if (field === 'repository') {
       return (
-        <label className="queue-inline-filter task-list-header-filter-control">
-          {labelPrefix}Repository filter value
-          <input
-            type="text"
-            value={isMobile ? filters.repository.exactText || '' : draftFilters.repository.exactText || ''}
-            disabled={!listEnabled}
-            placeholder="owner/repo"
-            onChange={(event) => {
-              if (isMobile) applyMobileRepository(event.target.value);
-              else updateDraftRepository(event.target.value);
-            }}
-          />
-          {!isMobile && valueOptionsForField('repository').length > 0 ? (
-            <select
-              aria-label="Repository value selection"
-              value={draftFilters.repository.values[0] || ''}
+        <div className="queue-inline-filter task-list-header-filter-control">
+          <label>
+            {labelPrefix}Repository filter value
+            <input
+              type="text"
+              value={isMobile ? filters.repository.exactText || '' : draftFilters.repository.exactText || ''}
               disabled={!listEnabled}
+              placeholder="owner/repo"
               onChange={(event) => {
-                setDraftFilters((current) => ({
-                  ...current,
-                  repository: {
-                    ...current.repository,
-                    mode: 'include',
-                    values: event.target.value ? [event.target.value] : [],
-                    exactText: event.target.value ? '' : current.repository.exactText || '',
-                  },
-                }));
+                if (isMobile) applyMobileRepository(event.target.value);
+                else updateDraftRepository(event.target.value);
               }}
-            >
-              <option value="">Repository values</option>
-              {valueOptionsForField('repository').map((repo) => (
-                <option key={repo} value={repo}>
-                  {repo}
-                </option>
-              ))}
-            </select>
+            />
+          </label>
+          {!isMobile && valueOptionsForField('repository').length > 0 ? (
+            <label>
+              Repository values
+              <select
+                aria-label="Repository value selection"
+                value={draftFilters.repository.values[0] || ''}
+                disabled={!listEnabled}
+                onChange={(event) => {
+                  setDraftFilters((current) => ({
+                    ...current,
+                    repository: {
+                      ...current.repository,
+                      mode: 'include',
+                      values: event.target.value ? [event.target.value] : [],
+                      exactText: event.target.value ? '' : current.repository.exactText || '',
+                    },
+                  }));
+                }}
+              >
+                <option value="">Repository values</option>
+                {valueOptionsForField('repository').map((repo) => (
+                  <option key={repo} value={repo}>
+                    {repo}
+                  </option>
+                ))}
+              </select>
+            </label>
           ) : null}
-        </label>
+          {renderFacetNotice('repository')}
+        </div>
       );
     }
 
@@ -813,6 +896,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               ))}
             </select>
           </label>
+          {renderFacetNotice('targetRuntime')}
         </div>
       );
     }
@@ -863,6 +947,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               ))}
             </select>
           </label>
+          {renderFacetNotice('targetSkill')}
         </div>
       );
     }

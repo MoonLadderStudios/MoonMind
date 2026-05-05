@@ -512,7 +512,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     parameters=request.parameters,
                     assistant_text=assistant_text,
                 )
-                if jira_blocker_summary is not None:
+                if jira_blocker_summary is not None and result.failure_class is None:
                     result = result.model_copy(
                         update={
                             "summary": jira_blocker_summary,

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
+import { formatStatusLabel } from '../../utils/formatters';
+
 const WorkerSnapshotSchema = z.object({
   system: z
     .object({
@@ -736,8 +738,8 @@ export function OperationsSettingsSection({
                         ? deploymentState.services
                             .map(
                               (service) =>
-                                `${service.name}: ${service.state}${
-                                  service.health ? ` / ${service.health}` : ''
+                                `${service.name}: ${formatStatusLabel(service.state)}${
+                                  service.health ? ` / ${formatStatusLabel(service.health)}` : ''
                                 }`,
                             )
                             .join(', ')
@@ -767,7 +769,7 @@ export function OperationsSettingsSection({
                         className="rounded-2xl bg-slate-50 p-4 text-sm dark:bg-slate-800/50"
                       >
                         <div className="font-semibold text-slate-900 dark:text-white">
-                          {action.status || 'UNKNOWN'}
+                          {formatStatusLabel(action.status, 'UNKNOWN')}
                         </div>
                         <div className="mt-1 break-all text-slate-600 dark:text-slate-400">
                           {action.requestedImage || 'Requested image unavailable'}

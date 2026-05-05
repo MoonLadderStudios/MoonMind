@@ -777,8 +777,8 @@ describe('ProviderProfilesManager form controls', () => {
       name: 'Anthropic API key enrollment for claude-anthropic',
     });
     expect(dialog).toBeTruthy();
-    expect(screen.getByText('not_connected')).toBeTruthy();
-    expect(screen.getByText('awaiting_external_step')).toBeTruthy();
+    expect(screen.getByText('not connected')).toBeTruthy();
+    expect(screen.getByText('awaiting external step')).toBeTruthy();
     expect(screen.getByText(/Use an Anthropic API key for Claude Code launches/i)).toBeTruthy();
     expect(dialog.textContent).not.toMatch(/terminal OAuth/i);
   });
@@ -789,7 +789,7 @@ describe('ProviderProfilesManager form controls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
 
-    expect(screen.getByText('awaiting_token_paste')).toBeTruthy();
+    expect(screen.getByText('awaiting token paste')).toBeTruthy();
     expect((screen.getByLabelText('Anthropic API key') as HTMLInputElement).type).toBe('password');
 
     fireEvent.click(screen.getByRole('button', { name: 'Validate and save Anthropic API key' }));
@@ -839,9 +839,9 @@ describe('ProviderProfilesManager form controls', () => {
     const payload = JSON.parse(String((requestInit as RequestInit).body));
     expect(payload).toEqual({ token: submittedToken });
 
-    expect(await screen.findByText('validating_token')).toBeTruthy();
-    expect(screen.getByText('saving_secret')).toBeTruthy();
-    expect(screen.getByText('updating_profile')).toBeTruthy();
+    expect(await screen.findByText('validating token')).toBeTruthy();
+    expect(screen.getByText('saving secret')).toBeTruthy();
+    expect(screen.getByText('updating profile')).toBeTruthy();
     expect(await screen.findByText('ready')).toBeTruthy();
     expect(screen.queryByDisplayValue(submittedToken)).toBeNull();
     expect(await screen.findByText('Anthropic API key ready')).toBeTruthy();

@@ -7,7 +7,7 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
-import { formatRuntimeLabel } from '../utils/formatters';
+import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
   recordTemporalTaskEditingClientEvent,
   taskEditForRerunHref,
@@ -898,9 +898,7 @@ function formatDurationMs(value: number | null | undefined): string {
 }
 
 function formatDependencyResolution(value: string | null | undefined): string {
-  const normalized = String(value || '').trim();
-  if (!normalized) return '—';
-  return normalized.replaceAll('_', ' ');
+  return formatStatusLabel(value);
 }
 
 function dependencyHref(workflowId: string): string {
@@ -930,7 +928,7 @@ function MergeAutomationPanel({
     <section className="stack">
       <h3>Merge Automation</h3>
       <div className="grid-2">
-        <Card label="Status">{mergeAutomation.status || '—'}</Card>
+        <Card label="Status">{formatStatusLabel(mergeAutomation.status)}</Card>
         {mergeAutomation.cycles !== undefined && mergeAutomation.cycles !== null ? (
           <Card label="Cycles">{String(mergeAutomation.cycles)}</Card>
         ) : null}
@@ -969,7 +967,7 @@ function MergeAutomationPanel({
                 <a href={child.detailHref || dependencyHref(child.workflowId)}>
                   <code className="text-xs break-all">{child.workflowId}</code>
                 </a>
-                {child.status ? <span className="small"> {child.status}</span> : null}
+                {child.status ? <span className="small"> {formatStatusLabel(child.status)}</span> : null}
                 {child.taskRunId ? (
                   <span className="small">
                     {' '}
@@ -1996,7 +1994,7 @@ function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema
   const statusPillClassName = executionStatusPillProps(check.status).className;
   return (
     <span className={`step-check-badge ${checkStatusClass} ${statusPillClassName}`}>
-      {check.kind.replaceAll('_', ' ')}: {check.status.replaceAll('_', ' ')}
+      {check.kind.replaceAll('_', ' ')}: {formatStatusLabel(check.status)}
     </span>
   );
 }
@@ -2094,7 +2092,7 @@ function StepWorkloadDetails({
       <ul className="step-detail-list">
         <li><strong>Runner profile:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.profileId)}</code></li>
         <li><strong>Image:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.imageRef)}</code></li>
-        <li><strong>Status:</strong> {formatOptionalValue(workload.status)}</li>
+        <li><strong>Status:</strong> {formatStatusLabel(workload.status)}</li>
         <li><strong>Exit code:</strong> {formatOptionalValue(workload.exitCode)}</li>
         <li><strong>Duration:</strong> {formatOptionalValue(workload.durationSeconds)}s</li>
         <li><strong>Tool:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.toolName)}</code></li>
@@ -2224,7 +2222,7 @@ function StepLedgerRowCard({
   return (
     <article className={`step-tl-row${expanded ? ' step-tl-expanded' : ''}${isLast ? ' step-tl-last' : ''}`}>
       <div className="step-tl-gutter" aria-hidden="true">
-        <span className={`step-tl-icon ${cssClass}`} title={row.status.replaceAll('_', ' ')}>{icon}</span>
+        <span className={`step-tl-icon ${cssClass}`} title={formatStatusLabel(row.status)}>{icon}</span>
         {!isLast ? <span className="step-tl-line" /> : null}
       </div>
       <div className="step-tl-content">
@@ -2239,7 +2237,7 @@ function StepLedgerRowCard({
             <span className="step-tl-title">{row.title}</span>
             <span className="step-tl-right">
               <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
-              <span {...executionStatusPillProps(row.status)}>{row.status.replaceAll('_', ' ')}</span>
+              <span {...executionStatusPillProps(row.status)}>{formatStatusLabel(row.status)}</span>
               {row.attempt > 1 ? <span className="step-attempt-pill">Attempt {row.attempt}</span> : null}
               <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>
             </span>
@@ -3307,7 +3305,7 @@ function RemediationRelationshipsPanel({
                   <code className="text-xs break-all">{item.remediationWorkflowId}</code>
                 </a>
                 <div className="grid-2">
-                  <Card label="Status">{item.status || '—'}</Card>
+                  <Card label="Status">{formatStatusLabel(item.status)}</Card>
                   <Card label="Authority">{item.authorityMode || '—'}</Card>
                   <Card label="Latest Action">{item.latestActionSummary || '—'}</Card>
                   <Card label="Resolution">{item.resolution || '—'}</Card>
@@ -3355,7 +3353,7 @@ function RemediationRelationshipsPanel({
                   <Card label="Pinned Run"><code className="text-xs break-all">{item.targetRunId || '—'}</code></Card>
                   <Card label="Mode">{item.mode || '—'}</Card>
                   <Card label="Authority">{item.authorityMode || '—'}</Card>
-                  <Card label="Status">{item.status || '—'}</Card>
+                  <Card label="Status">{formatStatusLabel(item.status)}</Card>
                   <Card label="Evidence Bundle">{item.contextArtifactRef || 'Missing'}</Card>
                   <Card label="Approval">{item.approvalState?.decision || 'not_required'}</Card>
                 </div>
@@ -4072,9 +4070,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             </FactGroup>
 
             <FactGroup title="Temporal">
-              <Fact label="Temporal Status">{execution.temporalStatus || '—'}</Fact>
-              <Fact label="Current State">{execution.rawState || execution.state || '—'}</Fact>
-              {execution.closeStatus ? <Fact label="Close Status">{execution.closeStatus}</Fact> : null}
+              <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
+              <Fact label="Current State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
+              {execution.closeStatus ? <Fact label="Close Status">{formatStatusLabel(execution.closeStatus)}</Fact> : null}
               <Fact label="Source">Temporal</Fact>
               <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
               <Fact label="Entry">{execution.entry || '—'}</Fact>
@@ -4103,7 +4101,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               ) : null}
               {runSummary.publish ? (
                 <div className="grid-2">
-                  <Card label="Publish Status">{runSummary.publish.status || '—'}</Card>
+                  <Card label="Publish Status">{formatStatusLabel(runSummary.publish.status)}</Card>
                   <Card label="Publish Mode">{runSummary.publish.mode || '—'}</Card>
                 </div>
               ) : null}
@@ -4250,14 +4248,14 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                               <strong>{item.title || item.workflowId}</strong>
                             </a>
                             <code className="text-xs break-all">{item.workflowId}</code>
-                            <span {...executionStatusPillProps(stateLabel)}>{stateLabel}</span>
+                            <span {...executionStatusPillProps(stateLabel)}>{formatStatusLabel(stateLabel)}</span>
                             {item.summary ? <p className="small">{item.summary}</p> : null}
                             {outcome?.message ? <p className="small">{outcome.message}</p> : null}
                             {outcome?.failureCategory ? (
                               <p className="small">Failure category: <code>{outcome.failureCategory}</code></p>
                             ) : null}
                             {(outcome?.closeStatus || item.closeStatus) ? (
-                              <p className="small">Close status: {outcome?.closeStatus || item.closeStatus}</p>
+                              <p className="small">Close status: {formatStatusLabel(outcome?.closeStatus || item.closeStatus)}</p>
                             ) : null}
                           </div>
                         </li>
@@ -4279,9 +4277,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                             <strong>{item.title || item.workflowId}</strong>
                           </a>
                           <code className="text-xs break-all">{item.workflowId}</code>
-                          <span {...executionStatusPillProps(item.state)}>{item.state || 'unknown'}</span>
+                          <span {...executionStatusPillProps(item.state)}>{formatStatusLabel(item.state, 'unknown')}</span>
                           {item.summary ? <p className="small">{item.summary}</p> : null}
-                          {item.closeStatus ? <p className="small">Close status: {item.closeStatus}</p> : null}
+                          {item.closeStatus ? <p className="small">Close status: {formatStatusLabel(item.closeStatus)}</p> : null}
                         </div>
                       </li>
                     ))}
@@ -4455,7 +4453,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                   <tr>
                     <td>Last update</td>
                     <td>{formatWhen(execution.updatedAt)}</td>
-                    <td>State: {(execution.state || '').replaceAll('_', ' ')}</td>
+                    <td>State: {formatStatusLabel(execution.state, '')}</td>
                   </tr>
                   {execution.waitingReason || execution.attentionRequired ? (
                     <tr>
@@ -4471,7 +4469,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     <tr>
                       <td>Closed</td>
                       <td>{formatWhen(execution.closedAt)}</td>
-                      <td>Close status: {execution.closeStatus || execution.temporalStatus || '—'}</td>
+                      <td>Close status: {formatStatusLabel(execution.closeStatus || execution.temporalStatus)}</td>
                     </tr>
                   ) : null}
                 </tbody>
@@ -4508,7 +4506,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                             <code>{artifact.artifactId}</code>
                           </td>
                           <td>{artifact.sizeBytes ?? '—'}</td>
-                          <td>{String(artifact.status ?? '—')}</td>
+                          <td>{formatStatusLabel(artifact.status)}</td>
                           <td>
                             <a
                               className="button secondary"
