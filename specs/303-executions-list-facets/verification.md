@@ -70,3 +70,13 @@
 ## Decision
 
 - Code and unit/contract/frontend evidence support the MM-590 story, but final MoonSpec completion should remain `ADDITIONAL_WORK_NEEDED` until hermetic integration verification runs successfully.
+
+## Implement-Stage Recheck - 2026-05-05
+
+| Suite | Command | Result | Notes |
+| --- | --- | --- | --- |
+| Temporal API unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/test_executions_temporal.py` | PASS | 14 Python tests passed; the wrapper also completed the configured frontend suite with 19 files / 299 tests passed and 223 skipped. |
+| API contract | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/contract/test_temporal_execution_api.py` | PASS | 8 Python tests passed; the wrapper also completed the configured frontend suite with 19 files / 299 tests passed and 223 skipped. |
+| Focused frontend via test runner | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` | FAIL | The Python full-unit phase failed before focused Vitest execution because repo-local `.agents/skills` PR resolver and fix-comments files are absent from the active skill projection. Failures are outside MM-590 task-list/facet files. |
+
+Current blocker: full-suite verification in this managed skill-projection workspace is blocked by missing repo-local skill files referenced by `tests/unit/test_batch_pr_resolver.py`, `tests/unit/test_pr_resolver_tools.py`, and `tests/unit/workflows/test_skills_resolver.py`. The active instructions require using `.agents/skills` as the resolved active snapshot and not discovering local-only skill sources, so this recheck does not restore or rewrite those skill files.
