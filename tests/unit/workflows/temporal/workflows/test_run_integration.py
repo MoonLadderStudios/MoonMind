@@ -1289,6 +1289,35 @@ def test_record_execution_context_tracks_created_report(
     assert status == "success"
     assert publish_failure is False
 
+
+def test_record_execution_context_tracks_mapped_agent_run_report(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = mock_run_workflow._map_agent_run_result(
+        {
+            "summary": "Report published.",
+            "metadata": {"primaryReportRef": "art_report_2"},
+        }
+    )
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result=execution_result,
+    )
+
+    status, _message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "none",
+            "reportOutput": {"enabled": True, "required": True},
+        }
+    )
+
+    assert mock_run_workflow._report_created is True
+    assert mock_run_workflow._report_ref == "art_report_2"
+    assert status == "success"
+    assert publish_failure is False
+
+
 def test_determine_publish_completion_includes_operator_summary_for_report_runs(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:

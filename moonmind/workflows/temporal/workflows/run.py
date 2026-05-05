@@ -3404,15 +3404,26 @@ class MoonMindRunWorkflow:
 
     def _record_report_result(self, execution_result: Any) -> None:
         metadata = self._get_from_result(execution_result, "metadata")
-        if not isinstance(metadata, Mapping):
+        outputs = self._get_from_result(execution_result, "outputs")
+        report_sources = [
+            source
+            for source in (metadata, outputs)
+            if isinstance(source, Mapping)
+        ]
+        if not report_sources:
             return
 
-        report_ref = self._coerce_text(
-            metadata.get("primaryReportRef")
-            or metadata.get("primary_report_ref"),
-            max_chars=200,
-        )
-        report_bundle = metadata.get("reportBundle") or metadata.get("report_bundle")
+        report_ref = ""
+        report_bundle: Any = None
+        for source in report_sources:
+            report_ref = self._coerce_text(
+                source.get("primaryReportRef")
+                or source.get("primary_report_ref"),
+                max_chars=200,
+            )
+            report_bundle = source.get("reportBundle") or source.get("report_bundle")
+            if report_ref or isinstance(report_bundle, Mapping):
+                break
         if not report_ref and isinstance(report_bundle, Mapping):
             primary_ref = (
                 report_bundle.get("primary_report_ref")
@@ -3678,11 +3689,7 @@ class MoonMindRunWorkflow:
     ) -> str | None:
         if publish_mode == "pr" and not self._pull_request_created():
             return "publishMode 'pr' requested but no PR was created"
-        if (
-            publish_mode == "branch"
-            and self._publish_status is None
-            and not self._branch_published()
-        ):
+        if publish_mode == "branch" and self._publish_status is None:
             return "branch publish outcome unknown"
         if self._merge_automation_requested(parameters) and not self._merge_happened():
             return "merge automation requested but PR was not merged"

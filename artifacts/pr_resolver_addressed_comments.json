@@ -1,27 +1,22 @@
 [
   {
-    "id": 3186820408,
+    "id": 3190605674,
     "disposition": "addressed",
-    "rationale": "Restricted dialog Enter-to-apply handling so Enter on popover action buttons is not intercepted, with a regression test for staged filters remaining unapplied from action-button keydown."
+    "rationale": "Simplified the branch publish unknown check by removing the redundant _branch_published() condition."
   },
   {
-    "id": 4226183005,
+    "id": 4230555974,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary wrapper; no standalone code action beyond the linked review comments."
+    "rationale": "Automated review summary; the actionable line comments are tracked separately."
   },
   {
-    "id": 3186821781,
+    "id": 3190620124,
     "disposition": "addressed",
-    "rationale": "Excluded button targets from the popover Enter key apply path and covered the accessibility behavior in Tasks List tests."
+    "rationale": "Recorded report refs from mapped agent-run outputs as well as metadata and added regression coverage."
   },
   {
-    "id": 3186821798,
-    "disposition": "addressed",
-    "rationale": "Guarded closeFilter focus restoration behind a non-null field target and added a mobile regression test to prevent stale desktop trigger focus."
-  },
-  {
-    "id": 4226184254,
+    "id": 4230570929,
     "disposition": "not-applicable",
-    "rationale": "Broad review summary; the concrete keyboard and focus findings from the summary were addressed in the linked line comments."
+    "rationale": "Automated review container comment; the actionable suggestions are tracked separately."
   }
 ]
