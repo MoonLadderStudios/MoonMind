@@ -1895,6 +1895,119 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     assert "-p" in actual_cmd or "--dangerously-skip-permissions" in actual_cmd
 
 @pytest.mark.asyncio
+async def test_launch_privilege_drop_chowns_github_broker_socket_for_claude_code(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_testtoken123")
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.shutil.which",
+        lambda command: "/usr/bin/gh" if command == "gh" else None,
+    )
+
+    class _FakeGitHubAuthBrokers:
+        def __init__(self) -> None:
+            self.starts: list[dict[str, str]] = []
+            self.stops: list[str] = []
+
+        async def start(self, *, run_id: str, token: str, socket_path: str) -> None:
+            self.starts.append(
+                {"run_id": run_id, "token": token, "socket_path": socket_path}
+            )
+
+        async def stop(self, run_id: str) -> None:
+            self.stops.append(run_id)
+
+    class _FakeProcess:
+        pid = 8881
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_launch_env: dict[str, str] = {}
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        if args[:3] == ("runuser", "-u", "app"):
+            env = kwargs.get("env")
+            if isinstance(env, dict):
+                captured_launch_env.update(env)
+        return _FakeProcess()
+
+    chown_calls: list[tuple[object, ...]] = []
+
+    async def _fake_run_checked_command(self, *cmd, **kw):
+        if cmd and cmd[0] == "chown":
+            chown_calls.append(cmd)
+        return None
+
+    original_exists = Path.exists
+
+    def _mock_exists(self):
+        if str(self) == "/home/app/.claude.json":
+            return True
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", _mock_exists)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._run_checked_command",
+        _fake_run_checked_command,
+    )
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    github_auth_brokers = _FakeGitHubAuthBrokers()
+    launcher._github_auth_brokers = github_auth_brokers
+
+    workspace_root = tmp_path / "workspaces" / "claude-gh-run" / "repo"
+    workspace_root.mkdir(parents=True)
+    (workspace_root / ".git").mkdir()
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        env_overrides={},
+        passthrough_env_keys=[],
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="claude-gh-run",
+        request=_make_request(),
+        profile=profile,
+        workspace_path=str(workspace_root),
+    )
+    await process.wait()
+
+    assert github_auth_brokers.starts == [
+        {
+            "run_id": "claude-gh-run",
+            "token": "ghp_testtoken123",
+            "socket_path": ManagedRuntimeLauncher._build_github_socket_path(
+                run_id="claude-gh-run",
+                support_root=str(workspace_root.parent),
+            ),
+        }
+    ]
+    socket_path = Path(github_auth_brokers.starts[0]["socket_path"])
+    assert (
+        "chown",
+        "app:app",
+        str(socket_path.parent),
+        str(socket_path),
+    ) in chown_calls
+    assert ("chown", "-R", "app:app", str(workspace_root.parent)) in chown_calls
+    assert "GITHUB_TOKEN" not in captured_launch_env
+    assert captured_launch_env["PATH"].startswith(
+        str(workspace_root.parent / ".moonmind" / "bin")
+    )
+
+@pytest.mark.asyncio
 async def test_launch_privilege_drop_chowns_repo_only_for_external_workspace(tmp_path, monkeypatch):
     captured_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
