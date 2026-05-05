@@ -16,6 +16,10 @@
 - `DESIGN-REQ-017`: old URL params fail safe while preserving task-compatible filters.
 - `DESIGN-REQ-025`: filter params cannot bypass authorization or expose hidden workflow categories.
 
+## Requirement Status Refresh
+
+The upstream `plan.md` and `research.md` were refreshed after implementation to mark all MM-586 requirements, scenarios, and in-scope source design requirements as `implemented_verified`. This `tasks.md` remains the completed execution record for the test-first work that produced that evidence: red-first backend unit tests, red-first frontend integration-style tests, production implementation tasks, story validation commands, alignment, and final `/moonspec-verify`.
+
 ## Story
 
 As an ordinary Tasks List user, I want `/tasks/list` to show only user-visible task runs and not become a workflow-kind browser.
@@ -78,4 +82,4 @@ As an ordinary Tasks List user, I want `/tasks/list` to show only user-visible t
 
 ## Implementation Strategy
 
-Use strict TDD: add backend and frontend tests that fail against the current broad workflow-browsing behavior, then make the smallest scoped changes in `api_service/api/routers/executions.py` and `frontend/src/entrypoints/tasks-list.tsx`. Preserve existing route/shell behavior from MM-585 and do not add a diagnostics route in this story. Final verification must preserve MM-586 and all in-scope DESIGN-REQ IDs.
+Completed via strict TDD: backend and frontend tests were added and confirmed failing against the broad workflow-browsing behavior, then the smallest scoped changes were made in `api_service/api/routers/executions.py` and `frontend/src/entrypoints/tasks-list.tsx`. Existing route/shell behavior from MM-585 was preserved, no diagnostics route was added, and final verification preserved MM-586 plus all in-scope DESIGN-REQ IDs.
