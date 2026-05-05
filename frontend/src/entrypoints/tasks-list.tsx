@@ -704,6 +704,57 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   ]
     .filter(Boolean)
     .join(' · ');
+  const resultsFooter = (
+    <div className="queue-results-toolbar task-list-results-footer">
+      <div className="task-list-footer-summary">
+        <span className="small">{pageSummary}</span>
+        <span className="small">
+          {liveUpdates && listEnabled
+            ? `Polling every ${Math.round(listPollMs / 1000)}s`
+            : 'Updates paused to keep selections stable.'}
+        </span>
+      </div>
+      <div className="queue-pagination">
+        <label className="queue-inline-toggle toolbar-live-toggle task-list-footer-live-toggle">
+          <input
+            type="checkbox"
+            checked={liveUpdates}
+            disabled={!listEnabled}
+            onChange={(event) => setLiveUpdates(event.target.checked)}
+          />
+          Live updates
+        </label>
+        <PageSizeSelector
+          pageSize={pageSize}
+          disabled={!listEnabled}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            resetToFirstPage();
+          }}
+        />
+        <nav aria-label="Pagination" style={{ display: 'inline-flex', gap: '0.45rem' }}>
+          <button
+            type="button"
+            className="secondary queue-pagination-button"
+            disabled={!listEnabled || cursorStack.length === 0}
+            onClick={goPrev}
+            aria-label="Previous page"
+          >
+            <span aria-hidden="true">&larr;</span>
+          </button>
+          <button
+            type="button"
+            className="secondary queue-pagination-button"
+            disabled={!listEnabled || !data?.nextPageToken}
+            onClick={goNext}
+            aria-label="Next page"
+          >
+            <span aria-hidden="true">&rarr;</span>
+          </button>
+        </nav>
+      </div>
+    </div>
+  );
   const filterValueForField = useCallback(
     (field: string): string => {
       if (!isFilterField(field)) return '';
@@ -1263,9 +1314,15 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       {isLoading ? (
         <p className="loading">Loading tasks...</p>
       ) : isError ? (
-        <div className="notice error">{(error as Error).message}</div>
+        <>
+          <div className="notice error">{(error as Error).message}</div>
+          {resultsFooter}
+        </>
       ) : sortedItems.length === 0 && !hasPaginationContext ? (
-        <p className="small">No tasks found for the current filters.</p>
+        <>
+          <p className="small">No tasks found for the current filters.</p>
+          {resultsFooter}
+        </>
       ) : (
         <section className="queue-layouts panel--data task-list-data-slab" aria-label="Task results">
           {sortedItems.length === 0 ? (
@@ -1453,55 +1510,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               </ul>
             </>
           )}
-          <div className="queue-results-toolbar task-list-results-footer">
-            <div className="task-list-footer-summary">
-              <span className="small">{pageSummary}</span>
-              <span className="small">
-                {liveUpdates && listEnabled
-                  ? `Polling every ${Math.round(listPollMs / 1000)}s`
-                  : 'Updates paused to keep selections stable.'}
-              </span>
-            </div>
-            <div className="queue-pagination">
-              <label className="queue-inline-toggle toolbar-live-toggle task-list-footer-live-toggle">
-                <input
-                  type="checkbox"
-                  checked={liveUpdates}
-                  disabled={!listEnabled}
-                  onChange={(event) => setLiveUpdates(event.target.checked)}
-                />
-                Live updates
-              </label>
-              <PageSizeSelector
-                pageSize={pageSize}
-                disabled={!listEnabled}
-                onPageSizeChange={(size) => {
-                  setPageSize(size);
-                  resetToFirstPage();
-                }}
-              />
-              <nav aria-label="Pagination" style={{ display: 'inline-flex', gap: '0.45rem' }}>
-                <button
-                  type="button"
-                  className="secondary queue-pagination-button"
-                  disabled={!listEnabled || cursorStack.length === 0}
-                  onClick={goPrev}
-                  aria-label="Previous page"
-                >
-                  <span aria-hidden="true">&larr;</span>
-                </button>
-                <button
-                  type="button"
-                  className="secondary queue-pagination-button"
-                  disabled={!listEnabled || !data?.nextPageToken}
-                  onClick={goNext}
-                  aria-label="Next page"
-                >
-                  <span aria-hidden="true">&rarr;</span>
-                </button>
-              </nav>
-            </div>
-          </div>
+          {resultsFooter}
         </section>
       )}
     </div>

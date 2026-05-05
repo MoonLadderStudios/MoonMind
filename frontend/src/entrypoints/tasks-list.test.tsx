@@ -64,6 +64,7 @@ describe('Tasks List Entrypoint', () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
+    expect(screen.getByLabelText('Live updates')).toBeTruthy();
   });
 
   it('keeps active filter chips visible on an empty first page with active filters', async () => {
@@ -104,6 +105,7 @@ describe('Tasks List Entrypoint', () => {
 
     expect(await screen.findByText('No tasks found for the current filters.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
+    expect(screen.getByLabelText('Live updates')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull();
   });
 

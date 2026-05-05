@@ -1,27 +1,17 @@
 [
   {
-    "id": 3186820408,
+    "id": 3190760474,
     "disposition": "addressed",
-    "rationale": "Restricted dialog Enter-to-apply handling so Enter on popover action buttons is not intercepted, with a regression test for staged filters remaining unapplied from action-button keydown."
+    "rationale": "Factored the tasks-list results footer into a reusable control and rendered it for error and first-page empty states so the Live updates toggle remains available outside populated results. Added regression assertions for both states."
   },
   {
-    "id": 4226183005,
+    "id": 4230728001,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary wrapper; no standalone code action beyond the linked review comments."
+    "rationale": "Automated review summary container with no separate actionable feedback beyond review comment 3190760474."
   },
   {
-    "id": 3186821781,
-    "disposition": "addressed",
-    "rationale": "Excluded button targets from the popover Enter key apply path and covered the accessibility behavior in Tasks List tests."
-  },
-  {
-    "id": 3186821798,
-    "disposition": "addressed",
-    "rationale": "Guarded closeFilter focus restoration behind a non-null field target and added a mobile regression test to prevent stale desktop trigger focus."
-  },
-  {
-    "id": 4226184254,
+    "id": 4230739851,
     "disposition": "not-applicable",
-    "rationale": "Broad review summary; the concrete keyboard and focus findings from the summary were addressed in the linked line comments."
+    "rationale": "Review explicitly states there is no feedback to address."
   }
 ]
