@@ -821,6 +821,10 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
     assert github_auth_brokers.starts[0]["socket_path"].startswith(
         str(Path("/tmp") / "mm-gh")
     )
+    socket_path = Path(github_auth_brokers.starts[0]["socket_path"])
+    assert socket_path.name == "github.sock"
+    assert socket_path.parent.parent == Path("/tmp") / "mm-gh"
+    assert len(socket_path.parent.name) == 16
     assert request.session_workspace_path not in github_auth_brokers.starts[0]["socket_path"]
     docker_run_text = " ".join(docker_commands[0])
     assert token not in docker_run_text

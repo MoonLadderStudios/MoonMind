@@ -376,6 +376,12 @@ def _source_issue_key(
             return _string(value)
     return ""
 
+
+def _is_subtask_issue_type_name(issue_type_name: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "", issue_type_name.strip().lower())
+    return normalized == "subtask"
+
+
 def _stable_idempotency_key(
     *,
     source_issue_key: str,
@@ -1182,6 +1188,41 @@ async def create_jira_issues_from_stories(
             )
         raise ValueError(reason)
 
+    is_subtask_issue_type = _is_subtask_issue_type_name(issue_type_name)
+    source_issue_key = _source_issue_key(
+        inputs=inputs,
+        traceability=jira_payload,
+    )
+    source_parent_issue_key = source_issue_key if is_subtask_issue_type else ""
+    explicit_parent_issue_key = _parent_issue_key(
+        story={},
+        jira_payload=jira_payload,
+        inputs=inputs,
+    )
+    has_all_story_parent_issue_keys = all(
+        _parent_issue_key(story=story, jira_payload={}, inputs={})
+        for story in stories
+    )
+    if (
+        is_subtask_issue_type
+        and not source_parent_issue_key
+        and not explicit_parent_issue_key
+        and not has_all_story_parent_issue_keys
+    ):
+        reason = (
+            "Jira issueTypeName 'Sub-task' requires sourceIssueKey or "
+            "parentIssueKey for every story so created issues can be attached "
+            "to a parent issue."
+        )
+        if fallback_on_failure:
+            return _fallback_result(
+                reason=reason,
+                inputs=inputs,
+                story_count=len(stories),
+                dependency_mode=dependency_mode,
+            )
+        raise ValueError(reason)
+
     created: list[dict[str, Any]] = []
     issue_mappings: list[dict[str, Any]] = []
     marker_label = _workflow_marker_label(inputs=inputs, context=_context)
@@ -1221,7 +1262,7 @@ async def create_jira_issues_from_stories(
                 story=story,
                 jira_payload=jira_payload,
                 inputs=inputs,
-            )
+            ) or source_parent_issue_key
             if parent_issue_key:
                 request = CreateSubtaskRequest(
                     projectKey=project_key,

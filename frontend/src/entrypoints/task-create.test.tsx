@@ -12470,6 +12470,96 @@ describe("Task Create submit arrow animation", () => {
       /\.queue-submit-primary-ripple\s*\{[^}]*animation:\s*queue-submit-primary-ripple\s+620ms\s+cubic-bezier\(0\.22,\s*0\.61,\s*0\.36,\s*1\)\s+forwards;/s,
     );
   });
+
+  it("keeps the create arrow exit active while submit is busy", async () => {
+    let resolveExecution: (response: Response) => void = () => {};
+    const fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        switch (true) {
+          case url.startsWith("/api/tasks/skills"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
+            } as Response);
+          case url.startsWith("/api/task-step-templates"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ items: [] }),
+            } as Response);
+          case url.startsWith("/api/v1/provider-profiles"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => [],
+            } as Response);
+          case url === "/api/executions":
+            return new Promise<Response>((resolve) => {
+              resolveExecution = resolve;
+            });
+          default:
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({}),
+            } as Response);
+        }
+      });
+    const { unmount } = renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    try {
+      fireEvent.change(await screen.findByLabelText("Instructions"), {
+        target: { value: "Run end-to-end regression flow." },
+      });
+
+      const createButton = screen.getByRole("button", { name: "Create" });
+      const arrow = createButton.querySelector<HTMLElement>(
+        "[data-submit-arrow='right']",
+      );
+      expect(arrow).not.toBeNull();
+
+      fireEvent.pointerDown(createButton, { button: 0 });
+      await waitFor(() => {
+        expect(
+          createButton.classList.contains("queue-submit-primary--arrow-exit"),
+        ).toBe(true);
+      });
+
+      fireEvent.click(createButton);
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledWith(
+          "/api/executions",
+          expect.objectContaining({
+            method: "POST",
+          }),
+        );
+        expect(createButton.getAttribute("aria-busy")).toBe("true");
+        expect(
+          createButton.classList.contains("queue-submit-primary--arrow-exit"),
+        ).toBe(true);
+      });
+    } finally {
+      resolveExecution(
+        new Response(
+          JSON.stringify({
+            workflowId: "mm:workflow-123",
+            runId: "run-123",
+            namespace: "moonmind",
+            redirectPath: "/tasks/mm:workflow-123?source=temporal",
+          }),
+          {
+            status: 201,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          },
+        ),
+      );
+      unmount();
+      fetchSpy.mockRestore();
+      vi.mocked(navigateTo).mockReset();
+    }
+  });
 });
 
 describe("Task Create MM-578 Preset expansion", () => {

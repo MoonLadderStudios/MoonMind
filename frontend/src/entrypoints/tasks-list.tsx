@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
-import { formatRuntimeLabel, formatTaskSkills } from '../utils/formatters';
+import { formatRuntimeLabel, formatStatusLabel, formatTaskSkills } from '../utils/formatters';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 
@@ -18,15 +18,6 @@ type ListDashboardConfig = {
   };
 };
 
-const USER_WORKFLOW_TYPES = ['MoonMind.Run', 'MoonMind.ManifestIngest'] as const;
-const SYSTEM_WORKFLOW_TYPES = ['MoonMind.ProviderProfileManager'] as const;
-const WORKFLOW_TYPES = [...USER_WORKFLOW_TYPES, ...SYSTEM_WORKFLOW_TYPES] as const;
-const LIST_SCOPES = [
-  ['tasks', 'Tasks'],
-  ['user', 'User Workflows'],
-  ['system', 'System Workflows'],
-  ['all', 'All Workflows'],
-] as const;
 const TEMPORAL_STATUSES = [
   'scheduled',
   'initializing',
@@ -41,7 +32,17 @@ const TEMPORAL_STATUSES = [
   'failed',
   'canceled',
 ] as const;
-const ENTRY_OPTIONS = ['run', 'manifest'] as const;
+const RUNTIME_FILTER_OPTIONS = [
+  'codex_cli',
+  'codex',
+  'claude_code',
+  'claude',
+  'gemini_cli',
+  'jules',
+  'codex_cloud',
+] as const;
+const TASK_WORKFLOW_TYPE = 'MoonMind.Run';
+const TASK_ENTRY = 'run';
 
 const TIMESTAMP_SORT_FIELDS = new Set(['scheduledFor', 'createdAt', 'closedAt']);
 const TABLE_COLUMNS = [
@@ -55,7 +56,40 @@ const TABLE_COLUMNS = [
   ['createdAt', 'Created'],
   ['closedAt', 'Finished'],
 ] as const;
+type TableColumn = (typeof TABLE_COLUMNS)[number];
+type FilterField =
+  | 'status'
+  | 'repository'
+  | 'targetRuntime'
+  | 'targetSkill'
+  | 'scheduledFor'
+  | 'createdAt'
+  | 'closedAt';
 const VALID_TABLE_SORT_FIELDS = new Set<string>([...TABLE_COLUMNS.map((column) => column[0]), 'integration']);
+const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
+  'status',
+  'repository',
+  'targetRuntime',
+  'targetSkill',
+  'scheduledFor',
+  'createdAt',
+  'closedAt',
+]);
+function isFilterField(field: string): field is FilterField {
+  return ACTIVE_FILTER_FIELDS.has(field as FilterField);
+}
+type ValueFilter = { mode: 'include' | 'exclude'; values: string[]; blank?: 'include' | 'exclude' | '' };
+type RepositoryFilter = ValueFilter & { exactText?: string };
+type DateFilter = { from?: string; to?: string; blank?: 'include' | 'exclude' | '' };
+type ColumnFilters = {
+  status: ValueFilter;
+  repository: RepositoryFilter;
+  targetRuntime: ValueFilter;
+  targetSkill: ValueFilter;
+  scheduledFor: DateFilter;
+  createdAt: DateFilter;
+  closedAt: DateFilter;
+};
 
 const ExecutionRowSchema = z
   .object({
@@ -112,13 +146,15 @@ function summarizeRuntime(runtime: string | null | undefined): string {
   return label === '—' ? '' : label;
 }
 
-function normalizeListScope(raw: string | null): string {
-  const candidate = (raw || '').trim().toLowerCase();
-  return LIST_SCOPES.some(([value]) => value === candidate) ? candidate : 'tasks';
-}
-
-function scopeLabel(value: string): string {
-  return LIST_SCOPES.find(([scopeValue]) => scopeValue === value)?.[1] || value;
+function hasUnsupportedWorkflowScopeState(params: URLSearchParams): boolean {
+  const scope = (params.get('scope') || '').trim().toLowerCase();
+  const workflowType = (params.get('workflowType') || '').trim();
+  const entry = (params.get('entry') || '').trim().toLowerCase();
+  return Boolean(
+    (scope && scope !== 'tasks') ||
+      (workflowType && workflowType !== TASK_WORKFLOW_TYPE) ||
+      (entry && entry !== TASK_ENTRY),
+  );
 }
 
 function dependencyListSummary(row: ExecutionRow): string {
@@ -175,6 +211,181 @@ function replaceUrlQuery(params: URLSearchParams) {
   window.history.replaceState({}, '', queryText ? `${path}?${queryText}` : path);
 }
 
+function emptyValueFilter(): ValueFilter {
+  return { mode: 'include', values: [], blank: '' };
+}
+
+function emptyFilters(): ColumnFilters {
+  return {
+    status: emptyValueFilter(),
+    repository: { ...emptyValueFilter(), exactText: '' },
+    targetRuntime: emptyValueFilter(),
+    targetSkill: emptyValueFilter(),
+    scheduledFor: {},
+    createdAt: {},
+    closedAt: {},
+  };
+}
+
+function uniqueValues(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.map((value) => (value || '').trim()).filter(Boolean)));
+}
+
+function splitParamValues(values: string[]): string[] {
+  return uniqueValues(values.flatMap((value) => value.split(',')));
+}
+
+function splitParam(params: URLSearchParams, key: string): string[] {
+  return splitParamValues(params.getAll(key));
+}
+
+function validateCanonicalFilterPair(
+  params: URLSearchParams,
+  includeParam: string,
+  excludeParam: string,
+): string | null {
+  const includeValues = splitParam(params, includeParam);
+  const excludeValues = splitParam(params, excludeParam);
+  if (includeValues.length > 0 && excludeValues.length > 0) {
+    return `Cannot combine ${includeParam} and ${excludeParam}.`;
+  }
+  return null;
+}
+
+function validateInitialFilterParams(params: URLSearchParams): string[] {
+  return [
+    validateCanonicalFilterPair(params, 'stateIn', 'stateNotIn'),
+    validateCanonicalFilterPair(params, 'repoIn', 'repoNotIn'),
+    validateCanonicalFilterPair(params, 'targetRuntimeIn', 'targetRuntimeNotIn'),
+    validateCanonicalFilterPair(params, 'targetSkillIn', 'targetSkillNotIn'),
+  ].filter((message): message is string => Boolean(message));
+}
+
+function parseInitialFilters(params: URLSearchParams): ColumnFilters {
+  const filters = emptyFilters();
+  const stateIn = splitParam(params, 'stateIn');
+  const stateNotIn = splitParam(params, 'stateNotIn');
+  const legacyState = (params.get('state') || '').trim().toLowerCase();
+  if (stateNotIn.length > 0) {
+    filters.status = { mode: 'exclude', values: stateNotIn, blank: '' };
+  } else if (stateIn.length > 0 || legacyState) {
+    filters.status = { mode: 'include', values: stateIn.length > 0 ? stateIn : [legacyState], blank: '' };
+  }
+
+  const repoIn = splitParam(params, 'repoIn');
+  const repoNotIn = splitParam(params, 'repoNotIn');
+  const repoExact = (params.get('repoExact') || params.get('repo') || '').trim();
+  if (repoNotIn.length > 0) {
+    filters.repository = { mode: 'exclude', values: repoNotIn, exactText: repoExact, blank: '' };
+  } else {
+    filters.repository = { mode: 'include', values: repoIn, exactText: repoExact, blank: '' };
+  }
+
+  const runtimeIn = splitParam(params, 'targetRuntimeIn');
+  const runtimeNotIn = splitParam(params, 'targetRuntimeNotIn');
+  const legacyRuntime = (params.get('targetRuntime') || '').trim();
+  if (runtimeNotIn.length > 0) {
+    filters.targetRuntime = { mode: 'exclude', values: runtimeNotIn, blank: '' };
+  } else if (runtimeIn.length > 0 || legacyRuntime) {
+    filters.targetRuntime = {
+      mode: 'include',
+      values: runtimeIn.length > 0 ? runtimeIn : [legacyRuntime],
+      blank: '',
+    };
+  }
+
+  const skillIn = splitParam(params, 'targetSkillIn');
+  const skillNotIn = splitParam(params, 'targetSkillNotIn');
+  if (skillNotIn.length > 0) {
+    filters.targetSkill = { mode: 'exclude', values: skillNotIn, blank: '' };
+  } else if (skillIn.length > 0) {
+    filters.targetSkill = { mode: 'include', values: skillIn, blank: '' };
+  }
+
+  filters.scheduledFor = {
+    from: params.get('scheduledFrom') || '',
+    to: params.get('scheduledTo') || '',
+    blank: (params.get('scheduledBlank') as DateFilter['blank']) || '',
+  };
+  filters.createdAt = {
+    from: params.get('createdFrom') || '',
+    to: params.get('createdTo') || '',
+  };
+  filters.closedAt = {
+    from: params.get('finishedFrom') || '',
+    to: params.get('finishedTo') || '',
+    blank: (params.get('finishedBlank') as DateFilter['blank']) || '',
+  };
+  return filters;
+}
+
+function appendValueParams(
+  params: URLSearchParams,
+  filter: ValueFilter,
+  includeParam: string,
+  excludeParam: string,
+  blankParam?: string,
+) {
+  if (filter.values.length > 0) {
+    params.set(filter.mode === 'exclude' ? excludeParam : includeParam, filter.values.join(','));
+  }
+  if (blankParam && filter.blank) {
+    params.set(blankParam, filter.blank);
+  }
+}
+
+function appendDateParams(
+  params: URLSearchParams,
+  filter: DateFilter,
+  fromParam: string,
+  toParam: string,
+  blankParam?: string,
+) {
+  if (filter.from) params.set(fromParam, filter.from);
+  if (filter.to) params.set(toParam, filter.to);
+  if (blankParam && filter.blank) params.set(blankParam, filter.blank);
+}
+
+function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
+  appendValueParams(params, filters.status, 'stateIn', 'stateNotIn');
+  if (filters.repository.exactText?.trim()) {
+    params.set('repoExact', filters.repository.exactText.trim());
+  }
+  appendValueParams(params, filters.repository, 'repoIn', 'repoNotIn', 'repoBlank');
+  appendValueParams(params, filters.targetRuntime, 'targetRuntimeIn', 'targetRuntimeNotIn', 'targetRuntimeBlank');
+  appendValueParams(params, filters.targetSkill, 'targetSkillIn', 'targetSkillNotIn', 'targetSkillBlank');
+  appendDateParams(params, filters.scheduledFor, 'scheduledFrom', 'scheduledTo', 'scheduledBlank');
+  appendDateParams(params, filters.createdAt, 'createdFrom', 'createdTo');
+  appendDateParams(params, filters.closedAt, 'finishedFrom', 'finishedTo', 'finishedBlank');
+}
+
+function filterSummary(field: FilterField, filters: ColumnFilters): string {
+  const summarizeValues = (filter: ValueFilter, formatter = (value: string) => value) => {
+    if (filter.blank === 'include' && filter.values.length === 0) return 'blank';
+    if (filter.blank === 'exclude' && filter.values.length === 0) return 'not blank';
+    if (filter.values.length === 0) return '';
+    const first = formatter(filter.values[0]!);
+    const suffix = filter.values.length > 1 ? ` +${filter.values.length - 1}` : '';
+    return `${filter.mode === 'exclude' ? 'not ' : ''}${first}${suffix}`;
+  };
+  if (field === 'status') return summarizeValues(filters.status, formatStatusLabel);
+  if (field === 'targetRuntime') return summarizeValues(filters.targetRuntime, formatRuntimeLabel);
+  if (field === 'targetSkill') return summarizeValues(filters.targetSkill);
+  if (field === 'repository') {
+    if (filters.repository.exactText?.trim()) return filters.repository.exactText.trim();
+    return summarizeValues(filters.repository);
+  }
+  const dateFilter = field === 'scheduledFor' ? filters.scheduledFor : field === 'createdAt' ? filters.createdAt : filters.closedAt;
+  if (dateFilter.blank === 'include' && !dateFilter.from && !dateFilter.to) return 'blank';
+  if (dateFilter.blank === 'exclude' && !dateFilter.from && !dateFilter.to) return 'not blank';
+  const parts = [];
+  if (dateFilter.from) parts.push(`from ${dateFilter.from}`);
+  if (dateFilter.to) parts.push(`to ${dateFilter.to}`);
+  if (dateFilter.blank === 'include') parts.push('blank');
+  if (dateFilter.blank === 'exclude') parts.push('not blank');
+  return parts.join(', ');
+}
+
 export function TasksListPage({ payload }: { payload: BootPayload }) {
   const dashboardCfg = useMemo(() => readListDashboardConfig(payload), [payload.initialData]);
   const listPollMs = useMemo(() => {
@@ -185,15 +396,17 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
-  const [listScope, setListScope] = useState(() =>
-    normalizeListScope(initial.get('scope') || (initial.get('workflowType') || initial.get('entry') ? 'all' : null)),
-  );
-  const [workflowType, setWorkflowType] = useState(() => initial.get('workflowType') || '');
-  const [temporalState, setTemporalState] = useState(() => (initial.get('state') || '').toLowerCase());
-  const [entry, setEntry] = useState(() => (initial.get('entry') || '').toLowerCase());
-  const [repository, setRepository] = useState(() => initial.get('repo') || '');
+  const initialFilterValidationErrors = useMemo(() => validateInitialFilterParams(initial), [initial]);
+  const [ignoredWorkflowScopeState] = useState(() => hasUnsupportedWorkflowScopeState(initial));
+  const [filters, setFilters] = useState(() => parseInitialFilters(initial));
+  const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
+  const [hasEditedFilters, setHasEditedFilters] = useState(false);
+  const [openFilter, setOpenFilter] = useState<FilterField | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
   const [pageSize, setPageSize] = useState(() => parsePageSize(initial.get('limit')));
-  const [listCursor, setListCursor] = useState<string | null>(() => initial.get('nextPageToken')?.trim() || null);
+  const [listCursor, setListCursor] = useState<string | null>(() =>
+    ignoredWorkflowScopeState ? null : initial.get('nextPageToken')?.trim() || null,
+  );
   const [cursorStack, setCursorStack] = useState<string[]>([]);
   const [liveUpdates, setLiveUpdates] = useState(true);
   const [sortField, setSortField] = useState<string>(() => normalizeTableSortField(initial.get('sort')));
@@ -202,21 +415,17 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     if (initialSortDir === 'asc' || initialSortDir === 'desc') return initialSortDir;
     return 'desc';
   });
-  const normalizedRepository = repository.trim();
-  const workflowTypeOptions = useMemo(() => {
-    if (listScope === 'user') return USER_WORKFLOW_TYPES;
-    if (listScope === 'system') return SYSTEM_WORKFLOW_TYPES;
-    return WORKFLOW_TYPES;
-  }, [listScope]);
+  const filterValidationErrors = useMemo(() => {
+    if (!hasEditedFilters) return initialFilterValidationErrors;
+    const params = new URLSearchParams();
+    appendFilterParams(params, filters);
+    return validateInitialFilterParams(params);
+  }, [filters, hasEditedFilters, initialFilterValidationErrors]);
 
   const syncUrl = useCallback(() => {
+    if (filterValidationErrors.length > 0) return;
     const params = new URLSearchParams();
-    const scopeSensitiveFilterActive = Boolean(entry || workflowType);
-    if (listScope !== 'tasks' || scopeSensitiveFilterActive) params.set('scope', listScope);
-    if (listScope !== 'tasks' && workflowType) params.set('workflowType', workflowType);
-    if (temporalState) params.set('state', temporalState);
-    if (entry) params.set('entry', entry);
-    if (normalizedRepository) params.set('repo', normalizedRepository);
+    appendFilterParams(params, filters);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('nextPageToken', listCursor);
     if (sortField !== 'scheduledFor' || sortDir !== 'desc') {
@@ -225,11 +434,8 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     }
     replaceUrlQuery(params);
   }, [
-    listScope,
-    workflowType,
-    temporalState,
-    entry,
-    normalizedRepository,
+    filters,
+    filterValidationErrors.length,
     pageSize,
     listCursor,
     sortField,
@@ -244,27 +450,20 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     'tasks-list',
     'temporal',
     pageSize,
-    listScope,
-    workflowType,
-    temporalState,
-    entry,
-    normalizedRepository,
+    filters,
     listCursor,
   ] as const;
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey,
-    enabled: listEnabled,
+    enabled: listEnabled && filterValidationErrors.length === 0,
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set('source', 'temporal');
       params.set('pageSize', String(pageSize));
-      params.set('scope', listScope);
+      params.set('scope', 'tasks');
       if (listCursor) params.set('nextPageToken', listCursor);
-      if (listScope !== 'tasks' && workflowType) params.set('workflowType', workflowType);
-      if (temporalState) params.set('state', temporalState);
-      if (entry) params.set('entry', entry);
-      if (normalizedRepository) params.set('repo', normalizedRepository);
+      appendFilterParams(params, filters);
       const response = await fetch(`${payload.apiBase}/executions?${params}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.statusText}`);
@@ -273,6 +472,25 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     },
     refetchInterval: liveUpdates && listEnabled ? listPollMs : false,
   });
+
+  useEffect(() => {
+    if (!openFilter) return;
+    setDraftFilters(filters);
+  }, [openFilter, filters]);
+
+  useEffect(() => {
+    if (!openFilter) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      const targetElement = event.target as Element | null;
+      if (target && popoverRef.current?.contains(target)) return;
+      if (targetElement?.closest('.task-list-column-filter-button, .task-list-filter-chip-open')) return;
+      setOpenFilter(null);
+      setDraftFilters(filters);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [openFilter, filters]);
 
   const sortedItems = useMemo(() => {
     const items = data?.items || [];
@@ -343,26 +561,427 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   ]
     .filter(Boolean)
     .join(' · ');
+  const filterValueForField = useCallback(
+    (field: string): string => {
+      if (!isFilterField(field)) return '';
+      return filterSummary(field, filters);
+    },
+    [filters],
+  );
   const activeFilters = useMemo(
     () =>
-      [
-        listScope !== 'tasks' ? ['Scope', scopeLabel(listScope)] : null,
-        listScope !== 'tasks' && workflowType ? ['Workflow', workflowType] : null,
-        temporalState ? ['Status', temporalState] : null,
-        entry ? ['Entry', entry] : null,
-        normalizedRepository ? ['Repository', normalizedRepository] : null,
-      ].filter((filter): filter is [string, string] => Boolean(filter)),
-    [listScope, workflowType, temporalState, entry, normalizedRepository],
+      TABLE_COLUMNS.map(([field, label]) => {
+        if (!isFilterField(field)) return null;
+        const value = filterSummary(field, filters);
+        return value ? { field, label, value } : null;
+      }).filter(
+        (filter): filter is { field: FilterField; label: TableColumn[1]; value: string } => Boolean(filter),
+      ),
+    [filters],
   );
   const hasActiveFilters = activeFilters.length > 0;
   const clearFilters = useCallback(() => {
-    setListScope('tasks');
-    setWorkflowType('');
-    setTemporalState('');
-    setEntry('');
-    setRepository('');
+    setHasEditedFilters(true);
+    setFilters(emptyFilters());
+    setDraftFilters(emptyFilters());
+    setOpenFilter(null);
     resetToFirstPage();
   }, [resetToFirstPage]);
+  const toggleFilter = useCallback((field: FilterField) => {
+    setOpenFilter((current) => (current === field ? null : field));
+  }, []);
+
+  const applyFilters = useCallback(
+    (nextFilters: ColumnFilters) => {
+      setHasEditedFilters(true);
+      setFilters(nextFilters);
+      setDraftFilters(nextFilters);
+      setOpenFilter(null);
+      resetToFirstPage();
+    },
+    [resetToFirstPage],
+  );
+
+  const updateDraftValue = (field: 'status' | 'targetRuntime' | 'targetSkill', value: string) => {
+    setDraftFilters((current) => ({
+      ...current,
+      [field]: value ? { ...current[field], values: [value], blank: '' } : emptyValueFilter(),
+    }));
+  };
+
+  const updateDraftValueMode = (field: 'targetRuntime' | 'targetSkill', mode: ValueFilter['mode']) => {
+    setDraftFilters((current) => ({
+      ...current,
+      [field]: { ...current[field], mode },
+    }));
+  };
+
+  const updateDraftRepository = (value: string) => {
+    setDraftFilters((current) => ({
+      ...current,
+      repository: { ...current.repository, mode: 'include', values: [], exactText: value },
+    }));
+  };
+
+  const updateDraftDate = (field: 'scheduledFor' | 'createdAt' | 'closedAt', patch: DateFilter) => {
+    setDraftFilters((current) => ({ ...current, [field]: { ...current[field], ...patch } }));
+  };
+
+  const applyMobileValue = (field: 'status' | 'targetRuntime', value: string) => {
+    applyFilters({
+      ...filters,
+      [field]:
+        value && field === 'targetRuntime'
+          ? { ...filters.targetRuntime, values: [value], blank: '' }
+          : value
+            ? { mode: 'include', values: [value], blank: '' }
+            : emptyValueFilter(),
+    });
+  };
+
+  const applyMobileRepository = (value: string) => {
+    applyFilters({
+      ...filters,
+      repository: { ...filters.repository, mode: 'include', values: [], exactText: value },
+    });
+  };
+
+  const applyMobileDate = (field: 'scheduledFor' | 'createdAt' | 'closedAt', patch: DateFilter) => {
+    applyFilters({
+      ...filters,
+      [field]: { ...filters[field], ...patch },
+    });
+  };
+
+  const filterAccessibilityLabel = (field: string, label: string): string => {
+    const value = filterValueForField(field);
+    if (!isFilterField(field)) return `Filter ${label}. No filter available.`;
+    if (!value) return `Filter ${label}. No filter applied.`;
+    return `Filter ${label}. Filter active: ${value}.`;
+  };
+
+  const valueOptionsForField = (field: FilterField): string[] => {
+    if (field === 'status') return [...TEMPORAL_STATUSES];
+    if (field === 'targetRuntime') {
+      return uniqueValues([
+        ...filters.targetRuntime.values,
+        ...draftFilters.targetRuntime.values,
+        ...RUNTIME_FILTER_OPTIONS,
+      ]);
+    }
+    if (field === 'targetSkill') {
+      return uniqueValues([
+        ...filters.targetSkill.values,
+        ...draftFilters.targetSkill.values,
+        ...(data?.items || []).flatMap((row) => [row.targetSkill, ...(row.taskSkills || [])]),
+      ]);
+    }
+    if (field === 'repository') {
+      return uniqueValues([
+        ...filters.repository.values,
+        ...draftFilters.repository.values,
+        ...(data?.items || []).map((row) => row.repository),
+      ]);
+    }
+    return [];
+  };
+
+  const renderFilterControl = (field: FilterField, labelPrefix = '') => {
+    const isMobile = Boolean(labelPrefix);
+    if (field === 'status') {
+      const selected = isMobile ? filters.status.values[0] || '' : draftFilters.status.values[0] || '';
+      return (
+        <div className="queue-inline-filter task-list-header-filter-control">
+          <label>
+            {labelPrefix}Status filter value
+            <select
+              value={selected}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                const value = event.target.value.toLowerCase();
+                if (isMobile) applyMobileValue('status', value);
+                else updateDraftValue('status', value);
+              }}
+            >
+              <option value="">All Statuses</option>
+              {TEMPORAL_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {formatStatusLabel(status)}
+                </option>
+              ))}
+            </select>
+          </label>
+          {!isMobile ? (
+            <label className="task-list-filter-checkbox">
+              <input
+                type="checkbox"
+                checked={draftFilters.status.mode === 'exclude' && draftFilters.status.values.includes('canceled')}
+                onChange={(event) => {
+                  setDraftFilters((current) => ({
+                    ...current,
+                    status: event.target.checked
+                      ? { mode: 'exclude', values: ['canceled'], blank: '' }
+                      : emptyValueFilter(),
+                  }));
+                }}
+              />
+              Exclude canceled
+            </label>
+          ) : null}
+        </div>
+      );
+    }
+
+    if (field === 'repository') {
+      return (
+        <label className="queue-inline-filter task-list-header-filter-control">
+          {labelPrefix}Repository filter value
+          <input
+            type="text"
+            value={isMobile ? filters.repository.exactText || '' : draftFilters.repository.exactText || ''}
+            disabled={!listEnabled}
+            placeholder="owner/repo"
+            onChange={(event) => {
+              if (isMobile) applyMobileRepository(event.target.value);
+              else updateDraftRepository(event.target.value);
+            }}
+          />
+          {!isMobile && valueOptionsForField('repository').length > 0 ? (
+            <select
+              aria-label="Repository value selection"
+              value={draftFilters.repository.values[0] || ''}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                setDraftFilters((current) => ({
+                  ...current,
+                  repository: {
+                    ...current.repository,
+                    mode: 'include',
+                    values: event.target.value ? [event.target.value] : [],
+                    exactText: event.target.value ? '' : current.repository.exactText || '',
+                  },
+                }));
+              }}
+            >
+              <option value="">Repository values</option>
+              {valueOptionsForField('repository').map((repo) => (
+                <option key={repo} value={repo}>
+                  {repo}
+                </option>
+              ))}
+            </select>
+          ) : null}
+        </label>
+      );
+    }
+
+    if (field === 'targetRuntime') {
+      const runtimeOptions = valueOptionsForField('targetRuntime');
+      const draft = isMobile ? filters.targetRuntime : draftFilters.targetRuntime;
+      return (
+        <div className="queue-inline-filter task-list-header-filter-control">
+          <label>
+            {labelPrefix}Runtime filter mode
+            <select
+              value={draft.mode}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                const mode = event.target.value as ValueFilter['mode'];
+                if (isMobile) applyFilters({ ...filters, targetRuntime: { ...filters.targetRuntime, mode } });
+                else updateDraftValueMode('targetRuntime', mode);
+              }}
+            >
+              <option value="include">Include selected</option>
+              <option value="exclude">Exclude selected</option>
+            </select>
+          </label>
+          <label>
+            {labelPrefix}Runtime filter value
+            <select
+              value={draft.values[0] || ''}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                if (isMobile) applyMobileValue('targetRuntime', event.target.value);
+                else updateDraftValue('targetRuntime', event.target.value);
+              }}
+            >
+              <option value="">All Runtimes</option>
+              {runtimeOptions.map((runtime) => (
+                <option key={runtime} value={runtime}>
+                  {formatRuntimeLabel(runtime)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      );
+    }
+
+    if (field === 'targetSkill') {
+      const skillOptions = valueOptionsForField('targetSkill');
+      const draft = isMobile ? filters.targetSkill : draftFilters.targetSkill;
+      return (
+        <div className="queue-inline-filter task-list-header-filter-control">
+          <label>
+            {labelPrefix}Skill filter mode
+            <select
+              value={draft.mode}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                const mode = event.target.value as ValueFilter['mode'];
+                if (isMobile) applyFilters({ ...filters, targetSkill: { ...filters.targetSkill, mode } });
+                else updateDraftValueMode('targetSkill', mode);
+              }}
+            >
+              <option value="include">Include selected</option>
+              <option value="exclude">Exclude selected</option>
+            </select>
+          </label>
+          <label>
+            {labelPrefix}Skill filter value
+            <select
+              value={draft.values[0] || ''}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                if (isMobile) {
+                  applyFilters({
+                    ...filters,
+                    targetSkill: event.target.value
+                      ? { ...filters.targetSkill, values: [event.target.value], blank: '' }
+                      : emptyValueFilter(),
+                  });
+                } else {
+                  updateDraftValue('targetSkill', event.target.value);
+                }
+              }}
+            >
+              <option value="">All Skills</option>
+              {skillOptions.map((skill) => (
+                <option key={skill} value={skill}>
+                  {skill}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      );
+    }
+
+    if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') {
+      const label = field === 'scheduledFor' ? 'Scheduled' : field === 'createdAt' ? 'Created' : 'Finished';
+      const draft = isMobile ? filters[field] : draftFilters[field];
+      return (
+        <div className="queue-inline-filter task-list-header-filter-control">
+          <label>
+            {labelPrefix}{label} from
+            <input
+              type="date"
+              value={draft.from || ''}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                if (isMobile) applyMobileDate(field, { from: event.target.value });
+                else updateDraftDate(field, { from: event.target.value });
+              }}
+            />
+          </label>
+          <label>
+            {labelPrefix}{label} to
+            <input
+              type="date"
+              value={draft.to || ''}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                if (isMobile) applyMobileDate(field, { to: event.target.value });
+                else updateDraftDate(field, { to: event.target.value });
+              }}
+            />
+          </label>
+          {field !== 'createdAt' ? (
+            <label>
+              {labelPrefix}{label} blank values
+              <select
+                value={draft.blank || ''}
+                disabled={!listEnabled}
+                onChange={(event) => {
+                  const blank = event.target.value as NonNullable<DateFilter['blank']>;
+                  if (isMobile) applyMobileDate(field, { blank });
+                  else updateDraftDate(field, { blank });
+                }}
+              >
+                <option value="">Ignore blanks</option>
+                <option value="include">Include blanks</option>
+                <option value="exclude">Exclude blanks</option>
+              </select>
+            </label>
+          ) : null}
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  const renderFilterPopover = (field: FilterField, label: string) => {
+    if (openFilter !== field) return null;
+
+    const control = renderFilterControl(field) || (
+      <p className="small">No filter is available for {label} yet.</p>
+    );
+
+    return (
+      <div
+        className="task-list-header-filter-popover"
+        role="dialog"
+        aria-label={`${label} filter`}
+        ref={popoverRef}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            setDraftFilters(filters);
+            setOpenFilter(null);
+          }
+        }}
+      >
+        {control}
+        {isFilterField(field) ? (
+          <div className="task-list-filter-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                const next = { ...draftFilters };
+                if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
+                else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
+                else next[field] = emptyValueFilter();
+                applyFilters(next);
+              }}
+              disabled={!listEnabled}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setDraftFilters(filters);
+                setOpenFilter(null);
+              }}
+              aria-label={`Cancel ${label} filter`}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => applyFilters(draftFilters)}
+              disabled={!listEnabled}
+              aria-label={`Apply ${label} filter`}
+            >
+              Apply
+            </button>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <div className="stack">
@@ -392,111 +1011,51 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
         {!listEnabled ? (
           <div className="notice error">Temporal task list is disabled in server configuration.</div>
         ) : null}
-
-        <form className="task-list-control-grid" onSubmit={(event) => event.preventDefault()}>
-          <label>
-            Scope
-            <select
-              value={listScope}
-              disabled={!listEnabled}
-              onChange={(event) => {
-                const nextScope = normalizeListScope(event.target.value);
-                setListScope(nextScope);
-                const nextWorkflowTypes =
-                  nextScope === 'user'
-                    ? USER_WORKFLOW_TYPES
-                    : nextScope === 'system'
-                      ? SYSTEM_WORKFLOW_TYPES
-                      : WORKFLOW_TYPES;
-                if (nextScope === 'tasks' || !nextWorkflowTypes.some((type) => type === workflowType)) {
-                  setWorkflowType('');
-                }
-                resetToFirstPage();
-              }}
-            >
-              {LIST_SCOPES.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Workflow Type
-            <select
-              value={workflowType}
-              disabled={!listEnabled || listScope === 'tasks'}
-              onChange={(event) => {
-                setWorkflowType(event.target.value);
-                resetToFirstPage();
-              }}
-            >
-              <option value="">All Types</option>
-              {workflowTypeOptions.map((workflow) => (
-                <option key={workflow} value={workflow}>
-                  {workflow}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Status
-            <select
-              value={temporalState}
-              disabled={!listEnabled}
-              onChange={(event) => {
-                setTemporalState(event.target.value.toLowerCase());
-                resetToFirstPage();
-              }}
-            >
-              <option value="">All Statuses</option>
-              {TEMPORAL_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Entry
-            <select
-              value={entry}
-              disabled={!listEnabled}
-              onChange={(event) => {
-                setEntry(event.target.value.toLowerCase());
-                resetToFirstPage();
-              }}
-            >
-              <option value="">All Entries</option>
-              {ENTRY_OPTIONS.map((entryOption) => (
-                <option key={entryOption} value={entryOption}>
-                  {entryOption}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Repository
-            <input
-              type="text"
-              value={repository}
-              disabled={!listEnabled}
-              placeholder="owner/repo"
-              onChange={(event) => {
-                setRepository(event.target.value);
-                resetToFirstPage();
-              }}
-            />
-          </label>
-        </form>
+        {ignoredWorkflowScopeState ? (
+          <div className="notice warning">
+            Workflow scope filters are not available on Tasks List. Showing task runs only.
+          </div>
+        ) : null}
+        {filterValidationErrors.length > 0 ? (
+          <div className="notice error" role="alert">
+            {filterValidationErrors.map((message) => (
+              <div key={message}>{message}</div>
+            ))}
+          </div>
+        ) : null}
 
         <div className="task-list-filter-row" aria-live="polite">
           {hasActiveFilters ? (
             <div className="task-list-filter-chips" aria-label="Active filters">
-              {activeFilters.map(([label, value]) => (
+              {activeFilters.map(({ field, label, value }) => (
                 <span className="task-list-filter-chip" key={`${label}:${value}`}>
-                  <span>{label}</span>
-                  <strong>{value}</strong>
+                  <button
+                    type="button"
+                    className="task-list-filter-chip-open"
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setOpenFilter(field);
+                    }}
+                    aria-label={`${label} filter: ${value}`}
+                  >
+                    <span>{label}</span>
+                    <strong>{value}</strong>
+                  </button>
+                  <button
+                    type="button"
+                    className="task-list-filter-chip-remove"
+                    onClick={() => {
+                      const next = { ...filters };
+                      if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
+                      else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
+                      else next[field] = emptyValueFilter();
+                      applyFilters(next);
+                    }}
+                    aria-label={`Remove ${label} filter`}
+                  >
+                    ×
+                  </button>
                 </span>
               ))}
             </div>
@@ -511,6 +1070,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           >
             Clear filters
           </button>
+        </div>
+        <div className="task-list-mobile-filter-controls" aria-label="Mobile task filters">
+          {TABLE_COLUMNS.map(([field]) =>
+            isFilterField(field) ? <div key={field}>{renderFilterControl(field, 'Mobile ')}</div> : null,
+          )}
         </div>
       </section>
 
@@ -576,18 +1140,37 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     <tr>
                       {TABLE_COLUMNS.map(([field, label]) => {
                         const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
+                        const filterField = isFilterField(field) ? field : null;
                         return (
-                          <th key={field} aria-sort={ariaSort}>
-                            <button
-                              type="button"
-                              className="table-sort-button"
-                              onClick={() => onHeaderClick(field)}
-                              aria-label={ariaLabel}
-                            >
-                              {label}
-                              {sortIndicator(field)}
-                              <span className="sr-only">{sortHint}</span>
-                            </button>
+                          <th key={field} aria-sort={ariaSort} className="task-list-compound-header-cell">
+                            <div className="task-list-compound-header">
+                              <button
+                                type="button"
+                                className="table-sort-button"
+                                onClick={() => onHeaderClick(field)}
+                                aria-label={ariaLabel}
+                              >
+                                {label}
+                                {sortIndicator(field)}
+                                <span className="sr-only">{sortHint}</span>
+                              </button>
+                              <button
+                                type="button"
+                                className={`task-list-column-filter-button${
+                                  filterValueForField(field) ? ' is-active' : ''
+                                }`}
+                                onMouseDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  if (filterField) toggleFilter(filterField);
+                                }}
+                                aria-label={filterAccessibilityLabel(field, label)}
+                                aria-expanded={filterField ? openFilter === filterField : false}
+                              >
+                                <span aria-hidden="true">Filter</span>
+                              </button>
+                            </div>
+                            {filterField ? renderFilterPopover(filterField, label) : null}
                           </th>
                         );
                       })}

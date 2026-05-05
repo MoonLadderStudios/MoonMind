@@ -64,43 +64,213 @@ describe('Tasks List Entrypoint', () => {
     });
   });
 
-  it('defaults to user task scope but exposes raw all-workflows scope', async () => {
+  it('separates desktop header sorting from filter popovers', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
-    const scopeFilter = screen.getByLabelText('Scope') as HTMLSelectElement;
-    expect(scopeFilter.value).toBe('tasks');
-    expect((screen.getByLabelText('Workflow Type') as HTMLSelectElement).disabled).toBe(true);
+    const scheduledHeaderButton = await screen.findByRole('button', {
+      name: /Scheduled\. Sorted descending\. Activate to sort ascending\./i,
+    });
+    const repositoryFilterButton = screen.getByRole('button', {
+      name: /Filter Repository\. No filter applied\./i,
+    });
 
-    const baselineCalls = fetchSpy.mock.calls.length;
-    fireEvent.change(scopeFilter, { target: { value: 'all' } });
+    fireEvent.click(repositoryFilterButton);
+
+    expect(screen.getByRole('dialog', { name: 'Repository filter' })).toBeTruthy();
+    expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
+
+    fireEvent.click(scheduledHeaderButton);
 
     await waitFor(() => {
-      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+      expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
     });
-    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=all',
-    );
-    expect((screen.getByLabelText('Workflow Type') as HTMLSelectElement).disabled).toBe(false);
+    expect(screen.queryByRole('dialog', { name: 'Scheduled filter' })).toBeNull();
   });
 
-  it('keeps explicit task scope in the URL when entry filters are active', async () => {
+  it('keeps task filters available outside the desktop-only table layout', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    const baselineCalls = fetchSpy.mock.calls.length;
 
-    fireEvent.change(screen.getByLabelText('Entry'), { target: { value: 'run' } });
+    expect(screen.getByLabelText('Mobile Skill filter value')).toBeTruthy();
+    expect(screen.getByLabelText('Mobile Scheduled from')).toBeTruthy();
+    expect(screen.getByLabelText('Mobile Created from')).toBeTruthy();
+    expect(screen.getByLabelText('Mobile Finished blank values')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Mobile Status filter value'), {
+      target: { value: 'completed' },
+    });
+    fireEvent.change(screen.getByLabelText('Mobile Repository filter value'), {
+      target: { value: 'owner/repo' },
+    });
+    fireEvent.change(screen.getByLabelText('Mobile Runtime filter value'), {
+      target: { value: 'codex_cloud' },
+    });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cloud',
+      );
+    });
+  });
+
+  it('applies runtime and skill exclude modes from value-list popovers', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-123',
+            source: 'temporal',
+            title: 'Example task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            targetRuntime: 'codex_cli',
+            targetSkill: 'pr-resolver',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Runtime filter mode'), { target: { value: 'exclude' } });
+    fireEvent.change(screen.getByLabelText('Runtime filter value'), { target: { value: 'codex_cli' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Runtime filter' }));
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toContain('targetRuntimeNotIn=codex_cli');
+    });
+    expect(screen.getByRole('button', { name: 'Runtime filter: not Codex CLI' })).toBeTruthy();
+    await screen.findAllByText('Example task');
+
+    fireEvent.click(screen.getByRole('button', { name: /Filter Skill\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Skill filter mode'), { target: { value: 'exclude' } });
+    fireEvent.change(screen.getByLabelText('Skill filter value'), { target: { value: 'pr-resolver' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Skill filter' }));
+
+    await waitFor(() => {
+      const url = fetchSpy.mock.calls.at(-1)?.[0];
+      expect(url).toContain('targetRuntimeNotIn=codex_cli');
+      expect(url).toContain('targetSkillNotIn=pr-resolver');
+    });
+    expect(screen.getByRole('button', { name: 'Skill filter: not pr-resolver' })).toBeTruthy();
+  }, 10_000);
+
+  it('offers every supported runtime identifier in the runtime filter', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
+
+    const runtimeFilter = screen.getByLabelText('Runtime filter value') as HTMLSelectElement;
+    expect(Array.from(runtimeFilter.options).map((option) => option.value)).toEqual([
+      '',
+      'codex_cli',
+      'codex',
+      'claude_code',
+      'claude',
+      'gemini_cli',
+      'jules',
+      'codex_cloud',
+    ]);
+  });
+
+  it('keeps workflow-kind browsing controls out of the normal task list', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    expect(screen.queryByLabelText('Scope')).toBeNull();
+    expect(screen.queryByLabelText('Workflow Type')).toBeNull();
+    expect(screen.queryByLabelText('Entry')).toBeNull();
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks',
+    );
+  });
+
+  it('normalizes legacy workflow scope URLs to task visibility with recoverable notice', async () => {
+    window.history.pushState(
+      {},
+      'Legacy',
+      '/tasks/list?scope=all&workflowType=MoonMind.ProviderProfileManager&entry=manifest&state=completed&repo=moon%2Fdemo&nextPageToken=stale-token',
+    );
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed&repoExact=moon%2Fdemo',
+    );
+    expect(screen.getByText(/Workflow scope filters are not available on Tasks List/i)).toBeTruthy();
+    expect(window.location.search).toBe('?stateIn=completed&repoExact=moon%2Fdemo&limit=50');
+    expect(screen.queryByText('MoonMind.ProviderProfileManager')).toBeNull();
+    expect(screen.queryByText('manifest')).toBeNull();
+  });
+
+  it('loads repeated canonical runtime params as raw URL values with product-label chips', async () => {
+    window.history.pushState(
+      {},
+      'Repeated canonical filters',
+      '/tasks/list?targetRuntimeIn=codex_cli&targetRuntimeIn=claude_code&targetRuntimeIn=&limit=50',
+    );
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&targetRuntimeIn=codex_cli%2Cclaude_code',
+    );
+    expect(window.location.search).toBe('?targetRuntimeIn=codex_cli%2Cclaude_code&limit=50');
+    expect(screen.getByRole('button', { name: 'Runtime filter: Codex CLI +1' })).toBeTruthy();
+  });
+
+  it('shows a clear validation error for contradictory canonical URL filters', async () => {
+    const baselineCalls = fetchSpy.mock.calls.length;
+    window.history.pushState(
+      {},
+      'Contradictory filters',
+      '/tasks/list?stateIn=completed&stateNotIn=canceled&targetRuntimeIn=codex_cli&targetRuntimeNotIn=jules',
+    );
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
+    expect(screen.getByText('Cannot combine targetRuntimeIn and targetRuntimeNotIn.')).toBeTruthy();
+    expect(fetchSpy.mock.calls.length).toBe(baselineCalls);
+  });
+
+  it('recovers from contradictory canonical URL filters after filters are cleared', async () => {
+    const baselineCalls = fetchSpy.mock.calls.length;
+    window.history.pushState(
+      {},
+      'Recover contradictory filters',
+      '/tasks/list?stateIn=completed&stateNotIn=canceled',
+    );
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
+    expect(fetchSpy.mock.calls.length).toBe(baselineCalls);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
     });
+    expect(screen.queryByText('Cannot combine stateIn and stateNotIn.')).toBeNull();
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&entry=run',
+      '/api/executions?source=temporal&pageSize=50&scope=tasks',
     );
-    expect(window.location.search).toContain('scope=tasks');
-    expect(window.location.search).toContain('entry=run');
+    expect(window.location.search).toBe('?limit=50');
   });
 
   it('renders active task-list pills with the shared shimmer selector contract while keeping inactive pills plain', async () => {
@@ -198,7 +368,7 @@ describe('Tasks List Entrypoint', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
 
-    const waitingPills = screen.getAllByText('waiting_on_dependencies');
+    const waitingPills = screen.getAllByText('AWAITING TASK');
     expect(waitingPills.length).toBeGreaterThan(0);
     for (const pill of waitingPills) {
       expect(pill.closest('span')?.dataset.effect).toBeUndefined();
@@ -208,7 +378,7 @@ describe('Tasks List Entrypoint', () => {
       document.querySelectorAll<HTMLElement>('.queue-table-cell-status span.status, .queue-card-status span.status'),
     );
 
-    const awaitingPills = nonExecutingStatusPills.filter((pill) => pill.textContent === 'awaiting_external');
+    const awaitingPills = nonExecutingStatusPills.filter((pill) => pill.textContent === 'awaiting external');
     expect(awaitingPills.length).toBeGreaterThan(0);
     for (const pill of awaitingPills) {
       expect(pill.dataset.effect).toBeUndefined();
@@ -271,58 +441,49 @@ describe('Tasks List Entrypoint', () => {
     expect((await screen.findAllByText('—')).length).toBeGreaterThan(0);
   });
 
-  it('reuses the trimmed filters for both the request and the query key', async () => {
+  it('reuses the trimmed repository column filter for both the request and the query key', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     const baselineCalls = fetchSpy.mock.calls.length;
 
-    fireEvent.change(screen.getByLabelText('Repository'), {
+    fireEvent.click(screen.getByRole('button', { name: /Filter Repository\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Repository filter value'), {
       target: { value: 'owner/repo' },
     });
+
+    expect(fetchSpy.mock.calls.length).toBe(baselineCalls);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Repository filter' }));
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
     });
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&repo=owner%2Frepo',
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&repoExact=owner%2Frepo',
     );
+    await screen.findAllByText('Example task');
 
-    fireEvent.change(screen.getByLabelText('Repository'), {
+    fireEvent.click(screen.getByRole('button', { name: /Repository filter: owner\/repo/i }));
+    fireEvent.change(screen.getByLabelText('Repository filter value'), {
       target: { value: 'owner/repo ' },
     });
 
-    const repositoryInput = screen.getByLabelText('Repository') as HTMLInputElement;
+    const repositoryInput = screen.getByLabelText('Repository filter value') as HTMLInputElement;
     await waitFor(() => {
       expect(repositoryInput.value).toBe('owner/repo ');
     });
     expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
-  });
+  }, 10_000);
 
-  it('preserves the default task scope in shared URLs when entry filters are set', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
-
-    await screen.findAllByText('Example task');
-    const baselineCalls = fetchSpy.mock.calls.length;
-
-    fireEvent.change(screen.getByLabelText('Entry'), { target: { value: 'manifest' } });
-
-    await waitFor(() => {
-      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
-    });
-    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&entry=manifest',
-    );
-    expect(window.location.search).toBe('?scope=tasks&entry=manifest&limit=50');
-  });
-
-  it('labels the lifecycle filter as status and exposes canonical status options', async () => {
+  it('labels the lifecycle column filter as status and exposes canonical status options', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
-    const statusFilter = screen.getByLabelText('Status') as HTMLSelectElement;
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
     const options = Array.from(statusFilter.options).map((option) => option.value);
+    const optionLabels = Array.from(statusFilter.options).map((option) => option.textContent);
 
     expect(options).toEqual([
       '',
@@ -339,18 +500,154 @@ describe('Tasks List Entrypoint', () => {
       'failed',
       'canceled',
     ]);
+    expect(optionLabels).toEqual([
+      'All Statuses',
+      'scheduled',
+      'initializing',
+      'AWAITING TASK',
+      'planning',
+      'AWAITING SLOT',
+      'executing',
+      'proposals',
+      'awaiting external',
+      'finalizing',
+      'completed',
+      'failed',
+      'canceled',
+    ]);
     expect(options).toContain('completed');
     expect(options).not.toContain('succeeded');
 
     const baselineCalls = fetchSpy.mock.calls.length;
     fireEvent.change(statusFilter, { target: { value: 'completed' } });
+    expect(fetchSpy.mock.calls.length).toBe(baselineCalls);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
     });
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&state=completed',
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed',
     );
+  });
+
+  it('stages status changes until Apply and discards them on cancel, Escape, or outside click', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const baselineCalls = fetchSpy.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    fireEvent.change(await screen.findByLabelText('Status filter value'), { target: { value: 'completed' } });
+    expect(fetchSpy.mock.calls.length).toBe(baselineCalls);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel Status filter' }));
+    expect(screen.queryByRole('dialog', { name: 'Status filter' })).toBeNull();
+    expect(fetchSpy.mock.calls.length).toBe(baselineCalls);
+
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    fireEvent.change(await screen.findByLabelText('Status filter value'), { target: { value: 'failed' } });
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Status filter' }), { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Status filter' })).toBeNull();
+    expect(fetchSpy.mock.calls.length).toBe(baselineCalls);
+
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    fireEvent.change(await screen.findByLabelText('Status filter value'), { target: { value: 'planning' } });
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole('dialog', { name: 'Status filter' })).toBeNull();
+    expect(fetchSpy.mock.calls.length).toBe(baselineCalls);
+  });
+
+  it('applies status exclude semantics and removes only the selected chip', async () => {
+    window.history.pushState({}, 'Paged', '/tasks/list?nextPageToken=stale-token');
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    fireEvent.click(screen.getByLabelText('Exclude canceled'));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateNotIn=canceled',
+      );
+    });
+    expect(window.location.search).toBe('?stateNotIn=canceled&limit=50');
+    expect(screen.getByRole('button', { name: 'Status filter: not canceled' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Status filter' }));
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks',
+      );
+    });
+  });
+
+  it('clears stale cursor state when the page size changes', async () => {
+    window.history.pushState({}, 'Paged', '/tasks/list?nextPageToken=stale-token&limit=50');
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&nextPageToken=stale-token',
+      );
+    });
+    await screen.findAllByText('Example task');
+
+    fireEvent.change(screen.getByLabelText('Show'), { target: { value: '100' } });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=100&scope=tasks',
+      );
+    });
+    expect(window.location.search).toBe('?limit=100');
+  });
+
+  it('supports skill and date filter chips with blank semantics', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-123',
+            source: 'temporal',
+            title: 'Example task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            targetSkill: 'moonspec-implement',
+            createdAt: '2026-03-28T00:00:00Z',
+            closedAt: null,
+            scheduledFor: null,
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Skill\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Skill filter value'), {
+      target: { value: 'moonspec-implement' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Skill filter' }));
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toContain('targetSkillIn=moonspec-implement');
+    });
+    expect(screen.getByRole('button', { name: 'Skill filter: moonspec-implement' })).toBeTruthy();
+    await screen.findAllByText('Example task');
+
+    fireEvent.click(screen.getByRole('button', { name: /Filter Finished\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Finished blank values'), { target: { value: 'include' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Finished filter' }));
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toContain('finishedBlank=include');
+    });
+    expect(screen.getByRole('button', { name: 'Finished filter: blank' })).toBeTruthy();
   });
 
   it('renders pagination as arrow buttons beside the table summary', async () => {
@@ -391,7 +688,10 @@ describe('Tasks List Entrypoint', () => {
     const scheduledHeader = tableWrapper?.querySelector<HTMLElement>('th');
 
     expect(controlDeck).toBeTruthy();
-    expect(controlDeck?.querySelector('form.task-list-control-grid')).toBeTruthy();
+    expect(controlDeck?.querySelector('form.task-list-control-grid')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Kind\./i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Workflow Type\./i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Entry\./i })).toBeNull();
 
     expect(controlDeck?.classList.contains('panel--controls')).toBe(false);
     expect(
@@ -430,7 +730,7 @@ describe('Tasks List Entrypoint', () => {
     const controlGrid = controlDeck.querySelector<HTMLElement>('.task-list-control-grid');
     const tableWrapper = dataSlab.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
 
-    expect(controlGrid).toBeTruthy();
+    expect(controlGrid).toBeNull();
     expect(tableWrapper).toBeTruthy();
 
     const shellPanelStyles = getComputedStyle(shellPanel as HTMLElement);
@@ -439,11 +739,6 @@ describe('Tasks List Entrypoint', () => {
     expect(shellPanelStyles.boxShadow).toBe('none');
     expect(shellPanelStyles.paddingTop).toBe('0px');
     expect(shellPanelStyles.minHeight).toBe('0px');
-
-    const controlGridStyles = getComputedStyle(controlGrid as HTMLElement);
-    expect(controlGridStyles.width).toBe('100%');
-    expect(controlGridStyles.maxWidth).toBe('none');
-    expect(controlGridStyles.gridTemplateColumns).toBe('repeat(4, minmax(12rem, 1fr))');
 
     const dataSlabStyles = getComputedStyle(dataSlab);
     expect(dataSlabStyles.gap).toBe('0px');
@@ -456,24 +751,42 @@ describe('Tasks List Entrypoint', () => {
     expect(tableWrapperStyles.backgroundColor).toBe('rgba(0, 0, 0, 0)');
   });
 
-  it('shows active filter chips and clears filters from the control deck', async () => {
+  it('shows clickable active column filter chips and clears filters from the control deck', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'completed' } });
-    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'owner/repo' } });
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    fireEvent.change(await screen.findByLabelText('Status filter value'), { target: { value: 'completed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Repository\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Repository filter value'), { target: { value: 'owner/repo' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Repository filter' }));
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
+    fireEvent.change(screen.getByLabelText('Runtime filter value'), { target: { value: 'codex_cli' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Runtime filter' }));
 
     await waitFor(() => {
       const activeFilterText = document.querySelector('.task-list-filter-chips')?.textContent || '';
       expect(activeFilterText).toContain('completed');
       expect(activeFilterText).toContain('owner/repo');
+      expect(activeFilterText).toContain('Codex CLI');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Repository filter: owner/repo' }));
+    expect(screen.getByRole('dialog', { name: 'Repository filter' })).toBeTruthy();
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cli',
+      );
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
 
     await waitFor(() => {
-      expect((screen.getByLabelText('Status') as HTMLSelectElement).value).toBe('');
-      expect((screen.getByLabelText('Repository') as HTMLInputElement).value).toBe('');
+      fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+      expect((screen.getByLabelText('Status filter value') as HTMLSelectElement).value).toBe('');
     });
   });
 

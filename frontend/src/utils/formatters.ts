@@ -8,6 +8,18 @@ export function formatTaskSkills(
   return skillId || '—';
 }
 
+const STATUS_DISPLAY_NAMES: Record<string, string> = {
+  awaiting_slot: 'AWAITING SLOT',
+  waiting_on_dependencies: 'AWAITING TASK',
+};
+
+export function formatStatusLabel(status: string | null | undefined, fallback = '—'): string {
+  const raw = String(status || fallback).trim();
+  if (!raw) return fallback;
+  const key = raw.toLowerCase().replace(/[\s_]+/g, '_');
+  return STATUS_DISPLAY_NAMES[key] || raw.replace(/_/g, ' ').replace(/\s+/g, ' ');
+}
+
 const RUNTIME_DISPLAY_NAMES: Record<string, string> = {
   codex_cli: 'Codex CLI',
   codex: 'Codex CLI',

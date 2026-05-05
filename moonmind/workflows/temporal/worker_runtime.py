@@ -617,6 +617,16 @@ def _selected_step_tool_name(step_entry: Mapping[str, Any]) -> str:
     )
     return str(step_tool.get("name") or step_tool.get("id") or "").strip()
 
+
+def _selected_step_tool_inputs(step_entry: Mapping[str, Any]) -> dict[str, Any]:
+    step_tool = _coerce_mapping(step_entry.get("tool")) or _coerce_mapping(
+        step_entry.get("skill")
+    )
+    return dict(
+        _coerce_mapping(step_tool.get("inputs"))
+        or _coerce_mapping(step_tool.get("args"))
+    )
+
 def _canonical_step_fingerprint(step_entry: Mapping[str, Any]) -> str:
     try:
         return json.dumps(step_entry, sort_keys=True, separators=(",", ":"))
@@ -1134,6 +1144,9 @@ def _build_runtime_planner():
                     },
                     "instructions": step_instructions,
                 }
+                step_tool_inputs = _selected_step_tool_inputs(step_entry)
+                for key, value in step_tool_inputs.items():
+                    step_node_inputs.setdefault(key, value)
 
                 # Per-step tool/skill override
                 step_tool_name = _selected_step_tool_name(step_entry)

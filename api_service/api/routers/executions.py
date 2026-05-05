@@ -9,7 +9,7 @@ import os
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, Optional
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 from functools import lru_cache
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -263,14 +263,12 @@ def _normalize_temporal_list_scope(
     """Return the product-facing Temporal list scope.
 
     The default task dashboard view is intentionally not a raw Temporal
-    namespace browser. Explicit workflow-type or entry filters keep the older
-    API behavior unless the caller pins a scope.
+    namespace browser. Recognized broad workflow scopes are accepted for old
+    URLs but fail safe to task-run visibility on this ordinary list boundary.
     """
 
     normalized = str(scope or "").strip().lower()
-    if not normalized:
-        return "all" if workflow_type or entry else "tasks"
-    if normalized not in _TEMPORAL_LIST_SCOPES:
+    if normalized and normalized not in _TEMPORAL_LIST_SCOPES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
@@ -282,7 +280,15 @@ def _normalize_temporal_list_scope(
                 ),
             },
         )
-    return cast(Literal["tasks", "user", "system", "all"], normalized)
+    return "tasks"
+
+
+def _is_task_list_workflow_type(workflow_type: str | None) -> bool:
+    return str(workflow_type or "").strip() == "MoonMind.Run"
+
+
+def _is_task_list_entry(entry: str | None) -> bool:
+    return str(entry or "").strip().lower() == "run"
 
 
 def _canonicalize_execution_identifier(raw_identifier: str) -> tuple[str, bool]:
@@ -2641,7 +2647,15 @@ def _normalize_story_output_payload(raw_story_output: Any) -> dict[str, Any]:
     jira_payload = _coerce_mapping(story_output.get("jira"))
     if jira_payload:
         normalized_jira: dict[str, Any] = {}
-        for key in ("projectKey", "issueTypeId", "issueTypeName", "dependencyMode"):
+        for key in (
+            "projectKey",
+            "issueTypeId",
+            "issueTypeName",
+            "boardId",
+            "dependencyMode",
+            "parentIssueKey",
+            "sourceIssueKey",
+        ):
             value = jira_payload.get(key)
             if isinstance(value, str) and value.strip():
                 normalized_jira[key] = value.strip()
@@ -4132,13 +4146,32 @@ async def create_execution(
 @router.get("", response_model=ExecutionListResponse)
 async def list_executions(
     *,
+    request: Request,
     workflow_type: Optional[str] = Query(None, alias="workflowType"),
     owner_type: Optional[str] = Query(None, alias="ownerType"),
     state: Optional[str] = Query(None, alias="state"),
+    state_in: Optional[str] = Query(None, alias="stateIn"),
+    state_not_in: Optional[str] = Query(None, alias="stateNotIn"),
     owner_id: Optional[str] = Query(None, alias="ownerId"),
     entry: Optional[str] = Query(None, alias="entry"),
     repo: Optional[str] = Query(None, alias="repo"),
+    repo_exact: Optional[str] = Query(None, alias="repoExact"),
+    repo_in: Optional[str] = Query(None, alias="repoIn"),
+    repo_not_in: Optional[str] = Query(None, alias="repoNotIn"),
     integration: Optional[str] = Query(None, alias="integration"),
+    target_runtime: Optional[str] = Query(None, alias="targetRuntime"),
+    target_runtime_in: Optional[str] = Query(None, alias="targetRuntimeIn"),
+    target_runtime_not_in: Optional[str] = Query(None, alias="targetRuntimeNotIn"),
+    target_skill_in: Optional[str] = Query(None, alias="targetSkillIn"),
+    target_skill_not_in: Optional[str] = Query(None, alias="targetSkillNotIn"),
+    scheduled_from: Optional[str] = Query(None, alias="scheduledFrom"),
+    scheduled_to: Optional[str] = Query(None, alias="scheduledTo"),
+    scheduled_blank: Optional[str] = Query(None, alias="scheduledBlank"),
+    created_from: Optional[str] = Query(None, alias="createdFrom"),
+    created_to: Optional[str] = Query(None, alias="createdTo"),
+    finished_from: Optional[str] = Query(None, alias="finishedFrom"),
+    finished_to: Optional[str] = Query(None, alias="finishedTo"),
+    finished_blank: Optional[str] = Query(None, alias="finishedBlank"),
     scope: Optional[str] = Query(None, alias="scope"),
     page_size: int = Query(50, alias="pageSize", ge=1, le=200),
     next_page_token: Optional[str] = Query(None, alias="nextPageToken"),
@@ -4184,7 +4217,132 @@ async def list_executions(
             def escape_val(v: str) -> str:
                 return v.replace('"', '\\"')
 
+            def split_csv(raw: str | list[str] | None) -> list[str]:
+                if not raw:
+                    return []
+                parts = raw if isinstance(raw, list) else [raw]
+                seen: set[str] = set()
+                values: list[str] = []
+                for item in parts:
+                    for part in item.split(","):
+                        value = part.strip()
+                        if value and value not in seen:
+                            seen.add(value)
+                            values.append(value)
+                return values
+
+            def raw_query_values(alias: str, fallback: str | None) -> list[str]:
+                values = request.query_params.getlist(alias)
+                if not values and fallback is not None:
+                    values = [fallback]
+                return split_csv(values)
+
+            def validate_non_contradictory(
+                include_alias: str,
+                include_raw: str | list[str] | None,
+                exclude_alias: str,
+                exclude_raw: str | list[str] | None,
+            ) -> None:
+                if split_csv(include_raw) and split_csv(exclude_raw):
+                    raise TemporalExecutionValidationError(
+                        f"Cannot combine {include_alias} and {exclude_alias}."
+                    )
+
+            def any_query(attr: str, values: list[str]) -> str | None:
+                if not values:
+                    return None
+                if len(values) == 1:
+                    return f'{attr}="{escape_val(values[0])}"'
+                return "(" + " OR ".join(
+                    f'{attr}="{escape_val(value)}"' for value in values
+                ) + ")"
+
+            def append_exact_or_multi_filter(
+                attr: str,
+                *,
+                exact: str | None = None,
+                include: str | list[str] | None = None,
+                exclude: str | list[str] | None = None,
+            ) -> None:
+                exact_value = (exact or "").strip()
+                if exact_value:
+                    query_parts.append(f'{attr}="{escape_val(exact_value)}"')
+                include_query = any_query(attr, split_csv(include))
+                if include_query and not exact_value:
+                    query_parts.append(include_query)
+                for value in split_csv(exclude):
+                    query_parts.append(f'{attr}!="{escape_val(value)}"')
+
+            def normalize_date_bound(
+                raw: str | None,
+                *,
+                end_of_day: bool = False,
+            ) -> str | None:
+                value = (raw or "").strip()
+                if not value:
+                    return None
+                if len(value) == 10:
+                    suffix = "T23:59:59.999999Z" if end_of_day else "T00:00:00Z"
+                    return f"{value}{suffix}"
+                return value.replace("+00:00", "Z")
+
+            def datetime_range_parts(
+                attr: str,
+                start_raw: str | None,
+                end_raw: str | None,
+            ) -> list[str]:
+                parts: list[str] = []
+                start_value = normalize_date_bound(start_raw)
+                end_value = normalize_date_bound(end_raw, end_of_day=True)
+                if start_value:
+                    parts.append(f'{attr}>="{escape_val(start_value)}"')
+                if end_value:
+                    parts.append(f'{attr}<="{escape_val(end_value)}"')
+                return parts
+
+            def append_datetime_filter(
+                attr: str,
+                start_raw: str | None,
+                end_raw: str | None,
+                blank_mode: str | None = None,
+            ) -> None:
+                range_parts = datetime_range_parts(attr, start_raw, end_raw)
+                blank_value = (blank_mode or "").strip().lower()
+                if blank_value == "include":
+                    null_query = f"{attr} IS NULL"
+                    if range_parts:
+                        range_query = " AND ".join(range_parts)
+                        query_parts.append(f"({null_query} OR ({range_query}))")
+                    else:
+                        query_parts.append(null_query)
+                    return
+                if blank_value == "exclude":
+                    query_parts.append(f"{attr} IS NOT NULL")
+                query_parts.extend(range_parts)
+
             query_parts = []
+            state_in_values = raw_query_values("stateIn", state_in)
+            state_not_in_values = raw_query_values("stateNotIn", state_not_in)
+            repo_in_values = raw_query_values("repoIn", repo_in)
+            repo_not_in_values = raw_query_values("repoNotIn", repo_not_in)
+            target_runtime_in_values = raw_query_values("targetRuntimeIn", target_runtime_in)
+            target_runtime_not_in_values = raw_query_values("targetRuntimeNotIn", target_runtime_not_in)
+            target_skill_in_values = raw_query_values("targetSkillIn", target_skill_in)
+            target_skill_not_in_values = raw_query_values("targetSkillNotIn", target_skill_not_in)
+            validate_non_contradictory("stateIn", state_in_values, "stateNotIn", state_not_in_values)
+            validate_non_contradictory("repoIn", repo_in_values, "repoNotIn", repo_not_in_values)
+            validate_non_contradictory(
+                "targetRuntimeIn",
+                target_runtime_in_values,
+                "targetRuntimeNotIn",
+                target_runtime_not_in_values,
+            )
+            validate_non_contradictory(
+                "targetSkillIn",
+                target_skill_in_values,
+                "targetSkillNotIn",
+                target_skill_not_in_values,
+            )
             temporal_scope = _normalize_temporal_list_scope(
                 scope,
                 workflow_type=workflow_type,
@@ -4193,11 +4351,26 @@ async def list_executions(
             scope_query = _TEMPORAL_SCOPE_QUERIES[temporal_scope]
             if scope_query:
                 query_parts.append(scope_query)
-            if workflow_type:
+            if workflow_type and not _is_task_list_workflow_type(workflow_type):
+                logger.info(
+                    "Ignoring workflowType=%s for ordinary task-list temporal query",
+                    workflow_type,
+                )
+            elif workflow_type and not scope_query:
                 query_parts.append(f'WorkflowType="{escape_val(workflow_type)}"')
-            if state:
+            if state and not (state_in_values or state_not_in_values):
                 query_parts.append(f'mm_state="{escape_val(state)}"')
-            if entry:
+            append_exact_or_multi_filter(
+                "mm_state",
+                include=state_in_values,
+                exclude=state_not_in_values,
+            )
+            if entry and not _is_task_list_entry(entry):
+                logger.info(
+                    "Ignoring entry=%s for ordinary task-list temporal query",
+                    entry,
+                )
+            elif entry and not scope_query:
                 query_parts.append(f'mm_entry="{escape_val(entry)}"')
             if effective_owner_type:
                 query_parts.append(
@@ -4205,10 +4378,28 @@ async def list_executions(
                 )
             if effective_owner:
                 query_parts.append(f'mm_owner_id="{escape_val(effective_owner)}"')
-            if repo:
-                query_parts.append(f'mm_repo="{escape_val(repo)}"')
+            append_exact_or_multi_filter(
+                "mm_repo",
+                exact=repo_exact or repo,
+                include=repo_in_values,
+                exclude=repo_not_in_values,
+            )
             if integration:
                 query_parts.append(f'mm_integration="{escape_val(integration)}"')
+            append_exact_or_multi_filter(
+                "mm_target_runtime",
+                exact=target_runtime,
+                include=target_runtime_in_values,
+                exclude=target_runtime_not_in_values,
+            )
+            append_exact_or_multi_filter(
+                "mm_target_skill",
+                include=target_skill_in_values,
+                exclude=target_skill_not_in_values,
+            )
+            append_datetime_filter("mm_scheduled_for", scheduled_from, scheduled_to, scheduled_blank)
+            append_datetime_filter("StartTime", created_from, created_to)
+            append_datetime_filter("CloseTime", finished_from, finished_to, finished_blank)
 
             query_str = " AND ".join(query_parts) if query_parts else ""
 
@@ -4303,6 +4494,14 @@ async def list_executions(
                 degraded_count=False,
                 refreshed_at=datetime.now(UTC),
             )
+        except TemporalExecutionValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "invalid_execution_query",
+                    "message": str(exc),
+                },
+            ) from exc
         except RPCError as exc:
             logger.warning(
                 "Failed to list Temporal executions directly: %s", exc, exc_info=True

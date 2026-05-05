@@ -129,7 +129,21 @@ class ManagedRuntimeLauncher:
         if support_root:
             material = f"{Path(support_root).resolve()}::{run_id}"
         digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
-        return str(socket_root / f"{digest}.sock")
+        return str(socket_root / digest / "github.sock")
+
+    async def _make_github_broker_accessible_to_app(
+        self,
+        *,
+        socket_path: str,
+    ) -> None:
+        """Allow a root-created GitHub broker socket to be used after runuser."""
+        path = Path(socket_path)
+        await self._run_checked_command(
+            "chown",
+            "app:app",
+            str(path.parent),
+            str(path),
+        )
 
     def _resolve_workspace_ownership_root(
         self,
@@ -799,6 +813,11 @@ class ManagedRuntimeLauncher:
         deferred_cleanup_paths: list[str] = []
         github_socket_path: str | None = None
         real_gh_path = shutil.which("gh")
+        # The claude CLI refuses --dangerously-skip-permissions when running as root
+        # (security restriction). For claude_code runtime, drop to the app user.
+        _run_as_root = os.geteuid() == 0
+        _is_claude_code = profile.runtime_id == "claude_code"
+        _needs_priv_drop = _run_as_root and _is_claude_code
         process: asyncio.subprocess.Process
         try:
             if github_token and run_root is not None:
@@ -811,7 +830,12 @@ class ManagedRuntimeLauncher:
                     token=github_token,
                     socket_path=github_socket_path,
                 )
+                if _needs_priv_drop:
+                    await self._make_github_broker_accessible_to_app(
+                        socket_path=github_socket_path,
+                    )
                 deferred_cleanup_paths.append(github_socket_path)
+                deferred_cleanup_paths.append(str(Path(github_socket_path).parent))
                 if self._runtime_requires_direct_github_env(profile.runtime_id):
                     env_overrides["GITHUB_TOKEN"] = github_token
                     env_overrides.setdefault("GIT_TERMINAL_PROMPT", "0")
@@ -828,12 +852,6 @@ class ManagedRuntimeLauncher:
                         real_gh_path=real_gh_path,
                     )
                 )
-
-            # The claude CLI refuses --dangerously-skip-permissions when running as root
-            # (security restriction). For claude_code runtime, drop to the app user.
-            _run_as_root = os.geteuid() == 0
-            _is_claude_code = profile.runtime_id == "claude_code"
-            _needs_priv_drop = _run_as_root and _is_claude_code
 
             # Transfer the full run workspace root to the app user so it can write
             # both repo files and launcher support artifacts beside the repo.
