@@ -404,6 +404,60 @@ async def test_controller_launch_unrestricted_session_exposes_docker_proxy(
     )
 
 @pytest.mark.asyncio
+async def test_controller_launch_removes_container_when_proxy_network_attach_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
+    monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "missing-proxy-network")
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={
+            "MOONMIND_URL": "http://api:8000",
+            "MOONMIND_WORKFLOW_DOCKER_MODE": "unrestricted",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if command[:3] == ("docker", "network", "connect"):
+            return 1, "", "network not found"
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        docker_host="tcp://docker-proxy:2375",
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    with pytest.raises(RuntimeError, match="network not found"):
+        await controller.launch_session(request)
+
+    assert commands[-1] == ("docker", "rm", "-f", "ctr-1")
+
+@pytest.mark.asyncio
 async def test_controller_replaces_blank_request_moonmind_url(
     tmp_path: Path,
 ) -> None:

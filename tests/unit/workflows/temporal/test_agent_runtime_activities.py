@@ -2743,6 +2743,45 @@ async def test_agent_runtime_prepare_turn_instructions_fails_before_launch_when_
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_selected_skill_projection_rejects_non_mapping_manifest(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    skill_dir = workspace / ".agents" / "skills" / "pr-resolver"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("resolver body\n", encoding="utf-8")
+    (workspace / ".agents" / "skills" / "_manifest.json").write_text(
+        "[]\n",
+        encoding="utf-8",
+    )
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-pr-resolver",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="pr-resolver",
+                version="1.0.0",
+                content_ref="art-pr-resolver-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.BUILT_IN
+                ),
+            )
+        ],
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="active skill manifest is unreadable",
+    ):
+        TemporalAgentRuntimeActivities._validate_selected_skill_projection(
+            workspace=workspace,
+            selected_skill="pr-resolver",
+            resolved_skillset=resolved_skillset,
+        )
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_preserves_checked_in_skills_before_projection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

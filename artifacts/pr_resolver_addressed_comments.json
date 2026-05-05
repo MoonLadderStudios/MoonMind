@@ -1,27 +1,27 @@
 [
   {
-    "id": 3186820408,
-    "disposition": "addressed",
-    "rationale": "Restricted dialog Enter-to-apply handling so Enter on popover action buttons is not intercepted, with a regression test for staged filters remaining unapplied from action-button keydown."
-  },
-  {
-    "id": 4226183005,
+    "id": 4231762096,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary wrapper; no standalone code action beyond the linked review comments."
+    "rationale": "Parent review summary only; actionable child comments are classified separately."
   },
   {
-    "id": 3186821781,
-    "disposition": "addressed",
-    "rationale": "Excluded button targets from the popover Enter key apply path and covered the accessibility behavior in Tasks List tests."
-  },
-  {
-    "id": 3186821798,
-    "disposition": "addressed",
-    "rationale": "Guarded closeFilter focus restoration behind a non-null field target and added a mobile regression test to prevent stale desktop trigger focus."
-  },
-  {
-    "id": 4226184254,
+    "id": 3191720998,
     "disposition": "not-applicable",
-    "rationale": "Broad review summary; the concrete keyboard and focus findings from the summary were addressed in the linked line comments."
+    "rationale": "The current session controller already imports both os and Mapping."
+  },
+  {
+    "id": 3191721033,
+    "disposition": "addressed",
+    "rationale": "Added manifest type validation so non-object JSON fails with a controlled TemporalActivityRuntimeError."
+  },
+  {
+    "id": 3191726001,
+    "disposition": "addressed",
+    "rationale": "Added cleanup of the launched container when unrestricted Docker proxy network attachment fails."
+  },
+  {
+    "id": 4231767468,
+    "disposition": "not-applicable",
+    "rationale": "Parent Codex review wrapper only; actionable child feedback is classified separately."
   }
 ]

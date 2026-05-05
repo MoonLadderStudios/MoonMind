@@ -1712,6 +1712,7 @@ class DockerCodexManagedSessionController:
                 "serve",
             ]
         )
+        container_id = ""
         try:
             stdout, _stderr = await self._run(
                 run_command,
@@ -1726,6 +1727,8 @@ class DockerCodexManagedSessionController:
                     network_name=unrestricted_proxy_network,
                 )
         except Exception:
+            if container_id:
+                await self._remove_container(container_id, ignore_failure=True)
             if github_broker_started:
                 await self._github_auth_brokers.stop(request.session_id)
             raise

@@ -4178,6 +4178,8 @@ class TemporalAgentRuntimeActivities:
             )
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(manifest, Mapping):
+                raise ValueError(f"manifest at {manifest_path} is not a mapping")
         except (OSError, TypeError, ValueError) as exc:
             raise TemporalActivityRuntimeError(
                 "selected skill materialization failed before runtime launch: "
