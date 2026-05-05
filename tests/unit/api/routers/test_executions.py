@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -803,6 +804,76 @@ def test_execution_status_facet_counts_static_status_values_with_task_scope() ->
     assert 'mm_entry="run"' in first_count_query
     assert "mm_owner_id=" in first_count_query
     assert body["truncated"] is True
+
+def test_execution_status_facet_supports_real_pagination() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=False)
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=1)),
+        list_workflows=Mock(),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        first_page = test_client.get(
+            "/api/executions/facets",
+            params={"source": "temporal", "facet": "status", "pageSize": 2},
+        )
+        second_page = test_client.get(
+            "/api/executions/facets",
+            params={
+                "source": "temporal",
+                "facet": "status",
+                "pageSize": 2,
+                "nextPageToken": first_page.json()["nextPageToken"],
+            },
+        )
+
+    assert first_page.status_code == 200
+    assert first_page.json()["nextPageToken"] == base64.b64encode(b"2").decode("utf-8")
+    assert second_page.status_code == 200
+    assert second_page.json()["items"] == [
+        {
+            "value": "waiting_on_dependencies",
+            "label": "Waiting On Dependencies",
+            "count": 1,
+        },
+        {"value": "planning", "label": "Planning", "count": 1},
+    ]
+    assert second_page.json()["nextPageToken"] == base64.b64encode(b"4").decode("utf-8")
+    temporal_client.list_workflows.assert_not_called()
+
+def test_execution_facets_reject_malformed_next_page_token() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=False)
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions/facets",
+            params={
+                "source": "temporal",
+                "facet": "targetRuntime",
+                "nextPageToken": "not base64",
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "invalid_execution_query",
+        "message": "nextPageToken must be a valid base64 token.",
+    }
+    temporal_client.list_workflows.assert_not_called()
 
 def test_list_executions_rejects_non_admin_owner_type_override() -> None:
     app = FastAPI()

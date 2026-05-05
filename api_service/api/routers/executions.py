@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import os
@@ -713,6 +715,40 @@ def _build_temporal_execution_query(
 
 def _and_temporal_query(base_query: str, clause: str) -> str:
     return f"{base_query} AND {clause}" if base_query else clause
+
+
+def _decode_execution_facet_page_token(next_page_token: str | None) -> bytes | None:
+    if not next_page_token:
+        return None
+    try:
+        return base64.b64decode(next_page_token, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise TemporalExecutionValidationError(
+            "nextPageToken must be a valid base64 token."
+        ) from exc
+
+
+def _decode_execution_status_facet_offset(next_page_token: str | None) -> int:
+    token_bytes = _decode_execution_facet_page_token(next_page_token)
+    if token_bytes is None:
+        return 0
+    try:
+        offset = int(token_bytes.decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise TemporalExecutionValidationError(
+            "nextPageToken must be a valid status facet page token."
+        ) from exc
+    if offset < 0:
+        raise TemporalExecutionValidationError(
+            "nextPageToken must be a valid status facet page token."
+        )
+    return offset
+
+
+def _encode_execution_status_facet_offset(offset: int | None) -> str | None:
+    if offset is None:
+        return None
+    return base64.b64encode(str(offset).encode("ascii")).decode("utf-8")
 
 
 def _facet_label(facet: str, value: str) -> str:
@@ -5016,11 +5052,19 @@ async def list_execution_facets(
         client = temporal_client
 
         if facet == "status":
-            values = [
+            matching_values = [
                 value
                 for value in _TEMPORAL_STATUS_VALUES
                 if not search_value or search_value.lower() in value.lower()
-            ][:page_size]
+            ]
+            status_offset = _decode_execution_status_facet_offset(next_page_token)
+            values = matching_values[status_offset : status_offset + page_size]
+            next_status_offset = status_offset + page_size
+            status_next_page_token = (
+                _encode_execution_status_facet_offset(next_status_offset)
+                if next_status_offset < len(matching_values)
+                else None
+            )
             items = []
             for value in values:
                 count_info = await client.count_workflows(
@@ -5040,15 +5084,13 @@ async def list_execution_facets(
                 facet=facet,
                 items=items,
                 blankCount=None,
-                truncated=len(_TEMPORAL_STATUS_VALUES) > page_size,
-                nextPageToken=None,
+                truncated=status_next_page_token is not None,
+                nextPageToken=status_next_page_token,
                 countMode="exact",
                 source="authoritative",
             )
 
-        import base64
-
-        token_bytes = base64.b64decode(next_page_token) if next_page_token else None
+        token_bytes = _decode_execution_facet_page_token(next_page_token)
         iterator = client.list_workflows(
             query=base_query,
             page_size=page_size,

@@ -1,22 +1,22 @@
 [
   {
-    "id": 4376768789,
+    "id": 4377068969,
     "disposition": "not-applicable",
-    "rationale": "Quota warning is an external automation status message and does not request a code change."
+    "rationale": "Quota warning from Gemini bot; no repository action required."
   },
   {
-    "id": 3186247357,
+    "id": 3186528575,
     "disposition": "addressed",
-    "rationale": "Frontend filter validation now recomputes after user filter edits, with regression coverage for clearing an initially contradictory URL."
+    "rationale": "Added base64 validation for facet nextPageToken so malformed dynamic facet tokens return structured invalid_execution_query 422 responses."
   },
   {
-    "id": 3186247359,
+    "id": 3186528579,
     "disposition": "addressed",
-    "rationale": "Backend canonical filter values are normalized before legacy state suppression, with regression coverage for state=completed plus empty stateIn."
+    "rationale": "Added real offset pagination for static status facets using the filtered canonical status list and nextPageToken."
   },
   {
-    "id": 4225517449,
+    "id": 4225851317,
     "disposition": "not-applicable",
-    "rationale": "Review summary container; actionable child review comments are classified separately."
+    "rationale": "Automated review summary wrapper; actionable child review comments are tracked separately."
   }
 ]
