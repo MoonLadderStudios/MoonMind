@@ -2013,6 +2013,7 @@ async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
                                 "enabled": True,
                                 "required": True,
                                 "reportType": "integration_test_report",
+                                "primaryPath": "reports/final-report",
                                 "executionRef": {
                                     "namespace": "default",
                                     "workflow_id": "parent-wf",
@@ -2041,6 +2042,7 @@ async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
             assert reports[0].metadata_json["report_type"] == "integration_test_report"
             assert reports[0].metadata_json["report_scope"] == "final"
             assert reports[0].metadata_json["is_final_report"] is True
+            assert reports[0].metadata_json["name"] == "final-report.md"
             _artifact, path = await service.read_path(
                 artifact_id=reports[0].artifact_id,
                 principal="system:agent_runtime",
@@ -2083,6 +2085,7 @@ async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_repo
                                 "enabled": True,
                                 "required": True,
                                 "reportType": "agent_run_report",
+                                "primaryPath": "exports/final-answer.txt",
                                 "executionRef": {
                                     "namespace": "default",
                                     "workflow_id": "parent-wf",
@@ -2104,6 +2107,7 @@ async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_repo
             )
 
             assert len(reports) == 1
+            assert reports[0].metadata_json["name"] == "final-answer.txt"
             _artifact, path = await service.read_path(
                 artifact_id=reports[0].artifact_id,
                 principal="system:agent_runtime",
