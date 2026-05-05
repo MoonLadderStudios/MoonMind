@@ -508,11 +508,32 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         "turnId": turn_id,
                     },
                 )
+                provider_failure = classify_provider_failure(assistant_text)
+                if provider_failure is not None:
+                    result = result.model_copy(
+                        update={
+                            "failure_class": provider_failure.failure_class,
+                            "provider_error_code": provider_failure.provider_error_code,
+                            "retry_recommendation": provider_failure.retry_recommendation,
+                            "metadata": {
+                                **result.metadata,
+                                "providerFailure": {
+                                    "providerErrorCode": (
+                                        provider_failure.provider_error_code
+                                    ),
+                                    "retryRecommendation": (
+                                        provider_failure.retry_recommendation
+                                    ),
+                                    "reason": assistant_text,
+                                },
+                            },
+                        }
+                    )
                 jira_blocker_summary = _jira_skill_blocker_summary(
                     parameters=request.parameters,
                     assistant_text=assistant_text,
                 )
-                if jira_blocker_summary is not None:
+                if jira_blocker_summary is not None and result.failure_class is None:
                     result = result.model_copy(
                         update={
                             "summary": jira_blocker_summary,

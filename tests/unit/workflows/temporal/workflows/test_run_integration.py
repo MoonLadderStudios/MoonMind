@@ -11,6 +11,7 @@ from moonmind.workflows.temporal.workflows.run import (
     INTEGRATION_POLL_LOOP_PATCH,
     NATIVE_PR_BRANCH_DEFAULTS_PATCH,
     NATIVE_PR_PUSH_STATUS_GATE_PATCH,
+    RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     MoonMindRunWorkflow,
 )
 from moonmind.workloads.tool_bridge import build_dood_tool_definition_payload
@@ -576,6 +577,146 @@ async def test_run_execution_stage_skips_integration_after_merge_automation_canc
     )
 
     assert integration_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_honors_pause_between_managed_session_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    child_workflow_ids: list[str] = []
+    pause_wait_count = 0
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        assert getattr(payload, "artifact_ref", None) == "plan-ref"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "first",
+                    "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                    "inputs": {"instructions": "Run the first managed step."},
+                },
+                {
+                    "id": "second",
+                    "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                    "inputs": {"instructions": "Run the second managed step."},
+                },
+            ],
+            edges=[{"from": "first", "to": "second"}],
+        )
+
+    async def fake_execute_child_workflow(
+        workflow_name: str,
+        request: Any,
+        **kwargs: Any,
+    ) -> Any:
+        assert workflow_name == "MoonMind.AgentRun"
+        child_workflow_ids.append(str(kwargs["id"]))
+        if len(child_workflow_ids) == 1:
+            workflow._paused = True
+        else:
+            assert pause_wait_count == 1
+        return {
+            "summary": "Completed with status completed",
+            "output_refs": [],
+            "failure_class": None,
+            "metadata": {"agentId": getattr(request, "agent_id", None)},
+        }
+
+    async def fake_wait_condition(
+        predicate: Callable[[], bool],
+        **_kwargs: Any,
+    ) -> None:
+        nonlocal pause_wait_count
+        assert workflow._paused is True
+        assert predicate() is False
+        pause_wait_count += 1
+        workflow._paused = False
+        assert predicate() is True
+
+    async def fake_bind_task_scoped_session(request: Any) -> Any:
+        return request
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-pause-boundary",
+            "run_id": "run-pause-boundary",
+            "search_attributes": {
+                "mm_owner_type": ["user"],
+                "mm_owner_id": ["owner-1"],
+            },
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {RUN_PAUSE_SAFE_BOUNDARIES_PATCH, "run-conditional-registry-read-v1"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_task_scoped_session",
+        fake_bind_task_scoped_session,
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"publishMode": "none"},
+        plan_ref="plan-ref",
+    )
+
+    assert child_workflow_ids == [
+        "wf-pause-boundary:agent:first",
+        "wf-pause-boundary:agent:second",
+    ]
+    assert pause_wait_count == 1
+    assert workflow._paused is False
+    assert workflow._waiting_reason is None
+
 
 @pytest.mark.asyncio
 async def test_run_integration_stage_signal_driven_completion(
