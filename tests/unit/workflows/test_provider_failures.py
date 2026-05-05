@@ -27,6 +27,17 @@ def test_classifies_rate_limit_as_429() -> None:
     assert result is not None
     assert result.provider_error_code == "429"
 
+def test_classifies_codex_usage_limit_as_429() -> None:
+    result = classify_provider_failure(
+        "You've hit your usage limit. To get more access now, send a request "
+        "to your admin or try again at 4:45 AM."
+    )
+
+    assert result is not None
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "429"
+    assert result.retry_recommendation == "retry_after_cooldown"
+
 def test_classifies_http_401_as_auth_user_error() -> None:
     result = classify_provider_failure("turn failed: http 401")
 

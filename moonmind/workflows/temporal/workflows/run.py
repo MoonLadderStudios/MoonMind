@@ -193,6 +193,7 @@ RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
 RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
+RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
@@ -1369,6 +1370,28 @@ class MoonMindRunWorkflow:
             self._update_search_attributes()
             self._update_memo()
 
+    async def _wait_if_paused_at_safe_boundary(self) -> None:
+        if not workflow.patched(RUN_PAUSE_SAFE_BOUNDARIES_PATCH):
+            await workflow.wait_condition(lambda: not self._paused)
+            return
+        if not self._paused:
+            return
+
+        self._waiting_reason = "operator_paused"
+        self._attention_required = True
+        self._update_search_attributes()
+        self._update_memo()
+        await workflow.wait_condition(
+            lambda: not self._paused or self._cancel_requested
+        )
+        if self._cancel_requested:
+            return
+        if self._waiting_reason == "operator_paused":
+            self._waiting_reason = None
+        self._attention_required = False
+        self._update_search_attributes()
+        self._update_memo()
+
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
         try:
@@ -1478,8 +1501,7 @@ class MoonMindRunWorkflow:
             ) from exc
         self._set_state(STATE_PLANNING, summary="Planning execution strategy.")
 
-        # Pause until unpaused
-        await workflow.wait_condition(lambda: not self._paused)
+        await self._wait_if_paused_at_safe_boundary()
         if self._cancel_requested:
             await self._run_finalizing_stage(
                 parameters=parameters, status="canceled", error=None
@@ -1908,6 +1930,10 @@ class MoonMindRunWorkflow:
 
         previous_step_outputs: Mapping[str, Any] = {}
         for index, node in enumerate(ordered_nodes, start=1):
+            await self._wait_if_paused_at_safe_boundary()
+            if self._cancel_requested:
+                return
+
             tool = node.get("tool")
             skill = node.get("skill")
 
@@ -1952,6 +1978,10 @@ class MoonMindRunWorkflow:
             current_review_attempt = 1
 
             while current_review_attempt <= (max_review_attempts + 1):
+                await self._wait_if_paused_at_safe_boundary()
+                if self._cancel_requested:
+                    return
+
                 node_inputs = dict(original_node_inputs)
                 if previous_review_feedback:
                     node_inputs = self._inject_review_feedback_into_inputs(
@@ -1976,6 +2006,10 @@ class MoonMindRunWorkflow:
 
                 system_retries = 0
                 while system_retries <= 3:
+                    await self._wait_if_paused_at_safe_boundary()
+                    if self._cancel_requested:
+                        return
+
                     if tool_type == "agent_runtime":
                         # --- Agent dispatch: child workflow ---
                         try:
@@ -2169,6 +2203,9 @@ class MoonMindRunWorkflow:
                                 f"Retrying plan node {node_id} after {failure_message} "
                                 f"(attempt {system_retries} of 3)"
                             )
+                            await self._wait_if_paused_at_safe_boundary()
+                            if self._cancel_requested:
+                                return
                             self._mark_step_running(
                                 node_id,
                                 updated_at=workflow.now(),
@@ -2198,6 +2235,10 @@ class MoonMindRunWorkflow:
 
                 if result_status is None or result_status != "COMPLETED":
                     break
+
+                await self._wait_if_paused_at_safe_boundary()
+                if self._cancel_requested:
+                    return
 
                 if not review_gate_active:
                     accepted_execution = True
@@ -2423,6 +2464,10 @@ class MoonMindRunWorkflow:
                             self._get_logger().warning(
                                 f"Failed to extract PR URL from diagnostics_ref {diag_ref}: {e}"
                             )
+
+        await self._wait_if_paused_at_safe_boundary()
+        if self._cancel_requested:
+            return
 
         if require_pull_request_url and pull_request_url is None:
             last_tool = (
