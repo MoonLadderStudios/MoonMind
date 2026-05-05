@@ -89,6 +89,47 @@ describe('Tasks List Entrypoint', () => {
     expect(screen.queryByRole('dialog', { name: 'Scheduled filter' })).toBeNull();
   });
 
+  it('keeps task filters available outside the desktop-only table layout', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    fireEvent.change(screen.getByLabelText('Mobile Status filter value'), {
+      target: { value: 'completed' },
+    });
+    fireEvent.change(screen.getByLabelText('Mobile Repository filter value'), {
+      target: { value: 'owner/repo' },
+    });
+    fireEvent.change(screen.getByLabelText('Mobile Runtime filter value'), {
+      target: { value: 'codex_cloud' },
+    });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&state=completed&repo=owner%2Frepo&targetRuntime=codex_cloud',
+      );
+    });
+  });
+
+  it('offers every supported runtime identifier in the runtime filter', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
+
+    const runtimeFilter = screen.getByLabelText('Runtime filter value') as HTMLSelectElement;
+    expect(Array.from(runtimeFilter.options).map((option) => option.value)).toEqual([
+      '',
+      'codex_cli',
+      'codex',
+      'claude_code',
+      'claude',
+      'gemini_cli',
+      'jules',
+      'codex_cloud',
+    ]);
+  });
+
   it('keeps workflow-kind browsing controls out of the normal task list', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 

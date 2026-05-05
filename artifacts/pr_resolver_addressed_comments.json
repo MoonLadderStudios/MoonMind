@@ -1,17 +1,22 @@
 [
   {
-    "id": 4376107040,
+    "id": 4376292553,
     "disposition": "not-applicable",
-    "rationale": "Quota warning from gemini-code-assist; no code action requested."
+    "rationale": "Quota warning issue comment is provider status noise and does not request a code change."
   },
   {
-    "id": 4224910915,
-    "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary with no actionable feedback."
-  },
-  {
-    "id": 3185711626,
+    "id": 3185847615,
     "disposition": "addressed",
-    "rationale": "Legacy workflow-scope URLs now drop stale nextPageToken before task-scoped fetching, with UI test coverage."
+    "rationale": "Restored status, repository, and runtime filters outside the desktop-only table via mobile task filter controls with UI coverage."
+  },
+  {
+    "id": 3185847617,
+    "disposition": "addressed",
+    "rationale": "Expanded runtime filter options to include codex, claude, and codex_cloud alongside existing runtime identifiers with UI coverage."
+  },
+  {
+    "id": 4225064778,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary contains no separate actionable request beyond the line comments already addressed."
   }
 ]

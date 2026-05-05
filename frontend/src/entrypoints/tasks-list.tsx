@@ -32,7 +32,15 @@ const TEMPORAL_STATUSES = [
   'failed',
   'canceled',
 ] as const;
-const RUNTIME_FILTER_OPTIONS = ['codex_cli', 'claude_code', 'gemini_cli', 'jules'] as const;
+const RUNTIME_FILTER_OPTIONS = [
+  'codex_cli',
+  'codex',
+  'claude_code',
+  'claude',
+  'gemini_cli',
+  'jules',
+  'codex_cloud',
+] as const;
 const TASK_WORKFLOW_TYPE = 'MoonMind.Run';
 const TASK_ENTRY = 'run';
 
@@ -374,14 +382,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     return `Filter ${label}. Filter active: ${field === 'targetRuntime' ? formatRuntimeLabel(value) : value}.`;
   };
 
-  const renderFilterPopover = (field: FilterField, label: string) => {
-    if (openFilter !== field) return null;
-
-    let control;
+  const renderFilterControl = (field: FilterField, labelPrefix = '') => {
     if (field === 'status') {
-      control = (
+      return (
         <label className="queue-inline-filter task-list-header-filter-control">
-          Status filter value
+          {labelPrefix}Status filter value
           <select
             value={temporalState}
             disabled={!listEnabled}
@@ -399,10 +404,12 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           </select>
         </label>
       );
-    } else if (field === 'repository') {
-      control = (
+    }
+
+    if (field === 'repository') {
+      return (
         <label className="queue-inline-filter task-list-header-filter-control">
-          Repository filter value
+          {labelPrefix}Repository filter value
           <input
             type="text"
             value={repository}
@@ -415,13 +422,15 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           />
         </label>
       );
-    } else if (field === 'targetRuntime') {
+    }
+
+    if (field === 'targetRuntime') {
       const runtimeOptions = normalizedTargetRuntime
         ? Array.from(new Set([normalizedTargetRuntime, ...RUNTIME_FILTER_OPTIONS]))
         : [...RUNTIME_FILTER_OPTIONS];
-      control = (
+      return (
         <label className="queue-inline-filter task-list-header-filter-control">
-          Runtime filter value
+          {labelPrefix}Runtime filter value
           <select
             value={targetRuntime}
             disabled={!listEnabled}
@@ -439,9 +448,17 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           </select>
         </label>
       );
-    } else {
-      control = <p className="small">No filter is available for {label} yet.</p>;
     }
+
+    return null;
+  };
+
+  const renderFilterPopover = (field: FilterField, label: string) => {
+    if (openFilter !== field) return null;
+
+    const control = renderFilterControl(field) || (
+      <p className="small">No filter is available for {label} yet.</p>
+    );
 
     return (
       <div className="task-list-header-filter-popover" role="dialog" aria-label={`${label} filter`}>
@@ -511,6 +528,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           >
             Clear filters
           </button>
+        </div>
+        <div className="task-list-mobile-filter-controls" aria-label="Mobile task filters">
+          {renderFilterControl('status', 'Mobile ')}
+          {renderFilterControl('repository', 'Mobile ')}
+          {renderFilterControl('targetRuntime', 'Mobile ')}
         </div>
       </section>
 

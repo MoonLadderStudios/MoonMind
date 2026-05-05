@@ -819,6 +819,12 @@ button.task-list-filter-chip:focus-visible {
   flex: 0 0 auto;
 }
 
+.task-list-mobile-filter-controls {
+  display: none;
+  gap: 0.7rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -1296,6 +1302,10 @@ tr[data-proposal-id].proposal-consuming td {
 
   .task-list-clear-filters {
     width: 100%;
+  }
+
+  .task-list-mobile-filter-controls {
+    display: grid;
   }
 
   .queue-results-toolbar,
