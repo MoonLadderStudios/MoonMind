@@ -130,6 +130,7 @@ interface OAuthSessionState {
 }
 
 export const PROVIDER_PROFILE_QUERY_KEY = ['provider-profiles'] as const;
+const PROVIDER_PROFILE_REFRESH_STORAGE_KEY = 'moonmind:provider-profile-updated';
 
 export function defaultFormState(): ProviderProfileFormState {
   return {
@@ -575,6 +576,19 @@ export function ProviderProfilesManager({
   useEffect(() => {
     claudeEnrollmentProfileIdRef.current = claudeEnrollment?.profile.profile_id ?? null;
   }, [claudeEnrollment?.profile.profile_id]);
+
+  useEffect(() => {
+    const handleProviderProfileRefresh = (event: StorageEvent) => {
+      if (event.key !== PROVIDER_PROFILE_REFRESH_STORAGE_KEY || !event.newValue) {
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+    };
+    window.addEventListener('storage', handleProviderProfileRefresh);
+    return () => {
+      window.removeEventListener('storage', handleProviderProfileRefresh);
+    };
+  }, [queryClient]);
 
   const resetForm = () => {
     setEditingProfileId(null);
