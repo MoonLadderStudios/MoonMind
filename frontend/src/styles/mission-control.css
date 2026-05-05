@@ -3534,6 +3534,41 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding: 6px 10px;
 }
 
+.oauth-terminal-session-panel {
+  background: rgb(var(--mm-panel, 255 255 255));
+  border: 1px solid rgb(var(--mm-border, 203 213 225));
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.oauth-terminal-session-panel dl {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  margin: 0;
+}
+
+.oauth-terminal-session-panel dt {
+  color: rgb(var(--mm-muted, 100 116 139));
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.oauth-terminal-session-panel dd {
+  color: rgb(var(--mm-text, 15 23 42));
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.oauth-terminal-session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .oauth-terminal-paste-box {
   background: rgb(var(--mm-panel, 255 255 255));
   border: 1px solid rgb(var(--mm-border, 203 213 225));
