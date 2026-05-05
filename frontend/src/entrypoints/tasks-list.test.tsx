@@ -64,43 +64,37 @@ describe('Tasks List Entrypoint', () => {
     });
   });
 
-  it('defaults to user task scope but exposes raw all-workflows scope', async () => {
+  it('keeps workflow-kind browsing controls out of the normal task list', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
-    const scopeFilter = screen.getByLabelText('Scope') as HTMLSelectElement;
-    expect(scopeFilter.value).toBe('tasks');
-    expect((screen.getByLabelText('Workflow Type') as HTMLSelectElement).disabled).toBe(true);
-
-    const baselineCalls = fetchSpy.mock.calls.length;
-    fireEvent.change(scopeFilter, { target: { value: 'all' } });
-
-    await waitFor(() => {
-      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
-    });
+    expect(screen.queryByLabelText('Scope')).toBeNull();
+    expect(screen.queryByLabelText('Workflow Type')).toBeNull();
+    expect(screen.queryByLabelText('Entry')).toBeNull();
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=all',
+      '/api/executions?source=temporal&pageSize=50&scope=tasks',
     );
-    expect((screen.getByLabelText('Workflow Type') as HTMLSelectElement).disabled).toBe(false);
   });
 
-  it('keeps explicit task scope in the URL when entry filters are active', async () => {
+  it('normalizes legacy workflow scope URLs to task visibility with recoverable notice', async () => {
+    window.history.pushState(
+      {},
+      'Legacy',
+      '/tasks/list?scope=all&workflowType=MoonMind.ProviderProfileManager&entry=manifest&state=completed&repo=moon%2Fdemo',
+    );
+
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    const baselineCalls = fetchSpy.mock.calls.length;
 
-    fireEvent.change(screen.getByLabelText('Entry'), { target: { value: 'run' } });
-
-    await waitFor(() => {
-      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
-    });
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&entry=run',
+      '/api/executions?source=temporal&pageSize=50&scope=tasks&state=completed&repo=moon%2Fdemo',
     );
-    expect(window.location.search).toContain('scope=tasks');
-    expect(window.location.search).toContain('entry=run');
+    expect(screen.getByText(/Workflow scope filters are not available on Tasks List/i)).toBeTruthy();
+    expect(window.location.search).toBe('?state=completed&repo=moon%2Fdemo&limit=50');
+    expect(screen.queryByText('MoonMind.ProviderProfileManager')).toBeNull();
+    expect(screen.queryByText('manifest')).toBeNull();
   });
 
   it('renders active task-list pills with the shared shimmer selector contract while keeping inactive pills plain', async () => {
@@ -299,23 +293,6 @@ describe('Tasks List Entrypoint', () => {
     expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
   });
 
-  it('preserves the default task scope in shared URLs when entry filters are set', async () => {
-    renderWithClient(<TasksListPage payload={mockPayload} />);
-
-    await screen.findAllByText('Example task');
-    const baselineCalls = fetchSpy.mock.calls.length;
-
-    fireEvent.change(screen.getByLabelText('Entry'), { target: { value: 'manifest' } });
-
-    await waitFor(() => {
-      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
-    });
-    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&scope=tasks&entry=manifest',
-    );
-    expect(window.location.search).toBe('?scope=tasks&entry=manifest&limit=50');
-  });
-
   it('labels the lifecycle filter as status and exposes canonical status options', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
@@ -392,6 +369,9 @@ describe('Tasks List Entrypoint', () => {
 
     expect(controlDeck).toBeTruthy();
     expect(controlDeck?.querySelector('form.task-list-control-grid')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Kind\./i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Workflow Type\./i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Entry\./i })).toBeNull();
 
     expect(controlDeck?.classList.contains('panel--controls')).toBe(false);
     expect(

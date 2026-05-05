@@ -9,7 +9,7 @@ import os
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, Optional
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
@@ -263,14 +263,12 @@ def _normalize_temporal_list_scope(
     """Return the product-facing Temporal list scope.
 
     The default task dashboard view is intentionally not a raw Temporal
-    namespace browser. Explicit workflow-type or entry filters keep the older
-    API behavior unless the caller pins a scope.
+    namespace browser. Recognized broad workflow scopes are accepted for old
+    URLs but fail safe to task-run visibility on this ordinary list boundary.
     """
 
     normalized = str(scope or "").strip().lower()
-    if not normalized:
-        return "all" if workflow_type or entry else "tasks"
-    if normalized not in _TEMPORAL_LIST_SCOPES:
+    if normalized and normalized not in _TEMPORAL_LIST_SCOPES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
@@ -282,7 +280,15 @@ def _normalize_temporal_list_scope(
                 ),
             },
         )
-    return cast(Literal["tasks", "user", "system", "all"], normalized)
+    return "tasks"
+
+
+def _is_task_list_workflow_type(workflow_type: str | None) -> bool:
+    return str(workflow_type or "").strip() == "MoonMind.Run"
+
+
+def _is_task_list_entry(entry: str | None) -> bool:
+    return str(entry or "").strip().lower() == "run"
 
 
 def _canonicalize_execution_identifier(raw_identifier: str) -> tuple[str, bool]:
@@ -4193,11 +4199,21 @@ async def list_executions(
             scope_query = _TEMPORAL_SCOPE_QUERIES[temporal_scope]
             if scope_query:
                 query_parts.append(scope_query)
-            if workflow_type:
+            if workflow_type and not _is_task_list_workflow_type(workflow_type):
+                logger.info(
+                    "Ignoring workflowType=%s for ordinary task-list temporal query",
+                    workflow_type,
+                )
+            elif workflow_type and not scope_query:
                 query_parts.append(f'WorkflowType="{escape_val(workflow_type)}"')
             if state:
                 query_parts.append(f'mm_state="{escape_val(state)}"')
-            if entry:
+            if entry and not _is_task_list_entry(entry):
+                logger.info(
+                    "Ignoring entry=%s for ordinary task-list temporal query",
+                    entry,
+                )
+            elif entry and not scope_query:
                 query_parts.append(f'mm_entry="{escape_val(entry)}"')
             if effective_owner_type:
                 query_parts.append(
