@@ -2,6 +2,7 @@ import { DataTable } from '../components/tables/DataTable';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
+import { formatStatusLabel } from '../utils/formatters';
 import { useMemo, useState, type FormEvent } from 'react';
 
 const ManifestRunSchema = z
@@ -71,7 +72,7 @@ function runStage(run: ManifestRun): string {
 }
 
 function statusLabel(run: ManifestRun): string {
-  const status = displayValue(run.status || run.rawState || run.state || run.temporalStatus);
+  const status = formatStatusLabel(run.status || run.rawState || run.state || run.temporalStatus);
   const stage = runStage(run);
   if (!stage) {
     return status;
@@ -414,7 +415,7 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
                   <option value="all">All statuses</option>
                   {statusOptions.map((status) => (
                     <option key={status} value={status}>
-                      {status}
+                      {formatStatusLabel(status)}
                     </option>
                   ))}
                 </select>

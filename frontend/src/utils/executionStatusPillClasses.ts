@@ -1,3 +1,5 @@
+import { formatStatusLabel } from './formatters';
+
 export const EXECUTING_STATUS_PILL_TRACEABILITY = Object.freeze({
   jiraIssue: 'MM-488',
   relatedJiraIssues: ['MM-489', 'MM-490', 'MM-491'],
@@ -46,9 +48,7 @@ function executionStatusBaseClasses(key: string): string {
 }
 
 function executionStatusVisibleLabel(status: string | null | undefined): string {
-  return String(status || 'executing')
-    .trim()
-    .replace(/\s+/g, ' ');
+  return formatStatusLabel(status, 'executing');
 }
 
 export function executionStatusPillProps(status: string | null | undefined): ExecutionStatusPillProps {

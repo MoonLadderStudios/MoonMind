@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
-import { formatRuntimeLabel, formatTaskSkills } from '../utils/formatters';
+import { formatRuntimeLabel, formatStatusLabel, formatTaskSkills } from '../utils/formatters';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 
@@ -368,7 +368,7 @@ function filterSummary(field: FilterField, filters: ColumnFilters): string {
     const suffix = filter.values.length > 1 ? ` +${filter.values.length - 1}` : '';
     return `${filter.mode === 'exclude' ? 'not ' : ''}${first}${suffix}`;
   };
-  if (field === 'status') return summarizeValues(filters.status);
+  if (field === 'status') return summarizeValues(filters.status, formatStatusLabel);
   if (field === 'targetRuntime') return summarizeValues(filters.targetRuntime, formatRuntimeLabel);
   if (field === 'targetSkill') return summarizeValues(filters.targetSkill);
   if (field === 'repository') {
@@ -706,7 +706,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               <option value="">All Statuses</option>
               {TEMPORAL_STATUSES.map((status) => (
                 <option key={status} value={status}>
-                  {status}
+                  {formatStatusLabel(status)}
                 </option>
               ))}
             </select>

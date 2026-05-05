@@ -1,6 +1,7 @@
 import { useMemo, type CSSProperties } from 'react';
 
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
+import { formatStatusLabel } from '../utils/formatters';
 
 type GlyphStyle = CSSProperties & {
   '--mm-letter-count'?: number;
@@ -29,7 +30,7 @@ function splitGraphemes(value: string): string[] {
 }
 
 function visibleStatusLabel(status: string | null | undefined): string {
-  return String(status || '—').trim().replace(/\s+/g, ' ') || '—';
+  return formatStatusLabel(status);
 }
 
 export function ExecutionStatusPill({ status }: { status: string | null | undefined }) {
