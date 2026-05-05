@@ -81,7 +81,7 @@ describe('Tasks List Entrypoint', () => {
     window.history.pushState(
       {},
       'Legacy',
-      '/tasks/list?scope=all&workflowType=MoonMind.ProviderProfileManager&entry=manifest&state=completed&repo=moon%2Fdemo',
+      '/tasks/list?scope=all&workflowType=MoonMind.ProviderProfileManager&entry=manifest&state=completed&repo=moon%2Fdemo&nextPageToken=stale-token',
     );
 
     renderWithClient(<TasksListPage payload={mockPayload} />);

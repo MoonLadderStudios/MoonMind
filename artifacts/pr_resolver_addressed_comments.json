@@ -1,12 +1,17 @@
 [
   {
-    "id": 3185533683,
-    "disposition": "addressed",
-    "rationale": "Replaced the transient absolute workspace path in specs/298-tasks-list-canonical-route-shell/verification.md with the repository-relative spec path."
+    "id": 4376107040,
+    "disposition": "not-applicable",
+    "rationale": "Quota warning from gemini-code-assist; no code action requested."
   },
   {
-    "id": 4224708869,
+    "id": 4224910915,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the single actionable path portability comment is tracked separately and addressed."
+    "rationale": "Top-level automated review summary with no actionable feedback."
+  },
+  {
+    "id": 3185711626,
+    "disposition": "addressed",
+    "rationale": "Legacy workflow-scope URLs now drop stale nextPageToken before task-scoped fetching, with UI test coverage."
   }
 ]

@@ -183,7 +183,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const [temporalState, setTemporalState] = useState(() => (initial.get('state') || '').toLowerCase());
   const [repository, setRepository] = useState(() => initial.get('repo') || '');
   const [pageSize, setPageSize] = useState(() => parsePageSize(initial.get('limit')));
-  const [listCursor, setListCursor] = useState<string | null>(() => initial.get('nextPageToken')?.trim() || null);
+  const [listCursor, setListCursor] = useState<string | null>(() =>
+    ignoredWorkflowScopeState ? null : initial.get('nextPageToken')?.trim() || null,
+  );
   const [cursorStack, setCursorStack] = useState<string[]>([]);
   const [liveUpdates, setLiveUpdates] = useState(true);
   const [sortField, setSortField] = useState<string>(() => normalizeTableSortField(initial.get('sort')));
