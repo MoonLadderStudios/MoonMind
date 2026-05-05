@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
-import { formatTaskSkills } from '../utils/formatters';
+import { formatStatusLabel, formatTaskSkills } from '../utils/formatters';
 import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
@@ -209,7 +209,7 @@ export function ProposalsPage({ payload }: { payload: BootPayload }) {
               <option value="">All States</option>
               {PROPOSAL_STATUSES.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {formatStatusLabel(s)}
                 </option>
               ))}
             </select>
@@ -311,7 +311,7 @@ export function ProposalsPage({ payload }: { payload: BootPayload }) {
                         <td>{row.repository || '—'}</td>
                         <td>
                           <span {...executionStatusPillProps(row.status)}>
-                            {row.status || '—'}
+                            {formatStatusLabel(row.status)}
                           </span>
                         </td>
                         <td>{row.title}</td>
@@ -364,7 +364,7 @@ export function ProposalsPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div className="queue-card-status">
                         <span {...executionStatusPillProps(row.status)}>
-                          {row.status || '—'}
+                          {formatStatusLabel(row.status)}
                         </span>
                       </div>
                     </div>
