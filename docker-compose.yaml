@@ -546,6 +546,7 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_DOCKER_PROXY_NETWORK=${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - .env
@@ -821,4 +822,5 @@ networks:
   local-network:
     external: true
   docker-proxy-network:
+    name: ${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
     internal: true
