@@ -3089,6 +3089,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [submitRippleKey, setSubmitRippleKey] = useState(0);
   const [submitRippleRect, setSubmitRippleRect] = useState<DOMRect | null>(null);
   const [isSubmitArrowExiting, setIsSubmitArrowExiting] = useState(false);
+  const submitArrowExitTimeoutRef = useRef<number | null>(null);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
   const prevRuntimeRef = useRef(runtime);
@@ -3100,6 +3101,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   useEffect(() => {
     stepsRef.current = steps;
   }, [steps]);
+
+  useEffect(
+    () => () => {
+      if (submitArrowExitTimeoutRef.current !== null) {
+        window.clearTimeout(submitArrowExitTimeoutRef.current);
+      }
+    },
+    [],
+  );
 
   const temporalDraftQuery = useQuery({
     queryKey: [
@@ -7020,10 +7030,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }, [isTemporalFormBlocked, showPrimaryCtaArrow]);
 
-  function clearSubmitArrowExit(event: React.AnimationEvent<HTMLElement>) {
-    if (event.animationName === "queue-submit-primary-arrow-exit") {
-      setIsSubmitArrowExiting(false);
+  function clearSubmitArrowExit() {
+    if (submitArrowExitTimeoutRef.current !== null) {
+      window.clearTimeout(submitArrowExitTimeoutRef.current);
+      submitArrowExitTimeoutRef.current = null;
     }
+    setIsSubmitArrowExiting(false);
+  }
+
+  function scheduleSubmitArrowExitClear() {
+    if (submitArrowExitTimeoutRef.current !== null) {
+      window.clearTimeout(submitArrowExitTimeoutRef.current);
+    }
+    submitArrowExitTimeoutRef.current = window.setTimeout(() => {
+      submitArrowExitTimeoutRef.current = null;
+      setIsSubmitArrowExiting(false);
+    }, 230);
   }
 
   return (
@@ -8598,6 +8620,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 setSubmitRippleRect(rect);
                 setSubmitRippleKey((value) => value + 1);
                 setIsSubmitArrowExiting(true);
+                scheduleSubmitArrowExitClear();
               }}
             >
               {showPrimaryCtaArrow ? (

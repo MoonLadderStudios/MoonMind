@@ -12446,7 +12446,7 @@ describe("Task Create submit arrow animation", () => {
       /\.queue-submit-primary--icon \.queue-submit-primary-arrow\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*overflow:\s*hidden;/s,
     );
     expect(css).toMatch(
-      /\.queue-submit-primary--icon:not\(:disabled\):not\(\[aria-disabled="true"\]\):hover\s*\.queue-submit-primary-arrow\s*svg\s*\{[^}]*animation:\s*queue-submit-primary-arrow-cycle\s+460ms\s+cubic-bezier\(0\.33,\s*0,\s*0\.2,\s*1\)\s+both;/s,
+      /\.queue-submit-primary--icon:not\(\.queue-submit-primary--arrow-exit\):not\(:disabled\):not\(\[aria-disabled="true"\]\):hover\s*\.queue-submit-primary-arrow\s*svg\s*\{[^}]*animation:\s*queue-submit-primary-arrow-cycle\s+460ms\s+cubic-bezier\(0\.33,\s*0,\s*0\.2,\s*1\)\s+both;/s,
     );
     expect(css).toMatch(
       /@keyframes queue-submit-primary-arrow-cycle\s*\{[\s\S]*38%\s*\{[\s\S]*transform:\s*translateX\(145%\);[\s\S]*39%\s*\{[\s\S]*transform:\s*translateX\(-145%\);[\s\S]*100%\s*\{[\s\S]*transform:\s*translateX\(0\);/,
@@ -12471,7 +12471,7 @@ describe("Task Create submit arrow animation", () => {
     );
   });
 
-  it("keeps the create arrow exit active while submit is busy", async () => {
+  it("clears the create arrow exit after its animation while submit is busy", async () => {
     let resolveExecution: (response: Response) => void = () => {};
     const fetchSpy = vi
       .spyOn(window, "fetch")
@@ -12537,6 +12537,12 @@ describe("Task Create submit arrow animation", () => {
         expect(
           createButton.classList.contains("queue-submit-primary--arrow-exit"),
         ).toBe(true);
+      });
+
+      await waitFor(() => {
+        expect(
+          createButton.classList.contains("queue-submit-primary--arrow-exit"),
+        ).toBe(false);
       });
     } finally {
       resolveExecution(

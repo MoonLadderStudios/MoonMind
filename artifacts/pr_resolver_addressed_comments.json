@@ -1,22 +1,17 @@
 [
   {
-    "id": 4377068969,
+    "id": 4376998426,
     "disposition": "not-applicable",
-    "rationale": "Quota warning from Gemini bot; no repository action required."
+    "rationale": "Quota warning issue comment from an automated reviewer; no code action requested."
   },
   {
-    "id": 3186528575,
+    "id": 3186457670,
     "disposition": "addressed",
-    "rationale": "Added base64 validation for facet nextPageToken so malformed dynamic facet tokens return structured invalid_execution_query 422 responses."
+    "rationale": "Cleared the submit arrow exit state after the exit animation duration even while submission remains busy, and updated the create-page regression test."
   },
   {
-    "id": 3186528579,
-    "disposition": "addressed",
-    "rationale": "Added real offset pagination for static status facets using the filtered canonical status list and nextPageToken."
-  },
-  {
-    "id": 4225851317,
+    "id": 4225768669,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary wrapper; actionable child review comments are tracked separately."
+    "rationale": "Automated review summary container; actionable child review comment 3186457670 was handled separately."
   }
 ]
