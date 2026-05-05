@@ -1263,6 +1263,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/facets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Execution Facets */
+        get: operations["list_execution_facets_api_executions_facets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/steps": {
         parameters: {
             query?: never;
@@ -3841,6 +3858,52 @@ export interface components {
             closeStatus?: string | null;
             /** Workflowtype */
             workflowType?: string | null;
+        };
+        /**
+         * ExecutionFacetItemModel
+         * @description One value bucket returned by an execution list facet query.
+         */
+        ExecutionFacetItemModel: {
+            /** Value */
+            value: string;
+            /** Label */
+            label: string;
+            /** Count */
+            count: number;
+        };
+        /**
+         * ExecutionFacetResponse
+         * @description Facet values and counts for execution list column filters.
+         */
+        ExecutionFacetResponse: {
+            /**
+             * Facet
+             * @enum {string}
+             */
+            facet: "status" | "targetRuntime" | "targetSkill" | "repository" | "integration";
+            /** Items */
+            items?: components["schemas"]["ExecutionFacetItemModel"][];
+            /** Blankcount */
+            blankCount?: number | null;
+            /**
+             * Countmode
+             * @default exact
+             * @enum {string}
+             */
+            countMode: "exact" | "estimated_or_unknown";
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+            /** Nextpagetoken */
+            nextPageToken?: string | null;
+            /**
+             * Source
+             * @default authoritative
+             * @enum {string}
+             */
+            source: "authoritative" | "current_page_fallback";
         };
         /**
          * ExecutionInterventionAuditEntryModel
@@ -9946,6 +10009,8 @@ export interface operations {
                 finishedTo?: string | null;
                 finishedBlank?: string | null;
                 scope?: string | null;
+                sort?: string | null;
+                sortDir?: string | null;
                 pageSize?: number;
                 nextPageToken?: string | null;
                 source?: string | null;
@@ -9998,6 +10063,67 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionModel"] | components["schemas"]["ScheduleCreatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_execution_facets_api_executions_facets_get: {
+        parameters: {
+            query: {
+                facet: "status" | "targetRuntime" | "targetSkill" | "repository" | "integration";
+                workflowType?: string | null;
+                ownerType?: string | null;
+                state?: string | null;
+                stateIn?: string | null;
+                stateNotIn?: string | null;
+                ownerId?: string | null;
+                entry?: string | null;
+                repo?: string | null;
+                repoExact?: string | null;
+                repoIn?: string | null;
+                repoNotIn?: string | null;
+                integration?: string | null;
+                targetRuntime?: string | null;
+                targetRuntimeIn?: string | null;
+                targetRuntimeNotIn?: string | null;
+                targetSkillIn?: string | null;
+                targetSkillNotIn?: string | null;
+                scheduledFrom?: string | null;
+                scheduledTo?: string | null;
+                scheduledBlank?: string | null;
+                createdFrom?: string | null;
+                createdTo?: string | null;
+                finishedFrom?: string | null;
+                finishedTo?: string | null;
+                finishedBlank?: string | null;
+                scope?: string | null;
+                search?: string | null;
+                pageSize?: number;
+                nextPageToken?: string | null;
+                source?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionFacetResponse"];
                 };
             };
             /** @description Validation Error */
