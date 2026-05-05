@@ -26,6 +26,7 @@ Required behavior:
 Contract:
 - MoonMind resolves a transport of `gateway`, `direct`, or explicit degraded `local_fallback`.
 - Gateway is preferred when MoonMind owns outbound retrieval or runtime embedding credentials are unavailable by default.
+- Gateway requests from managed runtimes use scoped RetrievalGateway-token auth (`MOONMIND_RETRIEVAL_TOKEN`) rather than legacy worker-token auth.
 - Direct remains available when environment and policy permit embedding and Qdrant access.
 - Local fallback remains explicit and degraded.
 

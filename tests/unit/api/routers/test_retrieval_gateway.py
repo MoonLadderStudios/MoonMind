@@ -18,12 +18,14 @@ from moonmind.rag.context_pack import ContextItem, build_context_pack
 class StubService:
     def __init__(self) -> None:
         self.settings = SimpleNamespace(similarity_top_k=3)
+        self.calls: list[dict[str, object]] = []
 
-    def retrieve(self, **_kwargs):
+    def retrieve(self, **kwargs):
+        self.calls.append(kwargs)
         return build_context_pack(
             items=[ContextItem(score=0.9, source="src/a.py", text="snippet")],
-            filters={"repo": "moonmind"},
-            budgets={},
+            filters=kwargs["filters"],
+            budgets=kwargs["budgets"],
             usage={"tokens": 8, "latency_ms": 4},
             transport="direct",
             telemetry_id="ctx-id",
@@ -56,9 +58,7 @@ def test_context_requires_authentication() -> None:
 
 
 def test_context_rejects_out_of_scope_repo() -> None:
-    """Worker-scoped requests should be rejected with 403 when repo is not permitted."""
-    # After Phase 3.5 queue removal, worker tokens are rejected with 401 at the auth level.
-    # This test verifies the auth gate behavior directly.
+    """Legacy worker-token requests should fail before retrieval execution."""
     app = _build_app()
 
     with TestClient(app) as client:
@@ -68,7 +68,7 @@ def test_context_rejects_out_of_scope_repo() -> None:
             headers={"X-MoonMind-Worker-Token": "token_abc"},
         )
 
-    assert response.status_code == 401
+    assert response.status_code == 410
 
 
 def test_context_returns_gateway_context_pack_for_authorized_request() -> None:
@@ -94,6 +94,60 @@ def test_context_returns_gateway_context_pack_for_authorized_request() -> None:
     assert body["usage"]["latency_ms"] == 4
     assert body["items"][0]["source"] == "src/a.py"
 
+def test_context_accepts_scoped_retrieval_token_and_preserves_request_knobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_RETRIEVAL_TOKEN", "scoped-token")
+    app = _build_app()
+    service = StubService()
+    app.dependency_overrides[get_retrieval_service] = lambda: service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={
+                "query": "q",
+                "filters": {"repository": "moonmind"},
+                "top_k": 7,
+                "overlay_policy": "skip",
+                "budgets": {"tokens": 512, "latency_ms": 1000},
+            },
+            headers={"X-MoonMind-Retrieval-Token": "scoped-token"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["transport"] == "gateway"
+    assert body["filters"] == {"repository": "moonmind"}
+    assert body["budgets"] == {"tokens": 512, "latency_ms": 1000}
+    assert service.calls == [
+        {
+            "query": "q",
+            "filters": {"repository": "moonmind"},
+            "top_k": 7,
+            "overlay_policy": "skip",
+            "budgets": {"tokens": 512, "latency_ms": 1000},
+            "transport": "direct",
+            "initiation_mode": "session",
+        }
+    ]
+
+
+def test_context_retrieval_token_enforces_allowed_repository_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_RETRIEVAL_TOKEN", "scoped-token")
+    monkeypatch.setenv("MOONMIND_RETRIEVAL_ALLOWED_REPOSITORIES", "moonmind")
+    app = _build_app()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={"query": "q", "filters": {"repo": "other/repo"}},
+            headers={"X-MoonMind-Retrieval-Token": "scoped-token"},
+        )
+
+    assert response.status_code == 403
 
 
 
@@ -154,30 +208,50 @@ def test_context_rejects_unsupported_budget_keys_for_authorized_request() -> Non
 
 @pytest.mark.asyncio
 async def test_authorize_worker_token_rejected_after_queue_removal() -> None:
-    """Worker tokens are temporarily rejected (Phase 3.5 queue removal stub)."""
+    """Worker tokens are rejected after queue-token removal."""
     with pytest.raises(HTTPException) as excinfo:
         await authorize_retrieval_request(
             worker_token_header="token_abc",
+            retrieval_token_header=None,
             authorization_header=None,
             user=None,
         )
 
-    assert excinfo.value.status_code == 401
-    assert "temporarily unavailable" in excinfo.value.detail
+    assert excinfo.value.status_code == 410
+    assert "removed" in excinfo.value.detail
 
 
 @pytest.mark.asyncio
-async def test_authorize_bearer_token_rejected_after_queue_removal() -> None:
-    """Bearer tokens are also rejected (Phase 3.5 stub)."""
+async def test_authorize_rejects_unconfigured_bearer_retrieval_token() -> None:
     with pytest.raises(HTTPException) as excinfo:
         await authorize_retrieval_request(
             worker_token_header=None,
+            retrieval_token_header=None,
             authorization_header="Bearer token_xyz",
             user=None,
         )
 
     assert excinfo.value.status_code == 401
-    assert "temporarily unavailable" in excinfo.value.detail
+    assert "not configured" in excinfo.value.detail
+
+
+@pytest.mark.asyncio
+async def test_authorize_accepts_scoped_retrieval_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_RETRIEVAL_TOKEN", "token_xyz")
+    monkeypatch.setenv("MOONMIND_RETRIEVAL_ALLOWED_REPOSITORIES", "moonmind,docs")
+
+    result = await authorize_retrieval_request(
+        worker_token_header=None,
+        retrieval_token_header="token_xyz",
+        authorization_header=None,
+        user=None,
+    )
+
+    assert result.auth_source == "retrieval_token"
+    assert result.allowed_repositories == ("moonmind", "docs")
+    assert result.capabilities == ("rag",)
 
 
 @pytest.mark.asyncio
@@ -186,6 +260,7 @@ async def test_authorize_with_valid_user() -> None:
 
     result = await authorize_retrieval_request(
         worker_token_header=None,
+        retrieval_token_header=None,
         authorization_header=None,
         user=user,  # type: ignore
     )
@@ -196,10 +271,39 @@ async def test_authorize_with_valid_user() -> None:
 
 
 @pytest.mark.asyncio
+async def test_authorize_prefers_valid_user_over_scoped_token_header() -> None:
+    user = SimpleNamespace(id="user_1")
+
+    result = await authorize_retrieval_request(
+        worker_token_header=None,
+        retrieval_token_header="stale-token",
+        authorization_header=None,
+        user=user,  # type: ignore
+    )
+
+    assert result.auth_source == "oidc"
+
+
+@pytest.mark.asyncio
+async def test_authorize_prefers_valid_user_over_bearer_retrieval_token_fallback() -> None:
+    user = SimpleNamespace(id="user_1")
+
+    result = await authorize_retrieval_request(
+        worker_token_header=None,
+        retrieval_token_header=None,
+        authorization_header="Bearer oidc-token-owned-by-auth-provider",
+        user=user,  # type: ignore
+    )
+
+    assert result.auth_source == "oidc"
+
+
+@pytest.mark.asyncio
 async def test_authorize_unauthorized() -> None:
     with pytest.raises(HTTPException) as excinfo:
         await authorize_retrieval_request(
             worker_token_header=None,
+            retrieval_token_header=None,
             authorization_header=None,
             user=None,
         )

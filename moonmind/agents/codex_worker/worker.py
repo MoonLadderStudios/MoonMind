@@ -8269,7 +8269,7 @@ class CodexWorker:
             "WORKSPACE:\n"
             "- Repository cwd is the task repo.\n"
             f"- Use {task_context_path} and {artifacts_path}/logs/** as evidence.\n"
-            "- Relevant skill docs are under ../skills_active/<skill-id>/.\n"
+            "- Relevant skill docs are under .agents/skills/<skill-id>/.\n"
             "- You may only create/update the proposal output file path listed below under OUTPUT CONTRACT.\n"
             "- Do NOT modify any other repository files.\n"
             "- Do NOT commit or push.\n\n"
@@ -10595,13 +10595,14 @@ class CodexWorker:
         else:
             instruction += (
                 "- Skills are available via .agents/skills and .gemini/skills links.\n"
-                "- Selected skills are always materialized under ../skills_active/<skill-id>/."
+                "- Selected skills are materialized under .agents/skills/<skill-id>/."
             )
             instruction += (
                 f"\n\nRUNTIME ADAPTER: {runtime_mode}"
                 "\n\nSKILL USAGE:\n"
-                "Use the selected skill's files under .agents/skills/{skill}/ as the procedure for this step. "
-                "If that path is missing, use ../skills_active/{skill}/."
+                "Use the selected skill's files under .agents/skills/{skill}/ "
+                "as the procedure for this step. "
+                "Fail fast if that active skill projection is missing."
             ).format(skill=step.effective_skill_id)
         return instruction
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
@@ -59,6 +60,10 @@ from moonmind.workflows.provider_failures import classify_provider_failure
 from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
+)
+from moonmind.workflow_docker_mode import (
+    DEFAULT_WORKFLOW_DOCKER_MODE,
+    normalize_workflow_docker_mode,
 )
 
 SessionSnapshotLoader = Callable[
@@ -954,6 +959,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             request=request,
             profile=profile,
         )
+        launch_environment = self._managed_session_launch_environment(
+            binding=active_binding,
+            environment=environment,
+        )
         launch_request = LaunchCodexManagedSessionRequest(
             taskRunId=active_binding.task_run_id,
             workflowId=self._workflow_id,
@@ -966,7 +975,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             codexHomePath=str(self._session_root(binding) / ".moonmind" / "codex-home"),
             imageRef=self._session_image_ref,
             turnCompletionTimeoutSeconds=turn_completion_timeout_seconds,
-            environment=environment,
+            environment=launch_environment,
             metadata=extract_durable_retrieval_metadata(request.parameters),
             workspaceSpec=(
                 dict(request.workspace_spec)
@@ -993,6 +1002,33 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             active_turn_id=handle.session_state.active_turn_id,
         )
         return handle
+
+    def _managed_session_launch_environment(
+        self,
+        *,
+        binding: CodexManagedSessionBinding,
+        environment: Mapping[str, str],
+    ) -> dict[str, str]:
+        session_environment = {
+            str(key): str(value) for key, value in environment.items()
+        }
+        session_environment.setdefault("MOONMIND_WORKDIR", str(self._workspace_root))
+        session_environment.setdefault("MOONMIND_JOB_ID", binding.task_run_id)
+        session_environment.setdefault(
+            "MOONMIND_CONTAINER_WORKSPACE_VOLUME",
+            os.environ.get("MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces"),
+        )
+        workflow_docker_mode = normalize_workflow_docker_mode(
+            os.environ.get(
+                "MOONMIND_WORKFLOW_DOCKER_MODE",
+                DEFAULT_WORKFLOW_DOCKER_MODE,
+            )
+        )
+        session_environment.setdefault(
+            "MOONMIND_WORKFLOW_DOCKER_MODE",
+            workflow_docker_mode,
+        )
+        return session_environment
 
     @staticmethod
     def _turn_completion_timeout_seconds(

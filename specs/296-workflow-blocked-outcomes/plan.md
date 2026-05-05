@@ -4,7 +4,7 @@
 
 ## Summary
 
-Add a replay-stable workflow helper that recognizes explicit structured blocked outcomes in step outputs. On detection, the parent `MoonMind.Run` workflow records the current step, skips remaining plan steps, suppresses publish handling, and completes with a blocked result message.
+Add a replay-stable workflow helper that recognizes explicit structured blocked outcomes in step outputs. On detection, the parent `MoonMind.Run` workflow records the current step, skips remaining plan steps, suppresses publish handling, and fails the parent run with the blocker as the terminal reason. Terminal success is evaluated from requested final outcomes: PR created for PR publishing, merge completed when merge automation is requested, and final report created when required report output is requested.
 
 ## Technical Context
 
@@ -34,4 +34,6 @@ Add a replay-stable workflow helper that recognizes explicit structured blocked 
 1. Add blocked outcome parsing for structured mappings and JSON summaries.
 2. Stop remaining plan execution and mark downstream steps skipped.
 3. Suppress publish handling for blocked outcomes.
-4. Add unit coverage for parsing, final publish outcome, and execution-stage stop behavior.
+4. Mark blocked parent runs as terminal `failed` so execution lists and dependency gates do not treat blocked work as successful completion.
+5. Track final outcome evidence for PR creation, merge automation success, and report artifact creation.
+6. Add unit coverage for parsing, final publish outcome, execution-stage stop behavior, parent terminal-state mapping, and final outcome gates.

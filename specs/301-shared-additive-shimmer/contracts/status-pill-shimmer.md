@@ -27,7 +27,7 @@ The shared light field is represented by:
 
 Required mask usage:
 - Fill mask: active host `::before` uses the shared gradient and keyframes.
-- Border mask: active host `::after` uses the same shared gradient and keyframes, clipped to the border ring.
+- Border mask: active host `::after` uses the same shared gradient and keyframes, clipped to a border ring that overlaps the physical border and a narrow inner edge.
 - Text mask: `.status-letter-wave::after` uses the same shared gradient and keyframes, clipped to visible label text.
 
 ## Text Contract
@@ -67,7 +67,7 @@ Forced colors:
 Unit CSS contract tests must assert:
 - Shared gradient token exists.
 - Fill, border, and text masks use the shared gradient and keyframes.
-- Border mask uses a ring mask.
+- Border mask uses a ring mask with explicit overlap geometry, not a purely interior hairline.
 - Text mask uses text clipping.
 - Glyph fallback is inactive by default and enabled only under unsupported text clipping.
 - Reduced-motion and forced-colors branches disable decorative animation.

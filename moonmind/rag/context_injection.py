@@ -64,6 +64,7 @@ _LOCAL_FALLBACK_ALLOWED_SKIP_REASONS: frozenset[str] = frozenset({
     "qdrant_unavailable",
     "retrieval_unavailable",
     "retrieval_gateway_unavailable",
+    "retrieval_gateway_auth_missing",
 })
 _LOCAL_FALLBACK_MAX_ITEMS = 8
 _LOCAL_FALLBACK_TERMINATE_TIMEOUT_SECONDS = 1.0

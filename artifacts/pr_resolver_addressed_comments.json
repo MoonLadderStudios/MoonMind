@@ -28,5 +28,30 @@
     "id": 4231808935,
     "disposition": "not-applicable",
     "rationale": "Broad review summary with no separate actionable request beyond the line comments already addressed."
+  },
+  {
+    "id": 4231762096,
+    "disposition": "not-applicable",
+    "rationale": "Parent review summary only; actionable child comments are classified separately."
+  },
+  {
+    "id": 3191720998,
+    "disposition": "not-applicable",
+    "rationale": "The current session controller already imports both os and Mapping."
+  },
+  {
+    "id": 3191721033,
+    "disposition": "addressed",
+    "rationale": "Added manifest type validation so non-object JSON fails with a controlled TemporalActivityRuntimeError."
+  },
+  {
+    "id": 3191726001,
+    "disposition": "addressed",
+    "rationale": "Added cleanup of the launched container when unrestricted Docker proxy network attachment fails."
+  },
+  {
+    "id": 4231767468,
+    "disposition": "not-applicable",
+    "rationale": "Parent Codex review wrapper only; actionable child feedback is classified separately."
   }
 ]

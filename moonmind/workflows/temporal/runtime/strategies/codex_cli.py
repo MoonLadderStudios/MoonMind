@@ -62,8 +62,6 @@ def _managed_retrieval_capability_state(
     enabled, reason = settings.retrieval_execution_reason(env)
     if not enabled:
         return False, reason
-    if settings.resolved_transport(None) == "gateway":
-        return False, "retrieval_gateway_auth_unavailable"
     return True, reason
 
 
@@ -225,7 +223,9 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
     ) -> None:
         """Inject RAG context into the instruction before building the command."""
         from moonmind.rag.context_injection import ContextInjectionService
-        service = ContextInjectionService()
+        service = ContextInjectionService(
+            env=dict(environment) if environment is not None else None
+        )
         await service.inject_context(
             request=request,
             workspace_path=workspace_path,

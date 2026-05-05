@@ -195,8 +195,11 @@ def test_retrieve_gateway_flow_skips_embedding_and_preserves_contract_shape(monk
             return None
 
     class _GatewayClient:
+        last_instance = None
+
         def __init__(self, *args, **kwargs):
             self.calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+            _GatewayClient.last_instance = self
 
         def __enter__(self):
             return self
@@ -211,7 +214,11 @@ def test_retrieve_gateway_flow_skips_embedding_and_preserves_contract_shape(monk
     monkeypatch.setattr("moonmind.rag.service.EmbeddingClient", _UnexpectedEmbeddingClient)
     monkeypatch.setattr("moonmind.rag.service.httpx.Client", _GatewayClient)
 
-    service = ContextRetrievalService(settings=settings, env={}, qdrant_client=_StubQdrant())
+    service = ContextRetrievalService(
+        settings=settings,
+        env={"MOONMIND_RETRIEVAL_TOKEN": "scoped-retrieval-token"},
+        qdrant_client=_StubQdrant(),
+    )
     pack = service.retrieve(
         query="gateway query",
         filters={"repo": "moonmind"},
@@ -223,6 +230,18 @@ def test_retrieve_gateway_flow_skips_embedding_and_preserves_contract_shape(monk
     )
 
     assert pack.transport == "gateway"
+    assert _GatewayClient.last_instance is not None
+    request_kwargs = _GatewayClient.last_instance.calls[0][1]
+    assert request_kwargs["json"] == {
+        "query": "gateway query",
+        "filters": {"repo": "moonmind"},
+        "top_k": 3,
+        "overlay_policy": "skip",
+        "budgets": {"tokens": 5000},
+    }
+    assert request_kwargs["headers"] == {
+        "X-MoonMind-Retrieval-Token": "scoped-retrieval-token"
+    }
     assert pack.initiation_mode == "session"
     assert pack.truncated is False
     assert pack.filters == {"repo": "moonmind"}
@@ -241,7 +260,7 @@ def test_retrieve_direct_flow_does_not_serialize_secret_env_values() -> None:
         env={
             "GOOGLE_API_KEY": "google-secret-key",
             "OPENAI_API_KEY": "openai-secret-key",
-            "MOONMIND_WORKER_TOKEN": "worker-token-secret",
+            "MOONMIND_RETRIEVAL_TOKEN": "retrieval-token-secret",
         },
         embedding_client=embedder,
         qdrant_client=qdrant,
@@ -260,4 +279,4 @@ def test_retrieve_direct_flow_does_not_serialize_secret_env_values() -> None:
     serialized = pack.to_json()
     assert "google-secret-key" not in serialized
     assert "openai-secret-key" not in serialized
-    assert "worker-token-secret" not in serialized
+    assert "retrieval-token-secret" not in serialized

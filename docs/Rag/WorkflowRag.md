@@ -1,8 +1,8 @@
 # Workflow RAG – Managed Session Retrieval
 
-**Status:** Draft
+**Status:** Implemented
 **Owners:** MoonMind Engineering
-**Last Updated:** 2026-04-22
+**Last Updated:** 2026-05-05
 
 > **See also:**
 > - [ManagedAgentArchitecture.md](../ManagedAgents/ManagedAgentArchitecture.md)
@@ -285,6 +285,8 @@ That tool may be implemented as:
 - a gateway endpoint for managed-session retrieval requests,
 - or an equivalent runtime-neutral retrieval capability.
 
+Gateway calls from managed runtimes use scoped RetrievalGateway authentication rather than legacy worker tokens. The gateway accepts OIDC-authenticated user requests and scoped retrieval-token requests, and can optionally constrain retrieval-token requests to configured repository scopes.
+
 ### 8.4 Direct raw database access is optional, not the default contract
 
 A deployment may choose to allow direct Qdrant access from a worker/session environment.
@@ -528,6 +530,8 @@ The exact configuration surface may evolve, but the current retrieval settings i
 | `RAG_MAX_CONTEXT_LENGTH_CHARS` | Injected context size cap |
 | `RAG_OVERLAY_MODE` | Overlay storage mode |
 | `MOONMIND_RETRIEVAL_URL` | Gateway transport endpoint |
+| `MOONMIND_RETRIEVAL_TOKEN` | Scoped token used by managed runtimes to call the RetrievalGateway |
+| `MOONMIND_RETRIEVAL_ALLOWED_REPOSITORIES` | Optional comma-separated repository allowlist for scoped RetrievalGateway-token requests |
 | `RAG_QUERY_TOKEN_BUDGET` | Retrieval token budget |
 | `RAG_LATENCY_BUDGET_MS` | Retrieval latency budget |
 | `MOONMIND_RAG_AUTO_CONTEXT` | Automatic initial retrieval enablement |

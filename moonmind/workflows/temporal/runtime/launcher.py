@@ -843,31 +843,17 @@ class ManagedRuntimeLauncher:
             if active_skills_dir.exists():
                 workspace_agents_dir = Path(resolved_workspace_path) / ".agents"
                 target_skills_dir = workspace_agents_dir / "skills"
-                active_link = target_skills_dir / "active"
                 try:
-                    if target_skills_dir.exists():
-                        if target_skills_dir.is_symlink():
-                            logger.warning(
-                                "Expected .agents/skills to be a directory, but found a symlink at %s; "
-                                "skipping active skills linkage.",
-                                target_skills_dir,
-                            )
-                            raise OSError("Cannot link active skills into symlinked .agents/skills")
-                    else:
-                        target_skills_dir.mkdir(parents=True)
-
-                    if active_link.lexists():
-                        if not active_link.is_symlink():
-                            logger.warning(
-                                "Expected .agents/skills/active to be a symlink, but found %s; "
-                                "leaving it unchanged.",
-                                active_link,
-                            )
+                    workspace_agents_dir.mkdir(parents=True, exist_ok=True)
+                    if target_skills_dir.lexists():
+                        if target_skills_dir.is_symlink() or target_skills_dir.is_file():
+                            target_skills_dir.unlink()
                         else:
-                            active_link.unlink()
-                    
-                    if not active_link.lexists():
-                        active_link.symlink_to(active_skills_dir, target_is_directory=True)
+                            shutil.rmtree(target_skills_dir)
+                    target_skills_dir.symlink_to(
+                        active_skills_dir,
+                        target_is_directory=True,
+                    )
                 except OSError as ex:
                     logger.warning("Failed to link active skills directory: %s", ex)
 
