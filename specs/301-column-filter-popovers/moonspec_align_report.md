@@ -6,22 +6,21 @@
 
 ## Updated
 
-- `plan.md`: normalized Technical Context field formatting so the agent context updater can parse current technology details.
-- `tasks.md`: validated as one-story, TDD-first, sequential, and traceable to MM-588 requirements.
+- No specification, plan, task, or design artifact remediation was required in this alignment pass.
+- `moonspec_align_report.md`: refreshed to reflect that implementation and final verification have completed.
 
 ## Key Decisions
 
-- Treat current `MM-587` code as a foundation, not completion: existing status/repository/runtime filters are partial because they apply immediately and cannot express include/exclude, blanks, Skill/date filters, or individual chip removal.
-- Use canonical post-edit URL/API names for include/exclude filters while preserving legacy `state`, `repo`, and `targetRuntime` as load-time mappings.
-- Keep all work scoped to `/tasks/list` task-run visibility; system workflow browsing remains a non-goal.
+- Preserve `spec.md` as the authoritative single-story MM-588 behavior contract; it still contains exactly one user story and the original Jira preset brief.
+- Keep `plan.md` as the planning-time gap analysis. Its pre-implementation `missing` and `partial` statuses are not artifact drift because `tasks.md` and `verification.md` now record completed execution evidence.
+- Keep `tasks.md` completed rather than regenerating it. It covers red-first unit tests, route-boundary integration tests, implementation, story validation, and final verification for the single MM-588 story.
 
 ## Validation
 
 - `SPECIFY_FEATURE=301-column-filter-popovers .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks`: PASS.
 - Sequential task validation for `tasks.md`: PASS, 33 tasks from T001 through T033.
-- `SPECIFY_FEATURE=301-column-filter-popovers .specify/scripts/bash/update-agent-context.sh codex`: PASS.
+- Requirement traceability: PASS. `spec.md`, `tasks.md`, and `verification.md` preserve `MM-588`, FR-001 through FR-025, SC-001 through SC-008, and DESIGN-REQ-007, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015, and DESIGN-REQ-027.
 
 ## Remaining Risks
 
-- Implementation must keep canonical filter semantics task-scoped in the API route.
-- Date and value-list filters should stay bounded and avoid untrusted markup rendering.
+- None found in MoonSpec artifacts.
