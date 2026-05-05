@@ -599,6 +599,41 @@ describe('Tasks List Entrypoint', () => {
     });
   });
 
+  it('does not apply staged filters when Enter is pressed on popover action buttons', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const baselineCalls = executionListCalls().length;
+
+    fireEvent.click(screen.getByRole('button', { name: /Filter Title\. No filter applied\./i }));
+    fireEvent.change(await screen.findByLabelText('Title filter value'), { target: { value: 'Example' } });
+    const clearButton = screen.getByRole('button', { name: 'Clear' });
+    clearButton.focus();
+
+    fireEvent.keyDown(clearButton, { key: 'Enter' });
+
+    expect(executionListCalls().length).toBe(baselineCalls);
+    expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&pageSize=50&scope=tasks');
+    expect(screen.getByRole('dialog', { name: 'Title filter' })).toBeTruthy();
+  });
+
+  it('keeps mobile filter focus from jumping to a stale desktop trigger', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const desktopStatusFilter = screen.getByRole('button', {
+      name: /Filter Status\. No filter applied\./i,
+    });
+    fireEvent.click(desktopStatusFilter);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel Status filter' }));
+
+    const mobileStatusFilter = screen.getByLabelText('Mobile Status filter value') as HTMLSelectElement;
+    mobileStatusFilter.focus();
+    fireEvent.change(mobileStatusFilter, { target: { value: 'completed' } });
+
+    expect(document.activeElement).toBe(mobileStatusFilter);
+  });
+
   it('applies status exclude semantics and removes only the selected chip', async () => {
     window.history.pushState({}, 'Paged', '/tasks/list?nextPageToken=stale-token');
     renderWithClient(<TasksListPage payload={mockPayload} />);

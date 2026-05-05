@@ -1,22 +1,27 @@
 [
   {
-    "id": 4377068969,
-    "disposition": "not-applicable",
-    "rationale": "Quota warning from Gemini bot; no repository action required."
-  },
-  {
-    "id": 3186528575,
+    "id": 3186820408,
     "disposition": "addressed",
-    "rationale": "Added base64 validation for facet nextPageToken so malformed dynamic facet tokens return structured invalid_execution_query 422 responses."
+    "rationale": "Restricted dialog Enter-to-apply handling so Enter on popover action buttons is not intercepted, with a regression test for staged filters remaining unapplied from action-button keydown."
   },
   {
-    "id": 3186528579,
-    "disposition": "addressed",
-    "rationale": "Added real offset pagination for static status facets using the filtered canonical status list and nextPageToken."
-  },
-  {
-    "id": 4225851317,
+    "id": 4226183005,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary wrapper; actionable child review comments are tracked separately."
+    "rationale": "Automated review summary wrapper; no standalone code action beyond the linked review comments."
+  },
+  {
+    "id": 3186821781,
+    "disposition": "addressed",
+    "rationale": "Excluded button targets from the popover Enter key apply path and covered the accessibility behavior in Tasks List tests."
+  },
+  {
+    "id": 3186821798,
+    "disposition": "addressed",
+    "rationale": "Guarded closeFilter focus restoration behind a non-null field target and added a mobile regression test to prevent stale desktop trigger focus."
+  },
+  {
+    "id": 4226184254,
+    "disposition": "not-applicable",
+    "rationale": "Broad review summary; the concrete keyboard and focus findings from the summary were addressed in the linked line comments."
   }
 ]

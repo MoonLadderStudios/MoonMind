@@ -552,7 +552,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           `.task-list-column-filter-button[data-filter-field="${fieldToFocus}"]`,
         )
       : null;
-    (filterTriggerRef.current?.isConnected ? filterTriggerRef.current : fallback)?.focus();
+    if (fieldToFocus) {
+      (filterTriggerRef.current?.isConnected ? filterTriggerRef.current : fallback)?.focus();
+    }
     setOpenFilter(null);
     setDraftFilters(nextDraftFilters);
     setPendingFocusField(fieldToFocus);
@@ -1101,7 +1103,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           }
           if (event.key === 'Enter' && event.target instanceof HTMLElement) {
             const tagName = event.target.tagName.toLowerCase();
-            if (tagName !== 'textarea' && !event.defaultPrevented) {
+            if (tagName !== 'textarea' && tagName !== 'button' && !event.defaultPrevented) {
               event.preventDefault();
               applyFilters(draftFilters, field);
             }
