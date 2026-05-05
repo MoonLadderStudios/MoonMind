@@ -43,7 +43,7 @@ steps:
     instructions: |-
       Check Jira issue {{ inputs.jira_issue_key }} through the deterministic trusted Jira blocker preflight before any MoonSpec implementation work starts.
 
-      Jira Blocks direction is strict for Jira GET issue responses: when the target issue response exposes the other issue as outwardIssue, that other issue blocks {{ inputs.jira_issue_key }}. When the target issue response exposes the other issue as inwardIssue, {{ inputs.jira_issue_key }} blocks a later issue and that link MUST NOT block this orchestration.
+      Jira Blocks direction is strict for Jira GET issue responses: when the target issue response exposes the other issue as inwardIssue and the link type says the inward relationship is "is blocked by", that other issue blocks {{ inputs.jira_issue_key }}. When the target issue response exposes the other issue as outwardIssue and the link type says the outward relationship is "blocks", {{ inputs.jira_issue_key }} blocks a later issue and that link MUST NOT block this orchestration.
 
       Ignore non-blocker issue links for the blocker decision.
 

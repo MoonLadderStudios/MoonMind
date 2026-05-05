@@ -121,8 +121,8 @@ def _blocking_issue_from_link(
             return outward_issue
         return None
 
-    if outward_issue and outward_key != target:
-        return outward_issue
+    if inward_issue and inward_key != target:
+        return inward_issue
     return None
 
 def _coerce_story_payload(value: Any) -> list[dict[str, Any]]:
