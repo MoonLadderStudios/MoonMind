@@ -1,17 +1,27 @@
 [
   {
-    "id": 4231449106,
+    "id": 4231522366,
     "disposition": "not-applicable",
-    "rationale": "Gemini review summary explicitly said there was no feedback to address."
+    "rationale": "Top-level automated review summary; the actionable inline retrieval-gateway auth-source comment is tracked separately."
   },
   {
-    "id": 4231452898,
-    "disposition": "not-applicable",
-    "rationale": "Codex top-level automated review boilerplate contained no actionable suggestion."
-  },
-  {
-    "id": 3191423155,
+    "id": 3191489788,
     "disposition": "addressed",
-    "rationale": "Validated reportOutput.primaryPath after Markdown suffix normalization and added a regression test for the 512-character extensionless path case."
+    "rationale": "Removed legacy worker_token from the scoped retrieval auth-source set and updated the scope error text to reference retrieval tokens."
+  },
+  {
+    "id": 3191505546,
+    "disposition": "addressed",
+    "rationale": "Allowed retrieval_gateway_auth_missing to use degraded local fallback and added regression coverage for that path."
+  },
+  {
+    "id": 3191505551,
+    "disposition": "addressed",
+    "rationale": "Changed retrieval gateway authorization so an authenticated OIDC user is accepted before scoped retrieval-token header validation and added regression coverage."
+  },
+  {
+    "id": 4231537621,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Codex review wrapper; actionable inline comments from the review are tracked separately."
   }
 ]

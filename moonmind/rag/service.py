@@ -36,8 +36,8 @@ class ContextRetrievalService:
     ) -> None:
         self._settings = settings
         self._env = env or os.environ
-        self._worker_token = (
-            str(self._env.get("MOONMIND_WORKER_TOKEN", "")).strip() or None
+        self._retrieval_token = (
+            str(self._env.get("MOONMIND_RETRIEVAL_TOKEN", "")).strip() or None
         )
         self._telemetry = VectorTelemetry(
             run_id=settings.run_id, job_id=settings.job_id
@@ -163,8 +163,8 @@ class ContextRetrievalService:
         }
         url = self._settings.retrieval_gateway_url.rstrip("/") + "/context"
         headers: dict[str, str] = {}
-        if self._worker_token:
-            headers["Authorization"] = f"Bearer {self._worker_token}"
+        if self._retrieval_token:
+            headers["X-MoonMind-Retrieval-Token"] = self._retrieval_token
         try:
             with httpx.Client(timeout=15.0) as client:
                 response = client.post(url, json=payload, headers=headers)
@@ -174,11 +174,14 @@ class ContextRetrievalService:
                 exc.response.status_code if exc.response is not None else "unknown"
             )
             raise RuntimeError(
-                f"RetrievalGateway request failed with status {status_code}. Verify MOONMIND_RETRIEVAL_URL and worker token permissions."
+                "RetrievalGateway request failed with status "
+                f"{status_code}. Verify MOONMIND_RETRIEVAL_URL and "
+                "retrieval token permissions."
             ) from exc
         except httpx.HTTPError as exc:
             raise RuntimeError(
-                "RetrievalGateway request failed due to a network error. Verify connectivity to MOONMIND_RETRIEVAL_URL."
+                "RetrievalGateway request failed due to a network error. "
+                "Verify connectivity to MOONMIND_RETRIEVAL_URL."
             ) from exc
         data = response.json()
         items = [
@@ -237,7 +240,9 @@ class ContextRetrievalService:
         )
         if estimated > token_budget:
             raise RetrievalBudgetExceededError(
-                f"Token budget exceeded before retrieval ({estimated}>{token_budget}). Reduce top_k or increase budgets.tokens.",
+                "Token budget exceeded before retrieval "
+                f"({estimated}>{token_budget}). Reduce top_k or increase "
+                "budgets.tokens.",
                 budget_type="tokens",
             )
 

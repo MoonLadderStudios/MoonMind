@@ -192,6 +192,37 @@ async def test_inject_context_skips_local_fallback_for_explicit_disable_reason(
     assert result.items_count == 0
     assert result.artifact_path is None
 
+@pytest.mark.asyncio
+@patch("moonmind.rag.context_injection.ContextInjectionService._build_local_fallback_pack")
+@patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
+async def test_inject_context_uses_local_fallback_when_gateway_auth_missing(
+    mock_retrieve,
+    mock_build_fallback,
+    mock_request: AgentExecutionRequest,
+    tmp_path,
+) -> None:
+    service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})
+    mock_pack = MagicMock(spec=ContextPack)
+    mock_pack.items = [MagicMock(spec=ContextItem)]
+    mock_pack.context_text = "Local fallback snippet"
+    mock_pack.transport = "local_fallback"
+    mock_pack.to_json.return_value = '{"test": "json"}'
+    mock_retrieve.return_value = (None, "retrieval_gateway_auth_missing")
+    mock_build_fallback.return_value = mock_pack
+
+    result = await service.inject_context(
+        request=mock_request,
+        workspace_path=tmp_path,
+    )
+
+    assert result.items_count == 1
+    assert "Local fallback snippet" in result.instruction
+    mock_build_fallback.assert_called_once()
+    moonmind_meta = mock_request.parameters["metadata"]["moonmind"]
+    assert moonmind_meta["retrievalMode"] == "degraded_local_fallback"
+    assert moonmind_meta["retrievalDegradedReason"] == "retrieval_gateway_auth_missing"
+
+
 @patch("moonmind.rag.context_injection.subprocess.Popen")
 def test_build_local_fallback_pack_stops_after_max_items(mock_popen, tmp_path) -> None:
     service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})

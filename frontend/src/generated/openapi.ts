@@ -7798,6 +7798,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-MoonMind-Worker-Token"?: string | null;
+                "X-MoonMind-Retrieval-Token"?: string | null;
                 Authorization?: string | null;
             };
             path?: never;

@@ -77,9 +77,20 @@ def test_retrieval_execution_reason_unsupported_provider() -> None:
 
 def test_retrieval_execution_reason_gateway_ok() -> None:
     settings = _settings(retrieval_gateway_url="http://gw:8000")
-    ok, reason = settings.retrieval_execution_reason(preferred_transport="gateway")
+    ok, reason = settings.retrieval_execution_reason(
+        {"MOONMIND_RETRIEVAL_TOKEN": "scoped-token"},
+        preferred_transport="gateway",
+    )
     assert ok
     assert reason == "ok"
+
+def test_retrieval_execution_reason_gateway_requires_scoped_auth() -> None:
+    settings = _settings(retrieval_gateway_url="http://gw:8000")
+    ok, reason = settings.retrieval_execution_reason(
+        preferred_transport="gateway",
+    )
+    assert not ok
+    assert reason == "retrieval_gateway_auth_missing"
 
 def test_retrieval_execution_reason_gateway_missing_url() -> None:
     settings = _settings(retrieval_gateway_url=None)
@@ -92,4 +103,7 @@ def test_retrieval_executable_mirrors_reason() -> None:
     assert not settings.retrieval_executable()
 
     settings_ok = _settings(retrieval_gateway_url="http://gw:8000")
-    assert settings_ok.retrieval_executable(preferred_transport="gateway")
+    assert settings_ok.retrieval_executable(
+        {"MOONMIND_RETRIEVAL_TOKEN": "scoped-token"},
+        preferred_transport="gateway",
+    )
