@@ -12476,7 +12476,7 @@ describe("Task Create submit arrow animation", () => {
       /\.queue-submit-primary-ripple\s*\{[^}]*rgb\(var\(--mm-accent-2\) \/ 0\.3\)\s*22%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*88%/s,
     );
     expect(css).toMatch(
-      /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 22px 5px rgb\(var\(--mm-accent-2\) \/ 0\.36\)[^}]*0 0 62px 18px rgb\(var\(--mm-action-primary\) \/ 0\.3\)/s,
+      /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 32px 2px rgb\(var\(--mm-accent-2\) \/ 0\.36\)[^}]*0 0 62px -2px rgb\(var\(--mm-accent-2\) \/ 0\.24\)/s,
     );
     expect(css).not.toMatch(
       /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 0 3px rgb\(var\(--mm-action-primary\) \/ 0\.6\)/s,

@@ -3478,8 +3478,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.3),
     0 0 0 1px rgb(255 255 255 / 0.5),
-    0 0 22px 5px rgb(var(--mm-accent-2) / 0.36),
-    0 0 62px 18px rgb(var(--mm-action-primary) / 0.3),
+    0 0 32px 2px rgb(var(--mm-accent-2) / 0.36),
+    0 0 62px -2px rgb(var(--mm-accent-2) / 0.24),
     0 18px 40px -16px rgb(var(--mm-action-primary) / 0.88);
 }
 
@@ -3493,8 +3493,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.34),
     0 0 0 1px rgb(255 255 255 / 0.54),
-    0 0 28px 7px rgb(var(--mm-accent-2) / 0.42),
-    0 0 72px 20px rgb(var(--mm-action-primary) / 0.34),
+    0 0 38px 3px rgb(var(--mm-accent-2) / 0.42),
+    0 0 72px -2px rgb(var(--mm-accent-2) / 0.28),
     0 0 16px 1px rgb(var(--mm-action-primary) / 0.68);
 }
 
