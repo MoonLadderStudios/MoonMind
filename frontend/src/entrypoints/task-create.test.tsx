@@ -13844,10 +13844,14 @@ describe("Task Create schema-driven capability inputs", () => {
                 required: ["repository"],
                 properties: {
                   repository: { type: "string", title: "Repository name" },
+                  effort: { type: "number", title: "Effort" },
                 },
               },
               uiSchema: {},
-              defaults: { repository: "MoonLadderStudios/MoonMind" },
+              defaults: {
+                repository: "MoonLadderStudios/MoonMind",
+                effort: 2,
+              },
             },
           ],
         }),
@@ -14068,6 +14072,17 @@ describe("Task Create schema-driven capability inputs", () => {
     fetchSpy.mockRestore();
   });
 
+  function latestSchemaCreateRequest(): Record<string, unknown> {
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    expect(executionCall).toBeTruthy();
+    return JSON.parse(String(executionCall?.[1]?.body || "{}")) as Record<
+      string,
+      unknown
+    >;
+  }
+
   it("renders jira.issue-picker from preset schema metadata and expands safe value", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
@@ -14159,6 +14174,66 @@ describe("Task Create schema-driven capability inputs", () => {
     });
 
     expect(await within(step).findByLabelText("Repository name")).toBeTruthy();
+  });
+
+  it("submits direct skill schema inputs in the skill payload", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    const repositoryInput = await within(step).findByLabelText("Repository name");
+    fireEvent.change(repositoryInput, {
+      target: { value: "MoonLadderStudios/SchemaRepo" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: {
+        task: {
+          tool?: { inputs?: Record<string, unknown> };
+          skill?: { args?: Record<string, unknown> };
+        };
+      };
+    };
+    expect(request.payload.task.tool?.inputs).toMatchObject({
+      repository: "MoonLadderStudios/SchemaRepo",
+    });
+    expect(request.payload.task.skill?.args).toMatchObject({
+      repository: "MoonLadderStudios/SchemaRepo",
+    });
+  });
+
+  it("keeps cleared optional numeric schema inputs unset", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    const effortInput = (await within(step).findByLabelText("Effort")) as HTMLInputElement;
+    expect(effortInput.value).toBe("2");
+    fireEvent.change(effortInput, { target: { value: "" } });
+    expect(effortInput.value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: { task: { tool?: { inputs?: Record<string, unknown> } } };
+    };
+    expect(request.payload.task.tool?.inputs?.effort).toBeUndefined();
   });
 });
 

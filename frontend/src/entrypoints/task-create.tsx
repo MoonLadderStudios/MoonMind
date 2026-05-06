@@ -2292,7 +2292,7 @@ function containsSecretLikeCapabilityValue(value: unknown): boolean {
         ) || containsSecretLikeCapabilityValue(nested),
     );
   }
-  return /(token=|password=|bearer\s+|ghp_|github_pat_|akia[0-9a-z]|aiza|atatt|-----begin [a-z ]*private key)/i.test(
+  return /(token=|password=|bearer\s+|ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|-----begin [a-z ]*private key)/i.test(
     String(value || ""),
   );
 }
@@ -2340,16 +2340,34 @@ function resolveSchemaCapabilityValues(
   explicitValues: Record<string, unknown>,
 ): Record<string, unknown> {
   const values: Record<string, unknown> = {};
-  for (const [name] of Object.entries(schemaProperties(detail.inputSchema))) {
+  const required = schemaRequired(detail.inputSchema);
+  for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
+    const fieldSchema = recordValue(rawSchema);
     const explicit = explicitValues[name];
     const fallback = safeCapabilityDefault(detail.defaults, name);
     if (explicit !== undefined) {
+      if (
+        explicit === "" &&
+        !required.has(name) &&
+        (fieldSchema.type === "number" || fieldSchema.type === "integer")
+      ) {
+        continue;
+      }
       values[name] = explicit;
     } else if (fallback !== undefined) {
       values[name] = fallback;
     }
   }
   return values;
+}
+
+function resolvedPresetInputValues(
+  detail: Pick<TaskTemplateDetail, "inputSchema" | "defaults">,
+  explicitValues: Record<string, unknown>,
+): Record<string, unknown> {
+  return schemaContractHasFields(detail)
+    ? resolveSchemaCapabilityValues(detail, explicitValues)
+    : explicitValues;
 }
 
 function validateSchemaCapabilityValues(
@@ -2376,6 +2394,30 @@ function validateSchemaCapabilityValues(
     }
   }
   return errors;
+}
+
+function schemaSkillInputs(
+  detail: Pick<TaskTemplateDetail, "inputSchema" | "uiSchema" | "defaults"> | null | undefined,
+  explicitValues: Record<string, unknown>,
+): {
+  values: Record<string, unknown>;
+  errors: Record<string, string>;
+} {
+  if (!detail || !schemaContractHasFields(detail)) {
+    return { values: {}, errors: {} };
+  }
+  const values = resolveSchemaCapabilityValues(detail, explicitValues);
+  return {
+    values,
+    errors: validateSchemaCapabilityValues(detail, values),
+  };
+}
+
+function mergeSkillArgsWithSchemaInputs(
+  skillArgs: Record<string, unknown>,
+  schemaInputs: Record<string, unknown>,
+): Record<string, unknown> {
+  return { ...skillArgs, ...schemaInputs };
 }
 
 function SchemaCapabilityFields({
@@ -2534,7 +2576,9 @@ function SchemaCapabilityFields({
                 onChange(
                   name,
                   inputType === "number"
-                    ? Number(event.target.value)
+                    ? event.target.value === ""
+                      ? ""
+                      : Number(event.target.value)
                     : event.target.value,
                 )
               }
@@ -5763,11 +5807,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     preset,
     detail,
     inputValues,
+    featureRequestOverride,
     submitIntent,
   }: {
     preset: TemplateOption;
     detail: TaskTemplateDetail;
     inputValues: Record<string, unknown>;
+    featureRequestOverride?: string;
     submitIntent?: string;
   }): Promise<PresetExpansionState> {
     const scopeParams = {
@@ -5783,6 +5829,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       : resolveTemplateInputs(
           detail.inputs || [],
           inputValues,
+          featureRequestOverride,
         );
     const version =
       detail.version || detail.latestVersion || preset.latestVersion || "1.0.0";
@@ -5993,7 +6040,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const expansion = await expandPresetForDraft({
         preset,
         detail,
-        inputValues: step.presetInputValues,
+        inputValues: resolvedPresetInputValues(detail, step.presetInputValues),
+        featureRequestOverride: step.instructions,
       });
       if (
         !currentStepPresetMatches(
@@ -6385,7 +6433,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         const expansion = await expandPresetForDraft({
           preset,
           detail,
-          inputValues: step.presetInputValues,
+          inputValues: resolvedPresetInputValues(detail, step.presetInputValues),
+          featureRequestOverride: step.instructions,
           submitIntent,
         });
         const blockingWarning = expansion.warnings.find((warning) =>
@@ -6598,6 +6647,23 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const taskSkillRequiredCapabilities = primaryStepIsSkill && showAdvancedStepOptions
       ? parseCapabilitiesCsv(String(primaryStep?.skillRequiredCapabilities || ""))
       : [];
+    const primarySkillDetail = primaryStepIsSkill
+      ? skillsQuery.data?.detailsById[primaryValidation.value.skillId.trim()] || null
+      : null;
+    const primarySchemaInputs = primaryStep
+      ? schemaSkillInputs(primarySkillDetail, primaryStep.presetInputValues)
+      : { values: {}, errors: {} };
+    if (primaryStep && Object.keys(primarySchemaInputs.errors).length > 0) {
+      updateStep(primaryStep.localId, {
+        presetInputErrors: primarySchemaInputs.errors,
+      });
+      setSubmitMessage(
+        Object.values(primarySchemaInputs.errors)[0] ||
+          "Complete required Skill input fields before submitting.",
+      );
+      clearSubmitBusy();
+      return;
+    }
 
     let primarySkillArgs: Record<string, unknown> = {};
     if (primarySkillArgsRaw) {
@@ -6615,6 +6681,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         return;
       }
     }
+    primarySkillArgs = mergeSkillArgsWithSchemaInputs(
+      primarySkillArgs,
+      primarySchemaInputs.values,
+    );
     let primaryToolInputs: Record<string, unknown> = {};
     if (primaryStep?.stepType === "tool" && !executableGeneratedToolPayload(primaryStep)) {
       if (!primaryStep.toolId.trim()) {
@@ -6685,6 +6755,24 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const stepSkillCaps = stepIsSkill && showAdvancedStepOptions
         ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
         : [];
+      const stepSkillDetail = stepIsSkill
+        ? skillsQuery.data?.detailsById[stepSkillId] || null
+        : null;
+      const stepSchemaInputs = schemaSkillInputs(
+        stepSkillDetail,
+        step.presetInputValues,
+      );
+      if (Object.keys(stepSchemaInputs.errors).length > 0) {
+        updateStep(step.localId, {
+          presetInputErrors: stepSchemaInputs.errors,
+        });
+        setSubmitMessage(
+          Object.values(stepSchemaInputs.errors)[0] ||
+            `Complete required Skill input fields before submitting Step ${index + 1}.`,
+        );
+        clearSubmitBusy();
+        return;
+      }
       const hasAuthoredToolInputs =
         stepIsTool &&
         Boolean(step.toolInputs.trim()) &&
@@ -6699,6 +6787,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         hasAuthoredToolInputs ||
         Boolean(stepSkillId) ||
         Boolean(stepSkillArgsRaw) ||
+        Object.keys(stepSchemaInputs.values).length > 0 ||
         stepSkillCaps.length > 0 ||
         Boolean(generatedToolPayload) ||
         Boolean(generatedSkillPayload);
@@ -6735,6 +6824,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           return;
         }
       }
+      stepSkillArgs = mergeSkillArgsWithSchemaInputs(
+        stepSkillArgs,
+        stepSchemaInputs.values,
+      );
       parsedAdditionalStepInputs.push({
         sourceIndex: index,
         step,
