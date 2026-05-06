@@ -37,7 +37,7 @@ A selectable capability that supports schema-driven inputs exposes this contract
 }
 ```
 
-Compatibility requirement: existing legacy task-template `inputs` may remain during migration, but the schema-driven renderer must prefer `inputSchema`/`uiSchema` when present.
+Pre-release replacement rule: when `inputSchema`/`uiSchema` is present, the schema-driven renderer is authoritative for that capability. Do not add compatibility aliases, duplicate capability-specific branches, or fallback paths that silently change schema semantics; existing task-template `inputs` remain only for unrelated surfaces until they are explicitly converted.
 
 ## Draft Input Value
 

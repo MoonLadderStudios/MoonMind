@@ -13,7 +13,7 @@ Build the schema-driven capability input foundation selected from MM-593: preset
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | partial | Tool discovery exposes inputSchema; task templates expose legacy inputs list; skill selection is mostly string IDs. | add normalized capability input contract for presets and skills while preserving existing template list compatibility during the pre-release migration | unit + integration |
+| FR-001 | partial | Tool discovery exposes inputSchema; task templates expose existing inputs lists; skill selection is mostly string IDs. | add normalized capability input contract for presets and skills, making the schema contract authoritative when present without adding compatibility aliases | unit + integration |
 | FR-002 | partial | TaskStepTemplateVersion.inputs_schema stores simplified name/label/type/default fields; no uiSchema/defaults object round-trip. | add lossless schema/ui/default normalization and serialization tests | unit + integration |
 | FR-003 | partial | Create page renders legacy template inputs and governed tool schema summaries, but not a shared generated field renderer for preset/skill schemas. | add schema-form renderer for selected preset and skill capability inputs | frontend unit + integration |
 | FR-004 | missing | No evidence of generic JSON Schema field rendering for required/properties/items/enum/oneOf/anyOf/format across presets and skills. | implement supported schema subset with fallback behavior | frontend unit |
@@ -43,9 +43,9 @@ Build the schema-driven capability input foundation selected from MM-593: preset
 | DESIGN-REQ-002 | missing | No generic schema-form renderer for presets/skills. | add supported schema renderer | frontend unit + integration |
 | DESIGN-REQ-003 | missing | No reusable widget registry for capability schemas. | add allowlisted widget registry | frontend unit |
 | DESIGN-REQ-004 | partial | Jira keys are text inputs; no reusable picker. | add reusable Jira issue picker contract and UI behavior | frontend unit + integration |
-| DESIGN-REQ-005 | implemented_unverified | Trusted Jira auth exists; need story-specific secret regression. | add security coverage | unit + integration |
+| DESIGN-REQ-005 | partial | Trusted Jira tooling exists and Jira responses are sanitized, but the capability input value contract is not yet defined for presets and skills. | define the safe Jira issue value shape and validation/enrichment boundary | unit + integration |
 | DESIGN-REQ-006 | partial | Legacy required validation exists; nested schema field paths missing. | add field-addressable validation shape and mapping | unit + integration |
-| DESIGN-REQ-007 | missing | Existing behavior still models individual preset input lists. | add regression proving no capability-specific branch | frontend integration |
+| DESIGN-REQ-007 | implemented_unverified | Trusted Jira auth is server-side; no story-specific regression proves schema defaults, draft values, logs, artifacts, or agent-visible payloads omit credentials and secret-like values. | add explicit credential-isolation and secret-default regression coverage | unit + integration |
 | DESIGN-REQ-008 | missing | Required story test suite absent. | write tests specified by quickstart | unit + integration |
 
 ## Technical Context

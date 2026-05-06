@@ -2,7 +2,7 @@
 
 ## Repository Gap: Capability Contracts
 
-Decision: Treat current behavior as partial and add a normalized preset/skill capability input contract while preserving legacy template input compatibility.
+Decision: Treat current behavior as partial and add a normalized preset/skill capability input contract while keeping unrelated existing template-list behavior intact until those surfaces are explicitly converted.
 Evidence: `api_service/services/task_templates/catalog.py` serializes `inputs`; `frontend/src/entrypoints/task-create.tsx` consumes template `inputs`; governed MCP tools expose `inputSchema`.
 Rationale: The selected story needs preset and skill schema/UI/default metadata, not only simplified template input rows or tool schema summaries.
 Alternatives considered: Reusing only legacy template inputs was rejected because it cannot represent nested Jira issue objects, UI schema hints, or shared skill input contracts.
@@ -47,4 +47,3 @@ Evidence: Existing repo guidance requires `./tools/test_unit.sh`; Create-page te
 Rationale: The story crosses UI and backend boundaries; separate unit and integration-style tests are needed before implementation.
 Alternatives considered: Manual browser-only validation was rejected because this is a contract-heavy Create-page behavior.
 Test implications: Unit: Python schema/validation and focused frontend renderer/widget tests. Integration: Create-page preset/skill selection payload tests and template catalog route/service tests.
-

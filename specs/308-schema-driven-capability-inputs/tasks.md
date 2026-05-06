@@ -7,13 +7,13 @@
 
 **Organization**: Tasks are grouped around one user story: `Render Capability Inputs From Schema`.
 
-**Source Traceability**: Covers FR-001 through FR-013, SCN-001 through SCN-006, SC-001 through SC-007, and DESIGN-REQ-001 through DESIGN-REQ-008 from `spec.md`.
+**Source Traceability**: Covers FR-001 through FR-013, SCN-001 through SCN-006, SC-001 through SC-007, and in-scope DESIGN-REQ-001 through DESIGN-REQ-008 from `spec.md`. DESIGN-REQ-009 is preserved as out-of-scope context for later or existing specs.
 
 **Requirement Status Summary**:
 
-- Missing: FR-004, FR-006, FR-007, FR-010, FR-013, SCN-003, SCN-006, SC-002, SC-003, SC-006, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-007, DESIGN-REQ-008
-- Partial: FR-001, FR-002, FR-003, FR-005, FR-008, FR-009, FR-012, SCN-001, SCN-002, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-001, DESIGN-REQ-004, DESIGN-REQ-006
-- Implemented unverified: FR-011, SC-007, DESIGN-REQ-005
+- Missing: FR-004, FR-006, FR-007, FR-010, FR-013, SCN-003, SCN-006, SC-002, SC-003, SC-006, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-008
+- Partial: FR-001, FR-002, FR-003, FR-005, FR-008, FR-009, FR-012, SCN-001, SCN-002, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-001, DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-006
+- Implemented unverified: FR-011, SC-007, DESIGN-REQ-007
 - Implemented verified: none
 
 **Test Commands**:
@@ -45,8 +45,8 @@
 
 **CRITICAL**: No production implementation work begins until red-first tests in Phase 3 have been written and confirmed failing.
 
-- [ ] T004 [P] Add backend schema/default redaction fixture data in tests/unit/api/test_task_step_templates_service.py covering FR-011, FR-012, SC-007, DESIGN-REQ-005
-- [ ] T005 [P] Add trusted Jira validation/enrichment fixture data in tests/unit/integrations/test_jira_tool_service.py covering FR-009, FR-012, DESIGN-REQ-004
+- [ ] T004 [P] Add backend schema/default redaction fixture data in tests/unit/api/test_task_step_templates_service.py covering FR-011, FR-012, SC-007, DESIGN-REQ-007
+- [ ] T005 [P] Add trusted Jira validation/enrichment fixture data in tests/unit/integrations/test_jira_tool_service.py covering FR-009, FR-012, DESIGN-REQ-004, DESIGN-REQ-005
 - [ ] T006 [P] Add frontend helper assertions for generated field paths, preserved draft values, and field-addressable errors in frontend/src/entrypoints/task-create.test.tsx covering FR-005, SCN-004, DESIGN-REQ-006
 
 ---
@@ -74,22 +74,22 @@
 
 - [ ] T007 [P] Add failing backend unit tests for normalized preset and skill `inputSchema`, `uiSchema`, and `defaults` serialization in tests/unit/api/test_task_step_templates_service.py covering FR-001, FR-002, DESIGN-REQ-001
 - [ ] T008 [P] Add failing backend unit tests for schema-backed required fields, nested field paths, and field-addressable validation errors in tests/unit/api/test_task_step_templates_service.py covering FR-005, SCN-004, DESIGN-REQ-006
-- [ ] T009 [P] Add failing backend unit tests for secret-like schema defaults and safe Jira issue values in tests/unit/api/test_task_step_templates_service.py covering FR-011, FR-012, SC-007, DESIGN-REQ-005
-- [ ] T010 [P] Add failing Jira validation/enrichment boundary tests for safe issue key values and optional enrichment in tests/unit/integrations/test_jira_tool_service.py covering FR-009, FR-012, DESIGN-REQ-004
-- [ ] T011 [P] Add failing MCP registry regression for schema/default secret safety in tests/unit/mcp/test_jira_tool_registry.py covering FR-011, DESIGN-REQ-005
+- [ ] T009 [P] Add failing backend unit tests for secret-like schema defaults and safe Jira issue values in tests/unit/api/test_task_step_templates_service.py covering FR-011, FR-012, SC-007, DESIGN-REQ-007
+- [ ] T010 [P] Add failing Jira validation/enrichment boundary tests for safe issue key values and optional enrichment in tests/unit/integrations/test_jira_tool_service.py covering FR-009, FR-012, DESIGN-REQ-004, DESIGN-REQ-005
+- [ ] T011 [P] Add failing MCP registry regression for schema/default secret safety in tests/unit/mcp/test_jira_tool_registry.py covering FR-011, DESIGN-REQ-007
 - [ ] T012 [P] Add failing frontend unit tests for JSON Schema field rendering of strings, booleans, numbers, enums, arrays, objects, oneOf/anyOf, formats, descriptions, and defaults in frontend/src/entrypoints/task-create.test.tsx covering FR-003, FR-004, DESIGN-REQ-002
 - [ ] T013 [P] Add failing frontend unit tests for allowlisted widget registry lookup, `uiSchema` widget hints, `x-moonmind-widget`, and unsupported-widget errors in frontend/src/entrypoints/task-create.test.tsx covering FR-006, FR-007, SCN-003, DESIGN-REQ-003
-- [ ] T014 [P] Add failing frontend unit tests for reusable `jira.issue-picker` manual entry, outage preservation, safe value shape, and field-path errors in frontend/src/entrypoints/task-create.test.tsx covering FR-008, FR-012, SCN-005, SC-005, DESIGN-REQ-004
+- [ ] T014 [P] Add failing frontend unit tests for reusable `jira.issue-picker` manual entry, outage preservation, safe value shape, and field-path errors in frontend/src/entrypoints/task-create.test.tsx covering FR-008, FR-012, SCN-005, SC-005, DESIGN-REQ-004, DESIGN-REQ-005
 
 ### Integration Tests (write first)
 
 - [ ] T015 [P] Add failing template catalog service integration-style tests for capability detail responses with `inputSchema`, `uiSchema`, and `defaults` in tests/unit/api/test_task_step_templates_service.py covering FR-001, FR-002, SC-001, DESIGN-REQ-001
 - [ ] T016 [P] Add failing startup seed test proving a seeded Jira Orchestrate-style preset can expose schema-backed Jira issue input metadata in tests/integration/test_startup_task_template_seeding.py covering FR-001, FR-007, SC-003, DESIGN-REQ-004
-- [ ] T017 [P] Add failing Create-page integration test for preset schema rendering without preset-specific form branches in frontend/src/entrypoints/task-create.test.tsx covering FR-003, FR-010, SCN-001, SC-001, SC-006, DESIGN-REQ-007
+- [ ] T017 [P] Add failing Create-page integration test for preset schema rendering without preset-specific form branches in frontend/src/entrypoints/task-create.test.tsx covering FR-003, FR-010, SCN-001, SC-001, SC-006, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-008
 - [ ] T018 [P] Add failing Create-page integration test for direct skill schema rendering through the same renderer path in frontend/src/entrypoints/task-create.test.tsx covering FR-003, SCN-002, SC-002, DESIGN-REQ-001
 - [ ] T019 [P] Add failing Create-page integration test for missing `jira_issue.key` blocking preview, apply, or submit while preserving draft values in frontend/src/entrypoints/task-create.test.tsx covering FR-005, SCN-004, SC-004, DESIGN-REQ-006
 - [ ] T020 [P] Add failing Create-page integration test for metadata-selected `jira.issue-picker` manual key entry when lookup is unavailable in frontend/src/entrypoints/task-create.test.tsx covering FR-007, FR-008, FR-009, SCN-003, SCN-005, DESIGN-REQ-004
-- [ ] T021 [P] Add failing Create-page integration test proving a new fixture capability with supported schema and existing widgets renders without capability-ID-specific code in frontend/src/entrypoints/task-create.test.tsx covering FR-010, SCN-006, SC-006, DESIGN-REQ-007
+- [ ] T021 [P] Add failing Create-page integration test proving a new fixture capability with supported schema and existing widgets renders without capability-ID-specific code in frontend/src/entrypoints/task-create.test.tsx covering FR-010, SCN-006, SC-006, DESIGN-REQ-001, DESIGN-REQ-008
 
 ### Red-First Confirmation
 
@@ -98,9 +98,9 @@
 
 ### Conditional Verification For Implemented-Unverified Rows
 
-- [ ] T024 Run the new secret-safety and safe-value tests from T009, T011, and T014 first; skip fallback implementation tasks T025-T026 only if FR-011, SC-007, and DESIGN-REQ-005 already pass without production changes
-- [ ] T025 Conditional on T024 failure, implement schema default redaction and secret-like value rejection in api_service/services/task_templates/catalog.py covering FR-011, SC-007, DESIGN-REQ-005
-- [ ] T026 Conditional on T024 failure, implement frontend safe-default omission and safe Jira issue value submission guardrails in frontend/src/entrypoints/task-create.tsx covering FR-011, FR-012, SC-007, DESIGN-REQ-005
+- [ ] T024 Run the new secret-safety and safe-value tests from T009, T011, and T014 first; skip fallback implementation tasks T025-T026 only if FR-011, SC-007, and DESIGN-REQ-007 already pass without production changes
+- [ ] T025 Conditional on T024 failure, implement schema default redaction and secret-like value rejection in api_service/services/task_templates/catalog.py covering FR-011, SC-007, DESIGN-REQ-007
+- [ ] T026 Conditional on T024 failure, implement frontend safe-default omission and safe Jira issue value submission guardrails in frontend/src/entrypoints/task-create.tsx covering FR-011, FR-012, SC-007, DESIGN-REQ-007
 
 ### Implementation
 
@@ -112,10 +112,10 @@
 - [ ] T032 Add or update frontend capability input contract types and draft state for schema-generated preset and skill inputs in frontend/src/entrypoints/task-create.tsx covering FR-001, FR-003, FR-008
 - [ ] T033 Implement the schema-form renderer for supported schema constructs in frontend/src/entrypoints/task-create.tsx covering FR-003, FR-004, DESIGN-REQ-002
 - [ ] T034 Implement the allowlisted widget registry and unsupported-widget fallback/error behavior in frontend/src/entrypoints/task-create.tsx covering FR-006, DESIGN-REQ-003
-- [ ] T035 Implement reusable `jira.issue-picker` field behavior, manual key preservation, and safe value shape in frontend/src/entrypoints/task-create.tsx covering FR-007, FR-008, FR-012, SCN-005, DESIGN-REQ-004
+- [ ] T035 Implement reusable `jira.issue-picker` field behavior, manual key preservation, and safe value shape in frontend/src/entrypoints/task-create.tsx covering FR-007, FR-008, FR-012, SCN-005, DESIGN-REQ-004, DESIGN-REQ-005
 - [ ] T036 Wire field-addressable backend/frontend validation errors to generated fields and block dependent preview/apply/submit actions when required values are missing in frontend/src/entrypoints/task-create.tsx covering FR-005, SCN-004, DESIGN-REQ-006
-- [ ] T037 Wire preset and direct skill detail flows to the shared schema renderer instead of capability-specific input branches in frontend/src/entrypoints/task-create.tsx covering FR-003, FR-010, SCN-001, SCN-002, SCN-006, DESIGN-REQ-007
-- [ ] T038 Remove or isolate stale capability-ID-specific Create-page branches made obsolete by schema-driven rendering in frontend/src/entrypoints/task-create.tsx covering FR-010, DESIGN-REQ-007
+- [ ] T037 Wire preset and direct skill detail flows to the shared schema renderer instead of capability-specific input branches in frontend/src/entrypoints/task-create.tsx covering FR-003, FR-010, SCN-001, SCN-002, SCN-006, DESIGN-REQ-001, DESIGN-REQ-002
+- [ ] T038 Remove or isolate stale capability-ID-specific Create-page branches made obsolete by schema-driven rendering in frontend/src/entrypoints/task-create.tsx covering FR-010, DESIGN-REQ-001, DESIGN-REQ-002
 
 ### Story Validation
 
@@ -184,7 +184,7 @@ Task: "Add failing Jira safe value tests in tests/unit/integrations/test_jira_to
 1. Complete setup and foundational fixture tasks.
 2. Write all unit tests and integration tests for the selected story.
 3. Run focused Python and frontend commands to confirm the new tests fail for missing behavior.
-4. Treat FR-011, SC-007, and DESIGN-REQ-005 as implemented-unverified: run verification tests first, then execute fallback implementation only if those tests fail.
+4. Treat FR-011, SC-007, and DESIGN-REQ-007 as implemented-unverified: run verification tests first, then execute fallback implementation only if those tests fail.
 5. Implement the backend normalized capability contract and safe Jira value validation.
 6. Implement the frontend schema renderer, widget registry, Jira issue picker, field-addressable errors, and generic preset/skill wiring.
 7. Run focused tests, quickstart validation, full unit verification, and final `/moonspec-verify`.

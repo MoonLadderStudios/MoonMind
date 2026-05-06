@@ -47,6 +47,12 @@ Hermetic integration verification if task-template API/seed behavior changes req
 ./tools/test_integration.sh
 ```
 
+Final MoonSpec verification after implementation and required tests pass:
+
+```bash
+/moonspec-verify
+```
+
 ## End-To-End Acceptance Checks
 
 - Select a seeded preset with `inputSchema` and `uiSchema`; generated fields appear without a preset-specific form branch.
