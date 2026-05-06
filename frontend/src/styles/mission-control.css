@@ -138,6 +138,7 @@
 
 html {
   font-family: var(--mm-font-sans);
+  scrollbar-gutter: stable;
 }
 
 body {
@@ -424,7 +425,7 @@ h1 {
   background: rgb(var(--mm-panel) / 0.65);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  transition: transform 130ms cubic-bezier(.2,.8,.2,1), border-color 130ms ease, background 130ms ease;
+  transition: border-color 130ms ease, background 130ms ease, box-shadow 130ms ease, color 130ms ease;
 }
 
 @supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
@@ -439,7 +440,6 @@ h1 {
   background: rgb(var(--mm-accent) / 0.14);
   color: rgb(var(--mm-ink));
   box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.35), 0 12px 30px -24px rgb(var(--mm-accent) / 0.85);
-  transform: scale(1.02);
 }
 
 .route-nav a:focus-visible {
