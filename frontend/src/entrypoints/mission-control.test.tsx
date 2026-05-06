@@ -796,7 +796,44 @@ describe('Mission Control shared entry', () => {
     const navBlocks = cssRuleBlocks(missionControlCss, '.route-nav');
     expect(
       navBlocks.some(
-        (block) => block.includes('position: absolute;') && block.includes('z-index: 30;'),
+        (block) =>
+          block.includes('position: fixed;') &&
+          block.includes('left: 0.875rem;') &&
+          block.includes('right: 0.875rem;') &&
+          block.includes('z-index: 50;'),
+      ),
+    ).toBe(true);
+  });
+
+  it('uses a mobile top-sheet navigation with row-style links', async () => {
+    const navBlocks = cssRuleBlocks(missionControlCss, '.route-nav');
+    expect(
+      navBlocks.some(
+        (block) =>
+          block.includes('border-radius: 1.5rem;') &&
+          block.includes('background: var(--mm-mobile-nav-fill);') &&
+          block.includes('backdrop-filter: blur(18px);'),
+      ),
+    ).toBe(true);
+
+    const linkBlocks = cssRuleBlocks(missionControlCss, '.route-nav a');
+    expect(
+      linkBlocks.some(
+        (block) =>
+          block.includes('min-height: 3.25rem;') &&
+          block.includes('border: 0;') &&
+          block.includes('border-radius: 1rem;') &&
+          block.includes('background: transparent;'),
+      ),
+    ).toBe(true);
+
+    const activeBlocks = cssRuleBlocks(missionControlCss, '.route-nav a.active');
+    expect(
+      activeBlocks.some(
+        (block) =>
+          block.includes('background: linear-gradient(') &&
+          block.includes('var(--mm-mobile-nav-active-start)') &&
+          block.includes('inset 3px 0 0 var(--mm-mobile-nav-active-edge)'),
       ),
     ).toBe(true);
   });

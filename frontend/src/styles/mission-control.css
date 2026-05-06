@@ -40,6 +40,15 @@
   --mm-control-shell: rgb(var(--mm-panel) / 0.78);
   --mm-control-shell-hover: rgb(var(--mm-accent) / 0.12);
   --mm-control-border: rgb(var(--mm-border) / 0.78);
+  --mm-mobile-nav-fill: rgb(18 13 34 / 0.92);
+  --mm-mobile-nav-border: rgb(150 110 255 / 0.35);
+  --mm-mobile-nav-edge: rgb(255 255 255 / 0.06);
+  --mm-mobile-nav-shadow: 0 20px 50px rgb(0 0 0 / 0.45);
+  --mm-mobile-nav-text: rgb(235 230 255 / 0.78);
+  --mm-mobile-nav-hover: rgb(160 120 255 / 0.12);
+  --mm-mobile-nav-active-start: rgb(135 82 255 / 0.34);
+  --mm-mobile-nav-active-end: rgb(135 82 255 / 0.12);
+  --mm-mobile-nav-active-edge: rgb(165 120 255 / 0.95);
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --mm-executing-sweep-cycle-duration: 2600ms;
   --mm-executing-sweep-angle: -18deg;
@@ -4127,23 +4136,25 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 
   .route-nav {
-    position: absolute;
-    right: 1rem;
-    top: calc(100% + 0.4rem);
-    z-index: 30;
+    position: fixed;
+    top: 7rem;
+    left: 0.875rem;
+    right: 0.875rem;
+    z-index: 50;
     display: none;
     flex-direction: column;
     align-items: stretch;
-    gap: 0.35rem;
-    padding: 0.55rem;
-    min-width: 14rem;
-    max-width: calc(100vw - 2rem);
-    border: 1px solid rgb(var(--mm-border));
-    border-radius: 0.85rem;
-    background: rgb(var(--mm-panel) / 0.98);
-    box-shadow: var(--mm-shadow);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
+    gap: 0.125rem;
+    padding: 0.625rem;
+    max-width: none;
+    border: 1px solid var(--mm-mobile-nav-border);
+    border-radius: 1.5rem;
+    background: var(--mm-mobile-nav-fill);
+    box-shadow:
+      var(--mm-mobile-nav-shadow),
+      inset 0 1px 0 var(--mm-mobile-nav-edge);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
   }
 
   .route-nav--open {
@@ -4151,8 +4162,46 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 
   .route-nav a {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-height: 3.25rem;
+    padding: 0 1rem;
+    border: 0;
+    border-radius: 1rem;
     text-align: left;
+    color: var(--mm-mobile-nav-text);
     background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    transform: none;
+  }
+
+  .route-nav a:hover {
+    color: white;
+    background: var(--mm-mobile-nav-hover);
+    box-shadow: none;
+    transform: none;
+  }
+
+  .route-nav a:focus-visible {
+    color: white;
+    background: var(--mm-mobile-nav-hover);
+    box-shadow: var(--mm-control-focus-ring);
+    transform: none;
+  }
+
+  .route-nav a.active {
+    color: white;
+    background: linear-gradient(
+      90deg,
+      var(--mm-mobile-nav-active-start),
+      var(--mm-mobile-nav-active-end)
+    );
+    box-shadow:
+      inset 3px 0 0 var(--mm-mobile-nav-active-edge),
+      inset 0 1px 0 var(--mm-mobile-nav-edge);
   }
 }
 
