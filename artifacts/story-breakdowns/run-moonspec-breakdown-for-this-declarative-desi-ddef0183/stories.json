@@ -1,0 +1,816 @@
+{
+  "source": {
+    "title": "Task Proposal System",
+    "path": "docs/Tasks/TaskProposalSystem.md",
+    "referencePath": "docs/Tasks/TaskProposalSystem.md",
+    "originalDesignText": "# Task Proposal System\n\nStatus: Active desired state\nOwners: MoonMind Engineering\nLast Updated: 2026-05-06\nRelated: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Tasks/AgentSkillSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`\n\n---\n\n## 1. Summary\n\nMoonMind proposals are reviewable follow-up work items discovered during a `MoonMind.Run`. They preserve useful next steps without automatically starting new executions.\n\nThe desired proposal architecture is external-tracker-native:\n\n1. MoonMind generates candidate follow-up work during the `proposals` stage of a `MoonMind.Run`.\n2. MoonMind validates, normalizes, deduplicates, and stores each proposal as a control-plane delivery record.\n3. MoonMind delivers each proposal to the configured human-review tracker as either a GitHub Issue or Jira issue.\n4. Reviewers triage proposals in GitHub or Jira, not on a dedicated MoonMind task proposal page.\n5. Promotion creates a new `MoonMind.Run` only after a verified human approval action in the configured tracker.\n6. MoonMind comments or transitions the external issue with execution, pull request, error, and final status links.\n\nEach proposal has two representations:\n\n1. **Executable source of truth:** MoonMind's stored, validated `taskCreateRequest` snapshot or artifact reference.\n2. **Human review artifact:** the GitHub Issue or Jira issue rendered from that snapshot.\n\nThe external issue is the review surface, not the executable contract. MoonMind never executes arbitrary edited issue Markdown, Jira ADF, labels, or comments as a task payload. Promotion always uses MoonMind's stored proposal snapshot plus bounded, validated reviewer controls.\n\nThe proposal system is Temporal-native:\n\n1. `MoonMind.Run` executes work.\n2. A dedicated `proposals` stage runs after execution and before finalization.\n3. Generator activities create candidate follow-up tasks from run artifacts and normalized agent results.\n4. Submission activities validate candidates, resolve routing policy, persist delivery records, and create or update external issues.\n5. Webhook or sync activities observe approved/rejected/deferred tracker actions.\n6. Promotion creates a new Temporal execution only after human approval.\n\nCanonical agent-skill storage, precedence, and snapshot semantics live in `docs/Tasks/AgentSkillSystem.md`. This document defines how proposals preserve and promote task-facing skill intent.\n\n---\n\n## 2. Core Invariants\n\nThese rules are fixed:\n\n1. `taskCreateRequest` is the canonical promote-to-task payload.\n2. Proposal creation is not execution; promotion is the only action that starts new work.\n3. Promotion creates a new `MoonMind.Run` execution, not a legacy queue job.\n4. `taskCreateRequest.payload.repository` is the canonical repository target for deduplication and future execution.\n5. Human review is required before any proposal becomes durable running work.\n6. Human review occurs in GitHub Issues or Jira, according to resolved proposal delivery policy.\n7. MoonMind does not provide a dedicated task proposal review page as a primary workflow surface.\n8. The external issue body is a rendered review artifact, not an executable payload.\n9. Proposal generation is best-effort and must never compromise the correctness of the parent run result.\n10. Proposal payloads must conform to the canonical Temporal submit contract used by `/api/executions`.\n11. Proposal origin metadata must identify the durable workflow that produced the proposal.\n12. When a proposal depends on agent skill context, that context must be preserved explicitly in the stored `taskCreateRequest` or through documented inheritance semantics.\n13. Proposal promotion must not silently drift to unrelated skill defaults when the original proposal logic depended on explicit skill selection.\n14. Preset-derived metadata in proposals is advisory review and reconstruction metadata, not a runtime dependency.\n15. Proposal promotion validates and submits the reviewed flat task payload; it does not depend on live preset catalog lookup or live preset re-expansion for correctness.\n16. Deduplication is repository-aware and deterministic.\n17. Delivery to GitHub or Jira is idempotent. A repeated proposal with the same dedup target updates or links to the existing external issue instead of creating reviewer-facing duplicates.\n18. Tracker credentials and webhook secrets remain inside trusted MoonMind integration boundaries and are never injected into managed agent runtimes.\n\n---\n\n## 3. `MoonMind.Run` Lifecycle Integration\n\n### 3.1 Submit-time contract\n\nTask-shaped submit requests may include:\n\n1. `task.proposeTasks`\n2. `task.proposalPolicy`\n3. `task.skills`\n4. `step.skills`\n\nThese values are part of the durable run contract and must be preserved in `initialParameters` for the run. These fields directly impact downstream proposal generation, delivery, and promotion.\n\nThe canonical direction is:\n\n1. Preserve the raw `task.proposalPolicy` object in `initialParameters`.\n2. Resolve global defaults plus per-task overrides inside the proposal stage or inside `proposal.submit`.\n3. Do not rely on a parallel flattened proposal-policy contract for new work.\n4. Persist enough resolved policy metadata on proposal delivery records to explain why a proposal was delivered to GitHub or Jira.\n\n### 3.1.1 Canonical submission-path normalization\n\nAll new task submission paths must normalize proposal intent into the same canonical nested task payload accepted by `/api/executions` before `MoonMind.Run` starts.\n\nCodex managed sessions do not define a parallel proposal contract. They are the highest-risk producer because session containers may create additional MoonMind tasks through the internal API path, but the rule also applies to ordinary API submission, proposal promotion, schedules, and any future task-creation surface.\n\nRequired mapping:\n\n1. session-level or adapter-level proposal opt-in becomes `initialParameters.task.proposeTasks`\n2. session-level or adapter-level proposal routing overrides become `initialParameters.task.proposalPolicy`\n3. task/runtime/repository metadata continues to flow through the canonical task payload instead of a Codex-only side channel\n\nNon-canonical locations such as root-level `initialParameters.proposeTasks`, turn metadata, session binding metadata, container environment, or adapter-local state are not the durable write contract for new work.\n\nWorkflow code may read root-level `initialParameters.proposeTasks` or older policy shapes only for replay and in-flight compatibility. New submission paths must write the nested `task.*` fields so future behavior does not depend on compatibility fallbacks.\n\nFor Codex, this applies both when a user submits a task targeting a managed Codex runtime and when a Codex managed session creates additional MoonMind tasks through the internal API path.\n\n### 3.2 Run states\n\nFor proposal-capable runs, the relevant state vocabulary is:\n\n1. `scheduled`\n2. `initializing`\n3. `waiting_on_dependencies`\n4. `planning`\n5. `awaiting_slot`\n6. `executing`\n7. `awaiting_external`\n8. `proposals`\n9. `finalizing`\n10. `completed`\n11. `failed`\n12. `canceled`\n\nThe proposal system uses this lifecycle vocabulary consistently across:\n\n1. workflow state\n2. execution API responses\n3. Mission Control status mapping\n4. finish summaries\n5. external issue comments or status updates\n6. related documentation\n\n### 3.3 When the `proposals` stage runs\n\nThe `proposals` stage runs only when both conditions are true:\n\n1. global proposal generation is enabled by workflow settings\n2. the submitted task enables proposals through `task.proposeTasks`\n\nThis gives operators a real global off switch while still allowing task-level opt-in when the feature is enabled system-wide.\n\nFor Codex managed-session originated runs, the durable gate is the canonical nested value preserved in `initialParameters.task.proposeTasks`; session-local flags alone must not determine whether the workflow enters `proposals`.\n\n### 3.4 Proposal generation\n\nProposal generation happens in Temporal activities, never in workflow code.\n\nGenerators analyze:\n\n1. run artifacts\n2. plan-step outcomes\n3. normalized `AgentRunResult` data from managed and external agents\n4. finish-summary signals and execution diagnostics\n5. resolved skill snapshot metadata and skill-related execution context, using artifact-backed skill metadata where needed rather than treating the runtime workspace as the sole source of truth\n6. authored preset metadata and per-step source provenance when the parent run exposes reliable preset provenance\n\nGenerators must:\n\n1. treat run inputs and logs as untrusted\n2. use artifact-backed references for large context\n3. avoid side effects such as commits, pushes, issue creation, or task creation\n4. redact or exclude secrets and unsafe command output\n5. preserve skill selectors only when they materially affect correctness or expected behavior of the follow-up work\n6. preserve reliable preset provenance only when the candidate work is genuinely derived from authored preset metadata or reliable step source metadata\n7. avoid fabricating `task.authoredPresets`, binding IDs, include paths, or preset-derived labels for work that lacks reliable binding evidence\n\n### 3.5 Proposal submission and delivery\n\nProposal submission is a separate side-effecting activity that:\n\n1. validates candidate entries, including any `task.skills` or `step.skills` selectors\n2. resolves proposal policy and tracker delivery policy\n3. normalizes origin metadata\n4. enforces repository and run-quality routing rules\n5. preserves explicit skill-selection intent when present\n6. rejects or normalizes malformed skill-selection fields before storage\n7. computes deduplication fields\n8. creates or updates a MoonMind proposal delivery record\n9. creates or updates the configured GitHub Issue or Jira issue\n10. writes external issue identifiers and URLs back to the delivery record\n\nSubmission creates proposals and delivery artifacts only. It never promotes them.\n\n### 3.6 Finish summary integration\n\nThe run finish summary records proposal outcomes in both the typed result and `reports/run_summary.json`.\n\nAt minimum it records:\n\n1. whether proposal generation was requested\n2. generated candidate count\n3. submitted proposal count\n4. delivered proposal count\n5. provider-specific delivery failures\n6. redacted validation errors\n7. external GitHub Issue or Jira issue links for delivered proposals\n8. dedup updates where new candidates were attached to existing issues\n\n---\n\n## 4. Proposal Policy\n\nProposal routing follows global defaults plus optional per-task overrides.\n\n`proposalPolicy` controls whether proposals are generated, which repositories receive proposed work, and which external tracker receives reviewer-facing issues. It does not independently redefine agent skill precedence. Skill selection is preserved from the candidate payload or inherited from canonical system semantics, not recomputed by the proposal policy itself.\n\n### 4.1 Global controls\n\nThe canonical global controls are:\n\n1. workflow-level proposal enable switch\n2. default proposal targets\n3. default per-target proposal caps\n4. default MoonMind severity floor\n5. MoonMind repository target\n6. default delivery provider: `github`, `jira`, or `auto`\n7. repository-to-tracker bindings\n8. GitHub delivery settings, including installation, repository allowlist, labels, and issue template controls\n9. Jira delivery settings, including site binding, project allowlist, issue type, workflow transitions, labels, custom fields, and retry controls\n\nOperator-facing configuration remains the source of truth for these defaults.\n\n### 4.2 Per-task policy contract\n\n`task.proposalPolicy` controls:\n\n1. `targets`\n2. `maxItems.project`\n3. `maxItems.moonmind`\n4. `minSeverityForMoonMind`\n5. `defaultRuntime`\n6. `delivery.provider`\n7. `delivery.github.repository`\n8. `delivery.github.labels`\n9. `delivery.jira.projectKey`\n10. `delivery.jira.issueType`\n11. `delivery.jira.labels`\n12. `delivery.jira.components`\n\n`defaultRuntime` supplies the default `task.runtime.mode` for generated proposals when the candidate does not already specify one. It does not block operators from overriding runtime during promotion.\n\n`delivery` supplies bounded tracker routing overrides. It does not grant arbitrary HTTP access, arbitrary repository writes, arbitrary Jira project writes, or credentials to agent runtimes.\n\n### 4.3 Policy resolution\n\nPolicy resolution happens at proposal submission time.\n\nThe resolved policy must:\n\n1. merge global defaults with `task.proposalPolicy`\n2. preserve explicit candidate values over defaults\n3. enforce per-target capacity limits\n4. enforce MoonMind severity and tag gates\n5. stamp `defaultRuntime` only when the candidate omitted a runtime\n6. resolve the proposal delivery provider and destination\n7. verify that the destination is allowed by operator policy\n8. persist the resolved target and delivery decision for auditability\n\nDelivery provider resolution follows this order:\n\n1. explicit `task.proposalPolicy.delivery.provider`\n2. repository-specific tracker binding\n3. global default delivery provider\n4. `auto`, which selects the repository's configured tracker and otherwise defaults to GitHub Issues for GitHub repositories\n\n### 4.4 Project-targeted proposals\n\nProject-targeted proposals keep the triggering repository as `taskCreateRequest.payload.repository`.\n\nThey are used for follow-up feature work, cleanup, tests, or project-local quality work discovered during the run.\n\nTheir external issue is delivered to the tracker associated with the project repository unless the task policy explicitly selects another allowed destination.\n\n### 4.5 MoonMind-targeted proposals\n\nMoonMind-targeted proposals are reserved for MoonMind run-quality improvements.\n\nWhen routed to MoonMind:\n\n1. the repository is rewritten to the configured MoonMind repository\n2. category is normalized to `run_quality`\n3. signal severity must meet the configured floor\n4. tags must match approved run-quality signal tags\n5. the external issue is delivered to MoonMind's configured proposal tracker\n\nThis keeps generic project follow-ups out of MoonMind's internal run-quality backlog.\n\n---\n\n## 5. External Proposal Delivery\n\n### 5.1 Delivery model\n\nEach submitted proposal creates or updates a MoonMind proposal delivery record.\n\nThe delivery record stores:\n\n1. MoonMind proposal delivery ID\n2. provider: `github` or `jira`\n3. external issue key or number\n4. external issue URL\n5. repository\n6. dedup key\n7. dedup hash\n8. status\n9. title\n10. summary\n11. category\n12. tags\n13. review priority\n14. `taskCreateRequest` snapshot or artifact reference\n15. origin source\n16. origin ID\n17. origin metadata\n18. proposed-by identity\n19. delivered-at timestamp\n20. last-synced-at timestamp\n21. promoted execution ID, when promoted\n22. decision actor and note, when decided\n\nThe delivery record is an audit and idempotency record. It is not a separate human-review page.\n\n### 5.2 Dedup-first delivery\n\nBefore creating an external issue, MoonMind computes the proposal dedup key and hash.\n\nThe dedup key is derived from:\n\n1. canonical repository target\n2. normalized proposal title\n\nMoonMind then searches:\n\n1. local open delivery records for the same provider, destination, and dedup hash\n2. provider-specific issue metadata such as labels, hidden markers, custom fields, or issue properties\n\nIf an open matching issue exists, MoonMind updates that issue instead of creating a new one. Updates may include:\n\n1. a comment describing the new origin signal\n2. an elevated priority label or field\n3. linked origin metadata\n4. a backlink to the triggering run\n5. refreshed similar-proposal context\n\nIf no matching issue exists, MoonMind creates a new external issue.\n\n### 5.3 GitHub Issues delivery\n\nGitHub Issues are the desired review surface for repositories configured with GitHub delivery.\n\nA GitHub proposal issue has:\n\n1. a title prefixed with `[MoonMind proposal]`\n2. labels identifying the item as a MoonMind proposal\n3. labels for category, priority, status, and dedup short hash\n4. a body rendered from the stored proposal snapshot\n5. a hidden MoonMind marker containing delivery ID, snapshot reference, and dedup hash\n6. links to the source run and relevant artifacts\n7. reviewer action instructions\n\nCanonical GitHub labels include:\n\n1. `moonmind:proposal`\n2. `moonmind:open`\n3. `moonmind:promoted`\n4. `moonmind:dismissed`\n5. `moonmind:deferred`\n6. `moonmind:category:<category>`\n7. `moonmind:priority:<low|normal|high|urgent>`\n8. `moonmind:dedup:<short_hash>`\n\nCanonical GitHub reviewer commands are:\n\n```text\n/moonmind promote\n/moonmind promote runtime=<runtime> priority=<integer> maxAttempts=<integer>\n/moonmind dismiss reason=\"<reason>\"\n/moonmind defer until=<date> reason=\"<reason>\"\n/moonmind priority <low|normal|high|urgent>\n```\n\nGitHub delivery may also support label-driven actions when configured by repository policy, but comment commands are the canonical explicit audit path.\n\n### 5.4 Jira delivery\n\nJira issues are the desired review surface for projects configured with Jira delivery.\n\nA Jira proposal issue has:\n\n1. summary prefixed with `[MoonMind proposal]`\n2. ADF-rendered description derived from the stored proposal snapshot\n3. labels identifying category, priority, status, and dedup short hash\n4. configured issue type, normally `Task`, `Story`, or `MoonMind Proposal`\n5. configured custom fields for MoonMind delivery ID, dedup hash, repository, origin run, runtime, max attempts, and snapshot reference\n6. links to the source run and relevant artifacts\n7. issue links to related or duplicate proposals\n\nCanonical Jira workflow states are:\n\n1. `Proposed`\n2. `Approved`\n3. `Promoted`\n4. `Rejected`\n5. `Deferred`\n\nJira promotion may be triggered by:\n\n1. transition to `Approved`\n2. configured approval field update\n3. `/moonmind promote` comment command\n\nJira dismissal and deferral may be triggered by workflow transitions or comment commands. Transitions are preferred when the Jira project uses workflow permissions for reviewer control.\n\n### 5.5 External issue rendering\n\nExternal issue text should include:\n\n1. proposal title and summary\n2. repository target\n3. runtime preview\n4. publish mode preview\n5. priority and max attempts\n6. category and tags\n7. source run links\n8. origin metadata summary\n9. dedup hash\n10. similar or duplicate issue links\n11. reviewer action instructions\n12. explicit notice that MoonMind executes the stored proposal snapshot, not edited issue text\n\nLarge payloads, logs, artifacts, and diagnostics are linked by reference rather than embedded directly.\n\n---\n\n## 6. Canonical Proposal Payload Contract\n\n### 6.1 Canonical direction\n\nStored proposals must use the same task-shaped contract accepted by Temporal submission through `/api/executions`.\n\nThat means:\n\n1. `taskCreateRequest` stores a normal task payload\n2. `task.runtime.mode` selects the runtime\n3. `task.tool` and `step.tool`, when present, use the canonical Temporal submit shape\n4. `task.tool.type` must be `skill` when a tool selector is provided, representing an executable tool rather than an agent instruction bundle\n5. proposal payloads do not use `tool.type = \"agent_runtime\"`\n6. `task.skills` and `step.skills` may be included and must follow the canonical Agent Skill System contract defined in `docs/Tasks/AgentSkillSystem.md`\n7. delivery metadata is stored alongside the proposal delivery record, not inside the executable task payload unless it is part of the user's explicit task contract\n\n### 6.2 Candidate example\n\n```json\n[\n  {\n    \"title\": \"Add regression coverage for retry loop detection\",\n    \"summary\": \"The run retried the same recoverable failure pattern without a targeted regression test.\",\n    \"category\": \"run_quality\",\n    \"tags\": [\"retry\", \"loop_detected\"],\n    \"signal\": {\n      \"severity\": \"high\"\n    },\n    \"taskCreateRequest\": {\n      \"type\": \"task\",\n      \"priority\": 0,\n      \"maxAttempts\": 3,\n      \"payload\": {\n        \"repository\": \"MoonLadderStudios/MoonMind\",\n        \"task\": {\n          \"instructions\": \"Add a regression test covering retry loop detection in the Temporal runtime.\",\n          \"tool\": {\n            \"type\": \"skill\",\n            \"name\": \"auto\",\n            \"version\": \"1.0\"\n          },\n          \"skills\": {\n            \"sets\": [\"deployment-default\", \"temporal-runtime-quality\"],\n            \"include\": [\n              { \"name\": \"moonmind-doc-writer\", \"version\": \"2.3.0\" }\n            ]\n          },\n          \"authoredPresets\": [\n            {\n              \"presetId\": \"runtime-quality-followup\",\n              \"version\": \"2026-04-17\",\n              \"includePath\": [\"root\", \"regression-coverage\"]\n            }\n          ],\n          \"runtime\": {\n            \"mode\": \"codex\"\n          },\n          \"publish\": {\n            \"mode\": \"pr\"\n          },\n          \"steps\": [\n            {\n              \"title\": \"Add regression coverage\",\n              \"instructions\": \"Add a regression test covering retry loop detection in the Temporal runtime.\",\n              \"source\": {\n                \"kind\": \"preset-derived\",\n                \"presetId\": \"runtime-quality-followup\",\n                \"includePath\": [\"root\", \"regression-coverage\"],\n                \"originalStepId\": \"add-regression-test\"\n              }\n            }\n          ]\n        }\n      }\n    }\n  }\n]\n```\n\n### 6.3 Payload rules\n\n1. `taskCreateRequest` must already validate against the canonical task contract.\n2. `taskCreateRequest.payload.repository` determines deduplication and future execution target.\n3. `taskCreateRequest.payload.task.runtime.mode` uses current supported task runtimes: `codex`, `gemini_cli`, `claude`, and optionally `jules`.\n4. Candidate payloads must not include secrets, raw credentials, or unsafe log dumps.\n5. Promotion-time overrides must also validate against the same canonical task contract before execution starts.\n6. If `task.skills` or `step.skills` are present, they must validate against the canonical agent-skill contract.\n7. Proposals must not embed full agent skill bodies inline when refs or selectors are the correct contract.\n8. Proposals preserve execution intent, not raw runtime materialization state.\n9. Proposal payloads must not store mutable `.agents/skills` directory state, runtime-local materialization outputs, or ephemeral prompt bundles produced only for one adapter session.\n10. Proposal-capable work originating from a Codex managed session must already carry `task.proposeTasks` and any `task.proposalPolicy` in the canonical task payload.\n11. Proposal generation must not reconstruct proposal intent from session-local metadata.\n12. Proposal payloads may include optional `task.authoredPresets` and `steps[].source` provenance when the metadata is reliable.\n13. Preset provenance fields are reconstruction and review metadata only; they do not change the executable meaning of the flat task payload.\n14. Proposal payloads must not contain unresolved preset include objects as runtime work.\n15. Preset-derived proposals must be execution-ready flat payloads before storage and promotion.\n\n---\n\n## 7. Origin, Identity, and Naming\n\n### 7.1 Origin source\n\nTemporal-backed proposals use:\n\n1. `origin.source = \"workflow\"`\n2. `origin.id = workflow_id`\n\n`temporal` is not a canonical proposal origin value.\n\n### 7.2 Origin metadata\n\nOrigin metadata uses snake_case keys consistently across workflow payloads, stored proposal delivery records, API responses, issue rendering, and docs.\n\nCanonical keys are:\n\n1. `workflow_id`\n2. `temporal_run_id`\n3. `trigger_repo`\n4. `starting_branch`\n5. `working_branch`\n6. `trigger_job_id`\n7. `trigger_step_id`\n8. `signal`\n\n### 7.3 Identity rules\n\n1. `workflow_id` is the durable source task identity for workflow-originated proposals.\n2. `temporal_run_id` is diagnostic metadata, not the durable task handle.\n3. Task-oriented Temporal surfaces continue to use `taskId == workflowId`.\n4. Continue-as-new does not change the proposal origin identity; the durable workflow remains the source.\n5. External issue keys are delivery identities, not execution identities.\n6. The MoonMind proposal delivery ID binds the stored proposal snapshot to the external issue.\n\n---\n\n## 8. Review, Promotion, and Execution\n\nProposal creation does not start work. Promotion does.\n\n### 8.1 Review surface\n\nThe desired human review surface is the configured external tracker.\n\nReviewers use:\n\n1. GitHub Issues for GitHub-delivered proposals\n2. Jira issues for Jira-delivered proposals\n\nMoonMind UI surfaces may link to proposals and show delivery status, but they are not the primary proposal queue and do not provide a dedicated proposal review page.\n\n### 8.2 Reviewer actions\n\nThe canonical proposal decisions are:\n\n1. promote\n2. dismiss\n3. defer\n4. reprioritize\n5. request revision\n\nActions must be attributable to a verified human actor. The integration layer maps provider-native events to MoonMind decisions.\n\nGitHub actions are expressed through comment commands or configured labels.\n\nJira actions are expressed through workflow transitions, configured field updates, or comment commands.\n\n### 8.3 Promotion flow\n\nPromotion must follow this algorithm:\n\n1. receive a verified GitHub or Jira approval event\n2. verify that the external actor has permission to approve proposals for the destination\n3. load the MoonMind proposal delivery record\n4. load the stored proposal snapshot\n5. verify the proposal is still open or approved-but-not-promoted\n6. parse bounded promotion controls such as `priority`, `maxAttempts`, `note`, and `runtimeMode`\n7. apply validated bounded controls to the execution request without replacing the stored task payload\n8. validate the stored payload against the canonical task contract, including verification of any agent-skill selectors and executable step types\n9. preserve explicit skill-selection intent from the stored proposal\n10. preserve `task.authoredPresets` and per-step `source` provenance from the stored proposal\n11. submit the reviewed task through the same Temporal-backed create path used by `/api/executions`\n12. create a new `MoonMind.Run` through `TemporalExecutionService.create_execution()`\n13. store the promoted workflow or execution identifier on the proposal delivery record\n14. update the external issue status to promoted\n15. comment on or transition the external issue with execution metadata\n\nPromotion does not accept a full task payload replacement from the external issue body. If a future proposal refresh, issue-edit ingestion, or preset re-expansion flow exists, it must be an explicit validate-and-confirm action that creates a new stored proposal revision before promotion.\n\nPromotion is a control-plane-to-Temporal bridge, not a proposal-local mutation only.\n\n### 8.4 Dismissal and deferral\n\nDismissal marks the proposal delivery as rejected or dismissed without starting work.\n\nDeferral marks the proposal delivery as deferred until a requested timestamp or tracker state changes.\n\nFor both actions, MoonMind records:\n\n1. external actor\n2. provider event identity\n3. reason or note\n4. timestamp\n5. external issue state\n\nMoonMind updates the external issue with the final decision when the provider action itself does not already represent the final state.\n\n### 8.5 Skill preservation and inheritance\n\nProposal promotion preserves agent skill intent from the original execution.\n\n1. When the original task relied only on deployment/default inheritance, proposal payloads may omit redundant explicit skill selectors.\n2. When the original task included explicit non-default skill selection that materially affects execution behavior, proposals should preserve that selection explicitly.\n3. Operators may override runtime at promotion time.\n4. Agent skill selectors are preserved by default.\n5. Changing the runtime does not automatically erase or rewrite agent skill intent.\n6. If a selected skill set is incompatible with the chosen runtime, promotion must fail validation or require an explicit override path.\n7. Proposal promotion does not re-resolve skill-source precedence as an undocumented side effect.\n\n### 8.6 Preset provenance preservation\n\nProposal promotion preserves reliable preset provenance from the stored proposal as review and reconstruction metadata.\n\nRules:\n\n1. Default promotion uses the reviewed flat `taskCreateRequest` payload and does not perform live preset catalog lookup for correctness.\n2. Default promotion does not re-expand live presets.\n3. Catalog changes after the proposal was created must not silently change the promoted execution.\n4. `task.authoredPresets` and `steps[].source` are preserved by default when present and valid in the stored proposal payload.\n5. If an operator intentionally edits or removes provenance through a validated proposal revision, the revised stored payload is the source of truth.\n6. A future refresh-latest workflow may exist, but it must be explicit operator-selected behavior that re-resolves presets before submission and presents the refreshed flat payload for validation.\n7. Flattened-only proposals remain valid.\n8. When reliable authored preset binding metadata is absent, promotion must not invent bindings or infer executable preset semantics from descriptive text.\n\n### 8.7 Runtime selection\n\nProposal promotion supports operator runtime selection.\n\nRules:\n\n1. the backend-served runtime list is the source of truth\n2. supported task-facing runtime values are `codex`, `gemini_cli`, `claude`, and optionally `jules`\n3. runtime overrides apply to the promoted execution request, not to the stored proposal snapshot\n4. disabled runtimes must fail validation before a workflow is created\n\n### 8.8 Promotion result\n\nA successful promotion response or external issue update includes:\n\n1. the updated proposal delivery record\n2. the created execution identifier for the new `MoonMind.Run`\n3. execution URL\n4. expected output or PR publication behavior\n5. any warnings about applied bounded overrides\n\n---\n\n## 9. API and Integration Contract\n\n### 9.1 Proposal submission API\n\n`POST /api/proposals` remains the canonical internal proposal submission API.\n\nIts desired response includes delivery information:\n\n```json\n{\n  \"id\": \"proposal-delivery-id\",\n  \"status\": \"delivered\",\n  \"provider\": \"github\",\n  \"externalKey\": \"123\",\n  \"externalUrl\": \"https://github.com/org/repo/issues/123\",\n  \"dedupHash\": \"...\",\n  \"taskPreview\": {}\n}\n```\n\nInternal callers do not need to know whether the reviewer will use GitHub or Jira before submission unless they intentionally provide an allowed per-task delivery override.\n\n### 9.2 Webhook endpoints\n\nMoonMind exposes provider webhook endpoints for tracker-originated review actions:\n\n1. `POST /api/integrations/github/issues/webhook`\n2. `POST /api/integrations/jira/webhook`\n\nWebhook handling must:\n\n1. verify provider signatures or shared secrets\n2. normalize provider events into proposal decision events\n3. verify actor permissions\n4. enforce idempotency by provider event ID\n5. avoid logging secrets or raw credentials\n6. load the stored proposal snapshot before promotion\n7. update proposal delivery state and external issue state consistently\n\n### 9.3 Admin and recovery APIs\n\nMoonMind may expose admin-oriented APIs for delivery inspection and recovery:\n\n1. `GET /api/proposal-deliveries/{id}`\n2. `POST /api/proposal-deliveries/{id}/redeliver`\n3. `POST /api/proposal-deliveries/{id}/sync`\n4. `POST /api/proposal-deliveries/{id}/promote`\n\nThese APIs are not the normal reviewer workflow. They exist for operators, tests, and recovery.\n\n### 9.4 Provider adapters\n\nProposal delivery uses provider adapters behind a common service boundary.\n\nThe provider adapter contract includes:\n\n1. find existing open issue by dedup metadata\n2. create issue\n3. update issue\n4. add comment\n5. link related issues\n6. read current issue state\n7. map provider event to MoonMind decision\n8. map MoonMind status to provider status, labels, transitions, or comments\n\nProvider-specific credentials, retry logic, redaction, and policy enforcement stay inside trusted integration packages.\n\n---\n\n## 10. Observability and UI Contract\n\n### 10.1 Status mapping\n\n`proposals` is a first-class workflow state and must be visible across API and UI surfaces.\n\nFor dashboard compatibility mapping:\n\n1. `scheduled -> queued`\n2. `waiting_on_dependencies -> waiting`\n3. `awaiting_slot -> queued`\n4. `proposals -> running`\n5. `completed -> completed`\n\n### 10.2 Proposal delivery visibility\n\nMission Control and execution details surface proposal delivery status, not a dedicated proposal review queue.\n\nThe system must show:\n\n1. `mm_state = proposals` while proposal generation or delivery is in progress\n2. proposal counts and errors in finish summary data\n3. external issue links from execution detail\n4. provider, external key, delivery status, and last sync timestamp\n5. whether a proposal was created as a new issue or attached to an existing dedup issue\n6. compact task summary: runtime, repository, publish mode, priority, max attempts, skill context, and preset provenance\n7. promotion result links after approval\n\n### 10.3 No dedicated proposal page\n\nMoonMind does not maintain a dedicated human-facing task proposal page for normal proposal triage.\n\nThe following surfaces are valid:\n\n1. source run finish summary\n2. execution detail delivery links\n3. compact delivery status cards\n4. admin/recovery views\n5. GitHub Issues\n6. Jira issues\n\nThe following surface is not part of the desired review workflow:\n\n1. a standalone MoonMind proposal queue page with Promote and Dismiss buttons as the primary reviewer experience\n\n### 10.4 Failure handling\n\nProposal generation, submission, and delivery are best-effort.\n\nRules:\n\n1. a successful run may still report proposal-stage or delivery-stage errors\n2. malformed candidates are skipped, not promoted\n3. malformed or incompatible skill selectors in generated candidates are skipped with a visible validation error and not silently dropped in a way that changes execution meaning\n4. submission retries must be bounded and idempotent\n5. external tracker delivery uses an outbox or equivalent retry-safe mechanism\n6. partial success must be visible through generated, submitted, delivered, updated, and failed counts\n7. external provider errors must be redacted before storage, logs, issue comments, or API responses\n\n---\n\n## 11. Security and Integrity\n\nExternal trackers are collaborative systems. MoonMind treats their content as untrusted unless it has been verified and parsed through an explicit command, transition, field, or label contract.\n\nRules:\n\n1. MoonMind never executes edited issue body text as instructions.\n2. MoonMind never extracts arbitrary Markdown or Jira ADF as a replacement `taskCreateRequest`.\n3. Promotion uses the stored MoonMind snapshot plus bounded reviewer controls.\n4. Bounded controls include runtime, priority, max attempts, note, and explicit approved fields defined by the provider adapter.\n5. Larger revisions require a new validated proposal revision before promotion.\n6. Webhooks must verify provider signatures or secrets.\n7. Actor identity and permissions must be checked before decisions are accepted.\n8. Provider event IDs must be used for idempotency.\n9. Tracker credentials must be resolved just in time inside trusted integration code.\n10. Tracker credentials must not be placed into managed agent environments.\n11. Errors, comments, and logs must be redacted.\n12. Delivery adapters must enforce repository, organization, Jira site, Jira project, and action allowlists.\n\n---\n\n## 12. Worker-Boundary Architecture\n\nThe proposal system follows the same Temporal rule as the rest of MoonMind: workflows orchestrate and activities perform side effects.\n\nQueue placement is:\n\n1. proposal generation on the LLM-capable activity fleet\n2. proposal submission, storage, and external issue delivery on a control-plane or integrations-capable activity fleet\n3. webhook decision handling and promotion on a trusted control-plane or integrations-capable activity fleet\n\nGeneration and submission are intentionally separate concerns. LLM-facing work and control-plane writes must not share an undifferentiated activity boundary.\n\nProposal generation may inspect resolved skill snapshot metadata or related execution artifacts. Proposal submission strictly validates skill-selection payload fields but avoids materializing runtime skill context.\n\n---\n\n## 13. Desired Data Model\n\nThe durable model is a proposal delivery record. Existing storage may keep the `task_proposals` name, but its desired role is delivery, audit, idempotency, and promotion linkage rather than a MoonMind-hosted review queue.\n\nCanonical fields are:\n\n1. `id`\n2. `provider`\n3. `external_key`\n4. `external_url`\n5. `repository`\n6. `dedup_key`\n7. `dedup_hash`\n8. `status`\n9. `title`\n10. `summary`\n11. `category`\n12. `tags`\n13. `review_priority`\n14. `priority_override_reason`\n15. `task_create_request` or `task_snapshot_ref`\n16. `origin_source`\n17. `origin_id`\n18. `origin_metadata`\n19. `proposed_by_worker_id`\n20. `proposed_by_user_id`\n21. `delivered_at`\n22. `last_synced_at`\n23. `promoted_at`\n24. `promoted_execution_id`\n25. `promoted_by_actor`\n26. `decided_by_actor`\n27. `decision_note`\n28. `created_at`\n29. `updated_at`\n\nCanonical statuses are:\n\n1. `pending_delivery`\n2. `delivered`\n3. `delivery_failed`\n4. `open`\n5. `approved`\n6. `promoted`\n7. `dismissed`\n8. `deferred`\n9. `superseded`\n\nProvider-specific metadata may be stored in a separate structured object when it does not belong in the canonical field set.\n\n---\n\n## 14. Acceptance Criteria\n\nThe desired system satisfies these acceptance criteria:\n\n1. A generated proposal creates or updates exactly one GitHub Issue or Jira issue per provider destination and dedup target.\n2. Reviewers can promote, dismiss, defer, and reprioritize proposals without opening a MoonMind proposal review page.\n3. Promotion executes only from MoonMind's stored validated task snapshot plus bounded reviewer controls.\n4. GitHub or Jira issue links appear in task run details and finish summaries.\n5. Duplicate proposals comment on or link to an existing external issue instead of creating duplicate reviewer-facing issues.\n6. Security, tests, and run-quality proposals preserve category, tags, origin metadata, priority, and notification behavior.\n7. External delivery failures are retried idempotently and visible in run summaries, delivery records, and operator diagnostics.\n8. Webhook decision handling is idempotent, permission-checked, and redacted.\n9. GitHub and Jira provider adapters enforce destination allowlists and do not expose arbitrary provider HTTP to agents.\n10. Mission Control surfaces proposal delivery status and external links but does not act as the primary proposal queue.\n"
+  },
+  "extractedAt": "2026-05-06T22:12:50Z",
+  "outputMode": "jira",
+  "designSummary": "The Task Proposal System defines a Temporal-native follow-up work pipeline where MoonMind generates reviewable proposals after a run, validates and stores canonical task snapshots, delivers human-review artifacts to GitHub Issues or Jira, and promotes work only after verified tracker approval. The design fixes submission payload invariants, proposal policy resolution, dedup-first delivery, external review commands and workflow states, stored payload security, skill and preset preservation, observability surfaces, worker-boundary placement, data model fields, idempotent recovery behavior, and explicit non-goals such as avoiding a dedicated MoonMind proposal queue page.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "External-tracker-native proposal review",
+      "type": "requirement",
+      "source_section": "1. Summary",
+      "explanation": "Proposals are follow-up work items surfaced through configured GitHub Issues or Jira issues rather than an internal proposal queue."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Stored task snapshot is executable source of truth",
+      "type": "state-model",
+      "source_section": "1. Summary, 2. Core Invariants",
+      "explanation": "Promotion must execute MoonMind stored validated taskCreateRequest data or an artifact reference, not external issue text."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Temporal-native proposals stage",
+      "type": "integration",
+      "source_section": "1. Summary, 3. MoonMind.Run Lifecycle Integration",
+      "explanation": "A dedicated proposals stage runs after execution and before finalization when both global and task-level gates enable it."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Canonical nested submit-time proposal intent",
+      "type": "requirement",
+      "source_section": "3.1 Submit-time contract, 3.1.1 Canonical submission-path normalization",
+      "explanation": "All submission paths must persist task.proposeTasks, task.proposalPolicy, task.skills, and step.skills in initialParameters using the canonical nested task payload."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Compatibility reads are replay-only",
+      "type": "constraint",
+      "source_section": "3.1.1 Canonical submission-path normalization",
+      "explanation": "Workflow code may read older/root proposal shapes only for replay and in-flight compatibility; new submissions must write nested task fields."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Proposal-capable run state vocabulary",
+      "type": "state-model",
+      "source_section": "3.2 Run states",
+      "explanation": "The proposals state and related lifecycle vocabulary must be consistent across workflow, API, UI, summaries, issues, and docs."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Generation activities are side-effect free",
+      "type": "artifact",
+      "source_section": "3.4 Proposal generation",
+      "explanation": "Generators analyze artifacts, agent results, diagnostics, skill metadata, and preset provenance while treating inputs as untrusted and avoiding commits, pushes, issues, or task creation."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Submission validates and delivers proposals",
+      "type": "integration",
+      "source_section": "3.5 Proposal submission and delivery",
+      "explanation": "Submission validates candidates and skill selectors, resolves policy, normalizes origin, enforces routing, computes deduplication, persists records, and creates or updates tracker issues."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Finish summaries report proposal outcomes",
+      "type": "observability",
+      "source_section": "3.6 Finish summary integration",
+      "explanation": "Run summaries and reports/run_summary.json must include requested/generated/submitted/delivered counts, delivery failures, validation errors, issue links, and dedup updates."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Global and per-task proposal policy resolution",
+      "type": "requirement",
+      "source_section": "4. Proposal Policy",
+      "explanation": "Proposal policy merges global defaults with bounded task overrides for targets, limits, severity, runtime defaults, provider, GitHub, and Jira routing."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Project versus MoonMind targeting",
+      "type": "state-model",
+      "source_section": "4.4 Project-targeted proposals, 4.5 MoonMind-targeted proposals",
+      "explanation": "Project proposals keep the triggering repository, while run-quality proposals route to the configured MoonMind repository with category, severity, and tag gates."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Durable proposal delivery record",
+      "type": "state-model",
+      "source_section": "5.1 Delivery model, 13. Desired Data Model",
+      "explanation": "Each submitted proposal creates or updates a delivery/audit/idempotency record with provider, external identity, repository, dedup data, status, snapshot reference, origin, actors, and promotion linkage."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Dedup-first delivery",
+      "type": "requirement",
+      "source_section": "5.2 Dedup-first delivery",
+      "explanation": "MoonMind derives dedup keys from repository and title, searches local/provider metadata, and updates matching open issues instead of creating duplicates."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "GitHub Issues review contract",
+      "type": "integration",
+      "source_section": "5.3 GitHub Issues delivery",
+      "explanation": "GitHub-delivered proposal issues require canonical title prefix, labels, hidden markers, source links, and comment commands for promotion, dismissal, deferral, and priority changes."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Jira issue review contract",
+      "type": "integration",
+      "source_section": "5.4 Jira delivery",
+      "explanation": "Jira-delivered proposal issues require canonical summary prefix, ADF description, labels/custom fields, workflow states, links, and promotion/dismissal/deferral triggers."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Rendered issue text is review-only",
+      "type": "security",
+      "source_section": "5.5 External issue rendering, 11. Security and Integrity",
+      "explanation": "External issue content must include review context and an explicit notice that edited text is not executable; large payloads are linked by reference."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Canonical proposal payload contract",
+      "type": "requirement",
+      "source_section": "6. Canonical Proposal Payload Contract",
+      "explanation": "Stored proposals must use the canonical Temporal submit shape accepted by /api/executions, including task.runtime.mode, tool.type=skill for executable tools, and no agent_runtime tool type."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Skill intent preservation",
+      "type": "constraint",
+      "source_section": "6.3 Payload rules, 8.5 Skill preservation and inheritance",
+      "explanation": "Proposal payloads preserve explicit material skill selectors without embedding skill bodies, mutable runtime materialization, or undocumented re-resolution side effects."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Preset provenance preservation",
+      "type": "constraint",
+      "source_section": "6.3 Payload rules, 8.6 Preset provenance preservation",
+      "explanation": "Reliable authored preset and step source provenance is review metadata preserved in flat execution-ready payloads, never live preset dependencies or fabricated bindings."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Canonical origin and identity metadata",
+      "type": "state-model",
+      "source_section": "7. Origin, Identity, and Naming",
+      "explanation": "Workflow-originated proposals use origin.source=workflow, origin.id=workflow_id, snake_case origin metadata, and workflow_id as durable source identity."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Verified human review actions",
+      "type": "security",
+      "source_section": "8. Review, Promotion, and Execution",
+      "explanation": "Promotion, dismissal, deferral, reprioritization, and revision requests require provider-native verified human actors and permission checks."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Promotion creates a new MoonMind.Run",
+      "type": "integration",
+      "source_section": "8.3 Promotion flow",
+      "explanation": "Promotion loads the delivery record and stored snapshot, applies bounded controls, validates payloads, submits through TemporalExecutionService.create_execution(), stores promoted identifiers, and updates the tracker."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "Dismissal and deferral are non-executing decisions",
+      "type": "state-model",
+      "source_section": "8.4 Dismissal and deferral",
+      "explanation": "Dismissal and deferral update delivery decision state, actor, provider event identity, note, timestamp, and external issue state without starting work."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "Runtime override validation",
+      "type": "requirement",
+      "source_section": "8.7 Runtime selection",
+      "explanation": "Operators can override runtime using backend-supported task-facing values, and disabled/incompatible runtimes must fail validation before workflow creation."
+    },
+    {
+      "id": "DESIGN-REQ-025",
+      "title": "Internal proposal and recovery APIs",
+      "type": "integration",
+      "source_section": "9. API and Integration Contract",
+      "explanation": "POST /api/proposals remains the internal submission API, with optional admin/recovery endpoints for inspection, redelivery, sync, and promotion."
+    },
+    {
+      "id": "DESIGN-REQ-026",
+      "title": "Provider webhook contract",
+      "type": "integration",
+      "source_section": "9.2 Webhook endpoints",
+      "explanation": "GitHub and Jira webhooks verify signatures or secrets, normalize events, verify actor permissions, enforce idempotency, avoid secret logging, and update delivery state consistently."
+    },
+    {
+      "id": "DESIGN-REQ-027",
+      "title": "Provider adapter boundary",
+      "type": "integration",
+      "source_section": "9.4 Provider adapters, 11. Security and Integrity",
+      "explanation": "Provider adapters encapsulate issue lookup/create/update/comment/link/read/status mapping, credentials, retries, redaction, and allowlist enforcement."
+    },
+    {
+      "id": "DESIGN-REQ-028",
+      "title": "Mission Control delivery visibility",
+      "type": "observability",
+      "source_section": "10. Observability and UI Contract",
+      "explanation": "Mission Control and execution details expose proposals state, counts, errors, external links, provider keys, dedup status, task previews, and promotion links."
+    },
+    {
+      "id": "DESIGN-REQ-029",
+      "title": "No dedicated proposal review page",
+      "type": "non-goal",
+      "source_section": "10.3 No dedicated proposal page",
+      "explanation": "A standalone MoonMind proposal queue page with primary Promote/Dismiss controls is explicitly excluded from the desired review workflow."
+    },
+    {
+      "id": "DESIGN-REQ-030",
+      "title": "Best-effort failure handling",
+      "type": "observability",
+      "source_section": "10.4 Failure handling",
+      "explanation": "Proposal errors do not invalidate successful parent runs; malformed candidates are skipped, retries are bounded/idempotent, partial success is visible, and provider errors are redacted."
+    },
+    {
+      "id": "DESIGN-REQ-031",
+      "title": "Tracker content is untrusted",
+      "type": "security",
+      "source_section": "11. Security and Integrity",
+      "explanation": "MoonMind never executes edited issue Markdown or Jira ADF, accepts only bounded controls, requires new validated revisions for larger changes, resolves credentials inside trusted code, and redacts errors/logs."
+    },
+    {
+      "id": "DESIGN-REQ-032",
+      "title": "Worker boundary separation",
+      "type": "integration",
+      "source_section": "12. Worker-Boundary Architecture",
+      "explanation": "Workflows orchestrate while activities perform side effects; generation, submission/delivery, and webhook/promotion run on appropriate separated fleets."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Normalize proposal intent in Temporal submissions",
+      "shortName": "proposal-intent-normalization",
+      "description": "As a MoonMind operator, I need every task creation surface to persist proposal intent in the canonical nested task payload so proposal behavior is deterministic across API submissions, schedules, promotions, and Codex managed sessions.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskProposalSystem.md",
+        "title": "Task Proposal System",
+        "sections": [
+          "3.1 Submit-time contract",
+          "3.1.1 Canonical submission-path normalization",
+          "3.2 Run states"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006"
+        ]
+      },
+      "why": "This story establishes the durable run contract that all later proposal generation and promotion behavior depends on.",
+      "scope": [
+        "Normalize task.proposeTasks, task.proposalPolicy, task.skills, and step.skills into initialParameters.task.* for all new task submission paths.",
+        "Gate the proposals stage on global enablement plus initialParameters.task.proposeTasks.",
+        "Expose the canonical proposals lifecycle state consistently through workflow/API/UI status mapping.",
+        "Retain replay-only compatibility reads for older proposal shapes without using them for new submissions."
+      ],
+      "outOfScope": [
+        "Generating proposals, delivering issues, or promoting proposals.",
+        "Creating new spec directories or Jira issues as part of breakdown."
+      ],
+      "independentTest": "Submit representative task payloads through API, schedule/promotion-style service calls, and Codex managed-session internal task creation, then assert persisted initialParameters.task.* fields and proposals-state gating without invoking delivery adapters.",
+      "acceptanceCriteria": [
+        "New submission paths write proposal opt-in and policy only to the canonical nested task payload.",
+        "Codex managed-session originated task creation does not rely on root-level flags, turn metadata, container environment, or adapter-local state for durable proposal intent.",
+        "The workflow enters proposals only when global settings and initialParameters.task.proposeTasks are both enabled.",
+        "Replay/in-flight compatibility reads are isolated and covered by a boundary test.",
+        "The proposals state vocabulary is reflected consistently in workflow payloads, API responses, UI mapping, finish summaries, and documentation references touched by the change."
+      ],
+      "requirements": [
+        "Persist canonical nested proposal fields for all new task submission surfaces.",
+        "Keep compatibility reads from becoming new write contracts.",
+        "Provide workflow-boundary coverage for proposals state gating."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "Temporal-native proposals stage"
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Canonical nested submit-time proposal intent"
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "Compatibility reads are replay-only"
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "Proposal-capable run state vocabulary"
+        }
+      ],
+      "dependencies": [],
+      "risks": [
+        "Submission surfaces may already have divergent normalization paths that require a full-codebase migration in one change."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Generate and validate proposal candidates from run evidence",
+      "shortName": "proposal-candidate-generation",
+      "description": "As a MoonMind operator, I need the proposals stage to generate candidate follow-up tasks from run evidence without side effects, then validate candidates before any delivery action is attempted.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskProposalSystem.md",
+        "title": "Task Proposal System",
+        "sections": [
+          "3.4 Proposal generation",
+          "3.5 Proposal submission and delivery",
+          "6. Canonical Proposal Payload Contract",
+          "12. Worker-Boundary Architecture"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-032"
+        ]
+      },
+      "why": "Proposal quality and safety depend on separating LLM-facing generation from trusted submission and enforcing canonical payload validation before side effects.",
+      "scope": [
+        "Run proposal generation in activities that inspect run artifacts, normalized agent results, finish-summary signals, diagnostics, skill metadata references, and reliable preset provenance.",
+        "Treat all inputs as untrusted and keep large context artifact-backed by reference.",
+        "Validate taskCreateRequest shape, runtime/tool fields, skill selectors, preset provenance, secret redaction, and execution-ready flat payload rules before submission.",
+        "Separate generation activity placement from control-plane submission/delivery activity placement."
+      ],
+      "outOfScope": [
+        "Creating GitHub or Jira issues.",
+        "Handling webhook approval events or promotion."
+      ],
+      "independentTest": "Run proposal generation against synthetic run artifacts and agent results, then assert generated candidates are side-effect free, canonical, redacted, and rejected when malformed skill selectors or non-flat preset payloads are present.",
+      "acceptanceCriteria": [
+        "Generation activities do not commit, push, create issues, create tasks, or mutate proposal delivery records.",
+        "Generated taskCreateRequest payloads validate against the canonical /api/executions task contract.",
+        "tool.type=skill is accepted for executable tools and tool.type=agent_runtime is rejected.",
+        "Explicit material skill selectors are preserved by reference or selector, not embedded as skill bodies or runtime materialization state.",
+        "Reliable authoredPresets and steps[].source provenance are preserved when present; absent provenance is not fabricated.",
+        "Activity/task-queue boundaries keep LLM-capable generation separate from trusted submission and delivery side effects."
+      ],
+      "requirements": [
+        "Implement side-effect-free candidate generation from durable run evidence.",
+        "Validate generated candidates at the submission boundary before delivery.",
+        "Reject unsafe, malformed, or semantically ambiguous candidates with visible redacted errors."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "Generation activities are side-effect free"
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "Submission validates and delivers proposals"
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Canonical proposal payload contract"
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "Skill intent preservation"
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "ownership": "Preset provenance preservation"
+        },
+        {
+          "id": "DESIGN-REQ-032",
+          "ownership": "Worker boundary separation"
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "risks": [
+        "Generator output may be hard to make deterministic enough for stable unit tests unless fixtures normalize timestamps and external links."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Resolve proposal policy and delivery records deterministically",
+      "shortName": "proposal-policy-delivery-records",
+      "description": "As a MoonMind operator, I need proposal submission to resolve routing policy, target repositories, deduplication, origin metadata, and durable delivery records before provider-specific issue delivery.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskProposalSystem.md",
+        "title": "Task Proposal System",
+        "sections": [
+          "4. Proposal Policy",
+          "5.1 Delivery model",
+          "5.2 Dedup-first delivery",
+          "7. Origin, Identity, and Naming",
+          "13. Desired Data Model"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "why": "This story defines the audit and idempotency core of proposals independently from any specific external tracker.",
+      "scope": [
+        "Merge global defaults with task.proposalPolicy using documented precedence.",
+        "Enforce project-target and MoonMind-target routing, severity, tag, destination, capacity, and defaultRuntime rules.",
+        "Compute repository-aware dedup keys and hashes from canonical repository target and normalized title.",
+        "Create or update delivery records with provider, external identity placeholders, status, snapshot reference, origin metadata, actors, timestamps, and promotion linkage fields.",
+        "Use canonical origin.source, origin.id, snake_case metadata, and workflow_id identity rules."
+      ],
+      "outOfScope": [
+        "Provider-specific issue creation, labels, comments, custom fields, or webhooks.",
+        "Promotion of approved issues."
+      ],
+      "independentTest": "Call proposal submission with project-targeted, MoonMind-targeted, duplicate, and policy-overridden candidates against a fake provider boundary; assert resolved policy decisions, delivery records, dedup behavior, and origin metadata without external network calls.",
+      "acceptanceCriteria": [
+        "Policy resolution preserves explicit candidate values over defaults while enforcing allowlists, capacity limits, severity gates, and tag gates.",
+        "Project proposals keep the triggering repository and MoonMind run-quality proposals rewrite to the configured MoonMind repository only when category/severity/tag gates pass.",
+        "Dedup searches local open delivery records and provider metadata before creating a new delivery target.",
+        "Existing open duplicates update or link to the existing issue path instead of creating duplicate reviewer-facing records.",
+        "Delivery records include the canonical field set or an explicitly documented subset with provider-specific metadata separated from canonical fields.",
+        "Origin metadata uses origin.source=workflow, origin.id=workflow_id, and snake_case keys."
+      ],
+      "requirements": [
+        "Implement deterministic policy resolution at proposal submission time.",
+        "Persist delivery records as the audit/idempotency source.",
+        "Provide repository-aware deduplication before provider issue creation."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "Global and per-task proposal policy resolution"
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "Project versus MoonMind targeting"
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "Durable proposal delivery record"
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "ownership": "Dedup-first delivery"
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "ownership": "Canonical origin and identity metadata"
+        }
+      ],
+      "dependencies": [
+        "STORY-002"
+      ],
+      "risks": [
+        "Existing task_proposals storage may need careful migration to serve as a delivery/audit record without introducing compatibility aliases."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Deliver proposals to GitHub and Jira review surfaces",
+      "shortName": "external-tracker-delivery",
+      "description": "As a reviewer, I need MoonMind proposals delivered as GitHub Issues or Jira issues with clear review context, canonical commands or workflow states, dedup markers, and safe links back to run evidence.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskProposalSystem.md",
+        "title": "Task Proposal System",
+        "sections": [
+          "5. External Proposal Delivery",
+          "9.4 Provider adapters",
+          "11. Security and Integrity"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-027",
+          "DESIGN-REQ-031"
+        ]
+      },
+      "why": "External tracker delivery is the primary human review experience and must be safe, idempotent, and provider-bounded.",
+      "scope": [
+        "Render GitHub proposal issues with canonical prefix, labels, hidden MoonMind markers, source links, dedup metadata, and reviewer commands.",
+        "Render Jira proposal issues with canonical prefix, ADF description, labels/custom fields, workflow states, source links, and accepted promotion/dismissal/deferral triggers.",
+        "Include explicit notice that edited issue text is not executable.",
+        "Link large payloads, logs, artifacts, and diagnostics by reference instead of embedding them.",
+        "Keep credentials, retries, redaction, provider issue operations, and destination allowlists inside provider adapters."
+      ],
+      "outOfScope": [
+        "A MoonMind-hosted proposal review queue page.",
+        "Executing approved proposals or processing webhook decisions."
+      ],
+      "independentTest": "Use fake GitHub and Jira adapters to submit new and duplicate proposals, then assert rendered issue fields, labels/custom fields, hidden markers, commands/workflow state metadata, issue update behavior, redaction, and destination allowlist enforcement.",
+      "acceptanceCriteria": [
+        "GitHub issues are created or updated with [MoonMind proposal] titles, canonical labels, hidden markers, source links, dedup metadata, and reviewer action instructions.",
+        "Jira issues are created or updated with [MoonMind proposal] summaries, ADF descriptions, labels/custom fields, canonical workflow states, source links, and configured action triggers.",
+        "Issue bodies/descriptions include a clear stored-snapshot notice and never embed raw executable payload replacement instructions.",
+        "Provider adapters enforce repository, organization, Jira site, Jira project, and action allowlists.",
+        "Provider credentials and raw provider errors are never exposed to managed agent environments, logs, comments, or API responses."
+      ],
+      "requirements": [
+        "Implement provider-specific delivery through adapter boundaries.",
+        "Render review artifacts from stored proposal snapshots and references.",
+        "Enforce delivery idempotency and security controls at the provider boundary."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "External-tracker-native proposal review"
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "GitHub Issues review contract"
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "Jira issue review contract"
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "ownership": "Rendered issue text is review-only"
+        },
+        {
+          "id": "DESIGN-REQ-027",
+          "ownership": "Provider adapter boundary"
+        },
+        {
+          "id": "DESIGN-REQ-031",
+          "ownership": "Tracker content is untrusted"
+        }
+      ],
+      "dependencies": [
+        "STORY-003"
+      ],
+      "risks": [
+        "Jira custom field and workflow configurations vary by site and may require configuration validation fixtures."
+      ],
+      "needsClarification": [
+        "Exact default Jira issue type and custom field IDs may be deployment-specific and should be supplied by operator configuration."
+      ]
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Process verified tracker decisions and promote approved proposals",
+      "shortName": "proposal-review-promotion",
+      "description": "As a reviewer, I need approved external tracker actions to promote proposals into new MoonMind.Run executions while dismiss, defer, reprioritize, and revision actions update proposal state without executing arbitrary tracker content.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskProposalSystem.md",
+        "title": "Task Proposal System",
+        "sections": [
+          "8. Review, Promotion, and Execution",
+          "9.2 Webhook endpoints",
+          "9.3 Admin and recovery APIs"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-024",
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-026",
+          "DESIGN-REQ-031"
+        ]
+      },
+      "why": "Promotion is the critical control-plane bridge from review to execution and must be permission-checked, idempotent, bounded, and snapshot-based.",
+      "scope": [
+        "Handle GitHub and Jira webhook events with signature/shared-secret verification, provider event idempotency, event normalization, actor permission checks, and redacted diagnostics.",
+        "Promote only by loading the delivery record and stored task snapshot, applying bounded controls, validating payloads, preserving skill and preset intent, and calling TemporalExecutionService.create_execution().",
+        "Support dismissal, deferral, reprioritization, and revision-request state changes without starting work.",
+        "Expose admin/recovery APIs for inspection, redelivery, sync, and promote where appropriate for operators and tests.",
+        "Validate runtime overrides against backend-supported task runtimes before workflow creation."
+      ],
+      "outOfScope": [
+        "Generating candidate proposals.",
+        "Rendering provider issue content except follow-up comments/transitions from decisions."
+      ],
+      "independentTest": "Replay signed fake GitHub and Jira decision events, duplicate event IDs, unauthorized actors, edited issue bodies, runtime overrides, and dismissal/deferral actions; assert only authorized promotion creates a Temporal execution from the stored snapshot.",
+      "acceptanceCriteria": [
+        "Webhook handlers verify provider signatures or shared secrets before processing decisions.",
+        "Provider event IDs make webhook decision handling idempotent.",
+        "Actor permission checks block unauthorized promotion, dismissal, deferral, reprioritization, and revision requests.",
+        "Promotion ignores edited issue body text and Jira ADF, uses only the stored snapshot plus bounded controls, and creates a new MoonMind.Run through the canonical Temporal-backed create path.",
+        "Promotion preserves explicit skill selectors, authoredPresets, and steps[].source provenance unless a validated proposal revision changed them.",
+        "Dismissal and deferral record actor, provider event identity, note/reason, timestamp, and external issue state without starting execution.",
+        "Disabled or unsupported runtime overrides fail validation before a workflow is created."
+      ],
+      "requirements": [
+        "Implement verified provider decision ingestion.",
+        "Bridge approved proposals to Temporal execution from stored snapshots.",
+        "Record non-executing decisions and expose recovery surfaces."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Stored task snapshot is executable source of truth"
+        },
+        {
+          "id": "DESIGN-REQ-021",
+          "ownership": "Verified human review actions"
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "ownership": "Promotion creates a new MoonMind.Run"
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "ownership": "Dismissal and deferral are non-executing decisions"
+        },
+        {
+          "id": "DESIGN-REQ-024",
+          "ownership": "Runtime override validation"
+        },
+        {
+          "id": "DESIGN-REQ-025",
+          "ownership": "Internal proposal and recovery APIs"
+        },
+        {
+          "id": "DESIGN-REQ-026",
+          "ownership": "Provider webhook contract"
+        },
+        {
+          "id": "DESIGN-REQ-031",
+          "ownership": "Tracker content is untrusted"
+        }
+      ],
+      "dependencies": [
+        "STORY-004"
+      ],
+      "risks": [
+        "Promotion touches security-sensitive webhook, auth, and Temporal boundaries and needs integration tests with realistic adapter payloads."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Surface proposal outcomes in summaries and Mission Control",
+      "shortName": "proposal-observability",
+      "description": "As a MoonMind operator, I need proposal generation, delivery, dedup, failure, and promotion outcomes visible in finish summaries, reports, APIs, execution detail, and Mission Control without creating a new primary proposal queue.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskProposalSystem.md",
+        "title": "Task Proposal System",
+        "sections": [
+          "3.6 Finish summary integration",
+          "10. Observability and UI Contract",
+          "14. Acceptance Criteria"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-028",
+          "DESIGN-REQ-029",
+          "DESIGN-REQ-030"
+        ]
+      },
+      "why": "Operators need enough visibility to audit best-effort proposal behavior and recover failures while external trackers remain the review surface.",
+      "scope": [
+        "Record proposal requested/generated/submitted/delivered/updated/failed counts and redacted validation/provider errors in typed finish results and reports/run_summary.json.",
+        "Expose external issue links, provider, external key, delivery status, last sync, dedup behavior, compact task summary, and promotion result links in API and Mission Control execution detail.",
+        "Map mm_state=proposals and related states for dashboard compatibility.",
+        "Ensure partial proposal success does not change a successful parent run into a failed run.",
+        "Exclude a standalone proposal queue page as the primary review workflow."
+      ],
+      "outOfScope": [
+        "Implementing provider adapters, webhooks, or promotion.",
+        "Building a dedicated MoonMind proposal review page."
+      ],
+      "independentTest": "Run proposal-stage success, partial failure, duplicate update, delivery failure, and promoted-link fixtures through finish summary/API/UI projection helpers and Mission Control tests; assert visible counts, links, redacted errors, state mapping, and absence of primary queue behavior.",
+      "acceptanceCriteria": [
+        "Finish summaries and reports/run_summary.json include requested/generated/submitted/delivered counts, provider failures, redacted validation errors, issue links, and dedup updates.",
+        "Execution detail and Mission Control show provider, external key, delivery status, last sync timestamp, dedup new-or-updated status, compact task summary, and promotion result links.",
+        "mm_state=proposals is visible and mapped to running for dashboard compatibility.",
+        "Malformed candidates are skipped with visible redacted errors and do not promote or silently drop semantically important fields.",
+        "External delivery failures are retried idempotently and visible in summaries, delivery records, and operator diagnostics.",
+        "No standalone proposal queue page becomes the normal review path."
+      ],
+      "requirements": [
+        "Publish proposal-stage observability across run summaries, APIs, and Mission Control.",
+        "Represent partial success and redacted failures clearly.",
+        "Preserve external tracker review as the primary workflow."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "Finish summaries report proposal outcomes"
+        },
+        {
+          "id": "DESIGN-REQ-028",
+          "ownership": "Mission Control delivery visibility"
+        },
+        {
+          "id": "DESIGN-REQ-029",
+          "ownership": "No dedicated proposal review page"
+        },
+        {
+          "id": "DESIGN-REQ-030",
+          "ownership": "Best-effort failure handling"
+        }
+      ],
+      "dependencies": [
+        "STORY-003"
+      ],
+      "risks": [
+        "UI tests may need stable fixtures for generated links and timestamps."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-025": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-026": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-027": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-028": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-029": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-030": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-031": [
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-032": [
+      "STORY-002"
+    ]
+  }
+}
