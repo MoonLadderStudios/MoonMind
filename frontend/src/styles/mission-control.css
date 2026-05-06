@@ -1003,7 +1003,7 @@ tbody tr:hover {
 
 .task-list-data-slab {
   gap: 0;
-  overflow: visible;
+  overflow: hidden;
   padding: 0;
   border-color: rgb(var(--mm-border) / 0.45);
   background: rgb(var(--mm-panel) / 0.96);
@@ -1093,7 +1093,8 @@ tbody tr:hover {
   position: relative;
   display: block;
   max-width: 100%;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: visible;
   scroll-padding-top: 3.2rem;
   border-radius: 0.75rem;
   border: 1px solid rgb(var(--mm-border) / 0.72);
