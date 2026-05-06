@@ -725,6 +725,12 @@ describe('Mission Control shared entry', () => {
     expect(popoverFilterBlock).toContain('border: 0');
     expect(popoverFilterBlock).toContain('background: transparent');
     expect(popoverFilterBlock).toContain('box-shadow: none');
+    expect(
+      cssRuleBlock(
+        missionControlCss,
+        '.task-list-header-filter-popover .task-list-header-filter-control label',
+      ),
+    ).toContain('gap: 0.55rem');
     expect(cssRuleBlock(missionControlCss, '.task-list-filter-actions')).toContain(
       'border-top: 1px solid rgb(var(--mm-border) / 0.7)',
     );

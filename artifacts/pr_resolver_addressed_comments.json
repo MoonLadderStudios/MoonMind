@@ -1,12 +1,12 @@
 [
   {
-    "id": 3192062411,
+    "id": 3192384822,
     "disposition": "addressed",
-    "rationale": "Combined the two sortedItems.length === 0 branches into a single block that toggles the inner element on hasPaginationContext, removing the duplicated resultsFooter."
+    "rationale": "Updated the popover label gap to 0.55rem so checkbox labels keep the same readable spacing as the global checkbox rule, and added a CSS regression assertion."
   },
   {
-    "id": 4232119181,
+    "id": 4232489257,
     "disposition": "not-applicable",
-    "rationale": "Summary review body referencing the inline suggestion already addressed; no additional action required."
+    "rationale": "Broad review summary only; the actionable spacing concern is tracked by review comment 3192384822 and was addressed."
   }
 ]
