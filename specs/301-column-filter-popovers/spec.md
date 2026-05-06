@@ -97,11 +97,54 @@ Default to runtime mode and only use docs mode when explicitly requested.
 If the brief points at an implementation document, treat it as runtime source requirements.
 Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
 Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts.
+
+Additional canonical Jira preset brief for MM-594:
+
+# MM-594 MoonSpec Orchestration Input
+
+## Source
+
+- Jira issue: MM-594
+- Jira project key: MM
+- Issue type: Story
+- Current status at fetch time: In Progress
+- Summary: Filters on the tasks list page should be multi-select dropdowns
+- Trusted fetch tool: `jira.get_issue`
+- Canonical source: normalized Jira preset brief synthesized from trusted Jira tool response fields because the MCP issue response did not expose `recommendedImports.presetInstructions`, `normalizedPresetBrief`, `presetBrief`, or `presetInstructions`.
+- Trusted response artifact: `artifacts/moonspec-inputs/MM-594-trusted-jira-get-issue.json`
+
+## Canonical MoonSpec Feature Request
+
+Jira issue: MM-594 from MM project
+Summary: Filters on the tasks list page should be multi-select dropdowns
+Issue type: Story
+Current Jira status: In Progress
+Jira project key: MM
+
+Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-594 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
+
+MM-594: Filters on the tasks list page should be multi-select dropdowns
+
+When a filter button is pressed on the tasks list page, it should open a box which includes multi-select dropdown options. They should not be standard dropdowns that only allow the selection of one option.
+
+Acceptance Criteria
+- Pressing a filter button on the tasks list page opens a filter box/popover for that filter.
+- The filter box presents dropdown options that support selecting multiple values.
+- Filter controls must not be standard single-select dropdowns when the filter semantics allow multiple options.
+- Preserve existing tasks list behavior outside the filter interaction change.
+
+## Orchestration Constraints
+
+Selected mode: runtime.
+Default to runtime mode and only use docs mode when explicitly requested.
+If the brief points at an implementation document, treat it as runtime source requirements.
+Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
+Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts.
 """
 
 ## Classification
 
-Input classification: single-story feature request. The Jira brief selects one independently testable runtime UI behavior story for the Tasks List page: operators can refine task rows through column-owned filter popovers, staged filter changes, include/exclude value semantics, blank handling, active chips, and default-view restoration. The source document is a broader design, but the Jira brief narrows the work to one story and does not require MoonSpec breakdown.
+Input classification: single-story feature request. The Jira brief selects one independently testable runtime UI behavior story for the Tasks List page: operators can refine task rows through column-owned filter popovers, staged filter changes, include/exclude value semantics, blank handling, active chips, and default-view restoration. The source document is a broader design, but the Jira brief narrows the work to one story and does not require MoonSpec breakdown. The additional MM-594 brief maps to this same single story because it specifically requires filter buttons to open a box with multi-select options instead of standard single-select dropdowns.
 
 ## User Story - Column Filter Refinement
 
@@ -166,7 +209,7 @@ Input classification: single-story feature request. The Jira brief selects one i
 - **FR-022**: Existing `repo=<value>` URLs MUST load as an equivalent exact Repository include filter for one value.
 - **FR-023**: After an operator changes filters in the new UI, shareable URL state SHOULD use canonical column filter encoding instead of legacy top-filter parameter names.
 - **FR-024**: Normal Tasks List filtering MUST remain task-scoped and MUST NOT expose system workflow browsing through column filters or legacy URL parameters.
-- **FR-025**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve Jira issue key `MM-588` and this canonical Jira preset brief.
+- **FR-025**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve Jira issue keys `MM-588` and `MM-594` and their canonical Jira preset briefs.
 
 ## Source Design Requirements
 
@@ -190,4 +233,4 @@ Input classification: single-story feature request. The Jira brief selects one i
 - **SC-005**: UI tests prove Repository supports both selectable values and legacy exact repository text mapping.
 - **SC-006**: UI tests prove active chips reopen their column popovers, remove only their own filter, and Clear filters restores the default task-run view.
 - **SC-007**: Boundary tests prove filter application resets pagination and preserves task-scoped list semantics.
-- **SC-008**: Traceability evidence preserves `MM-588`, the canonical Jira preset brief, and DESIGN-REQ-007, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015, and DESIGN-REQ-027 in MoonSpec artifacts.
+- **SC-008**: Traceability evidence preserves `MM-588`, `MM-594`, their canonical Jira preset briefs, and DESIGN-REQ-007, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015, and DESIGN-REQ-027 in MoonSpec artifacts.
