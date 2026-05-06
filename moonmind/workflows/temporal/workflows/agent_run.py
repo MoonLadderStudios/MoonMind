@@ -119,6 +119,9 @@ MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID = "agent-run-managed-task-workflow-bindin
 MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-fetch-result-activity-v1"
 )
+STORY_BREAKDOWN_ARTIFACT_HANDOFF_PATCH_ID = (
+    "agent-run-story-breakdown-artifact-handoff-v1"
+)
 MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-prepare-turn-instructions-activity-v1"
 )
@@ -546,6 +549,74 @@ class MoonMindAgentRun:
             )
             moonmind_payload["reportOutput"] = dict(report_output_context)
             metadata["moonmind"] = moonmind_payload
+
+        if workflow.patched(STORY_BREAKDOWN_ARTIFACT_HANDOFF_PATCH_ID):
+            params = (
+                request.parameters if isinstance(request.parameters, Mapping) else {}
+            )
+            story_output_context = (
+                params.get("storyOutput")
+                if isinstance(params.get("storyOutput"), Mapping)
+                else params.get("story_output")
+                if isinstance(params.get("story_output"), Mapping)
+                else None
+            )
+            story_breakdown_path = str(
+                params.get("storyBreakdownPath")
+                or params.get("story_breakdown_path")
+                or (
+                    story_output_context.get("storyBreakdownPath")
+                    if isinstance(story_output_context, Mapping)
+                    else ""
+                )
+                or (
+                    story_output_context.get("story_breakdown_path")
+                    if isinstance(story_output_context, Mapping)
+                    else ""
+                )
+                or ""
+            ).strip()
+            story_breakdown_markdown_path = str(
+                params.get("storyBreakdownMarkdownPath")
+                or params.get("story_breakdown_markdown_path")
+                or (
+                    story_output_context.get("storyBreakdownMarkdownPath")
+                    if isinstance(story_output_context, Mapping)
+                    else ""
+                )
+                or (
+                    story_output_context.get("story_breakdown_markdown_path")
+                    if isinstance(story_output_context, Mapping)
+                    else ""
+                )
+                or ""
+            ).strip()
+            if story_breakdown_path:
+                metadata.setdefault("storyBreakdownPath", story_breakdown_path)
+            if story_breakdown_markdown_path:
+                metadata.setdefault(
+                    "storyBreakdownMarkdownPath",
+                    story_breakdown_markdown_path,
+                )
+            if story_output_context is not None and (
+                story_breakdown_path or story_breakdown_markdown_path
+            ):
+                story_output_metadata = (
+                    dict(metadata.get("storyOutput"))
+                    if isinstance(metadata.get("storyOutput"), Mapping)
+                    else dict(story_output_context)
+                )
+                if story_breakdown_path:
+                    story_output_metadata.setdefault(
+                        "storyBreakdownPath",
+                        story_breakdown_path,
+                    )
+                if story_breakdown_markdown_path:
+                    story_output_metadata.setdefault(
+                        "storyBreakdownMarkdownPath",
+                        story_breakdown_markdown_path,
+                    )
+                metadata["storyOutput"] = story_output_metadata
 
         return result.model_copy(update={"metadata": metadata})
 
