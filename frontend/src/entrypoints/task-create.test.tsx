@@ -13975,6 +13975,10 @@ describe("Task Create schema-driven capability inputs", () => {
                 title: "Unsupported widget",
                 "x-moonmind-widget": "external.lookup",
               },
+              unsafe_default: {
+                type: "string",
+                title: "Unsafe default",
+              },
             },
           },
           uiSchema: {},
@@ -13987,6 +13991,7 @@ describe("Task Create schema-driven capability inputs", () => {
             metadata: { source: "fixture" },
             assignee_email: "team@example.com",
             mode: "draft",
+            unsafe_default: "token=raw-secret",
           },
         }),
       } as Response);
@@ -14141,6 +14146,8 @@ describe("Task Create schema-driven capability inputs", () => {
     expect((within(step).getByLabelText("Assignee email") as HTMLInputElement).type).toBe("email");
     expect(within(step).getByLabelText("Mode")).toBeTruthy();
     expect(within(step).getByText("Unsupported field widget.")).toBeTruthy();
+    expect((within(step).getByLabelText("Unsafe default") as HTMLInputElement).value).toBe("");
+    expect(within(step).queryByDisplayValue("token=raw-secret")).toBeNull();
   });
 
   it("renders direct skill inputs through the same schema behavior", async () => {

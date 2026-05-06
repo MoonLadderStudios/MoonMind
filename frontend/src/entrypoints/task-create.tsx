@@ -2280,12 +2280,32 @@ function unsupportedCapabilityWidget(
   return !supported.has(widget);
 }
 
+function containsSecretLikeCapabilityValue(value: unknown): boolean {
+  if (value && typeof value === "object") {
+    if (Array.isArray(value)) {
+      return value.some((item) => containsSecretLikeCapabilityValue(item));
+    }
+    return Object.entries(value as Record<string, unknown>).some(
+      ([key, nested]) =>
+        /(authorization|cookie|password|secret|token|api[_-]?key|access[_-]?key)/i.test(
+          key,
+        ) || containsSecretLikeCapabilityValue(nested),
+    );
+  }
+  return /(token=|password=|bearer\s+|ghp_|github_pat_|akia[0-9a-z]|aiza|atatt|-----begin [a-z ]*private key)/i.test(
+    String(value || ""),
+  );
+}
+
 function safeCapabilityDefault(
   defaults: Record<string, unknown> | undefined,
   name: string,
 ): unknown {
   const value = defaults?.[name];
   if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (containsSecretLikeCapabilityValue(value)) {
     return undefined;
   }
   return structuredClone(value);

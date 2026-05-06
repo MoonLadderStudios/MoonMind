@@ -287,6 +287,74 @@ async def test_expand_schema_capability_reports_field_addressable_errors(tmp_pat
         }
     ]
 
+async def test_expand_annotated_schema_capability_reports_field_addressable_errors(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="annotated-schema-required",
+                title="Annotated Schema Required",
+                description="Schema-driven preset",
+                scope="global",
+                scope_ref=None,
+                tags=["schema"],
+                inputs_schema=[],
+                steps=[{"title": "Use issue", "instructions": "{{ inputs.jira_issue.key }}"}],
+                annotations={
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["jira_issue"],
+                        "properties": {
+                            "jira_issue": {
+                                "type": "object",
+                                "title": "Jira issue",
+                                "required": ["key"],
+                                "properties": {"key": {"type": "string"}},
+                            }
+                        },
+                    },
+                    "uiSchema": {
+                        "jira_issue": {
+                            "widget": "jira.issue-picker",
+                            "allowManualKeyEntry": True,
+                        }
+                    },
+                    "defaults": {},
+                },
+                required_capabilities=["jira"],
+                created_by=user_id,
+            )
+
+            with pytest.raises(TaskTemplateValidationError) as excinfo:
+                await service.expand_template(
+                    slug="annotated-schema-required",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={"jira_issue": {}},
+                    context={},
+                )
+
+            expanded = await service.expand_template(
+                slug="annotated-schema-required",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={"jira_issue": {"key": "MM-593"}},
+                context={},
+            )
+
+    assert excinfo.value.errors == [
+        {
+            "path": "preset.inputs.jira_issue.key",
+            "message": "Jira issue key is required.",
+            "code": "required",
+            "recoverable": True,
+        }
+    ]
+    assert expanded["appliedTemplate"]["inputs"]["jira_issue"] == {"key": "MM-593"}
+
 async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path):
     user_id = uuid4()
     async with template_db(tmp_path) as session_maker:

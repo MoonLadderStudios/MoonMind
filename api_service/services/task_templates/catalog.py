@@ -568,6 +568,10 @@ def _apply_contextual_input_overrides(
             issue_key = str(jira_issue.get("key") or "").strip()
             if issue_key and not str(adjusted.get("jira_issue_key") or "").strip():
                 adjusted["jira_issue_key"] = issue_key
+        elif str(adjusted.get("jira_issue_key") or "").strip():
+            adjusted["jira_issue"] = {
+                "key": str(adjusted.get("jira_issue_key") or "").strip()
+            }
         return adjusted
 
     if slug not in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
@@ -684,6 +688,59 @@ def _capability_contract_from_inputs(
     if required:
         schema["required"] = required
     return schema, ui_schema, defaults
+
+def _schema_contract_input_definitions(
+    *,
+    input_schema: Mapping[str, Any],
+    ui_schema: Mapping[str, Any],
+    defaults: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    properties = input_schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return []
+    required = {
+        str(item or "").strip()
+        for item in input_schema.get("required") or []
+        if str(item or "").strip()
+    }
+    definitions: list[dict[str, Any]] = []
+    for name, raw_field_schema in properties.items():
+        field_name = str(name or "").strip()
+        field_schema = dict(raw_field_schema) if isinstance(raw_field_schema, Mapping) else {}
+        if not field_name:
+            continue
+        field_type = str(field_schema.get("type") or "text").strip().lower()
+        if field_type == "boolean":
+            input_type = "boolean"
+        elif isinstance(field_schema.get("enum"), list):
+            input_type = "enum"
+        else:
+            input_type = "text"
+        definitions.append(
+            {
+                "name": field_name,
+                "label": str(field_schema.get("title") or field_name).strip(),
+                "type": input_type,
+                "required": field_name in required,
+                **(
+                    {"default": defaults[field_name]}
+                    if field_name in defaults
+                    else {}
+                ),
+                **(
+                    {"options": [str(item) for item in field_schema.get("enum") or []]}
+                    if input_type == "enum"
+                    else {}
+                ),
+                "schema": field_schema,
+                **(
+                    {"uiSchema": dict(ui_schema[field_name])}
+                    if isinstance(ui_schema.get(field_name), Mapping)
+                    else {}
+                ),
+            }
+        )
+    return definitions
 
 def _normalize_seed_annotations(item: Mapping[str, Any]) -> dict[str, Any]:
     annotations = dict(item.get("annotations") or {})
@@ -1562,6 +1619,31 @@ class TaskTemplateCatalogService:
             inputs_schema=selected_version.inputs_schema or [],
             context=effective_context,
         )
+        annotated_schema = (selected_version.annotations or {}).get("inputSchema")
+        if isinstance(annotated_schema, Mapping):
+            annotated_ui_schema = (selected_version.annotations or {}).get("uiSchema")
+            annotated_defaults = (selected_version.annotations or {}).get("defaults")
+            contract_definitions = _schema_contract_input_definitions(
+                input_schema=annotated_schema,
+                ui_schema=annotated_ui_schema
+                if isinstance(annotated_ui_schema, Mapping)
+                else {},
+                defaults=annotated_defaults
+                if isinstance(annotated_defaults, Mapping)
+                else {},
+            )
+            existing_names = {
+                str(definition.get("name") or "").strip()
+                for definition in effective_schema
+            }
+            effective_schema = [
+                *effective_schema,
+                *[
+                    definition
+                    for definition in contract_definitions
+                    if definition["name"] not in existing_names
+                ],
+            ]
         submitted_inputs = _apply_contextual_input_overrides(
             slug=template.slug,
             inputs_schema=effective_schema,
