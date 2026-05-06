@@ -131,6 +131,9 @@ def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> SimpleNa
         app.dependency_overrides[dependency] = _current_user
     return mock_user
 
+def _empty_session_override() -> SimpleNamespace:
+    return SimpleNamespace()
+
 def _build_execution_record(
     *,
     workflow_type: TemporalWorkflowType = TemporalWorkflowType.RUN,
@@ -2928,7 +2931,7 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = lambda: SimpleNamespace()
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with patch(
@@ -2978,6 +2981,53 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
         "targets": ["project"],
         "defaultRuntime": "gemini_cli",
     }
+
+def test_create_task_shaped_recurring_schedule_uses_root_proposal_fallbacks(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    next_run_at = datetime.now(UTC) + timedelta(hours=1)
+
+    with patch(
+        "api_service.services.recurring_tasks_service.RecurringTasksService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.create_definition = AsyncMock(
+            return_value=SimpleNamespace(
+                id=uuid4(),
+                name="Inline schedule",
+                cron="0 * * * *",
+                timezone="UTC",
+                next_run_at=next_run_at,
+            )
+        )
+
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "proposeTasks": True,
+                    "proposalPolicy": {"targets": ["moonmind"]},
+                    "schedule": {
+                        "mode": "recurring",
+                        "cron": "0 * * * *",
+                    },
+                    "task": {
+                        "instructions": "Run this on a schedule",
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.json()
+    target = service.create_definition.await_args.kwargs["target"]
+    stored_payload = target["job"]["payload"]
+    assert "proposeTasks" not in stored_payload
+    assert "proposalPolicy" not in stored_payload
+    assert stored_payload["task"]["proposeTasks"] is True
+    assert stored_payload["task"]["proposalPolicy"] == {"targets": ["moonmind"]}
 
 def test_create_execution_surfaces_domain_validation_errors(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],

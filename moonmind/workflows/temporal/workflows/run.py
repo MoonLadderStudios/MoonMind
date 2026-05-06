@@ -3071,7 +3071,12 @@ class MoonMindRunWorkflow:
         if workflow.patched("run-workflow-nested-propose-tasks"):
             task_node = parameters.get("task")
             if isinstance(task_node, Mapping):
-                return _coerce_bool(task_node.get("proposeTasks"), default=False)
+                propose_tasks_value = (
+                    task_node["proposeTasks"]
+                    if "proposeTasks" in task_node
+                    else parameters.get("proposeTasks")
+                )
+                return _coerce_bool(propose_tasks_value, default=False)
             return _coerce_bool(parameters.get("proposeTasks"), default=False)
         else:
             return _coerce_bool(parameters.get("proposeTasks"), default=False)

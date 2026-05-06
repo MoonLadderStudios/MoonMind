@@ -4279,17 +4279,27 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
     ``RecurringTasksService.create_definition()``.
     """
     target_payload = dict(request_payload)
-    target_payload.pop("proposeTasks", None)
-    target_payload.pop("proposalPolicy", None)
+    root_propose_tasks = target_payload.pop("proposeTasks", None)
+    root_proposal_policy = target_payload.pop("proposalPolicy", None)
     task_node = target_payload.get("task")
     if isinstance(task_node, Mapping):
         task_payload = dict(task_node)
+        propose_tasks_value = (
+            task_payload["proposeTasks"]
+            if "proposeTasks" in task_payload
+            else root_propose_tasks
+        )
+        proposal_policy_value = (
+            task_payload["proposalPolicy"]
+            if "proposalPolicy" in task_payload
+            else root_proposal_policy
+        )
         task_payload["proposeTasks"] = _coerce_bool(
-            task_payload.get("proposeTasks"),
+            propose_tasks_value,
             default=False,
         )
         normalized_proposal_policy = _normalize_task_proposal_policy(
-            task_payload.get("proposalPolicy")
+            proposal_policy_value
         )
         if normalized_proposal_policy is not None:
             task_payload["proposalPolicy"] = normalized_proposal_policy

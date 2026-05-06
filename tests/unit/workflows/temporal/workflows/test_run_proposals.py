@@ -166,7 +166,44 @@ async def test_run_proposals_stage_honors_nested_task_propose_tasks(
     ]
 
 @pytest.mark.asyncio
-async def test_run_proposals_stage_nested_task_flag_takes_precedence(
+async def test_run_proposals_stage_uses_root_compatibility_fallback_when_task_flag_missing(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        dumped = json.loads(json.dumps(payload, default=_to_serializable))
+        captured.append((activity_type, dumped))
+        if activity_type == "proposal.generate":
+            return [{"title": "Generated proposal 1"}]
+        if activity_type == "proposal.submit":
+            return {"submitted_count": 1}
+        return {}
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+
+    await mock_run_workflow._run_proposals_stage(
+        parameters={
+            "repo": "org/repo",
+            "proposeTasks": True,
+            "task": {
+                "instructions": "Canonical task payload without proposal opt-in.",
+            },
+        }
+    )
+
+    assert [activity for activity, _payload in captured] == [
+        "proposal.generate",
+        "proposal.submit",
+    ]
+
+@pytest.mark.asyncio
+async def test_run_proposals_stage_nested_task_flag_takes_precedence_on_conflict(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -182,7 +219,8 @@ async def test_run_proposals_stage_nested_task_flag_takes_precedence(
             "repo": "org/repo",
             "proposeTasks": True,
             "task": {
-                "instructions": "Canonical task payload without proposal opt-in.",
+                "instructions": "Canonical task payload disables proposal opt-in.",
+                "proposeTasks": False,
             },
         }
     )
