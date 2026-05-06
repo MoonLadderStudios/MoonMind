@@ -850,7 +850,6 @@ describe('Mission Control shared entry', () => {
     expect(rootBlock).toContain('--mm-mobile-nav-border: rgb(var(--mm-accent) / 0.35);');
     expect(rootBlock).toContain('--mm-mobile-nav-hover: rgb(var(--mm-accent) / 0.12);');
     expect(rootBlock).toContain('--mm-mobile-nav-active-start: rgb(var(--mm-accent) / 0.30);');
-    expect(darkBlock).toContain('--mm-mobile-nav-fill: rgb(var(--mm-panel) / 0.92);');
     expect(darkBlock).toContain('--mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.95);');
   });
 

@@ -123,8 +123,6 @@
   --mm-control-shell: rgb(var(--mm-panel) / 0.82);
   --mm-control-shell-hover: rgb(var(--mm-accent) / 0.18);
   --mm-control-border: rgb(var(--mm-border) / 0.76);
-  --mm-mobile-nav-fill: rgb(var(--mm-panel) / 0.92);
-  --mm-mobile-nav-border: rgb(var(--mm-accent) / 0.35);
   --mm-mobile-nav-edge: var(--mm-glass-edge);
   --mm-mobile-nav-shadow: 0 20px 50px rgb(0 0 0 / 0.45);
   --mm-mobile-nav-text: rgb(var(--mm-muted) / 0.78);
