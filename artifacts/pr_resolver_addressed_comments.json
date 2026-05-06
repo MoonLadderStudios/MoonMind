@@ -1,22 +1,32 @@
 [
   {
-    "id": 3192506969,
+    "id": 3193823070,
     "disposition": "addressed",
-    "rationale": "Added launch metadata preflight that skips skill materialization so durable retrieval metadata is present at cold session launch while real skill projection still happens after launch."
+    "rationale": "Updated backend secret-like AWS access key detection to match the standard AKIA prefix plus 16-character key body."
   },
   {
-    "id": 4232619979,
-    "disposition": "not-applicable",
-    "rationale": "Review body summary only; no separate actionable request."
-  },
-  {
-    "id": 3192516052,
+    "id": 3193823074,
     "disposition": "addressed",
-    "rationale": "Preserved preparation-produced durable retrieval metadata in launch request metadata and request parameters before sending the turn."
+    "rationale": "Updated frontend secret-like AWS access key detection to match the standard AKIA prefix plus 16-character key body."
   },
   {
-    "id": 4232630020,
+    "id": 4234197184,
     "disposition": "not-applicable",
-    "rationale": "Review body summary only; actionable retrieval metadata concern is covered by review comments 3192506969 and 3192516052."
+    "rationale": "Review summary only; the actionable AWS regex line comments from this review were addressed separately."
+  },
+  {
+    "id": 3193830068,
+    "disposition": "addressed",
+    "rationale": "Merged schema-rendered Skill inputs into submitted tool and skill payload inputs, with regression coverage."
+  },
+  {
+    "id": 3193830071,
+    "disposition": "addressed",
+    "rationale": "Preserved cleared optional numeric schema fields as empty UI state and omitted them from resolved submission inputs."
+  },
+  {
+    "id": 4234205844,
+    "disposition": "not-applicable",
+    "rationale": "Review wrapper/informational body only; the actionable Codex review line comments were addressed separately."
   }
 ]

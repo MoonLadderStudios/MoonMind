@@ -74,6 +74,14 @@ _JIRA_BREAKDOWN_PROJECT_INPUT = "jira_project_key"
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 _UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"{{\s*[^}]+\s*}}")
 _NATIVE_BOOLEAN_TEMPLATE_PATTERN = re.compile(r"^\{\{.*\}\}$", re.DOTALL)
+_SECRET_LIKE_KEY_PATTERN = re.compile(
+    r"(authorization|cookie|password|secret|token|api[_-]?key|access[_-]?key)",
+    re.IGNORECASE,
+)
+_SECRET_LIKE_VALUE_PATTERN = re.compile(
+    r"(token=|password=|bearer\s+|ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|-----begin [a-z ]*private key)",
+    re.IGNORECASE,
+)
 _STEP_RESERVED_KEYS = frozenset(
     {
         "id",
@@ -197,6 +205,12 @@ class TaskTemplateNotFoundError(TaskTemplateError):
 
 class TaskTemplateValidationError(TaskTemplateError):
     """Raised when template payloads fail validation."""
+
+    def __init__(
+        self, message: str, *, errors: list[dict[str, Any]] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.errors = errors or []
 
 class TaskTemplateConflictError(TaskTemplateError):
     """Raised when uniqueness constraints are violated."""
@@ -547,6 +561,19 @@ def _apply_contextual_input_overrides(
     submitted: dict[str, Any],
     context: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
+    adjusted = dict(submitted)
+    if slug == "jira-orchestrate":
+        jira_issue = adjusted.get("jira_issue")
+        if isinstance(jira_issue, Mapping):
+            issue_key = str(jira_issue.get("key") or "").strip()
+            if issue_key and not str(adjusted.get("jira_issue_key") or "").strip():
+                adjusted["jira_issue_key"] = issue_key
+        elif str(adjusted.get("jira_issue_key") or "").strip():
+            adjusted["jira_issue"] = {
+                "key": str(adjusted.get("jira_issue_key") or "").strip()
+            }
+        return adjusted
+
     if slug not in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
         return submitted
 
@@ -555,7 +582,6 @@ def _apply_contextual_input_overrides(
     if not repository and not project_key:
         return submitted
 
-    adjusted = dict(submitted)
     schema_defaults = _input_schema_defaults_by_name(inputs_schema)
     if slug == _JIRA_BREAKDOWN_ORCHESTRATE_SLUG:
         submitted_repository = str(adjusted.get("repository") or "").strip()
@@ -586,6 +612,154 @@ def _input_schema_defaults_by_name(inputs_schema: list[dict[str, Any]]) -> dict[
         if str(definition.get("name") or "").strip()
     }
 
+def _contains_secret_like_value(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if _SECRET_LIKE_KEY_PATTERN.search(str(key)):
+                return True
+            if _contains_secret_like_value(nested):
+                return True
+        return False
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(_contains_secret_like_value(item) for item in value)
+    return bool(_SECRET_LIKE_VALUE_PATTERN.search(str(value or "")))
+
+def _legacy_input_to_json_schema(definition: Mapping[str, Any]) -> dict[str, Any]:
+    explicit_schema = definition.get("schema")
+    if isinstance(explicit_schema, Mapping):
+        return dict(explicit_schema)
+
+    input_type = str(definition.get("type") or "text").strip().lower()
+    title = str(definition.get("label") or definition.get("name") or "").strip()
+    schema: dict[str, Any]
+    if input_type == "boolean":
+        schema = {"type": "boolean"}
+    elif input_type == "enum":
+        schema = {
+            "type": "string",
+            "enum": [str(item) for item in definition.get("options") or []],
+        }
+    else:
+        schema = {"type": "string"}
+    if title:
+        schema["title"] = title
+    placeholder = str(definition.get("placeholder") or "").strip()
+    if placeholder:
+        schema["description"] = placeholder
+    return schema
+
+def _capability_contract_from_inputs(
+    *,
+    inputs_schema: list[dict[str, Any]],
+    annotations: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    annotations = annotations or {}
+    annotated_schema = annotations.get("inputSchema") or annotations.get("input_schema")
+    annotated_ui_schema = annotations.get("uiSchema") or annotations.get("ui_schema")
+    annotated_defaults = annotations.get("defaults")
+    if isinstance(annotated_schema, Mapping):
+        return (
+            dict(annotated_schema),
+            dict(annotated_ui_schema) if isinstance(annotated_ui_schema, Mapping) else {},
+            dict(annotated_defaults) if isinstance(annotated_defaults, Mapping) else {},
+        )
+
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    ui_schema: dict[str, Any] = {}
+    defaults: dict[str, Any] = {}
+    for definition in inputs_schema:
+        name = str(definition.get("name") or "").strip()
+        if not name:
+            continue
+        properties[name] = _legacy_input_to_json_schema(definition)
+        if bool(definition.get("required", False)):
+            required.append(name)
+        default = definition.get("default")
+        if default not in (None, ""):
+            defaults[name] = default
+        field_ui_schema = definition.get("uiSchema") or definition.get("ui_schema")
+        if isinstance(field_ui_schema, Mapping):
+            ui_schema[name] = dict(field_ui_schema)
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+    }
+    if required:
+        schema["required"] = required
+    return schema, ui_schema, defaults
+
+def _schema_contract_input_definitions(
+    *,
+    input_schema: Mapping[str, Any],
+    ui_schema: Mapping[str, Any],
+    defaults: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    properties = input_schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return []
+    required = {
+        str(item or "").strip()
+        for item in input_schema.get("required") or []
+        if str(item or "").strip()
+    }
+    definitions: list[dict[str, Any]] = []
+    for name, raw_field_schema in properties.items():
+        field_name = str(name or "").strip()
+        field_schema = dict(raw_field_schema) if isinstance(raw_field_schema, Mapping) else {}
+        if not field_name:
+            continue
+        field_type = str(field_schema.get("type") or "text").strip().lower()
+        if field_type == "boolean":
+            input_type = "boolean"
+        elif isinstance(field_schema.get("enum"), list):
+            input_type = "enum"
+        else:
+            input_type = "text"
+        definitions.append(
+            {
+                "name": field_name,
+                "label": str(field_schema.get("title") or field_name).strip(),
+                "type": input_type,
+                "required": field_name in required,
+                **(
+                    {"default": defaults[field_name]}
+                    if field_name in defaults
+                    else {}
+                ),
+                **(
+                    {"options": [str(item) for item in field_schema.get("enum") or []]}
+                    if input_type == "enum"
+                    else {}
+                ),
+                "schema": field_schema,
+                **(
+                    {"uiSchema": dict(ui_schema[field_name])}
+                    if isinstance(ui_schema.get(field_name), Mapping)
+                    else {}
+                ),
+            }
+        )
+    return definitions
+
+def _normalize_seed_annotations(item: Mapping[str, Any]) -> dict[str, Any]:
+    annotations = dict(item.get("annotations") or {})
+    for source_key, target_key in (
+        ("inputSchema", "inputSchema"),
+        ("input_schema", "inputSchema"),
+        ("uiSchema", "uiSchema"),
+        ("ui_schema", "uiSchema"),
+        ("defaults", "defaults"),
+    ):
+        value = item.get(source_key)
+        if isinstance(value, Mapping):
+            annotations[target_key] = dict(value)
+    if _contains_secret_like_value(annotations.get("defaults")):
+        raise TaskTemplateValidationError(
+            "Capability schema defaults contain a secret-like value."
+        )
+    return annotations
+
 
 def _serialize_template(
     *,
@@ -594,6 +768,10 @@ def _serialize_template(
     is_favorite: bool,
     recent_applied_at: datetime | None,
 ) -> dict[str, Any]:
+    input_schema, ui_schema, defaults = _capability_contract_from_inputs(
+        inputs_schema=version.inputs_schema or [],
+        annotations=version.annotations or {},
+    )
     return {
         "slug": template.slug,
         "scope": template.scope_type.value,
@@ -611,6 +789,9 @@ def _serialize_template(
             slug=template.slug,
             inputs_schema=version.inputs_schema or [],
         ),
+        "inputSchema": input_schema,
+        "uiSchema": ui_schema,
+        "defaults": defaults,
         "steps": list(version.steps or []),
         "annotations": dict(version.annotations or {}),
         "requiredCapabilities": _normalize_capabilities(
@@ -997,6 +1178,21 @@ class TaskTemplateCatalogService:
             else:
                 normalized_options = []
             placeholder = str(raw_input.get("placeholder") or "").strip()
+            default_value = raw_input.get("default")
+            if _contains_secret_like_value(default_value):
+                raise TaskTemplateValidationError(
+                    f"Template input '{name}' has a secret-like default value."
+                )
+            schema_value = raw_input.get("schema")
+            if schema_value is not None and not isinstance(schema_value, dict):
+                raise TaskTemplateValidationError(
+                    f"Template input '{name}' schema must be an object."
+                )
+            ui_schema_value = raw_input.get("uiSchema") or raw_input.get("ui_schema")
+            if ui_schema_value is not None and not isinstance(ui_schema_value, dict):
+                raise TaskTemplateValidationError(
+                    f"Template input '{name}' uiSchema must be an object."
+                )
             names.add(name)
             validated.append(
                 {
@@ -1004,9 +1200,15 @@ class TaskTemplateCatalogService:
                     "label": label,
                     "type": input_type,
                     "required": bool(raw_input.get("required", False)),
-                    "default": raw_input.get("default"),
+                    "default": default_value,
                     **({"options": normalized_options} if normalized_options else {}),
                     **({"placeholder": placeholder} if placeholder else {}),
+                    **({"schema": dict(schema_value)} if isinstance(schema_value, dict) else {}),
+                    **(
+                        {"uiSchema": dict(ui_schema_value)}
+                        if isinstance(ui_schema_value, dict)
+                        else {}
+                    ),
                 }
             )
         return validated
@@ -1417,6 +1619,31 @@ class TaskTemplateCatalogService:
             inputs_schema=selected_version.inputs_schema or [],
             context=effective_context,
         )
+        annotated_schema = (selected_version.annotations or {}).get("inputSchema")
+        if isinstance(annotated_schema, Mapping):
+            annotated_ui_schema = (selected_version.annotations or {}).get("uiSchema")
+            annotated_defaults = (selected_version.annotations or {}).get("defaults")
+            contract_definitions = _schema_contract_input_definitions(
+                input_schema=annotated_schema,
+                ui_schema=annotated_ui_schema
+                if isinstance(annotated_ui_schema, Mapping)
+                else {},
+                defaults=annotated_defaults
+                if isinstance(annotated_defaults, Mapping)
+                else {},
+            )
+            existing_names = {
+                str(definition.get("name") or "").strip()
+                for definition in effective_schema
+            }
+            effective_schema = [
+                *effective_schema,
+                *[
+                    definition
+                    for definition in contract_definitions
+                    if definition["name"] not in existing_names
+                ],
+            ]
         submitted_inputs = _apply_contextual_input_overrides(
             slug=template.slug,
             inputs_schema=effective_schema,
@@ -1521,10 +1748,80 @@ class TaskTemplateCatalogService:
             raw_value = submitted[name] if name in submitted else default
             if raw_value in (None, "") and required:
                 raise TaskTemplateValidationError(
-                    f"Missing required template input '{name}'."
+                    f"Missing required template input '{name}'.",
+                    errors=[
+                        {
+                            "path": f"preset.inputs.{name}",
+                            "message": f"{definition.get('label') or name} is required.",
+                            "code": "required",
+                            "recoverable": True,
+                        }
+                    ],
                 )
             if raw_value in (None, ""):
                 resolved[name] = raw_value
+                continue
+            field_schema = definition.get("schema")
+            if isinstance(field_schema, dict) and field_schema.get("type") == "object":
+                if not isinstance(raw_value, dict):
+                    raise TaskTemplateValidationError(
+                        f"Input '{name}' must be an object.",
+                        errors=[
+                            {
+                                "path": f"preset.inputs.{name}",
+                                "message": f"{definition.get('label') or name} must be an object.",
+                                "code": "invalid_type",
+                                "recoverable": True,
+                            }
+                        ],
+                    )
+                object_value = dict(raw_value)
+                nested_errors: list[dict[str, Any]] = []
+                properties = field_schema.get("properties")
+                property_schemas = properties if isinstance(properties, dict) else {}
+                for required_key in field_schema.get("required") or []:
+                    key = str(required_key or "").strip()
+                    if not key:
+                        continue
+                    nested = object_value.get(key)
+                    if nested in (None, ""):
+                        nested_schema = property_schemas.get(key)
+                        title = (
+                            nested_schema.get("title")
+                            if isinstance(nested_schema, dict)
+                            else None
+                        )
+                        label = str(title or f"{definition.get('label') or name} {key}").strip()
+                        if key == "key" and name == "jira_issue":
+                            message = "Jira issue key is required."
+                        else:
+                            message = f"{label} is required."
+                        nested_errors.append(
+                            {
+                                "path": f"preset.inputs.{name}.{key}",
+                                "message": message,
+                                "code": "required",
+                                "recoverable": True,
+                            }
+                        )
+                if nested_errors:
+                    raise TaskTemplateValidationError(
+                        f"Input '{name}' failed schema validation.",
+                        errors=nested_errors,
+                    )
+                if _contains_secret_like_value(object_value):
+                    raise TaskTemplateValidationError(
+                        f"Input '{name}' contains a secret-like value.",
+                        errors=[
+                            {
+                                "path": f"preset.inputs.{name}",
+                                "message": "Input contains a secret-like value.",
+                                "code": "secret_like_value",
+                                "recoverable": True,
+                            }
+                        ],
+                    )
+                resolved[name] = object_value
                 continue
             if input_type == "boolean":
                 if isinstance(raw_value, bool):
@@ -1817,7 +2114,7 @@ class TaskTemplateCatalogService:
                     tags=item.get("tags") or [],
                     inputs_schema=item.get("inputs") or [],
                     steps=item.get("steps") or [],
-                    annotations=item.get("annotations") or {},
+                    annotations=_normalize_seed_annotations(item),
                     required_capabilities=item.get("requiredCapabilities") or [],
                     created_by=None,
                     version=version,
@@ -1852,7 +2149,7 @@ class TaskTemplateCatalogService:
             version_label = str(item.get("version", "1.0.0")).strip() or "1.0.0"
             validated_inputs = self._validate_inputs_schema(item.get("inputs") or [])
             validated_steps = self._validate_template_steps(item.get("steps") or [])
-            annotations = dict(item.get("annotations") or {})
+            annotations = _normalize_seed_annotations(item)
             derived_capabilities = _normalize_capabilities(
                 (item.get("requiredCapabilities") or [])
                 + [

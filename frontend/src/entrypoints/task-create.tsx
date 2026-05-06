@@ -399,6 +399,7 @@ interface SkillsResponse {
   items?: {
     worker?: string[];
   };
+  legacyItems?: SkillCapabilityDetail[];
 }
 
 interface DependencyPickerExecution {
@@ -464,6 +465,21 @@ interface TaskTemplateSummary {
 
 interface TaskTemplateDetail extends TaskTemplateSummary {
   inputs?: TaskTemplateInputDefinition[];
+  inputSchema?: Record<string, unknown>;
+  uiSchema?: Record<string, unknown>;
+  defaults?: Record<string, unknown>;
+}
+
+interface SkillCapabilityDetail {
+  id: string;
+  inputSchema?: Record<string, unknown>;
+  uiSchema?: Record<string, unknown>;
+  defaults?: Record<string, unknown>;
+}
+
+interface SkillCatalogResult {
+  ids: string[];
+  detailsById: Record<string, SkillCapabilityDetail>;
 }
 
 interface TaskTemplateListResponse {
@@ -595,7 +611,8 @@ interface StepState {
   skillArgs: string;
   skillRequiredCapabilities: string;
   presetKey: string;
-  presetInputValues: Record<string, string | boolean>;
+  presetInputValues: Record<string, unknown>;
+  presetInputErrors: Record<string, string>;
   presetDetail: TaskTemplateDetail | null;
   submitExpansion?: PresetSubmitExpansionState | null;
   presetMessage: string | null;
@@ -1205,6 +1222,7 @@ function createStepStateEntry(
     skillRequiredCapabilities: "",
     presetKey: "",
     presetInputValues: {},
+    presetInputErrors: {},
     presetDetail: null,
     submitExpansion: null,
     presetMessage: null,
@@ -1219,10 +1237,12 @@ function createStepStateEntry(
 
 function presetInputValuesFromPayload(
   inputValues: Record<string, unknown> | undefined,
-): Record<string, string | boolean> {
-  return Object.entries(inputValues || {}).reduce<Record<string, string | boolean>>(
+): Record<string, unknown> {
+  return Object.entries(inputValues || {}).reduce<Record<string, unknown>>(
     (values, [key, value]) => {
-      if (typeof value === "boolean") {
+      if (value && typeof value === "object") {
+        values[key] = structuredClone(value);
+      } else if (typeof value === "boolean") {
         values[key] = value;
       } else if (value !== null && value !== undefined) {
         values[key] = String(value);
@@ -1234,7 +1254,7 @@ function presetInputValuesFromPayload(
 }
 
 function presetInputValueSignature(
-  inputValues: Record<string, string | boolean>,
+  inputValues: Record<string, unknown>,
 ): string {
   return JSON.stringify(
     Object.entries(inputValues).sort(([left], [right]) =>
@@ -1308,6 +1328,7 @@ function createStepStateEntriesFromTemporalDraft(
         step.stepType === "preset"
           ? presetInputValuesFromPayload(presetPayload.inputs)
           : {},
+      presetInputErrors: {},
       presetDetail: null,
       templateStepId: step.templateStepId,
       templateInstructions: step.templateInstructions,
@@ -2136,6 +2157,439 @@ function isVisiblePresetInput(
     return false;
   }
   return true;
+}
+
+function schemaProperties(schema: Record<string, unknown> | undefined): Record<string, unknown> {
+  return recordValue(schema?.properties);
+}
+
+function schemaRequired(schema: Record<string, unknown> | undefined): Set<string> {
+  return new Set(
+    (Array.isArray(schema?.required) ? schema.required : [])
+      .map((item) => String(item || "").trim())
+      .filter(Boolean),
+  );
+}
+
+function capabilityFieldLabel(name: string, schema: Record<string, unknown>): string {
+  return String(schema.title || name)
+    .trim()
+    .replaceAll("_", " ");
+}
+
+function capabilityFieldUiSchema(
+  uiSchema: Record<string, unknown> | undefined,
+  name: string,
+): Record<string, unknown> {
+  return recordValue(uiSchema?.[name]);
+}
+
+function capabilityWidgetName(
+  schema: Record<string, unknown>,
+  uiSchema: Record<string, unknown>,
+): string {
+  return String(
+    uiSchema.widget || schema["x-moonmind-widget"] || schema.format || schema.type || "text",
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function schemaChoiceOptions(schema: Record<string, unknown>): Array<{
+  label: string;
+  value: unknown;
+}> {
+  const choices = Array.isArray(schema.oneOf)
+    ? schema.oneOf
+    : Array.isArray(schema.anyOf)
+      ? schema.anyOf
+      : [];
+  return choices
+    .map((choice) => {
+      const choiceSchema = recordValue(choice);
+      const value = choiceSchema.const ?? (Array.isArray(choiceSchema.enum) ? choiceSchema.enum[0] : undefined);
+      if (value === undefined) {
+        return null;
+      }
+      return {
+        label: String(choiceSchema.title || value),
+        value,
+      };
+    })
+    .filter((choice): choice is { label: string; value: unknown } => Boolean(choice));
+}
+
+function textInputTypeForSchema(schema: Record<string, unknown>): string {
+  const format = String(schema.format || "").trim().toLowerCase();
+  if (format === "email" || format === "uri" || format === "url" || format === "date") {
+    return format === "uri" ? "url" : format;
+  }
+  if (schema.type === "number" || schema.type === "integer") {
+    return "number";
+  }
+  return "text";
+}
+
+function complexCapabilityTextValue(value: unknown): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function parseComplexCapabilityValue(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function unsupportedCapabilityWidget(
+  widget: string,
+  schema: Record<string, unknown>,
+): boolean {
+  if (Array.isArray(schema.enum) || schemaChoiceOptions(schema).length > 0) {
+    return false;
+  }
+  const supported = new Set([
+    "array",
+    "boolean",
+    "date",
+    "email",
+    "integer",
+    "jira.issue-picker",
+    "number",
+    "object",
+    "string",
+    "text",
+    "uri",
+    "url",
+  ]);
+  return !supported.has(widget);
+}
+
+function containsSecretLikeCapabilityValue(value: unknown): boolean {
+  if (value && typeof value === "object") {
+    if (Array.isArray(value)) {
+      return value.some((item) => containsSecretLikeCapabilityValue(item));
+    }
+    return Object.entries(value as Record<string, unknown>).some(
+      ([key, nested]) =>
+        /(authorization|cookie|password|secret|token|api[_-]?key|access[_-]?key)/i.test(
+          key,
+        ) || containsSecretLikeCapabilityValue(nested),
+    );
+  }
+  return /(token=|password=|bearer\s+|ghp_|github_pat_|akia[0-9a-z]{16}|aiza|atatt|-----begin [a-z ]*private key)/i.test(
+    String(value || ""),
+  );
+}
+
+function safeCapabilityDefault(
+  defaults: Record<string, unknown> | undefined,
+  name: string,
+): unknown {
+  const value = defaults?.[name];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (containsSecretLikeCapabilityValue(value)) {
+    return undefined;
+  }
+  return structuredClone(value);
+}
+
+function capabilityInputValue(
+  values: Record<string, unknown>,
+  defaults: Record<string, unknown> | undefined,
+  name: string,
+): unknown {
+  return values[name] !== undefined ? values[name] : safeCapabilityDefault(defaults, name);
+}
+
+function capabilityInputTextValue(
+  values: Record<string, unknown>,
+  defaults: Record<string, unknown> | undefined,
+  name: string,
+): string {
+  const value = capabilityInputValue(values, defaults, name);
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return String((value as Record<string, unknown>).key || "");
+  }
+  return value === undefined || value === null ? "" : String(value);
+}
+
+function schemaContractHasFields(detail: Pick<TaskTemplateDetail, "inputSchema"> | null | undefined): boolean {
+  return Object.keys(schemaProperties(detail?.inputSchema)).length > 0;
+}
+
+function resolveSchemaCapabilityValues(
+  detail: Pick<TaskTemplateDetail, "inputSchema" | "defaults">,
+  explicitValues: Record<string, unknown>,
+): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
+  const required = schemaRequired(detail.inputSchema);
+  for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
+    const fieldSchema = recordValue(rawSchema);
+    const explicit = explicitValues[name];
+    const fallback = safeCapabilityDefault(detail.defaults, name);
+    if (explicit !== undefined) {
+      if (
+        explicit === "" &&
+        !required.has(name) &&
+        (fieldSchema.type === "number" || fieldSchema.type === "integer")
+      ) {
+        continue;
+      }
+      values[name] = explicit;
+    } else if (fallback !== undefined) {
+      values[name] = fallback;
+    }
+  }
+  return values;
+}
+
+function resolvedPresetInputValues(
+  detail: Pick<TaskTemplateDetail, "inputSchema" | "defaults">,
+  explicitValues: Record<string, unknown>,
+): Record<string, unknown> {
+  return schemaContractHasFields(detail)
+    ? resolveSchemaCapabilityValues(detail, explicitValues)
+    : explicitValues;
+}
+
+function validateSchemaCapabilityValues(
+  detail: Pick<TaskTemplateDetail, "inputSchema" | "uiSchema">,
+  values: Record<string, unknown>,
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const required = schemaRequired(detail.inputSchema);
+  const properties = schemaProperties(detail.inputSchema);
+  for (const [name, rawSchema] of Object.entries(properties)) {
+    const fieldSchema = recordValue(rawSchema);
+    const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
+    const widget = capabilityWidgetName(fieldSchema, uiSchema);
+    const value = values[name];
+    if (widget === "jira.issue-picker") {
+      const issueValue = recordValue(value);
+      if (required.has(name) && !String(issueValue.key || "").trim()) {
+        errors[name] = "A Jira issue is required.";
+      }
+      continue;
+    }
+    if (required.has(name) && (value === undefined || value === null || value === "")) {
+      errors[name] = `${capabilityFieldLabel(name, fieldSchema)} is required.`;
+    }
+  }
+  return errors;
+}
+
+function schemaSkillInputs(
+  detail: Pick<TaskTemplateDetail, "inputSchema" | "uiSchema" | "defaults"> | null | undefined,
+  explicitValues: Record<string, unknown>,
+): {
+  values: Record<string, unknown>;
+  errors: Record<string, string>;
+} {
+  if (!detail || !schemaContractHasFields(detail)) {
+    return { values: {}, errors: {} };
+  }
+  const values = resolveSchemaCapabilityValues(detail, explicitValues);
+  return {
+    values,
+    errors: validateSchemaCapabilityValues(detail, values),
+  };
+}
+
+function mergeSkillArgsWithSchemaInputs(
+  skillArgs: Record<string, unknown>,
+  schemaInputs: Record<string, unknown>,
+): Record<string, unknown> {
+  return { ...skillArgs, ...schemaInputs };
+}
+
+function SchemaCapabilityFields({
+  fields,
+  detail,
+  values,
+  errors,
+  disabled,
+  onChange,
+}: {
+  fields: Array<[string, unknown]>;
+  detail: Pick<TaskTemplateDetail, "uiSchema" | "defaults">;
+  values: Record<string, unknown>;
+  errors: Record<string, string>;
+  disabled: boolean;
+  onChange: (name: string, value: unknown) => void;
+}): ReactElement | null {
+  if (fields.length === 0) {
+    return null;
+  }
+  return (
+    <div className="grid-2">
+      {fields.map(([name, rawSchema]) => {
+        const fieldSchema = recordValue(rawSchema);
+        const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
+        const widget = capabilityWidgetName(fieldSchema, uiSchema);
+        const label = capabilityFieldLabel(name, fieldSchema);
+        const value = capabilityInputValue(values, detail.defaults, name);
+        const inputId = `queue-capability-input-${name}`;
+        const error = errors[name];
+        const description = String(fieldSchema.description || "").trim();
+        const choices = schemaChoiceOptions(fieldSchema);
+        if (unsupportedCapabilityWidget(widget, fieldSchema)) {
+          return (
+            <label key={name} htmlFor={inputId}>
+              {label}
+              <input
+                id={inputId}
+                type="text"
+                value={capabilityInputTextValue(values, detail.defaults, name)}
+                disabled
+                aria-invalid
+                onChange={() => undefined}
+              />
+              <span className="notice small">Unsupported field widget.</span>
+            </label>
+          );
+        }
+        if (widget === "jira.issue-picker") {
+          const issueValue = recordValue(value);
+          return (
+            <label key={name} htmlFor={inputId}>
+              {label}
+              <input
+                id={inputId}
+                type="text"
+                value={String(issueValue.key || "")}
+                placeholder={String(uiSchema.searchPlaceholder || "Search Jira issues")}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                onChange={(event) =>
+                  onChange(name, {
+                    ...issueValue,
+                    key: event.target.value,
+                  })
+                }
+              />
+              {description ? <span className="small">{description}</span> : null}
+              {error ? <span className="notice small">{error}</span> : null}
+            </label>
+          );
+        }
+        if (fieldSchema.type === "boolean") {
+          return (
+            <label key={name} htmlFor={inputId}>
+              {label}
+              <input
+                id={inputId}
+                type="checkbox"
+                checked={Boolean(value)}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                onChange={(event) => onChange(name, event.target.checked)}
+              />
+              {description ? <span className="small">{description}</span> : null}
+              {error ? <span className="notice small">{error}</span> : null}
+            </label>
+          );
+        }
+        if (Array.isArray(fieldSchema.enum) || choices.length > 0) {
+          const enumOptions = Array.isArray(fieldSchema.enum)
+            ? fieldSchema.enum
+            : [];
+          const options: Array<{ label: string; value: unknown }> =
+            choices.length > 0
+              ? choices
+              : enumOptions.map((option: unknown) => ({
+                  label: String(option),
+                  value: option,
+                }));
+          return (
+            <label key={name} htmlFor={inputId}>
+              {label}
+              <select
+                id={inputId}
+                value={capabilityInputTextValue(values, detail.defaults, name)}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                onChange={(event) => {
+                  const selected = options.find(
+                    (option) => String(option.value) === event.target.value,
+                  );
+                  onChange(name, selected?.value ?? event.target.value);
+                }}
+              >
+                {options.map((option) => (
+                  <option key={String(option.value)} value={String(option.value)}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {description ? <span className="small">{description}</span> : null}
+              {error ? <span className="notice small">{error}</span> : null}
+            </label>
+          );
+        }
+        if (fieldSchema.type === "array" || fieldSchema.type === "object") {
+          return (
+            <label key={name} htmlFor={inputId}>
+              {label}
+              <textarea
+                id={inputId}
+                value={complexCapabilityTextValue(value)}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                onChange={(event) =>
+                  onChange(name, parseComplexCapabilityValue(event.target.value))
+                }
+              />
+              {description ? <span className="small">{description}</span> : null}
+              {error ? <span className="notice small">{error}</span> : null}
+            </label>
+          );
+        }
+        const inputType = textInputTypeForSchema(fieldSchema);
+        return (
+          <label key={name} htmlFor={inputId}>
+            {label}
+            <input
+              id={inputId}
+              type={inputType}
+              value={capabilityInputTextValue(values, detail.defaults, name)}
+              disabled={disabled}
+              aria-invalid={Boolean(error)}
+              onChange={(event) =>
+                onChange(
+                  name,
+                  inputType === "number"
+                    ? event.target.value === ""
+                      ? ""
+                      : Number(event.target.value)
+                    : event.target.value,
+                )
+              }
+            />
+            {description ? <span className="small">{description}</span> : null}
+            {error ? <span className="notice small">{error}</span> : null}
+          </label>
+        );
+      })}
+    </div>
+  );
 }
 
 export function resolveObjectiveInstructions(
@@ -3477,7 +3931,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const skillsQuery = useQuery({
     queryKey: ["task-create", "skills"],
-    queryFn: async (): Promise<string[]> => {
+    queryFn: async (): Promise<SkillCatalogResult> => {
       const response = await fetch("/api/tasks/skills", {
         headers: { Accept: "application/json" },
       });
@@ -3487,7 +3941,23 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         );
       }
       const data = (await response.json()) as SkillsResponse;
-      return data.items?.worker || [];
+      const detailsById: Record<string, SkillCapabilityDetail> = {};
+      for (const item of data.legacyItems || []) {
+        const id = String(item.id || "").trim();
+        if (!id) {
+          continue;
+        }
+        detailsById[id] = {
+          id,
+          ...(item.inputSchema ? { inputSchema: item.inputSchema } : {}),
+          ...(item.uiSchema ? { uiSchema: item.uiSchema } : {}),
+          ...(item.defaults ? { defaults: item.defaults } : {}),
+        };
+      }
+      return {
+        ids: data.items?.worker || Object.keys(detailsById),
+        detailsById,
+      };
     },
   });
 
@@ -4759,6 +5229,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     updateStep(localId, {
       presetKey,
       presetInputValues: {},
+      presetInputErrors: {},
       presetDetail,
       presetMessage: null,
     });
@@ -4783,7 +5254,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     localId: string,
     presetKey: string,
     expectedInstructions?: string,
-    expectedInputValues?: Record<string, string | boolean>,
+    expectedInputValues?: Record<string, unknown>,
   ): boolean {
     const currentStep = stepsRef.current.find((step) => step.localId === localId);
     const inputValuesMatch =
@@ -5043,6 +5514,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           discardedLabels.push("Preset configuration");
           nextStep.presetKey = "";
           nextStep.presetInputValues = {};
+          nextStep.presetInputErrors = {};
           nextStep.presetDetail = null;
           nextStep.presetMessage = null;
         }
@@ -5060,20 +5532,23 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   function updateStepPresetInputValue(
     localId: string,
-    definition: TaskTemplateInputDefinition,
-    value: string | boolean,
+    definition: Pick<TaskTemplateInputDefinition, "name">,
+    value: unknown,
   ) {
     setSteps((current) =>
       current.map((step) => {
         if (step.localId !== localId) {
           return step;
         }
+        const { [definition.name]: _removed, ...remainingErrors } =
+          step.presetInputErrors;
         return {
           ...step,
           presetInputValues: {
             ...step.presetInputValues,
             [definition.name]: value,
           },
+          presetInputErrors: remainingErrors,
         };
       }),
     );
@@ -5332,21 +5807,30 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     preset,
     detail,
     inputValues,
+    featureRequestOverride,
     submitIntent,
   }: {
     preset: TemplateOption;
     detail: TaskTemplateDetail;
     inputValues: Record<string, unknown>;
+    featureRequestOverride?: string;
     submitIntent?: string;
   }): Promise<PresetExpansionState> {
     const scopeParams = {
       scope: preset.scope,
       scopeRef: preset.scopeRef || undefined,
     };
-    const { values: inputs, assumptions } = resolveTemplateInputs(
-      detail.inputs || [],
-      inputValues,
-    );
+    const schemaDriven = schemaContractHasFields(detail);
+    const { values: inputs, assumptions } = schemaDriven
+      ? {
+          values: resolveSchemaCapabilityValues(detail, inputValues),
+          assumptions: [] as string[],
+        }
+      : resolveTemplateInputs(
+          detail.inputs || [],
+          inputValues,
+          featureRequestOverride,
+        );
     const version =
       detail.version || detail.latestVersion || preset.latestVersion || "1.0.0";
     const presetRuntime = runtime.trim().toLowerCase();
@@ -5540,14 +6024,24 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         step.presetDetail && step.presetKey === preset.key
           ? step.presetDetail
           : await loadPresetDetail(preset);
+      if (schemaContractHasFields(detail)) {
+        const validationErrors = validateSchemaCapabilityValues(
+          detail,
+          resolveSchemaCapabilityValues(detail, step.presetInputValues),
+        );
+        if (Object.keys(validationErrors).length > 0) {
+          updateStepPresetIfCurrent(localId, preset.key, {
+            presetInputErrors: validationErrors,
+            presetMessage: Object.values(validationErrors)[0] || "Preset input is required.",
+          });
+          return;
+        }
+      }
       const expansion = await expandPresetForDraft({
         preset,
         detail,
-        inputValues: resolveTemplateInputs(
-          detail.inputs || [],
-          step.presetInputValues,
-          step.instructions,
-        ).values,
+        inputValues: resolvedPresetInputValues(detail, step.presetInputValues),
+        featureRequestOverride: step.instructions,
       });
       if (
         !currentStepPresetMatches(
@@ -5841,7 +6335,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   function updatePresetSubmitExpansion(
     localId: string,
-    updates: Pick<StepState, "presetMessage" | "submitExpansion">,
+    updates: Partial<
+      Pick<StepState, "presetInputErrors" | "presetMessage" | "submitExpansion">
+    >,
   ) {
     setSteps((current) =>
       current.map((step) =>
@@ -5914,14 +6410,31 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         ) {
           throw new Error("Preset expansion was superseded by another submit attempt.");
         }
+        if (schemaContractHasFields(detail)) {
+          const validationErrors = validateSchemaCapabilityValues(
+            detail,
+            resolveSchemaCapabilityValues(detail, step.presetInputValues),
+          );
+          if (Object.keys(validationErrors).length > 0) {
+            const message =
+              Object.values(validationErrors)[0] || "Preset input is required.";
+            updatePresetSubmitExpansion(step.localId, {
+              presetInputErrors: validationErrors,
+              presetMessage: message,
+              submitExpansion: {
+                status: "failed",
+                requestId,
+                errorMessage: message,
+              },
+            });
+            throw new Error(message);
+          }
+        }
         const expansion = await expandPresetForDraft({
           preset,
           detail,
-          inputValues: resolveTemplateInputs(
-            detail.inputs || [],
-            step.presetInputValues,
-            step.instructions,
-          ).values,
+          inputValues: resolvedPresetInputValues(detail, step.presetInputValues),
+          featureRequestOverride: step.instructions,
           submitIntent,
         });
         const blockingWarning = expansion.warnings.find((warning) =>
@@ -6134,6 +6647,23 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const taskSkillRequiredCapabilities = primaryStepIsSkill && showAdvancedStepOptions
       ? parseCapabilitiesCsv(String(primaryStep?.skillRequiredCapabilities || ""))
       : [];
+    const primarySkillDetail = primaryStepIsSkill
+      ? skillsQuery.data?.detailsById[primaryValidation.value.skillId.trim()] || null
+      : null;
+    const primarySchemaInputs = primaryStep
+      ? schemaSkillInputs(primarySkillDetail, primaryStep.presetInputValues)
+      : { values: {}, errors: {} };
+    if (primaryStep && Object.keys(primarySchemaInputs.errors).length > 0) {
+      updateStep(primaryStep.localId, {
+        presetInputErrors: primarySchemaInputs.errors,
+      });
+      setSubmitMessage(
+        Object.values(primarySchemaInputs.errors)[0] ||
+          "Complete required Skill input fields before submitting.",
+      );
+      clearSubmitBusy();
+      return;
+    }
 
     let primarySkillArgs: Record<string, unknown> = {};
     if (primarySkillArgsRaw) {
@@ -6151,6 +6681,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         return;
       }
     }
+    primarySkillArgs = mergeSkillArgsWithSchemaInputs(
+      primarySkillArgs,
+      primarySchemaInputs.values,
+    );
     let primaryToolInputs: Record<string, unknown> = {};
     if (primaryStep?.stepType === "tool" && !executableGeneratedToolPayload(primaryStep)) {
       if (!primaryStep.toolId.trim()) {
@@ -6221,6 +6755,24 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const stepSkillCaps = stepIsSkill && showAdvancedStepOptions
         ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
         : [];
+      const stepSkillDetail = stepIsSkill
+        ? skillsQuery.data?.detailsById[stepSkillId] || null
+        : null;
+      const stepSchemaInputs = schemaSkillInputs(
+        stepSkillDetail,
+        step.presetInputValues,
+      );
+      if (Object.keys(stepSchemaInputs.errors).length > 0) {
+        updateStep(step.localId, {
+          presetInputErrors: stepSchemaInputs.errors,
+        });
+        setSubmitMessage(
+          Object.values(stepSchemaInputs.errors)[0] ||
+            `Complete required Skill input fields before submitting Step ${index + 1}.`,
+        );
+        clearSubmitBusy();
+        return;
+      }
       const hasAuthoredToolInputs =
         stepIsTool &&
         Boolean(step.toolInputs.trim()) &&
@@ -6235,6 +6787,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         hasAuthoredToolInputs ||
         Boolean(stepSkillId) ||
         Boolean(stepSkillArgsRaw) ||
+        Object.keys(stepSchemaInputs.values).length > 0 ||
         stepSkillCaps.length > 0 ||
         Boolean(generatedToolPayload) ||
         Boolean(generatedSkillPayload);
@@ -6271,6 +6824,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           return;
         }
       }
+      stepSkillArgs = mergeSkillArgsWithSchemaInputs(
+        stepSkillArgs,
+        stepSchemaInputs.values,
+      );
       parsedAdditionalStepInputs.push({
         sourceIndex: index,
         step,
@@ -7352,7 +7909,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           <div id="queue-steps-list" className="stack queue-steps-list">
             <datalist id={SKILL_OPTIONS_DATALIST_ID}>
               <option value="auto" />
-              {(skillsQuery.data || []).map((skillId) => (
+              {(skillsQuery.data?.ids || []).map((skillId) => (
                 <option key={skillId} value={skillId} />
               ))}
             </datalist>
@@ -7390,6 +7947,18 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       isVisiblePresetInput(step.presetDetail?.slug, definition) &&
                       !isFeatureRequestInputKey(definition.name),
                   )
+                : [];
+              const visiblePresetSchemaFields = schemaContractHasFields(
+                step.presetDetail,
+              )
+                ? Object.entries(schemaProperties(step.presetDetail?.inputSchema))
+                : [];
+              const selectedSkillDetail =
+                skillsQuery.data?.detailsById[step.skillId.trim()] || null;
+              const visibleSkillSchemaFields = schemaContractHasFields(
+                selectedSkillDetail,
+              )
+                ? Object.entries(schemaProperties(selectedSkillDetail?.inputSchema))
                 : [];
               const toolSearchText = toolSearchTextByStep[step.localId] || "";
               const trustedToolDefinitions = trustedToolsQuery.data || [];
@@ -7714,6 +8283,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           />
                         </label>
                       ) : null}
+                      {selectedSkillDetail ? (
+                        <SchemaCapabilityFields
+                          fields={visibleSkillSchemaFields}
+                          detail={selectedSkillDetail}
+                          values={step.presetInputValues}
+                          errors={step.presetInputErrors}
+                          disabled={false}
+                          onChange={(name, value) =>
+                            updateStepPresetInputValue(
+                              step.localId,
+                              { name },
+                              value,
+                            )
+                          }
+                        />
+                      ) : null}
                     </div>
                   ) : null}
 
@@ -7995,7 +8580,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       className="stack queue-step-preset-options"
                       aria-label="Step Preset Options"
                     >
-                      {visiblePresetInputs.length > 0 ? (
+                      {visiblePresetSchemaFields.length > 0 && step.presetDetail ? (
+                        <SchemaCapabilityFields
+                          fields={visiblePresetSchemaFields}
+                          detail={step.presetDetail}
+                          values={step.presetInputValues}
+                          errors={step.presetInputErrors}
+                          disabled={isApplyingPreset}
+                          onChange={(name, value) =>
+                            updateStepPresetInputValue(
+                              step.localId,
+                              { name },
+                              value,
+                            )
+                          }
+                        />
+                      ) : visiblePresetInputs.length > 0 ? (
                         <div className="grid-2">
                           {visiblePresetInputs.map((definition) => {
                               const inputId = `queue-step-${step.localId}-preset-input-${definition.name}`;

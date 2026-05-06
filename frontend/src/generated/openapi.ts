@@ -6701,6 +6701,18 @@ export interface components {
             releaseStatus: string;
             /** Inputs */
             inputs?: components["schemas"]["TaskTemplateInputSchema"][];
+            /** Inputschema */
+            inputSchema?: {
+                [key: string]: unknown;
+            };
+            /** Uischema */
+            uiSchema?: {
+                [key: string]: unknown;
+            };
+            /** Defaults */
+            defaults?: {
+                [key: string]: unknown;
+            };
             /** Steps */
             steps?: components["schemas"]["TaskTemplateStepBlueprintSchema"][];
             /** Annotations */
