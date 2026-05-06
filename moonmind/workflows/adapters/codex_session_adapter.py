@@ -338,16 +338,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             raise ValueError(
                 "CodexSessionAdapter does not support inputRefs for managed session turns"
             )
-        instructions: str | None = None
-        preparation_error: Exception | None = None
-        try:
-            instructions = await self._instructions_for_request(
-                binding=binding,
-                request=request,
-                workspace_path=workspace_path,
-            )
-        except Exception as exc:
-            preparation_error = exc
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
@@ -392,14 +382,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         failed_state_persisted = False
 
         try:
-            if preparation_error is not None:
-                raise preparation_error
-            if instructions is None:
-                instructions = await self._instructions_for_request(
-                    binding=binding,
-                    request=request,
-                    workspace_path=workspace_path,
-                )
+            instructions = await self._instructions_for_request(
+                binding=binding,
+                request=request,
+                workspace_path=workspace_path,
+            )
             turn_response = await self._coerce_turn_response(
                 self._send_turn(
                     SendCodexManagedSessionTurnRequest(

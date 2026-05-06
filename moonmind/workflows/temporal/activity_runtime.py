@@ -5334,8 +5334,18 @@ class TemporalAgentRuntimeActivities:
         if workspace is not None and (
             normalized == ".agents/skills"
             or normalized.startswith(".agents/skills/")
+            or normalized == ".gemini/skills"
+            or normalized.startswith(".gemini/skills/")
+            or normalized == "skills_active"
+            or normalized.startswith("skills_active/")
         ):
-            projection = workspace.expanduser().resolve() / ".agents" / "skills"
+            root = normalized.split("/", 2)
+            if root[:2] == [".agents", "skills"]:
+                projection = workspace.expanduser().resolve() / ".agents" / "skills"
+            elif root[:2] == [".gemini", "skills"]:
+                projection = workspace.expanduser().resolve() / ".gemini" / "skills"
+            else:
+                projection = workspace.expanduser().resolve() / "skills_active"
             if projection.is_symlink():
                 return True
         return False

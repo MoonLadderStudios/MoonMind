@@ -3018,6 +3018,32 @@ async def test_publish_path_filter_normalizes_relative_workspace_path(
     )
 
 
+async def test_publish_path_filter_excludes_generated_compatibility_skill_links(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    backing = tmp_path / "runtime" / "skills_active"
+    backing.mkdir(parents=True)
+    gemini_projection = workspace / ".gemini" / "skills"
+    repo_projection = workspace / "skills_active"
+    gemini_projection.parent.mkdir(parents=True)
+    gemini_projection.symlink_to(backing, target_is_directory=True)
+    repo_projection.symlink_to(backing, target_is_directory=True)
+
+    assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
+        ".gemini/skills",
+        workspace=workspace,
+    )
+    assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
+        ".gemini/skills/pr-resolver/SKILL.md",
+        workspace=workspace,
+    )
+    assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
+        "skills_active/pr-resolver/SKILL.md",
+        workspace=workspace,
+    )
+
+
 async def test_commit_workspace_changes_filters_skill_projection_from_string_workspace(
     tmp_path: Path,
 ) -> None:
