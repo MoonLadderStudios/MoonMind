@@ -1,12 +1,22 @@
 [
   {
-    "id": 3192062411,
+    "id": 3192506969,
     "disposition": "addressed",
-    "rationale": "Combined the two sortedItems.length === 0 branches into a single block that toggles the inner element on hasPaginationContext, removing the duplicated resultsFooter."
+    "rationale": "Added launch metadata preflight that skips skill materialization so durable retrieval metadata is present at cold session launch while real skill projection still happens after launch."
   },
   {
-    "id": 4232119181,
+    "id": 4232619979,
     "disposition": "not-applicable",
-    "rationale": "Summary review body referencing the inline suggestion already addressed; no additional action required."
+    "rationale": "Review body summary only; no separate actionable request."
+  },
+  {
+    "id": 3192516052,
+    "disposition": "addressed",
+    "rationale": "Preserved preparation-produced durable retrieval metadata in launch request metadata and request parameters before sending the turn."
+  },
+  {
+    "id": 4232630020,
+    "disposition": "not-applicable",
+    "rationale": "Review body summary only; actionable retrieval metadata concern is covered by review comments 3192506969 and 3192516052."
   }
 ]

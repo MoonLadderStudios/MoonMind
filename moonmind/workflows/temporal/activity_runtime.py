@@ -4029,10 +4029,16 @@ class TemporalAgentRuntimeActivities:
         workspace_path_raw = str(
             payload.get("workspace_path") or payload.get("workspacePath") or ""
         ).strip()
-        skill_snapshot_materialized = await self._materialize_selected_agent_skill_for_turn(
-            request=request,
-            workspace_path=workspace_path_raw,
+        skip_skill_materialization = bool(
+            payload.get("skipSkillMaterialization")
+            or payload.get("skip_skill_materialization")
         )
+        skill_snapshot_materialized = False
+        if not skip_skill_materialization:
+            skill_snapshot_materialized = await self._materialize_selected_agent_skill_for_turn(
+                request=request,
+                workspace_path=workspace_path_raw,
+            )
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
             if not workspace_path_raw:

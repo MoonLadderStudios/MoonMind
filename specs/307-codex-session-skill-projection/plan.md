@@ -30,15 +30,16 @@ Fix managed Codex session ordering so the final cloned workspace exists before s
 
 ## Implementation Strategy
 
-1. Reorder `CodexSessionAdapter.start` so `_ensure_remote_session` runs before `_instructions_for_request`.
-2. Keep selected-skill materialization and validation inside `agent_runtime.prepare_turn_instructions`; now it runs against the final workspace.
-3. Extend publish path filtering to ignore `.gemini/skills` and root `skills_active` symlink projections.
-4. Add targeted tests for cold-session order and publish filtering.
+1. Add a launch metadata preflight that calls turn preparation with selected-skill materialization skipped.
+2. Reorder `CodexSessionAdapter.start` so `_ensure_remote_session` runs before the real `_instructions_for_request`.
+3. Keep selected-skill materialization and validation inside the real `agent_runtime.prepare_turn_instructions`; now it runs against the final workspace.
+4. Extend publish path filtering to ignore `.gemini/skills` and root `skills_active` symlink projections.
+5. Add targeted tests for cold-session order, launch metadata preservation, and publish filtering.
 
 ## Risk & Mitigation
 
-- **Risk**: Prepared retrieval metadata is no longer available to the launch request when it is produced by turn preparation.
-  **Mitigation**: Request metadata still receives prepared durable retrieval metadata before turn send; launch metadata continues to include metadata already present before preparation.
+- **Risk**: Preparing selected skills before launch can create a projection that is deleted by workspace clone.
+  **Mitigation**: The pre-launch preparation path skips selected-skill materialization and only harvests compact durable metadata.
 
 ## Verification
 

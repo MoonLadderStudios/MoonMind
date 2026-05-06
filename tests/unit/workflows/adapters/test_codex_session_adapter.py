@@ -401,8 +401,12 @@ async def test_start_prepares_turn_instructions_after_cold_session_launch(
         )
 
     async def _prepare_after_launch(payload: dict[str, Any]) -> str:
-        call_order.append("prepare")
         assert payload["workspacePath"] == str(workspace_path)
+        if payload.get("skipSkillMaterialization") is True:
+            call_order.append("preflight")
+            assert not (workspace_path / ".launch-complete").exists()
+            return "metadata preflight\n\nManaged Codex CLI note:"
+        call_order.append("prepare")
         assert (workspace_path / ".launch-complete").is_file()
         return "prepared after launch\n\nManaged Codex CLI note:"
 
@@ -458,7 +462,7 @@ async def test_start_prepares_turn_instructions_after_cold_session_launch(
 
     await adapter.start(_request(binding, workspace_path=str(workspace_path)))
 
-    assert call_order == ["launch", "prepare", "send"]
+    assert call_order == ["preflight", "launch", "prepare", "send"]
     assert send_turn_calls[0].instructions.startswith("prepared after launch")
 
 async def test_start_passes_managed_session_dood_context(
@@ -2368,17 +2372,19 @@ async def test_start_delegates_turn_instruction_preparation_before_sending_turn(
     assert send_turn_calls[0].instructions.startswith("Injected context instruction")
     assert "Managed Codex CLI note:" in send_turn_calls[0].instructions
 
-async def test_start_updates_request_metadata_from_prepared_turn_request(
+async def test_start_populates_launch_metadata_from_prepared_turn_request(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
     launch_calls: list[Any] = []
+    prepare_calls: list[bool] = []
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
         return _snapshot(binding=binding)
 
     async def _prepare(payload: dict[str, Any]) -> dict[str, Any]:
         assert payload["includePreparedRequestMetadata"] is True
+        prepare_calls.append(bool(payload.get("skipSkillMaterialization")))
         return {
             "instructions": "Injected context instruction\n\nManaged Codex CLI note:",
             "durableRetrievalMetadata": {
@@ -2452,8 +2458,13 @@ async def test_start_updates_request_metadata_from_prepared_turn_request(
     await adapter.start(request)
 
     assert len(launch_calls) == 1
+    assert prepare_calls == [True, False]
     launch_request = launch_calls[0]["request"]
-    assert launch_request["metadata"] == {}
+    assert (
+        launch_request["metadata"]["latestContextPackRef"]
+        == "artifacts/context/rag-context-prepared.json"
+    )
+    assert launch_request["metadata"]["retrievalDurabilityAuthority"] == "artifact_ref"
     assert (
         request.parameters["metadata"]["moonmind"]["latestContextPackRef"]
         == "artifacts/context/rag-context-prepared.json"
