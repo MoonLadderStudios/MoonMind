@@ -937,9 +937,10 @@ describe('Tasks List Entrypoint', () => {
     expect(pageSizeLabel?.classList.contains('queue-page-size-selector')).toBe(true);
     expect(pageSizeLabel?.classList.contains('queue-inline-filter')).toBe(false);
     expect(tableWrapper).toBeTruthy();
-    expect(getComputedStyle(tableWrapper as HTMLElement).overflow).toBe('auto');
+    expect(getComputedStyle(dataSlab as HTMLElement).overflow).toBe('hidden');
+    expect(getComputedStyle(tableWrapper as HTMLElement).overflowX).toBe('auto');
+    expect(getComputedStyle(tableWrapper as HTMLElement).overflowY).toBe('visible');
     expect(getComputedStyle(tableWrapper as HTMLElement).scrollPaddingTop).not.toBe('auto');
-    expect(getComputedStyle(tableWrapper as HTMLElement).minHeight).not.toBe('0px');
     expect(getComputedStyle(table as HTMLElement).borderCollapse).toBe('separate');
     expect(getComputedStyle(tableHead as HTMLElement).position).toBe('sticky');
     expect(getComputedStyle(tableHead as HTMLElement).top).toBe('0px');
@@ -989,6 +990,8 @@ describe('Tasks List Entrypoint', () => {
     expect(tableWrapperStyles.borderTopWidth).toBe('0px');
     expect(tableWrapperStyles.borderRadius).toBe('0px');
     expect(tableWrapperStyles.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(tableWrapperStyles.overflowX).toBe('auto');
+    expect(tableWrapperStyles.overflowY).toBe('visible');
   });
 
   it('shows clickable active column filter chips and removes individual filters from the chip row', async () => {

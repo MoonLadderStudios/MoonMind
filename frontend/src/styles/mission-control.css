@@ -1093,9 +1093,8 @@ tbody tr:hover {
   position: relative;
   display: block;
   max-width: 100%;
-  max-height: min(70vh, 58rem);
-  min-height: min(32rem, 70vh);
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: visible;
   scroll-padding-top: 3.2rem;
   border-radius: 0.75rem;
   border: 1px solid rgb(var(--mm-border) / 0.72);
