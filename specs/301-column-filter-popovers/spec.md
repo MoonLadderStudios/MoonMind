@@ -133,13 +133,6 @@ Acceptance Criteria
 - Filter controls must not be standard single-select dropdowns when the filter semantics allow multiple options.
 - Preserve existing tasks list behavior outside the filter interaction change.
 
-## Orchestration Constraints
-
-Selected mode: runtime.
-Default to runtime mode and only use docs mode when explicitly requested.
-If the brief points at an implementation document, treat it as runtime source requirements.
-Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
-Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts.
 """
 
 ## Classification
