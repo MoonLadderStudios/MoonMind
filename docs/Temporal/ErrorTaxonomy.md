@@ -398,7 +398,7 @@ Model-provider rate limits include:
 Managed agent runtimes such as Claude Code and Codex CLI must treat these as
 retryable-with-policy failures. The runner should:
 
-1. classify the failure as `RATE_LIMITED`
+1. classify the normalized tool/step error code as `RATE_LIMITED`
 2. honor `Retry-After` when available
 3. retry with bounded exponential backoff and jitter
 4. report cooldown to the Provider Profile Manager when profile-scoped

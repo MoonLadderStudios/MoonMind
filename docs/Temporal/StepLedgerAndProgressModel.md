@@ -209,8 +209,8 @@ step row must include a bounded operator-facing summary such as:
 > Failed after 5 attempts. The step hit a model-provider rate limit and
 > exhausted exponential-backoff retries.
 
-`lastError` should classify the failure as `RATE_LIMITED`. Detailed stderr,
-provider payloads, and diagnostics remain in artifacts.
+`lastError.error_code` should classify the failure as `RATE_LIMITED`. Detailed
+stderr, provider payloads, and diagnostics remain in artifacts.
 
 ## 8. Step status vocabulary
 
