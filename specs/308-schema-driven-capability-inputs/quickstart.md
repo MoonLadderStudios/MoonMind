@@ -62,3 +62,10 @@ Final MoonSpec verification after implementation and required tests pass:
 - Simulate Jira lookup unavailable with manual entry allowed; manually entered issue key remains in the draft.
 - Add a fixture capability with supported schema fields and existing widgets; it renders without code that checks the fixture capability ID.
 - Confirm raw Jira credentials or secret-like defaults do not appear in schema defaults, draft safe values, submitted payloads, logs, artifacts, or agent-visible content in covered flows.
+
+## Implementation Verification Notes
+
+- `npm run ui:test:task-create`: passed for the Create-page schema-driven capability input coverage.
+- `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`: passed. `npm run ui:typecheck` is blocked in this managed shell because the npm script did not resolve `tsc` from `node_modules/.bin`.
+- `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only -- tests/unit/api/test_task_step_templates_service.py tests/unit/integrations/test_jira_tool_service.py tests/unit/mcp/test_jira_tool_registry.py tests/integration/test_startup_task_template_seeding.py`: passed.
+- `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`: blocked before the UI target by unrelated active skill projection failures. The managed `.agents/skills` projection is missing `fix-comments` and `pr-resolver` tool files required by existing PR resolver tests.

@@ -13826,6 +13826,335 @@ describe("Task Create MM-578 Preset expansion", () => {
   });
 });
 
+describe("Task Create schema-driven capability inputs", () => {
+  let fetchSpy: MockInstance;
+
+  function mockSchemaCapabilityFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const url = String(input);
+    if (url.startsWith("/api/tasks/skills")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: { worker: ["schema.skill"] },
+          legacyItems: [
+            {
+              id: "schema.skill",
+              inputSchema: {
+                type: "object",
+                required: ["repository"],
+                properties: {
+                  repository: { type: "string", title: "Repository name" },
+                },
+              },
+              uiSchema: {},
+              defaults: { repository: "MoonLadderStudios/MoonMind" },
+            },
+          ],
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/github/branches")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [{ value: "main", label: "main", source: "github" }],
+          defaultBranch: "main",
+          error: null,
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates?scope=personal")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              slug: "jira-schema-preset",
+              scope: "global",
+              title: "Jira Schema Preset",
+              description: "Schema-driven Jira preset.",
+              latestVersion: "1.0.0",
+              version: "1.0.0",
+            },
+            {
+              slug: "generic-schema-preset",
+              scope: "global",
+              title: "Generic Schema Preset",
+              description: "Schema-driven generic preset.",
+              latestVersion: "1.0.0",
+              version: "1.0.0",
+            },
+          ],
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates/jira-schema-preset?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          slug: "jira-schema-preset",
+          scope: "global",
+          title: "Jira Schema Preset",
+          description: "Schema-driven Jira preset.",
+          latestVersion: "1.0.0",
+          version: "1.0.0",
+          inputSchema: {
+            type: "object",
+            required: ["jira_issue"],
+            properties: {
+              jira_issue: {
+                type: "object",
+                title: "Jira issue",
+                required: ["key"],
+                properties: {
+                  key: { type: "string", title: "Issue key" },
+                  summary: { type: "string", title: "Summary" },
+                },
+              },
+            },
+          },
+          uiSchema: {
+            jira_issue: {
+              widget: "jira.issue-picker",
+              allowManualKeyEntry: true,
+              searchPlaceholder: "Search Jira issues",
+            },
+          },
+          defaults: {},
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates/generic-schema-preset?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          slug: "generic-schema-preset",
+          scope: "global",
+          title: "Generic Schema Preset",
+          description: "Schema-driven generic preset.",
+          latestVersion: "1.0.0",
+          version: "1.0.0",
+          inputSchema: {
+            type: "object",
+            required: ["summary", "urgent"],
+            properties: {
+              summary: { type: "string", title: "Summary" },
+              urgent: { type: "boolean", title: "Urgent" },
+              estimate: { type: "number", title: "Estimate" },
+              priority: {
+                type: "string",
+                title: "Priority",
+                enum: ["low", "high"],
+              },
+              labels: {
+                type: "array",
+                title: "Labels",
+                description: "JSON array of labels",
+              },
+              metadata: { type: "object", title: "Metadata" },
+              assignee_email: {
+                type: "string",
+                format: "email",
+                title: "Assignee email",
+              },
+              mode: {
+                title: "Mode",
+                oneOf: [
+                  { const: "draft", title: "Draft" },
+                  { const: "submit", title: "Submit" },
+                ],
+              },
+              unsupported_widget: {
+                type: "string",
+                title: "Unsupported widget",
+                "x-moonmind-widget": "external.lookup",
+              },
+            },
+          },
+          uiSchema: {},
+          defaults: {
+            summary: "Default summary",
+            urgent: false,
+            estimate: 3,
+            priority: "high",
+            labels: ["schema"],
+            metadata: { source: "fixture" },
+            assignee_email: "team@example.com",
+            mode: "draft",
+          },
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates/jira-schema-preset:expand?scope=global")) {
+      const payload = JSON.parse(String(init?.body || "{}")) as {
+        inputs?: Record<string, unknown>;
+      };
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          steps: [
+            {
+              id: "tpl:jira-schema-preset:1.0.0:01",
+              title: "Use Jira issue",
+              instructions: `Use ${(payload.inputs?.jira_issue as { key?: string })?.key || ""}.`,
+              tool: {
+                type: "tool",
+                id: "jira.get_issue",
+                inputs: payload.inputs,
+              },
+            },
+          ],
+          appliedTemplate: {
+            slug: "jira-schema-preset",
+            version: "1.0.0",
+            inputs: payload.inputs,
+          },
+          capabilities: ["jira"],
+          warnings: [],
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/v1/provider-profiles")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => [
+          {
+            profile_id: "profile:codex-default",
+            account_label: "Codex Default",
+            is_default: true,
+          },
+        ],
+      } as Response);
+    }
+    if (url.startsWith("/api/executions?")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as Response);
+    }
+    if (url === "/api/executions") {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ workflowId: "mm:schema-create" }),
+      } as Response);
+    }
+    return Promise.resolve({
+      ok: false,
+      status: 404,
+      text: async () => `Unhandled fetch ${url}`,
+    } as Response);
+  }
+
+  beforeEach(() => {
+    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    vi.mocked(navigateTo).mockReset();
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation(mockSchemaCapabilityFetch);
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("renders jira.issue-picker from preset schema metadata and expands safe value", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-schema-preset" },
+    });
+
+    const issueKeyInput = await within(step).findByLabelText("Jira issue");
+    fireEvent.change(issueKeyInput, { target: { value: "MM-593" } });
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url, request]) => {
+          if (!String(url).startsWith("/api/task-step-templates/jira-schema-preset:expand")) {
+            return false;
+          }
+          const payload = JSON.parse(String(request?.body || "{}")) as {
+            inputs?: { jira_issue?: { key?: string } };
+          };
+          return payload.inputs?.jira_issue?.key === "MM-593";
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it("blocks dependent preset actions with field-addressable required errors", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-schema-preset" },
+    });
+    await within(step).findByLabelText("Jira issue");
+
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+
+    await waitFor(() => {
+      expect(within(step).getAllByText("A Jira issue is required.").length).toBeGreaterThan(0);
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url).startsWith("/api/task-step-templates/jira-schema-preset:expand"),
+      ),
+    ).toBe(false);
+  });
+
+  it("renders a new schema preset without capability-id-specific code", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::generic-schema-preset" },
+    });
+
+    expect(await within(step).findByLabelText("Summary")).toBeTruthy();
+    expect(within(step).getByLabelText("Urgent")).toBeTruthy();
+    expect((within(step).getByLabelText("Estimate") as HTMLInputElement).type).toBe("number");
+    expect(within(step).getByLabelText("Priority")).toBeTruthy();
+    expect(within(step).getByText("Labels")).toBeTruthy();
+    expect(within(step).getByText("JSON array of labels")).toBeTruthy();
+    expect(within(step).getByText("Metadata")).toBeTruthy();
+    expect((within(step).getByLabelText("Assignee email") as HTMLInputElement).type).toBe("email");
+    expect(within(step).getByLabelText("Mode")).toBeTruthy();
+    expect(within(step).getByText("Unsupported field widget.")).toBeTruthy();
+  });
+
+  it("renders direct skill inputs through the same schema behavior", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    expect(await within(step).findByLabelText("Repository name")).toBeTruthy();
+  });
+});
+
 describe("Task Create governed Tool authoring", () => {
   let fetchSpy: MockInstance;
   let toolDiscoveryResponse: Response;

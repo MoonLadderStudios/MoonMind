@@ -104,6 +104,16 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         jira_orchestrate_template = result.scalar_one_or_none()
         assert jira_orchestrate_template is not None
         assert jira_orchestrate_template.latest_version is not None
+        annotations = jira_orchestrate_template.latest_version.annotations or {}
+        assert annotations["inputSchema"]["required"] == ["jira_issue"]
+        assert annotations["inputSchema"]["properties"]["jira_issue"]["required"] == [
+            "key"
+        ]
+        assert (
+            annotations["uiSchema"]["jira_issue"]["widget"]
+            == "jira.issue-picker"
+        )
+        assert annotations["uiSchema"]["jira_issue"]["allowManualKeyEntry"] is True
         jira_orchestrate_steps = [
             (step.get("skill") or step.get("tool"))["id"]
             for step in jira_orchestrate_template.latest_version.steps
