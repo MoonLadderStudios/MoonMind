@@ -2360,6 +2360,7 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
             "proposalTargets": "file",
             "proposalDefaultRuntime": "gemini",
             "task": {
+                "proposeTasks": True,
                 "proposalPolicy": {
                     "maxItems": {"project": 12},
                     "targets": ["project"],

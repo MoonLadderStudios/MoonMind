@@ -2168,7 +2168,8 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
         "initial_parameters"
     ]
 
-    assert initial_parameters["proposeTasks"] is True
+    assert "proposeTasks" not in initial_parameters
+    assert "proposalPolicy" not in initial_parameters
     assert initial_parameters["task"]["proposeTasks"] is True
     assert initial_parameters["task"]["proposalPolicy"] == {
         "targets": ["project", "moonmind"],

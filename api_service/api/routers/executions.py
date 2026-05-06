@@ -4055,7 +4055,6 @@ async def _create_execution_from_task_request(
         "profileId": raw_profile_id if _provider_profile is not None else None,
         "effort": runtime_payload.get("effort"),
         "publishMode": publish_payload["mode"],
-        "proposeTasks": propose_tasks,
         "stepCount": step_count,
     }
     if story_output_payload:
