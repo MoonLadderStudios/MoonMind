@@ -45,7 +45,7 @@ OAUTH_PROVIDERS: dict[str, OAuthProviderSpec] = {
         default_mount_path_env="CLAUDE_VOLUME_PATH",
         provider_id="anthropic",
         provider_label="Anthropic",
-        bootstrap_command=["claude", "login"],
+        bootstrap_command=["claude", "auth", "login"],
         success_check="claude_config_exists",
         account_label_prefix="Claude",
     ),

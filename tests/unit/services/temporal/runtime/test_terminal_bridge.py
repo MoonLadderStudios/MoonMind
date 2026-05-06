@@ -242,7 +242,7 @@ async def test_start_terminal_bridge_container_uses_claude_home_environment(
         volume_ref="claude_auth_volume",
         volume_mount_path="/home/app/.claude",
         session_ttl=1800,
-        bootstrap_command=("claude", "login"),
+        bootstrap_command=("claude", "auth", "login"),
     )
 
     assert "claude_auth_volume:/home/app/.claude" in observed
@@ -256,6 +256,7 @@ async def test_start_terminal_bridge_container_uses_claude_home_environment(
     assert "CODEX_HOME=/home/app/.claude" not in observed
     assert "command -v claude" in observed[-1]
     assert observed[-1] != "claude login"
+    assert observed[-1] != "claude auth login"
 
 @pytest.mark.asyncio
 async def test_start_terminal_bridge_container_redacts_startup_failures(
@@ -342,7 +343,7 @@ async def test_start_terminal_bridge_container_redacts_claude_auth_paths_in_star
             volume_ref="claude_auth_volume",
             volume_mount_path="/home/app/.claude",
             session_ttl=1800,
-            bootstrap_command=("claude", "login"),
+            bootstrap_command=("claude", "auth", "login"),
         )
 
     message = str(exc_info.value)
