@@ -18,10 +18,10 @@ The preset system must make the Create page easier to use without making the Cre
 - A preset may remain unexpanded while the user configures it.
 - The user may submit a task with unexpanded preset steps; submission expands them automatically after validation.
 - The Create page never hard-codes preset-specific forms such as `if presetId === "jira-orchestrate"`.
-- Each preset declares its expected inputs with an `input_schema` that can drive UI generation, API validation, preview, apply, reapply, and submit-time expansion.
+- Each preset declares its expected inputs with an `input_schema` that can drive UI generation, API validation, apply, reapply, and submit-time expansion.
 - Preset input schemas align with the same direction as MoonMind skill input schemas and Agent Skills-style declarative capability metadata.
 - Presets may compose other presets without losing input validation, provenance, or debuggability.
-- Expansion is deterministic and backend-owned. The frontend may preview expansion, but it does not become the source of truth for expanded steps.
+- Expansion is deterministic and backend-owned.
 
 ## Non-Goals
 
@@ -50,7 +50,7 @@ A preset step is a step on the Create page with `type: preset`, a `preset_id`, a
 
 ### Expansion
 
-Expansion transforms a preset step plus validated inputs into concrete child steps. The backend owns expansion so preview, apply, submit, API-driven task creation, and re-run flows share the same behavior.
+Expansion transforms a preset step plus validated inputs into concrete child steps. The backend owns expansion so apply, submit, API-driven task creation, and re-run flows share the same behavior.
 
 ### Provenance
 
@@ -218,15 +218,14 @@ When a user selects a preset on the Create page:
 2. The frontend reads `input_schema`, `ui_schema`, defaults, and any already-collected values.
 3. The generic schema-form renderer creates fields for required and optional inputs.
 4. Fields are validated locally for immediate feedback.
-5. The same values are validated again by the backend before preview, apply, or submit.
-6. The configured preset step stores the input values while remaining unexpanded if the user has not chosen to preview/apply expansion.
+5. The same values are validated again by the backend before apply or submit.
+6. The configured preset step stores the input values while remaining unexpanded if the user has not chosen to apply expansion.
 
 The Create page must support these states:
 
 - no preset selected
 - preset selected but required inputs missing
 - preset configured but not expanded
-- preset preview generated
 - preset applied into editable child steps
 - preset submitted without manual expansion
 - preset expansion failed due to invalid inputs or backend validation errors
@@ -317,7 +316,7 @@ Before expansion, a preset step should be representable as:
 }
 ```
 
-After preview or submit-time expansion, generated steps should include provenance:
+After apply or submit-time expansion, generated steps should include provenance:
 
 ```json
 {
@@ -350,7 +349,6 @@ expandPreset(preset_id, inputs, context) -> expanded_steps
 
 The same path is used by:
 
-- preset preview
 - preset apply
 - preset reapply
 - task submission with unexpanded presets
@@ -430,9 +428,9 @@ The user may click Create Task while one or more preset steps are still unexpand
 
 If a required preset input is missing, Create Task is blocked and the missing field is highlighted. If backend expansion fails, the Create page displays the field-addressable errors and preserves the user's entered values.
 
-## Preview and Apply
+## Apply and Reapply
 
-Preview shows the generated steps without replacing the preset step. Apply replaces or augments the draft with generated child steps, depending on the selected UX mode.
+Apply replaces or augments the draft with generated child steps, depending on the selected UX mode.
 
 When applied, generated steps remain editable, but MoonMind must preserve provenance and the original preset input snapshot. Editing generated steps does not mutate the preset template.
 
@@ -486,7 +484,6 @@ The preset catalog API must expose enough metadata for schema-driven UI generati
   "uiSchema": {},
   "defaults": {},
   "capabilities": {
-    "preview": true,
     "apply": true,
     "submitTimeExpansion": true
   }
@@ -500,7 +497,6 @@ Required endpoints or equivalent service operations:
 - list presets
 - read preset details
 - validate preset inputs
-- preview preset expansion
 - expand preset for submission
 
 ## Security and Policy
@@ -539,7 +535,7 @@ To fully realize this design, MoonMind needs:
 3. A generic schema-form renderer on the Create page.
 4. A reusable widget registry for semantic widgets such as Jira issue picker.
 5. Removal of preset-specific Create page branches.
-6. A shared backend expansion service used by preview, apply, reapply, submit-time auto-expansion, and API-created tasks.
+6. A shared backend expansion service used by apply, reapply, submit-time auto-expansion, and API-created tasks.
 7. Provenance on expanded steps.
 8. Recursive expansion support with cycle detection.
 9. Field-addressable validation errors.
@@ -553,7 +549,6 @@ Tests should cover:
 - frontend rendering of required and optional fields from schema
 - Jira issue picker selection populating the configured preset input object
 - validation failures for missing required fields
-- preview expansion using the backend expansion service
 - submit-time auto-expansion for unexpanded preset steps
 - nested preset input mapping
 - cycle detection

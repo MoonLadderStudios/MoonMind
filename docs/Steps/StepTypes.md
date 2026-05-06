@@ -268,7 +268,7 @@ Examples:
 5. Deployment verification flow.
 6. PR with merge automation flow.
 
-A Preset step is not directly executable by default. It is a configured composition request. It may be previewed, applied into editable child steps, or submitted unexpanded so the backend submit path expands it before workflow creation.
+A Preset step is not directly executable by default. It is a configured composition request. It may be applied into editable child steps or submitted unexpanded so the backend submit path expands it before workflow creation.
 
 Example UI:
 
@@ -277,7 +277,6 @@ Step Type: Preset
 Preset: Jira Orchestrate
 Jira issue: MM-123 — Add schema-driven preset inputs
 
-[Preview expansion]
 [Apply preset]
 ```
 
@@ -302,7 +301,7 @@ Temporary draft payload before expansion:
 }
 ```
 
-After preview, apply, or submit-time expansion, generated steps should include provenance:
+After apply or submit-time expansion, generated steps should include provenance:
 
 ```json
 {
@@ -433,19 +432,15 @@ uiSchema:
 
 The Create page renders the Jira issue picker because the schema requests `jira.issue-picker`, not because the preset ID is known to the page.
 
-### 8.1 Preview
-
-Preview calls the backend expansion service and shows generated steps without replacing the Preset step.
-
-### 8.2 Apply
+### 8.1 Apply
 
 Apply calls the backend expansion service and inserts generated child steps into the draft. Applied steps remain editable and retain provenance.
 
-### 8.3 Reapply
+### 8.2 Reapply
 
 Reapply regenerates steps from the saved preset ID, preset version, and current inputs. If generated child steps were edited, the UI must explain whether reapply replaces, merges, or appends regenerated steps.
 
-### 8.4 Submit-time auto-expansion
+### 8.3 Submit-time auto-expansion
 
 The user may submit a task while Preset steps remain unexpanded. The submit path must:
 
@@ -537,10 +532,10 @@ A Skill step is valid only when:
 
 ### 10.4 Preset validation
 
-A Preset step is valid for preview, apply, or submit-time expansion only when:
+A Preset step is valid for apply or submit-time expansion only when:
 
 1. the preset exists,
-2. the preset version is active or explicitly previewable,
+2. the preset version is active for authoring,
 3. inputs validate against the preset input schema,
 4. expansion succeeds deterministically,
 5. generated steps validate under their own Tool or Skill rules,
@@ -700,7 +695,7 @@ type PresetStep = BaseStep & {
     version?: string;
     inputs: Record<string, unknown>;
   };
-  expansionState?: "not_expanded" | "previewed" | "applied" | "error";
+  expansionState?: "not_expanded" | "applied" | "error";
 };
 
 type DraftStep = ToolStep | SkillStep | PresetStep;
@@ -744,8 +739,7 @@ Preset use lives inside step authoring:
 2. choose `Step Type = Preset`,
 3. select a preset,
 4. configure schema-generated inputs,
-5. preview generated steps,
-6. apply into executable steps or submit unexpanded for backend auto-expansion.
+5. apply into executable steps or submit unexpanded for backend auto-expansion.
 
 There should not be a separate Presets section for choosing and applying a preset to the current task. The Presets section is management-only.
 
@@ -757,7 +751,7 @@ Task proposals must preserve executable intent.
 
 When a proposal is created from preset-derived work, it may carry preset provenance, but the stored promotable task payload should be executable and flattened by default unless the proposal is explicitly still in draft-authoring form.
 
-Promotion must not silently re-expand a live preset catalog entry. If the user wants to refresh a proposal or draft to the latest preset version, that must be an explicit action with preview and validation.
+Promotion must not silently re-expand a live preset catalog entry. If the user wants to refresh a proposal or draft to the latest preset version, that must be an explicit action with validation.
 
 Rules:
 
@@ -800,7 +794,7 @@ The implementation may migrate in phases.
 ### Phase 4: Preset expansion normalization
 
 1. Make Preset a configured composition step.
-2. Support preview, apply, reapply, and submit-time expansion through the same backend service.
+2. Support apply, reapply, and submit-time expansion through the same backend service.
 3. Preserve provenance on expanded steps.
 4. Ensure runtime payloads are executable without live preset lookup.
 

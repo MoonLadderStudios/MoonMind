@@ -618,7 +618,7 @@ Promotion must follow this algorithm:
 14. update the external issue status to promoted
 15. comment on or transition the external issue with execution metadata
 
-Promotion does not accept a full task payload replacement from the external issue body. If a future proposal refresh, issue-edit ingestion, or preset re-expansion flow exists, it must be an explicit preview-and-validate action that creates a new stored proposal revision before promotion.
+Promotion does not accept a full task payload replacement from the external issue body. If a future proposal refresh, issue-edit ingestion, or preset re-expansion flow exists, it must be an explicit validate-and-confirm action that creates a new stored proposal revision before promotion.
 
 Promotion is a control-plane-to-Temporal bridge, not a proposal-local mutation only.
 
@@ -782,7 +782,7 @@ The system must show:
 3. external issue links from execution detail
 4. provider, external key, delivery status, and last sync timestamp
 5. whether a proposal was created as a new issue or attached to an existing dedup issue
-6. compact task preview: runtime, repository, publish mode, priority, max attempts, skill context, and preset provenance
+6. compact task summary: runtime, repository, publish mode, priority, max attempts, skill context, and preset provenance
 7. promotion result links after approval
 
 ### 10.3 No dedicated proposal page
