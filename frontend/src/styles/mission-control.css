@@ -623,8 +623,8 @@ h1 {
   top: calc(100% + 0.35rem);
   left: 0;
   z-index: 8;
-  width: min(18rem, 70vw);
-  padding: 0.65rem;
+  width: min(22rem, calc(100vw - 2rem));
+  padding: 0.85rem;
   border: 1px solid rgb(var(--mm-border) / 0.84);
   border-radius: 0.5rem;
   background: rgb(var(--mm-panel) / 0.98);
@@ -635,6 +635,32 @@ h1 {
   width: 100%;
 }
 
+.task-list-header-filter-popover .task-list-header-filter-control {
+  display: grid;
+  gap: 0.75rem;
+  align-items: stretch;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.task-list-header-filter-popover .task-list-header-filter-control:hover,
+.task-list-header-filter-popover .task-list-header-filter-control:focus-within {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.task-list-header-filter-popover .task-list-header-filter-control label {
+  gap: 0.55rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
 .task-list-header-filter-control select,
 .task-list-header-filter-control input {
   width: 100%;
@@ -643,9 +669,10 @@ h1 {
 .task-list-filter-checkbox {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  margin-top: 0.45rem;
-  font-size: 0.78rem;
+  gap: 0.55rem;
+  margin-top: 0;
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .task-list-filter-checkbox input {
@@ -656,7 +683,9 @@ h1 {
   display: flex;
   justify-content: flex-end;
   gap: 0.45rem;
-  margin-top: 0.65rem;
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgb(var(--mm-border) / 0.7);
 }
 
 .stack {

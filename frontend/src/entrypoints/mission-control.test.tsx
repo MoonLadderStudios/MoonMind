@@ -716,6 +716,24 @@ describe('Mission Control shared entry', () => {
     const filterChipBlock = cssRuleBlock(missionControlCss, '.task-list-filter-chip {');
     expect(filterChipBlock).toContain('background: var(--mm-control-shell)');
     expect(filterChipBlock).toContain('border: 1px solid var(--mm-control-border)');
+    const popoverFilterBlock = cssRuleBlock(
+      missionControlCss,
+      '.task-list-header-filter-popover .task-list-header-filter-control',
+    );
+    expect(popoverFilterBlock).toContain('display: grid');
+    expect(popoverFilterBlock).toContain('gap: 0.75rem');
+    expect(popoverFilterBlock).toContain('border: 0');
+    expect(popoverFilterBlock).toContain('background: transparent');
+    expect(popoverFilterBlock).toContain('box-shadow: none');
+    expect(
+      cssRuleBlock(
+        missionControlCss,
+        '.task-list-header-filter-popover .task-list-header-filter-control label',
+      ),
+    ).toContain('gap: 0.55rem');
+    expect(cssRuleBlock(missionControlCss, '.task-list-filter-actions')).toContain(
+      'border-top: 1px solid rgb(var(--mm-border) / 0.7)',
+    );
     expect(cssRuleBlock(missionControlCss, '.queue-inline-filter:focus-within')).toContain(
       'box-shadow: var(--mm-control-focus-ring)',
     );
