@@ -4278,11 +4278,29 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
     Constructs the ``kind=queue_task`` envelope expected by
     ``RecurringTasksService.create_definition()``.
     """
+    target_payload = dict(request_payload)
+    target_payload.pop("proposeTasks", None)
+    target_payload.pop("proposalPolicy", None)
+    task_node = target_payload.get("task")
+    if isinstance(task_node, Mapping):
+        task_payload = dict(task_node)
+        task_payload["proposeTasks"] = _coerce_bool(
+            task_payload.get("proposeTasks"),
+            default=False,
+        )
+        normalized_proposal_policy = _normalize_task_proposal_policy(
+            task_payload.get("proposalPolicy")
+        )
+        if normalized_proposal_policy is not None:
+            task_payload["proposalPolicy"] = normalized_proposal_policy
+        else:
+            task_payload.pop("proposalPolicy", None)
+        target_payload["task"] = task_payload
     return {
         "kind": "queue_task",
         "job": {
             "type": "task",
-            "payload": request_payload,
+            "payload": target_payload,
         },
     }
 
@@ -4313,7 +4331,9 @@ async def _handle_recurring_schedule(
     )
     return ScheduleCreatedResponse(
         definitionId=str(definition.id),
+        name=definition.name,
         cron=definition.cron,
+        timezone=definition.timezone,
         nextRunAt=definition.next_run_at,
         redirectPath=f"/tasks/schedules/{definition.id}",
     )
