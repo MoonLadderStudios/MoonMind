@@ -787,6 +787,17 @@ describe('Mission Control shared entry', () => {
     );
   });
 
+  it('keeps navigation positions stable across route selection changes', async () => {
+    const htmlBlock = cssRuleBlock(missionControlCss, 'html');
+    expect(htmlBlock).toContain('scrollbar-gutter: stable;');
+
+    const linkBlocks = cssRuleBlocks(missionControlCss, '.route-nav a');
+    expect(linkBlocks.join('\n')).not.toContain('transition: transform');
+
+    const activeBlocks = cssRuleBlocks(missionControlCss, '.route-nav a.active');
+    expect(activeBlocks.join('\n')).not.toContain('transform: scale');
+  });
+
   it('keeps the mobile navigation layer above route content panels', async () => {
     const mastheadBlock = cssRuleBlock(missionControlCss, '.masthead');
     expect(mastheadBlock).toContain('position: relative;');
