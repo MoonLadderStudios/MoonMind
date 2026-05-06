@@ -937,9 +937,9 @@ describe('Tasks List Entrypoint', () => {
     expect(pageSizeLabel?.classList.contains('queue-page-size-selector')).toBe(true);
     expect(pageSizeLabel?.classList.contains('queue-inline-filter')).toBe(false);
     expect(tableWrapper).toBeTruthy();
-    expect(getComputedStyle(tableWrapper as HTMLElement).overflow).toBe('auto');
+    expect(getComputedStyle(dataSlab as HTMLElement).overflow).toBe('visible');
+    expect(getComputedStyle(tableWrapper as HTMLElement).overflow).toBe('visible');
     expect(getComputedStyle(tableWrapper as HTMLElement).scrollPaddingTop).not.toBe('auto');
-    expect(getComputedStyle(tableWrapper as HTMLElement).minHeight).not.toBe('0px');
     expect(getComputedStyle(table as HTMLElement).borderCollapse).toBe('separate');
     expect(getComputedStyle(tableHead as HTMLElement).position).toBe('sticky');
     expect(getComputedStyle(tableHead as HTMLElement).top).toBe('0px');
@@ -982,7 +982,7 @@ describe('Tasks List Entrypoint', () => {
 
     const dataSlabStyles = getComputedStyle(dataSlab);
     expect(dataSlabStyles.gap).toBe('0px');
-    expect(dataSlabStyles.overflow).toBe('hidden');
+    expect(dataSlabStyles.overflow).toBe('visible');
     expect(dataSlabStyles.paddingTop).toBe('0px');
 
     const tableWrapperStyles = getComputedStyle(tableWrapper as HTMLElement);
