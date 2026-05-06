@@ -8223,7 +8223,7 @@ describe.skip("Task Create Entrypoint", () => {
       /\.queue-floating-bar--liquid-glass\s*\{[^}]*position:\s*fixed;[^}]*isolation:\s*isolate;[^}]*overflow:\s*hidden;/s,
     );
     expect(missionControlCss).toMatch(
-      /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-0\.7rem;[^}]*color-mix\(in srgb,\s*rgb\(var\(--mm-action-primary\)\)\s*42%,\s*white\)/s,
+      /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-1\.35rem;[^}]*border:\s*0;[^}]*filter:\s*blur\(8px\);/s,
     );
     expect(missionControlCss).toMatch(
       /\.queue-floating-bar::before\s*\{[^}]*background:\s*linear-gradient/s,
@@ -12468,6 +12468,18 @@ describe("Task Create submit arrow animation", () => {
     );
     expect(css).toMatch(
       /\.queue-submit-primary-ripple\s*\{[^}]*animation:\s*queue-submit-primary-ripple\s+620ms\s+cubic-bezier\(0\.22,\s*0\.61,\s*0\.36,\s*1\)\s+forwards;/s,
+    );
+    expect(css).toMatch(
+      /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-1\.35rem;[^}]*border:\s*0;[^}]*filter:\s*blur\(8px\);/s,
+    );
+    expect(css).toMatch(
+      /\.queue-submit-primary-ripple\s*\{[^}]*rgb\(var\(--mm-accent-2\) \/ 0\.3\)\s*22%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*88%/s,
+    );
+    expect(css).toMatch(
+      /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 32px 2px rgb\(var\(--mm-accent-2\) \/ 0\.36\)[^}]*0 0 62px -2px rgb\(var\(--mm-accent-2\) \/ 0\.24\)/s,
+    );
+    expect(css).not.toMatch(
+      /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 0 3px rgb\(var\(--mm-action-primary\) \/ 0\.6\)/s,
     );
   });
 

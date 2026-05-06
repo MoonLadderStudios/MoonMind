@@ -3448,9 +3448,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: 2px solid rgb(var(--mm-action-primary) / 0.85);
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.22),
-    0 0 0 1px rgb(var(--mm-action-primary) / 0.5),
-    0 0 18px rgb(var(--mm-action-primary) / 0.55),
-    0 12px 24px -14px rgb(var(--mm-action-primary) / 0.84);
+    0 0 0 1px rgb(255 255 255 / 0.38),
+    0 0 12px 2px rgb(var(--mm-accent-2) / 0.26),
+    0 0 34px -4px rgb(var(--mm-accent-2) / 0.36),
+    0 12px 26px -16px rgb(var(--mm-action-primary) / 0.78);
   transition:
     box-shadow 240ms ease-out,
     border-color 240ms ease-out,
@@ -3494,9 +3495,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-color: rgb(var(--mm-action-primary));
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.3),
-    0 0 0 3px rgb(var(--mm-action-primary) / 0.6),
-    0 0 32px 6px rgb(var(--mm-action-primary) / 0.78),
-    0 18px 36px -14px rgb(var(--mm-action-primary) / 0.95);
+    0 0 0 1px rgb(255 255 255 / 0.5),
+    0 0 32px 2px rgb(var(--mm-accent-2) / 0.36),
+    0 0 62px -2px rgb(var(--mm-accent-2) / 0.24),
+    0 18px 40px -16px rgb(var(--mm-action-primary) / 0.88);
 }
 
 .queue-submit-primary--icon:focus-visible {
@@ -3508,9 +3510,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-color: rgb(var(--mm-action-primary));
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.34),
-    0 0 0 4px rgb(var(--mm-action-primary) / 0.7),
-    0 0 38px 8px rgb(var(--mm-action-primary) / 0.85),
-    0 0 16px 1px rgb(var(--mm-action-primary) / 0.85);
+    0 0 0 1px rgb(255 255 255 / 0.54),
+    0 0 38px 3px rgb(var(--mm-accent-2) / 0.42),
+    0 0 72px -2px rgb(var(--mm-accent-2) / 0.28),
+    0 0 16px 1px rgb(var(--mm-action-primary) / 0.68);
 }
 
 @keyframes queue-submit-primary-arrow-cycle {
@@ -3539,34 +3542,34 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-submit-primary-ripple {
   position: absolute;
-  inset: -0.7rem;
+  inset: -1.35rem;
   border-radius: inherit;
   pointer-events: none;
-  border: 3px solid color-mix(in srgb, rgb(var(--mm-action-primary)) 42%, white);
+  border: 0;
   background: radial-gradient(
     circle at center,
-    color-mix(in srgb, rgb(var(--mm-action-primary)) 52%, white) 0%,
-    rgb(var(--mm-accent-2) / 0.22) 45%,
-    rgb(var(--mm-action-primary) / 0) 75%
+    rgb(255 255 255 / 0.48) 0%,
+    rgb(var(--mm-accent-2) / 0.3) 22%,
+    rgb(var(--mm-action-primary) / 0.18) 48%,
+    rgb(var(--mm-action-primary) / 0.08) 68%,
+    rgb(var(--mm-action-primary) / 0) 88%
   );
+  filter: blur(8px);
   transform-origin: center;
   animation: queue-submit-primary-ripple 620ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
 }
 
 @keyframes queue-submit-primary-ripple {
   0% {
-    opacity: 0.95;
-    transform: scale(0.85);
-    border-width: 4px;
+    opacity: 0.82;
+    transform: scale(0.72);
   }
   60% {
-    opacity: 0.45;
-    border-width: 2px;
+    opacity: 0.34;
   }
   100% {
     opacity: 0;
-    transform: scale(3.05);
-    border-width: 1px;
+    transform: scale(2.65);
   }
 }
 
