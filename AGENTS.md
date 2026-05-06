@@ -223,6 +223,8 @@ Key diagnostics:
 - N/A; filter state is URL/query state and component state only (304-mobile-accessibility-live-update-stability)
 - Python 3.12 target per repo instructions; TypeScript/React for Mission Control OAuth terminal and Settings UI + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, xterm.js, Vitest, pytest (306-finalize-oauth-terminal)
 - Existing `managed_agent_oauth_sessions` and Provider Profile rows; existing auth volumes; no new persistent tables planned (306-finalize-oauth-terminal)
+- Python 3.12; TypeScript/React for Mission Control Create page + FastAPI, SQLAlchemy async ORM, Pydantic v2, React, TanStack Query, Vitest/Testing Library, pytest (308-schema-driven-capability-inputs)
+- Existing `task_step_template_versions.inputs_schema` JSON and task draft/submission payloads; no new persistent tables planned (308-schema-driven-capability-inputs)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
