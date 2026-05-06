@@ -1,12 +1,32 @@
 [
   {
-    "id": 3192384822,
+    "id": 3192536988,
     "disposition": "addressed",
-    "rationale": "Updated the popover label gap to 0.55rem so checkbox labels keep the same readable spacing as the global checkbox rule, and added a CSS regression assertion."
+    "rationale": "Changed the mobile route nav from fixed top offset to absolute positioning anchored below the masthead with top: 100%."
   },
   {
-    "id": 4232489257,
+    "id": 3192536991,
+    "disposition": "addressed",
+    "rationale": "Reworked mobile navigation CSS variables to derive from existing theme tokens and added dark theme overrides."
+  },
+  {
+    "id": 3192536992,
+    "disposition": "addressed",
+    "rationale": "Updated the Mission Control CSS structure test to assert absolute positioning and top: 100%."
+  },
+  {
+    "id": 4232652422,
+    "disposition": "addressed",
+    "rationale": "Top-level review summary is covered by the CSS positioning and token-first theme fixes."
+  },
+  {
+    "id": 3192540712,
+    "disposition": "addressed",
+    "rationale": "Added max-height and overflow-y:auto to keep the mobile top-sheet scrollable on constrained viewport heights."
+  },
+  {
+    "id": 4232656930,
     "disposition": "not-applicable",
-    "rationale": "Broad review summary only; the actionable spacing concern is tracked by review comment 3192384822 and was addressed."
+    "rationale": "Automated review metadata only; the actionable child comment was addressed separately."
   }
 ]

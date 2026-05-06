@@ -40,15 +40,15 @@
   --mm-control-shell: rgb(var(--mm-panel) / 0.78);
   --mm-control-shell-hover: rgb(var(--mm-accent) / 0.12);
   --mm-control-border: rgb(var(--mm-border) / 0.78);
-  --mm-mobile-nav-fill: rgb(18 13 34 / 0.92);
-  --mm-mobile-nav-border: rgb(150 110 255 / 0.35);
-  --mm-mobile-nav-edge: rgb(255 255 255 / 0.06);
-  --mm-mobile-nav-shadow: 0 20px 50px rgb(0 0 0 / 0.45);
-  --mm-mobile-nav-text: rgb(235 230 255 / 0.78);
-  --mm-mobile-nav-hover: rgb(160 120 255 / 0.12);
-  --mm-mobile-nav-active-start: rgb(135 82 255 / 0.34);
-  --mm-mobile-nav-active-end: rgb(135 82 255 / 0.12);
-  --mm-mobile-nav-active-edge: rgb(165 120 255 / 0.95);
+  --mm-mobile-nav-fill: var(--mm-glass-fill);
+  --mm-mobile-nav-border: var(--mm-glass-border);
+  --mm-mobile-nav-edge: var(--mm-glass-edge);
+  --mm-mobile-nav-shadow: var(--mm-elevation-floating);
+  --mm-mobile-nav-text: rgb(var(--mm-muted));
+  --mm-mobile-nav-hover: var(--mm-control-shell-hover);
+  --mm-mobile-nav-active-start: rgb(var(--mm-accent) / 0.16);
+  --mm-mobile-nav-active-end: rgb(var(--mm-accent) / 0.06);
+  --mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.74);
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --mm-executing-sweep-cycle-duration: 2600ms;
   --mm-executing-sweep-angle: -18deg;
@@ -123,6 +123,15 @@
   --mm-control-shell: rgb(var(--mm-panel) / 0.82);
   --mm-control-shell-hover: rgb(var(--mm-accent) / 0.18);
   --mm-control-border: rgb(var(--mm-border) / 0.76);
+  --mm-mobile-nav-fill: var(--mm-glass-fill);
+  --mm-mobile-nav-border: var(--mm-glass-border);
+  --mm-mobile-nav-edge: var(--mm-glass-edge);
+  --mm-mobile-nav-shadow: var(--mm-elevation-floating);
+  --mm-mobile-nav-text: rgb(var(--mm-muted));
+  --mm-mobile-nav-hover: var(--mm-control-shell-hover);
+  --mm-mobile-nav-active-start: rgb(var(--mm-accent) / 0.22);
+  --mm-mobile-nav-active-end: rgb(var(--mm-accent) / 0.10);
+  --mm-mobile-nav-active-edge: rgb(var(--mm-accent-2) / 0.86);
 }
 
 * {
@@ -4136,8 +4145,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 
   .route-nav {
-    position: fixed;
-    top: 7rem;
+    position: absolute;
+    top: 100%;
     left: 0.875rem;
     right: 0.875rem;
     z-index: 50;
@@ -4147,6 +4156,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     gap: 0.125rem;
     padding: 0.625rem;
     max-width: none;
+    max-height: min(28rem, calc(100dvh - 1rem));
+    overflow-y: auto;
     border: 1px solid var(--mm-mobile-nav-border);
     border-radius: 1.5rem;
     background: var(--mm-mobile-nav-fill);
