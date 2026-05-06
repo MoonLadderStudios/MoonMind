@@ -2670,6 +2670,55 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_can_skip_skill_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "agent_jobs" / "job-1" / "repo"
+    workspace.mkdir(parents=True)
+
+    class _FailingMaterializer:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError("skill materializer should not be constructed")
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "AgentSkillMaterializer",
+        _FailingMaterializer,
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "parameters": {
+                    "instructions": "Resolve the PR.",
+                    "publishMode": "none",
+                    "metadata": {
+                        "moonmind": {
+                            "selectedSkill": "pr-resolver",
+                        },
+                    },
+                },
+            },
+            "workspacePath": str(workspace),
+            "includePreparedRequestMetadata": True,
+            "skipSkillMaterialization": True,
+        }
+    )
+
+    assert isinstance(result, dict)
+    assert result["instructions"].startswith("Resolve the PR.")
+    assert "Active MoonMind skill snapshot:" not in result["instructions"]
+    assert result["durableRetrievalMetadata"] == {}
+    assert not (workspace / ".agents").exists()
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_fails_before_launch_when_projection_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3015,6 +3064,32 @@ async def test_publish_path_filter_normalizes_relative_workspace_path(
     assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
         ".agents/skills/pr-resolver/SKILL.md",
         workspace=Path("repo"),
+    )
+
+
+async def test_publish_path_filter_excludes_generated_compatibility_skill_links(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    backing = tmp_path / "runtime" / "skills_active"
+    backing.mkdir(parents=True)
+    gemini_projection = workspace / ".gemini" / "skills"
+    repo_projection = workspace / "skills_active"
+    gemini_projection.parent.mkdir(parents=True)
+    gemini_projection.symlink_to(backing, target_is_directory=True)
+    repo_projection.symlink_to(backing, target_is_directory=True)
+
+    assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
+        ".gemini/skills",
+        workspace=workspace,
+    )
+    assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
+        ".gemini/skills/pr-resolver/SKILL.md",
+        workspace=workspace,
+    )
+    assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
+        "skills_active/pr-resolver/SKILL.md",
+        workspace=workspace,
     )
 
 

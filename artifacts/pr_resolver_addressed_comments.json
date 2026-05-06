@@ -1,32 +1,22 @@
 [
   {
-    "id": 3192536988,
+    "id": 3192506969,
     "disposition": "addressed",
-    "rationale": "Changed the mobile route nav from fixed top offset to absolute positioning anchored below the masthead with top: 100%."
+    "rationale": "Added launch metadata preflight that skips skill materialization so durable retrieval metadata is present at cold session launch while real skill projection still happens after launch."
   },
   {
-    "id": 3192536991,
-    "disposition": "addressed",
-    "rationale": "Reworked mobile navigation CSS variables to derive from existing theme tokens and added dark theme overrides."
-  },
-  {
-    "id": 3192536992,
-    "disposition": "addressed",
-    "rationale": "Updated the Mission Control CSS structure test to assert absolute positioning and top: 100%."
-  },
-  {
-    "id": 4232652422,
-    "disposition": "addressed",
-    "rationale": "Top-level review summary is covered by the CSS positioning and token-first theme fixes."
-  },
-  {
-    "id": 3192540712,
-    "disposition": "addressed",
-    "rationale": "Added max-height and overflow-y:auto to keep the mobile top-sheet scrollable on constrained viewport heights."
-  },
-  {
-    "id": 4232656930,
+    "id": 4232619979,
     "disposition": "not-applicable",
-    "rationale": "Automated review metadata only; the actionable child comment was addressed separately."
+    "rationale": "Review body summary only; no separate actionable request."
+  },
+  {
+    "id": 3192516052,
+    "disposition": "addressed",
+    "rationale": "Preserved preparation-produced durable retrieval metadata in launch request metadata and request parameters before sending the turn."
+  },
+  {
+    "id": 4232630020,
+    "disposition": "not-applicable",
+    "rationale": "Review body summary only; actionable retrieval metadata concern is covered by review comments 3192506969 and 3192516052."
   }
 ]

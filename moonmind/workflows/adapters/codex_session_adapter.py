@@ -338,16 +338,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             raise ValueError(
                 "CodexSessionAdapter does not support inputRefs for managed session turns"
             )
-        instructions: str | None = None
-        preparation_error: Exception | None = None
-        try:
-            instructions = await self._instructions_for_request(
-                binding=binding,
-                request=request,
-                workspace_path=workspace_path,
-            )
-        except Exception as exc:
-            preparation_error = exc
+        await self._prepare_launch_metadata_for_request(
+            request=request,
+            workspace_path=workspace_path,
+        )
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
@@ -392,14 +386,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         failed_state_persisted = False
 
         try:
-            if preparation_error is not None:
-                raise preparation_error
-            if instructions is None:
-                instructions = await self._instructions_for_request(
-                    binding=binding,
-                    request=request,
-                    workspace_path=workspace_path,
-                )
+            instructions = await self._instructions_for_request(
+                binding=binding,
+                request=request,
+                workspace_path=workspace_path,
+            )
             turn_response = await self._coerce_turn_response(
                 self._send_turn(
                     SendCodexManagedSessionTurnRequest(
@@ -1002,6 +993,41 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             active_turn_id=handle.session_state.active_turn_id,
         )
         return handle
+
+    async def _prepare_launch_metadata_for_request(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        workspace_path: str,
+    ) -> None:
+        """Populate launch-safe durable metadata without installing skill projections."""
+
+        if self._prepare_turn_instructions is None:
+            return
+        metadata_request = request.model_copy(deep=True)
+        try:
+            prepared = await self._prepare_turn_instructions(
+                {
+                    "request": metadata_request.model_dump(
+                        by_alias=True,
+                        exclude_none=True,
+                    ),
+                    "workspacePath": workspace_path,
+                    "includePreparedRequestMetadata": True,
+                    "skipSkillMaterialization": True,
+                }
+            )
+        except Exception:
+            logger.debug(
+                "Launch metadata preflight failed; real turn preparation will run after session launch.",
+                exc_info=True,
+            )
+            return
+        if isinstance(prepared, Mapping):
+            _merge_durable_retrieval_metadata(
+                request,
+                prepared.get("durableRetrievalMetadata"),
+            )
 
     def _managed_session_launch_environment(
         self,

@@ -4029,10 +4029,16 @@ class TemporalAgentRuntimeActivities:
         workspace_path_raw = str(
             payload.get("workspace_path") or payload.get("workspacePath") or ""
         ).strip()
-        skill_snapshot_materialized = await self._materialize_selected_agent_skill_for_turn(
-            request=request,
-            workspace_path=workspace_path_raw,
+        skip_skill_materialization = bool(
+            payload.get("skipSkillMaterialization")
+            or payload.get("skip_skill_materialization")
         )
+        skill_snapshot_materialized = False
+        if not skip_skill_materialization:
+            skill_snapshot_materialized = await self._materialize_selected_agent_skill_for_turn(
+                request=request,
+                workspace_path=workspace_path_raw,
+            )
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
             if not workspace_path_raw:
@@ -5334,8 +5340,18 @@ class TemporalAgentRuntimeActivities:
         if workspace is not None and (
             normalized == ".agents/skills"
             or normalized.startswith(".agents/skills/")
+            or normalized == ".gemini/skills"
+            or normalized.startswith(".gemini/skills/")
+            or normalized == "skills_active"
+            or normalized.startswith("skills_active/")
         ):
-            projection = workspace.expanduser().resolve() / ".agents" / "skills"
+            root = normalized.split("/", 2)
+            if root[:2] == [".agents", "skills"]:
+                projection = workspace.expanduser().resolve() / ".agents" / "skills"
+            elif root[:2] == [".gemini", "skills"]:
+                projection = workspace.expanduser().resolve() / ".gemini" / "skills"
+            else:
+                projection = workspace.expanduser().resolve() / "skills_active"
             if projection.is_symlink():
                 return True
         return False
