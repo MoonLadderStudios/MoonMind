@@ -4271,7 +4271,30 @@ class TemporalAgentRuntimeActivities:
             parameters=parameters,
             skill_snapshot_materialized=skill_snapshot_materialized,
         )
+        prepared = cls._append_managed_step_boundary(prepared)
         return append_managed_codex_runtime_note(prepared)
+
+    @staticmethod
+    def _append_managed_step_boundary(instructions: str) -> str:
+        if "MoonMind managed step boundary:" in instructions:
+            return instructions
+        block = (
+            "MoonMind managed step boundary:\n"
+            "- Treat the text under `TASK INSTRUCTION`, or the inline instruction "
+            "when no `TASK INSTRUCTION` header is present, as the only work "
+            "authorized for this turn.\n"
+            "- Execute only this current plan step. Do not perform later workflow "
+            "steps such as specification, planning, task generation, "
+            "implementation, verification, publishing, pull request creation, or "
+            "Jira transitions unless this turn's instruction explicitly asks for "
+            "them.\n"
+            "- Repository `AGENTS.md` autonomy instructions apply only within this "
+            "current step boundary.\n"
+            "- Always finish with a brief assistant message describing this step's "
+            "outcome. If the step is already satisfied and no action is needed, "
+            "say that explicitly with the evidence.\n"
+        )
+        return instructions.rstrip() + "\n\n" + block
 
     @staticmethod
     def _prepend_selected_skill_activation(
