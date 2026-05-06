@@ -1090,10 +1090,13 @@ tbody tr:hover {
 }
 
 .queue-table-wrapper {
+  position: relative;
   display: block;
   max-width: 100%;
   max-height: min(70vh, 58rem);
+  min-height: min(32rem, 70vh);
   overflow: auto;
+  scroll-padding-top: 3.2rem;
   border-radius: 0.75rem;
   border: 1px solid rgb(var(--mm-border) / 0.72);
   background: rgb(var(--mm-panel) / 0.92);
@@ -1107,6 +1110,8 @@ tbody tr:hover {
 
 .queue-table-wrapper table {
   border: 0;
+  border-collapse: separate;
+  border-spacing: 0;
   border-radius: 0;
   background: transparent;
   table-layout: fixed;
@@ -1114,10 +1119,23 @@ tbody tr:hover {
   margin: 0;
 }
 
+.queue-table-wrapper thead {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+}
+
 .queue-table-wrapper th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 7;
+  background: rgb(var(--mm-panel) / 0.98);
+  border-bottom: 0;
+  box-shadow: 0 1px 0 rgb(var(--mm-border) / 0.72);
+}
+
+.queue-table-wrapper .task-list-compound-header-cell.is-filter-open {
+  z-index: 12;
 }
 
 .queue-table-wrapper th,

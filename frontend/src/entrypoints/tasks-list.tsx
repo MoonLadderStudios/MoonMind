@@ -1347,7 +1347,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                         const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
                         const filterField = isFilterField(field) ? field : null;
                         return (
-                          <th key={field} aria-sort={ariaSort} className="task-list-compound-header-cell">
+                          <th
+                            key={field}
+                            aria-sort={ariaSort}
+                            className={`task-list-compound-header-cell${filterField && openFilter === filterField ? " is-filter-open" : ""}`}
+                          >
                             <div className="task-list-compound-header">
                               <button
                                 type="button"
