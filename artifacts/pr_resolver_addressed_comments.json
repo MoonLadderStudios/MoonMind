@@ -1,32 +1,12 @@
 [
   {
-    "id": 3193823070,
+    "id": 3196972476,
     "disposition": "addressed",
-    "rationale": "Updated backend secret-like AWS access key detection to match the standard AKIA prefix plus 16-character key body."
+    "rationale": "Updated docs/Temporal/ManagedAndExternalAgentExecutionModel.md to use schema-valid failure_class = \"integration_error\" for exhausted provider rate limits while preserving rate-limit specificity in provider_error_code and metadata."
   },
   {
-    "id": 3193823074,
-    "disposition": "addressed",
-    "rationale": "Updated frontend secret-like AWS access key detection to match the standard AKIA prefix plus 16-character key body."
-  },
-  {
-    "id": 4234197184,
+    "id": 4238924098,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the actionable AWS regex line comments from this review were addressed separately."
-  },
-  {
-    "id": 3193830068,
-    "disposition": "addressed",
-    "rationale": "Merged schema-rendered Skill inputs into submitted tool and skill payload inputs, with regression coverage."
-  },
-  {
-    "id": 3193830071,
-    "disposition": "addressed",
-    "rationale": "Preserved cleared optional numeric schema fields as empty UI state and omitted them from resolved submission inputs."
-  },
-  {
-    "id": 4234205844,
-    "disposition": "not-applicable",
-    "rationale": "Review wrapper/informational body only; the actionable Codex review line comments were addressed separately."
+    "rationale": "Automated review summary body with no separate actionable request."
   }
 ]

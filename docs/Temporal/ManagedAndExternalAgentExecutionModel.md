@@ -346,7 +346,7 @@ This result is the canonical terminal output surface for an agent run. Large dat
 For model-provider rate limits, terminal results should preserve bounded retry
 metadata:
 
-* `failure_class = "rate_limited"` when retry exhaustion caused failure
+* `failure_class = "integration_error"` when retry exhaustion caused failure
 * `provider_error_code` should preserve the stable provider code when known,
   and may use `RATE_LIMITED` when only the normalized classification is known
 * `retry_recommendation` should indicate whether retrying later is useful
