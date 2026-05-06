@@ -2592,6 +2592,55 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_issue_updater_t
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_adds_step_boundary() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-step-boundary",
+                "idempotencyKey": "idem-step-boundary",
+                "parameters": {
+                    "instructions": "Classify request and resume point.",
+                    "publishMode": "none",
+                    "metadata": {
+                        "moonmind": {
+                            "stepLedger": {
+                                "logicalStepId": "tpl:jira-orchestrate:1.0.0:04:demo",
+                                "attempt": 1,
+                                "scope": "step",
+                            },
+                        },
+                    },
+                },
+            },
+        }
+    )
+
+    assert "MoonMind managed step boundary:" in result
+    assert "Execute only this current plan step." in result
+    assert (
+        "Repository `AGENTS.md` autonomy instructions apply only within this "
+        "current step boundary."
+    ) in result
+    assert "Always finish with a brief assistant message" in result
+    assert "complete the current task instruction" in result
+    assert "verification requested by that instruction" in result
+    assert "make the requested commit when that instruction asks for one" in result
+    assert result.index("Classify request and resume point.") < result.index(
+        "MoonMind managed step boundary:"
+    )
+    assert result.index("MoonMind managed step boundary:") < result.index(
+        "MoonMind retrieval capability:"
+    )
+    assert result.index("MoonMind retrieval capability:") < result.index(
+        "Managed Codex CLI note:"
+    )
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_materializes_selected_skill_snapshot(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
