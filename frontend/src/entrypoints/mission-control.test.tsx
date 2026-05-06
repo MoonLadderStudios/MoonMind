@@ -792,10 +792,10 @@ describe('Mission Control shared entry', () => {
     expect(htmlBlock).toContain('scrollbar-gutter: stable;');
 
     const linkBlocks = cssRuleBlocks(missionControlCss, '.route-nav a');
-    expect(linkBlocks.join('\n')).not.toContain('transition: transform');
+    expect(linkBlocks.join('\n')).not.toMatch(/transition:[^;]*\btransform\b/);
 
     const activeBlocks = cssRuleBlocks(missionControlCss, '.route-nav a.active');
-    expect(activeBlocks.join('\n')).not.toContain('transform: scale');
+    expect(activeBlocks.join('\n')).not.toMatch(/transform:[^;]*\bscale\b/);
   });
 
   it('keeps the mobile navigation layer above route content panels', async () => {
