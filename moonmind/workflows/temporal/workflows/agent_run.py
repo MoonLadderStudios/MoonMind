@@ -561,36 +561,32 @@ class MoonMindAgentRun:
                 if isinstance(params.get("story_output"), Mapping)
                 else None
             )
-            story_breakdown_path = str(
-                params.get("storyBreakdownPath")
-                or params.get("story_breakdown_path")
-                or (
-                    story_output_context.get("storyBreakdownPath")
-                    if isinstance(story_output_context, Mapping)
-                    else ""
-                )
-                or (
-                    story_output_context.get("story_breakdown_path")
-                    if isinstance(story_output_context, Mapping)
-                    else ""
-                )
-                or ""
-            ).strip()
-            story_breakdown_markdown_path = str(
-                params.get("storyBreakdownMarkdownPath")
-                or params.get("story_breakdown_markdown_path")
-                or (
-                    story_output_context.get("storyBreakdownMarkdownPath")
-                    if isinstance(story_output_context, Mapping)
-                    else ""
-                )
-                or (
-                    story_output_context.get("story_breakdown_markdown_path")
-                    if isinstance(story_output_context, Mapping)
-                    else ""
-                )
-                or ""
-            ).strip()
+
+            def _story_path_param(camel_key: str, snake_key: str) -> str:
+                return str(
+                    params.get(camel_key)
+                    or params.get(snake_key)
+                    or (
+                        story_output_context.get(camel_key)
+                        if isinstance(story_output_context, Mapping)
+                        else ""
+                    )
+                    or (
+                        story_output_context.get(snake_key)
+                        if isinstance(story_output_context, Mapping)
+                        else ""
+                    )
+                    or ""
+                ).strip()
+
+            story_breakdown_path = _story_path_param(
+                "storyBreakdownPath",
+                "story_breakdown_path",
+            )
+            story_breakdown_markdown_path = _story_path_param(
+                "storyBreakdownMarkdownPath",
+                "story_breakdown_markdown_path",
+            )
             if story_breakdown_path:
                 metadata.setdefault("storyBreakdownPath", story_breakdown_path)
             if story_breakdown_markdown_path:

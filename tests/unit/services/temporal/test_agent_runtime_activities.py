@@ -268,6 +268,65 @@ async def test_publish_artifacts_captures_story_breakdown_handoff(tmp_path):
     )
 
 @pytest.mark.asyncio
+async def test_publish_artifacts_skips_story_breakdown_handoff_when_run_missing():
+    class _RunStore:
+        def load(self, run_id: str):
+            assert run_id == "task-run-1"
+            return None
+
+    mock_service = MagicMock()
+    mock_service.create = AsyncMock()
+    mock_service.write_complete = AsyncMock()
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=mock_service,
+        run_store=_RunStore(),
+    )
+    input_result = AgentRunResult(
+        summary="Completed successfully",
+        metadata={
+            "taskRunId": "task-run-1",
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
+        },
+    )
+    captured_payloads: list[object] = []
+
+    async def fake_write_json_artifact(
+        _service,
+        *,
+        principal,
+        payload,
+        execution_ref=None,
+        metadata_json=None,
+    ):
+        del principal, execution_ref, metadata_json
+        captured_payloads.append(payload)
+        artifact_id = "art-summary" if len(captured_payloads) == 1 else "art-result"
+        return SimpleNamespace(artifact_id=artifact_id)
+
+    with (
+        patch(
+            "moonmind.workflows.temporal.activity_runtime._write_json_artifact",
+            new=fake_write_json_artifact,
+        ),
+        patch(
+            "temporalio.activity.info",
+            return_value=SimpleNamespace(
+                namespace="default",
+                workflow_id="wf-1",
+                workflow_run_id="run-1",
+            ),
+        ),
+    ):
+        result = await activities.agent_runtime_publish_artifacts(input_result)
+
+    assert isinstance(result, AgentRunResult)
+    assert "storyBreakdownArtifactRef" not in result.metadata
+    assert mock_service.create.await_count == 0
+    assert mock_service.write_complete.await_count == 0
+    assert captured_payloads[1]["metadata"]["taskRunId"] == "task-run-1"
+    assert "storyBreakdownArtifactRef" not in captured_payloads[1]["metadata"]
+
+@pytest.mark.asyncio
 async def test_publish_artifacts_handles_object_without_metadata_mapping():
     activities = TemporalAgentRuntimeActivities(artifact_service=MagicMock())
     input_result = SimpleNamespace(diagnostics_ref=None)

@@ -3558,6 +3558,13 @@ class TemporalAgentRuntimeActivities:
             if not task_run_id or self._run_store is None:
                 return {}
             record = self._run_store.load(task_run_id)
+            if record is None:
+                logger.warning(
+                    "Skipping story breakdown artifact publication: run record not "
+                    "found for %s",
+                    task_run_id,
+                )
+                return {}
             workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
             if not workspace_path:
                 return {}

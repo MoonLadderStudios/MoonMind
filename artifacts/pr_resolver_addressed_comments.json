@@ -1,27 +1,17 @@
 [
   {
-    "id": 4231522366,
+    "id": 3196835903,
+    "disposition": "addressed",
+    "rationale": "Added an explicit None check after run-store load so missing task run records skip story breakdown handoff publication without crashing."
+  },
+  {
+    "id": 3196835914,
+    "disposition": "addressed",
+    "rationale": "Refactored repeated story breakdown path extraction in the agent run workflow into a local helper and preserved camel/snake-case lookup behavior."
+  },
+  {
+    "id": 4238757043,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary; the actionable inline retrieval-gateway auth-source comment is tracked separately."
-  },
-  {
-    "id": 3191489788,
-    "disposition": "addressed",
-    "rationale": "Removed legacy worker_token from the scoped retrieval auth-source set and updated the scope error text to reference retrieval tokens."
-  },
-  {
-    "id": 3191505546,
-    "disposition": "addressed",
-    "rationale": "Allowed retrieval_gateway_auth_missing to use degraded local fallback and added regression coverage for that path."
-  },
-  {
-    "id": 3191505551,
-    "disposition": "addressed",
-    "rationale": "Changed retrieval gateway authorization so an authenticated OIDC user is accepted before scoped retrieval-token header validation and added regression coverage."
-  },
-  {
-    "id": 4231537621,
-    "disposition": "not-applicable",
-    "rationale": "Top-level Codex review wrapper; actionable inline comments from the review are tracked separately."
+    "rationale": "Review summary only; its two actionable findings are tracked by the inline review comments and addressed separately."
   }
 ]
