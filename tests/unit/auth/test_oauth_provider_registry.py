@@ -42,7 +42,11 @@ class TestOAuthProviderRegistry:
         assert spec["provider_id"] == "anthropic"
         assert spec["provider_label"] == "Anthropic"
         assert spec["success_check"] == "claude_config_exists"
-        assert get_provider_bootstrap_command("claude_code") == ("claude", "login")
+        assert get_provider_bootstrap_command("claude_code") == (
+            "claude",
+            "auth",
+            "login",
+        )
 
     def test_unknown_runtime_returns_none(self) -> None:
         assert get_provider("unknown_runtime") is None
@@ -105,6 +109,12 @@ class TestOAuthProviderRegistry:
             "login",
             "--device-auth",
         )
+
+    def test_claude_bootstrap_command_uses_auth_subcommand(self) -> None:
+        command = get_provider_bootstrap_command("claude_code")
+
+        assert command == ("claude", "auth", "login")
+        assert command != ("claude", "login")
 
     def test_bootstrap_command_rejects_unknown_runtime(self) -> None:
         with pytest.raises(ValueError, match="Unsupported OAuth runtime"):

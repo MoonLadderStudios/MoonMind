@@ -390,7 +390,7 @@ async def test_start_auth_runner_resolves_claude_bootstrap_command(
     )
 
     assert result["container_name"] == "moonmind_auth_oas_claude_activityrunner"
-    assert observed["bootstrap_command"] == ("claude", "login")
+    assert observed["bootstrap_command"] == ("claude", "auth", "login")
     assert observed["volume_ref"] == "claude_auth_volume"
     assert observed["volume_mount_path"] == "/home/app/.claude"
 
