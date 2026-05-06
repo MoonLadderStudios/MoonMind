@@ -82,7 +82,7 @@
 
 - [ ] T014 [P] Add failing Temporal workflow integration test using canonical `task.proposeTasks` to invoke proposal activities and report proposal counts for FR-007, SC-002, and DESIGN-REQ-005 in `tests/integration/workflows/temporal/workflows/test_run.py`
 - [ ] T015 [P] Add failing Temporal workflow integration test proving absent canonical nested proposal opt-in skips proposal activities even if non-canonical metadata is present for FR-004, FR-005, SC-004, and DESIGN-REQ-005 in `tests/integration/workflows/temporal/workflows/test_run.py`
-- [ ] T016 [P] Add integration or service-boundary test for representative scheduled or promoted task creation payload normalization for FR-003, SC-001, and DESIGN-REQ-004 in the appropriate `tests/integration/` or `tests/unit/workflows/task_proposals/` file identified by T004
+- [ ] T016 [P] Add service-boundary test for promoted task creation payload normalization for FR-003, SC-001, and DESIGN-REQ-004 in `tests/unit/workflows/task_proposals/test_service.py`; if T004 finds a separate scheduler file with proposal-intent writes, add a new explicit follow-up task naming that file before implementation
 
 ### Red-First Confirmation
 
@@ -93,7 +93,7 @@
 
 - [ ] T019 Remove root-level proposal intent writes for new task-shaped execution submissions while preserving nested `task.proposeTasks` and `task.proposalPolicy` for FR-001, FR-002, FR-004, SC-001, SC-004, DESIGN-REQ-003, and DESIGN-REQ-005 in `api_service/api/routers/executions.py`
 - [ ] T020 Update API tests and any local assertions that currently expect root `initial_parameters["proposeTasks"]` for FR-001 and FR-004 in `tests/unit/api/routers/test_executions.py`
-- [ ] T021 Implement any missing canonical proposal intent propagation for proposal promotion or scheduled task creation surfaces identified in T004 for FR-003, SC-001, and DESIGN-REQ-004 in `moonmind/workflows/task_proposals/service.py` or the exact scheduler/promotion files identified by T004
+- [ ] T021 Implement missing canonical proposal intent propagation for proposal promotion in `moonmind/workflows/task_proposals/service.py` and API submission in `api_service/api/routers/executions.py` for FR-003, SC-001, and DESIGN-REQ-004; if T004 finds a separate scheduler proposal-intent writer, add a new explicit task naming that file before editing it
 - [ ] T022 Tighten or document workflow compatibility helper behavior so root proposal intent is only a previous-payload read path and nested values win on conflict for FR-005, SC-003, and DESIGN-REQ-005 in `moonmind/workflows/temporal/workflows/run.py`
 - [ ] T023 Implement any Codex managed-session canonical payload corrections exposed by T011 for FR-003, FR-004, and DESIGN-REQ-004 in `moonmind/agents/codex_worker/worker.py`
 - [ ] T024 Implement status vocabulary consistency fixes exposed by T013-T015 for FR-006, SC-005, and DESIGN-REQ-006 in `moonmind/workflows/temporal/workflows/run.py`, `api_service/api/routers/executions.py`, `api_service/api/routers/task_dashboard_view_model.py`, or `frontend/src/utils/executionStatusPillClasses.ts`
