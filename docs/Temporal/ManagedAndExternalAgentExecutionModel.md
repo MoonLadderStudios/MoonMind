@@ -343,6 +343,18 @@ Canonical fields:
 
 This result is the canonical terminal output surface for an agent run. Large data stays in artifacts referenced by `output_refs[]` or `diagnostics_ref`.
 
+For model-provider rate limits, terminal results should preserve bounded retry
+metadata:
+
+* `failure_class = "integration_error"` when retry exhaustion caused provider
+  failure
+* `provider_error_code` should preserve the stable provider code when known,
+  and may use `RATE_LIMITED` when only the normalized classification is known
+* `retry_recommendation` should indicate whether retrying later is useful
+* `metadata.hitRateLimit = true` if any attempt hit a provider rate limit
+* `metadata.exhaustedRateLimitRetries = true` if backoff retries were exhausted
+* `metadata.attempts[]` may contain bounded attempt summaries, not raw logs
+
 ## 4.5 Idempotency requirements
 
 Any start-like side effect must be idempotent with respect to a stable key such as:
@@ -529,6 +541,13 @@ They may:
 * need provider-specific concurrency and cooldown controls
 
 Because of that, they must be launched asynchronously and supervised durably.
+
+Claude Code and Codex CLI should not self-own MoonMind's provider rate-limit
+policy. Their CLI processes may expose provider errors, but the managed runtime
+runner or supervisor is responsible for classifying model-provider rate limits,
+honoring provider retry hints, coordinating profile cooldowns, enforcing bounded
+retry, and publishing terminal summaries through the canonical `AgentRunResult`
+and step-ledger surfaces.
 
 ## 8.2 Managed runtime lifecycle
 

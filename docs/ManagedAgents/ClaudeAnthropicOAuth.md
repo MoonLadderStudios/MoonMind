@@ -34,6 +34,11 @@ The OAuth path is the subject of this document. The API-key path is mentioned
 only to clarify that OAuth is not the only valid Claude Anthropic credential
 method.
 
+OAuth versus API-key authentication does not change managed-runtime
+rate-limit reporting requirements. Claude Code rate limits should flow through
+Provider Profiles and the shared managed-runtime retry/cooldown policy whenever
+the failure can be attributed to the selected profile.
+
 ## 2. OAuth Profile Shape
 
 The OAuth-backed `claude_anthropic` provider profile uses a volume-backed Claude
