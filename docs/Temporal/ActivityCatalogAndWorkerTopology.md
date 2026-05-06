@@ -579,6 +579,13 @@ Typical defaults by family:
 - avoid retries that duplicate destructive sandbox side effects
 - ensure external starts are idempotent
 - ensure canonical contract normalization failures are treated as contract errors, not silently tolerated
+- treat model-provider rate limits as retryable-with-policy
+
+Activity-level retry for model-provider rate limits may be used only when it is
+bounded and safe. Managed agent runtimes should prefer orchestration-aware
+retry: classify the failure, back off with jitter, honor provider retry hints,
+persist bounded attempt metadata, and surface exhausted rate-limit failures in
+the step summary.
 
 ## 11.3 Heartbeats
 

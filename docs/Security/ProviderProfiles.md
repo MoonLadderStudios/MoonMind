@@ -688,6 +688,12 @@ On provider 429 or equivalent quota exhaustion:
 
 If another compatible profile exists, the run may continue on a different profile. Otherwise, it waits.
 
+Claude Code and Codex CLI rate limits must be reported against the selected
+provider profile whenever the failure can be attributed to that profile. The
+`AgentRun` should release the current slot, report cooldown, and retry through
+the same profile selector unless the request required an exact profile. If no
+compatible profile is available, the run waits in `awaiting_slot`.
+
 ---
 
 ## 11. Runtime Materialization Pipeline

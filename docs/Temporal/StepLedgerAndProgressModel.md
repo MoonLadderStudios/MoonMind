@@ -203,6 +203,15 @@ Rules:
 - `summary` must stay bounded and display-safe
 - `lastError` is a summary only; large error details belong in artifacts
 
+If a step exhausts retries because of model-provider rate limits, the current
+step row must include a bounded operator-facing summary such as:
+
+> Failed after 5 attempts. The step hit a model-provider rate limit and
+> exhausted exponential-backoff retries.
+
+`lastError` should classify the failure as `RATE_LIMITED`. Detailed stderr,
+provider payloads, and diagnostics remain in artifacts.
+
 ## 8. Step status vocabulary
 
 The canonical v1 step statuses are:
@@ -259,6 +268,9 @@ Rules:
 - the authoritative key shape for derived storage is `(workflowId, runId, logicalStepId, attempt)`
 - the default task detail view may show a compact current row plus attempt count
 - detailed attempt history may be lazy-loaded later, but attempt identity must already be explicit
+- exhausted model-provider rate-limit retries must remain visible in the latest
+  attempt summary and `lastError`, with detailed attempt evidence linked through
+  artifacts rather than expanded inline
 
 ## 11. Parent/child refs and artifact refs
 

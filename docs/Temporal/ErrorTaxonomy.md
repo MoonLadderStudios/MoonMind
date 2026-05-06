@@ -385,6 +385,28 @@ Examples of acceptable handling:
 
 The right response is usually orchestration-aware backoff, not aggressive activity-level repetition.
 
+## 8.3 Model-provider rate-limit handling
+
+Model-provider rate limits include:
+
+- HTTP `429`
+- provider-native `rate_limit_error` or `rate_limit_exceeded` codes
+- `Too Many Requests` responses
+- requests-per-minute exhaustion
+- tokens-per-minute exhaustion
+
+Managed agent runtimes such as Claude Code and Codex CLI must treat these as
+retryable-with-policy failures. The runner should:
+
+1. classify the failure as `RATE_LIMITED`
+2. honor `Retry-After` when available
+3. retry with bounded exponential backoff and jitter
+4. report cooldown to the Provider Profile Manager when profile-scoped
+5. stop after the configured maximum attempts
+6. persist bounded attempt metadata
+7. ensure the final operator summary explicitly says when retries were
+   exhausted due to a model-provider rate limit
+
 ---
 
 ## 9. Retry policy guidance
@@ -398,6 +420,12 @@ Even retryable failures should use:
 - maximum attempt caps
 
 Do not allow unbounded activity-level retry loops.
+
+For model-provider rate limits, bounded retry means the runtime or supervisor
+must make exhaustion observable rather than hiding it behind repeated process
+restarts. Attempts should preserve enough metadata to explain cooldowns and
+provider hints, but raw provider payloads and full stderr belong in diagnostics
+artifacts.
 
 ## 9.2 Prefer typed classification to string matching
 
