@@ -113,8 +113,8 @@ async def test_resolver_filters_local_skills_when_not_allowed():
         ]
     )
     
-    result = await resolver.resolve(selector, context)
-    assert len(result.skills) == 0
+    with pytest.raises(ValueError, match="Could not resolve selected skill 'my_local_skill'"):
+        await resolver.resolve(selector, context)
 
 async def test_resolver_resolves_repo_skills_when_workspace_provided():
     loader = RepoSkillLoader()
@@ -180,8 +180,8 @@ async def test_resolver_ignores_repo_skills_when_no_workspace():
         ]
     )
     
-    result = await resolver.resolve(selector, context)
-    assert len(result.skills) == 0
+    with pytest.raises(ValueError, match="Could not resolve selected skill 'my_repo_skill'"):
+        await resolver.resolve(selector, context)
 
 async def test_resolver_filters_repo_skills_when_not_allowed(tmp_path):
     skills_dir = tmp_path / ".agents" / "skills"
@@ -197,10 +197,8 @@ async def test_resolver_filters_repo_skills_when_not_allowed(tmp_path):
     )
     selector = SkillSelector(include=[{"name": "repo_skill"}])
 
-    result = await resolver.resolve(selector, context)
-
-    assert result.skills == []
-    assert result.policy_summary["repo_skills_allowed"] is False
+    with pytest.raises(ValueError, match="Could not resolve selected skill 'repo_skill'"):
+        await resolver.resolve(selector, context)
 
 async def test_resolver_resolves_repo_skills_when_allowed(tmp_path):
     skills_dir = tmp_path / ".agents" / "skills"
@@ -395,3 +393,164 @@ async def test_resolver_produces_deterministic_snapshot_sorting():
     assert result.skills[0].skill_name == "alpha"
     assert result.skills[1].skill_name == "charlie"
     assert result.skills[2].skill_name == "zebra"
+
+async def test_resolver_expands_required_skills_from_strict_metadata(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    orchestrator = skills_dir / "orchestrator"
+    helper = skills_dir / "helper-skill"
+    orchestrator.mkdir(parents=True)
+    helper.mkdir()
+    (orchestrator / "SKILL.md").write_text(
+        "---\n"
+        "name: orchestrator\n"
+        "description: Runs orchestration.\n"
+        "metadata:\n"
+        "  required-skills: \"helper-skill\"\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    (helper / "SKILL.md").write_text(
+        "---\n"
+        "name: helper-skill\n"
+        "description: Supports orchestration.\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "orchestrator"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert [skill.skill_name for skill in result.skills] == [
+        "helper-skill",
+        "orchestrator",
+    ]
+    by_name = {skill.skill_name: skill for skill in result.skills}
+    assert by_name["orchestrator"].selection_reason == "selected"
+    assert by_name["helper-skill"].selection_reason == "required"
+    assert by_name["helper-skill"].required_by == ["orchestrator"]
+    assert result.source_trace["requiredSkillEdges"] == [
+        {"requiredBy": "orchestrator", "skill": "helper-skill"}
+    ]
+
+async def test_resolver_expands_packaged_pr_resolver_support_skills():
+    resolver = AgentSkillResolver(loaders=[BuiltInSkillLoader()])
+    context = SkillResolutionContext(snapshot_id="snap-123")
+    selector = SkillSelector(include=[{"name": "pr-resolver"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert {skill.skill_name for skill in result.skills} >= {
+        "fix-ci",
+        "fix-comments",
+        "fix-merge-conflicts",
+        "pr-resolver",
+    }
+    assert result.source_trace["requiredSkillEdges"] == [
+        {"requiredBy": "pr-resolver", "skill": "fix-ci"},
+        {"requiredBy": "pr-resolver", "skill": "fix-comments"},
+        {"requiredBy": "pr-resolver", "skill": "fix-merge-conflicts"},
+    ]
+
+async def test_resolver_rejects_excluded_required_skill(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    orchestrator = skills_dir / "orchestrator"
+    helper = skills_dir / "helper-skill"
+    orchestrator.mkdir(parents=True)
+    helper.mkdir()
+    (orchestrator / "SKILL.md").write_text(
+        "---\n"
+        "name: orchestrator\n"
+        "description: Runs orchestration.\n"
+        "metadata:\n"
+        "  required-skills: \"helper-skill\"\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    (helper / "SKILL.md").write_text(
+        "---\n"
+        "name: helper-skill\n"
+        "description: Supports orchestration.\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(
+        include=[{"name": "orchestrator"}],
+        exclude=["helper-skill"],
+    )
+
+    with pytest.raises(ValueError, match="requires skill 'helper-skill'.*excluded"):
+        await resolver.resolve(selector, context)
+
+async def test_resolver_rejects_missing_required_skill(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    orchestrator = skills_dir / "orchestrator"
+    orchestrator.mkdir(parents=True)
+    (orchestrator / "SKILL.md").write_text(
+        "---\n"
+        "name: orchestrator\n"
+        "description: Runs orchestration.\n"
+        "metadata:\n"
+        "  required-skills: \"helper-skill\"\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "orchestrator"}])
+
+    with pytest.raises(ValueError, match="requires missing skill 'helper-skill'"):
+        await resolver.resolve(selector, context)
+
+async def test_resolver_rejects_non_string_required_skills_metadata(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    orchestrator = skills_dir / "orchestrator"
+    helper = skills_dir / "helper-skill"
+    orchestrator.mkdir(parents=True)
+    helper.mkdir()
+    (orchestrator / "SKILL.md").write_text(
+        "---\n"
+        "name: orchestrator\n"
+        "description: Runs orchestration.\n"
+        "metadata:\n"
+        "  required-skills:\n"
+        "    - helper-skill\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    (helper / "SKILL.md").write_text(
+        "---\n"
+        "name: helper-skill\n"
+        "description: Supports orchestration.\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "orchestrator"}])
+
+    with pytest.raises(ValueError, match="metadata.required-skills must be a string"):
+        await resolver.resolve(selector, context)

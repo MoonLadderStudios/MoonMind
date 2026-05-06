@@ -1,9 +1,11 @@
 import abc
+import re
 import typing
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +19,9 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillSet,
     SkillSelector,
 )
+
+_REQUIRED_SKILLS_METADATA_KEY = "required-skills"
+_AGENT_SKILL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 
 class SkillResolutionContext:
     """Contextual parameters for skill resolution (e.g. paths, run ID)."""
@@ -123,11 +128,6 @@ class DeploymentSkillLoader(SkillLoader):
                 selectinload(AgentSkillDefinition.versions)
             )
 
-            if selector.include:
-                stmt = stmt.where(
-                    AgentSkillDefinition.slug.in_([e.name for e in selector.include])
-                )
-
             res = await session.execute(stmt)
             defs = res.scalars().all()
 
@@ -177,6 +177,73 @@ def _scan_for_skills(
                 )
             )
     return results
+
+
+def _load_skill_frontmatter(skill_dir: Path) -> dict[str, typing.Any]:
+    skill_file = skill_dir / "SKILL.md"
+    try:
+        lines = skill_file.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ValueError(f"failed to read skill frontmatter from {skill_file}: {exc}") from exc
+    if not lines or lines[0].strip() != "---":
+        return {}
+    frontmatter_lines: list[str] = []
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        frontmatter_lines.append(line)
+    else:
+        return {}
+    try:
+        parsed = yaml.safe_load("\n".join(frontmatter_lines)) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid YAML frontmatter in {skill_file}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"frontmatter in {skill_file} must be a mapping")
+    return parsed
+
+
+def _validate_required_skill_name(skill_name: str, *, owner: str) -> str:
+    normalized = skill_name.strip()
+    if (
+        not normalized
+        or "--" in normalized
+        or _AGENT_SKILL_NAME_RE.fullmatch(normalized) is None
+    ):
+        raise ValueError(
+            f"skill '{owner}' metadata.{_REQUIRED_SKILLS_METADATA_KEY} contains "
+            f"invalid Agent Skills name '{skill_name}'"
+        )
+    return normalized
+
+
+def _required_skill_names_for_entry(entry: ResolvedSkillEntry) -> tuple[str, ...]:
+    source_path = entry.provenance.source_path
+    if not source_path:
+        return ()
+    frontmatter = _load_skill_frontmatter(Path(source_path))
+    metadata = frontmatter.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise ValueError(f"skill '{entry.skill_name}' metadata must be a mapping")
+    raw_required = metadata.get(_REQUIRED_SKILLS_METADATA_KEY)
+    if raw_required is None:
+        return ()
+    if not isinstance(raw_required, str):
+        raise ValueError(
+            f"skill '{entry.skill_name}' metadata.{_REQUIRED_SKILLS_METADATA_KEY} "
+            "must be a string"
+        )
+    required: list[str] = []
+    seen: set[str] = set()
+    for raw_name in raw_required.split():
+        name = _validate_required_skill_name(raw_name, owner=entry.skill_name)
+        if name == entry.skill_name:
+            raise ValueError(f"skill '{entry.skill_name}' cannot require itself")
+        if name in seen:
+            continue
+        seen.add(name)
+        required.append(name)
+    return tuple(required)
 
 
 class RepoSkillLoader(SkillLoader):
@@ -249,10 +316,6 @@ class AgentSkillResolver:
             if source in candidates_by_source:
                 bucket_seen = set()
                 for entry in candidates_by_source[source]:
-                    # Ignore excluded skills
-                    if entry.skill_name in selector.exclude:
-                        continue
-
                     # Collision detection within the same source
                     if entry.skill_name in bucket_seen:
                         raise ValueError(
@@ -262,8 +325,14 @@ class AgentSkillResolver:
 
                     resolved_map[entry.skill_name] = entry
 
+        excluded_names = {str(name).strip() for name in selector.exclude if str(name).strip()}
+
         # Pinning strict check
         for include_entry in selector.include:
+            if include_entry.name in excluded_names:
+                raise ValueError(
+                    f"selected skill '{include_entry.name}' cannot also be excluded"
+                )
             if include_entry.version:
                 resolved = resolved_map.get(include_entry.name)
                 if not resolved or resolved.version != include_entry.version:
@@ -271,13 +340,45 @@ class AgentSkillResolver:
                         f"Could not resolve pinned version '{include_entry.name}@{include_entry.version}' across any active sources"
                     )
 
-        final_skills = list(resolved_map.values())
-        
         requested_names = {entry.name for entry in selector.include}
         # Note: Future implementation for `sets` would expand skill names here.
 
         if selector.include or selector.sets:
-            final_skills = [s for s in final_skills if s.skill_name in requested_names]
+            required_by: dict[str, set[str]] = {}
+            closure_names = set(requested_names)
+            pending = list(sorted(requested_names))
+            while pending:
+                current_name = pending.pop(0)
+                current = resolved_map.get(current_name)
+                if current is None:
+                    raise ValueError(f"Could not resolve selected skill '{current_name}'")
+                for required_name in _required_skill_names_for_entry(current):
+                    if required_name in excluded_names:
+                        raise ValueError(
+                            f"skill '{current_name}' requires skill '{required_name}', "
+                            "but it was explicitly excluded"
+                        )
+                    if required_name not in resolved_map:
+                        raise ValueError(
+                            f"skill '{current_name}' requires missing skill '{required_name}'"
+                        )
+                    required_by.setdefault(required_name, set()).add(current_name)
+                    if required_name not in closure_names:
+                        closure_names.add(required_name)
+                        pending.append(required_name)
+
+            final_skills = []
+            for name in closure_names:
+                entry = resolved_map[name]
+                reason = "selected" if name in requested_names else "required"
+                final_skills.append(
+                    entry.model_copy(
+                        update={
+                            "selection_reason": reason,
+                            "required_by": sorted(required_by.get(name, set())),
+                        }
+                    )
+                )
         else:
             # If nothing was requested, return empty
             final_skills = []
@@ -298,6 +399,16 @@ class AgentSkillResolver:
                 "local_skills_allowed": context.allow_local_skills,
                 "sources_merged": [
                     s.value for s in candidates_by_source.keys()
+                ],
+            },
+            source_trace={
+                "requiredSkillEdges": [
+                    {
+                        "requiredBy": required_by,
+                        "skill": entry.skill_name,
+                    }
+                    for entry in final_skills
+                    for required_by in entry.required_by
                 ],
             },
         )
