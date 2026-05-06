@@ -1094,6 +1094,7 @@ tbody tr:hover {
   display: block;
   max-width: 100%;
   max-height: min(70vh, 58rem);
+  min-height: min(32rem, 70vh);
   overflow: auto;
   scroll-padding-top: 3.2rem;
   border-radius: 0.75rem;
@@ -1129,10 +1130,11 @@ tbody tr:hover {
   top: 0;
   z-index: 7;
   background: rgb(var(--mm-panel) / 0.98);
+  border-bottom: 0;
   box-shadow: 0 1px 0 rgb(var(--mm-border) / 0.72);
 }
 
-.queue-table-wrapper .task-list-compound-header-cell:has(.task-list-header-filter-popover) {
+.queue-table-wrapper .task-list-compound-header-cell.is-filter-open {
   z-index: 12;
 }
 

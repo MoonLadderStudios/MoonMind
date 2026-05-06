@@ -152,6 +152,7 @@ describe('Tasks List Entrypoint', () => {
     fireEvent.click(repositoryFilterButton);
 
     expect(screen.getByRole('dialog', { name: 'Repository filter' })).toBeTruthy();
+    expect(repositoryFilterButton.closest('th')?.classList.contains('is-filter-open')).toBe(true);
     expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
 
     fireEvent.click(scheduledHeaderButton);
@@ -938,11 +939,13 @@ describe('Tasks List Entrypoint', () => {
     expect(tableWrapper).toBeTruthy();
     expect(getComputedStyle(tableWrapper as HTMLElement).overflow).toBe('auto');
     expect(getComputedStyle(tableWrapper as HTMLElement).scrollPaddingTop).not.toBe('auto');
+    expect(getComputedStyle(tableWrapper as HTMLElement).minHeight).not.toBe('0px');
     expect(getComputedStyle(table as HTMLElement).borderCollapse).toBe('separate');
     expect(getComputedStyle(tableHead as HTMLElement).position).toBe('sticky');
     expect(getComputedStyle(tableHead as HTMLElement).top).toBe('0px');
     expect(getComputedStyle(firstHeader as HTMLElement).position).toBe('sticky');
     expect(getComputedStyle(firstHeader as HTMLElement).top).toBe('0px');
+    expect(getComputedStyle(firstHeader as HTMLElement).borderBottomWidth).toBe('0px');
     expect(Number(getComputedStyle(firstHeader as HTMLElement).zIndex)).toBeGreaterThan(1);
   });
 
