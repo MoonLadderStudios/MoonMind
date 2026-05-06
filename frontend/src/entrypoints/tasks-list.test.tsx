@@ -913,7 +913,9 @@ describe('Tasks List Entrypoint', () => {
     const controlDeck = document.querySelector<HTMLElement>('.task-list-control-deck');
     const dataSlab = document.querySelector<HTMLElement>('.task-list-data-slab.panel--data');
     const tableWrapper = dataSlab?.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
-    const scheduledHeader = tableWrapper?.querySelector<HTMLElement>('th');
+    const table = tableWrapper?.querySelector<HTMLElement>('table');
+    const tableHead = tableWrapper?.querySelector<HTMLElement>('thead');
+    const firstHeader = tableWrapper?.querySelector<HTMLElement>('th');
 
     expect(controlDeck).toBeTruthy();
     expect(controlDeck?.querySelector('form.task-list-control-grid')).toBeNull();
@@ -935,7 +937,13 @@ describe('Tasks List Entrypoint', () => {
     expect(pageSizeLabel?.classList.contains('queue-inline-filter')).toBe(false);
     expect(tableWrapper).toBeTruthy();
     expect(getComputedStyle(tableWrapper as HTMLElement).overflow).toBe('auto');
-    expect(getComputedStyle(scheduledHeader as HTMLElement).position).toBe('sticky');
+    expect(getComputedStyle(tableWrapper as HTMLElement).scrollPaddingTop).not.toBe('auto');
+    expect(getComputedStyle(table as HTMLElement).borderCollapse).toBe('separate');
+    expect(getComputedStyle(tableHead as HTMLElement).position).toBe('sticky');
+    expect(getComputedStyle(tableHead as HTMLElement).top).toBe('0px');
+    expect(getComputedStyle(firstHeader as HTMLElement).position).toBe('sticky');
+    expect(getComputedStyle(firstHeader as HTMLElement).top).toBe('0px');
+    expect(Number(getComputedStyle(firstHeader as HTMLElement).zIndex)).toBeGreaterThan(1);
   });
 
   it('keeps the task list surfaces to one control deck and one data slab', async () => {
