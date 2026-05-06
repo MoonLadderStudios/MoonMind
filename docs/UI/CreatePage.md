@@ -23,7 +23,7 @@ The page should support simple one-step tasks while also scaling to advanced wor
 - The Create page must not contain preset-specific branches such as `if presetId === "jira-orchestrate"`.
 - Reusable field widgets may be custom; individual presets should not require custom page code.
 - Users may submit configured but unexpanded preset steps. The backend validates and expands them at submit time.
-- Backend expansion and validation are authoritative. The frontend may preview expansion, but it does not own expansion semantics.
+- Backend expansion and validation are authoritative.
 - Advanced options should be available without overwhelming the default path.
 
 ## Primary User Flows
@@ -44,7 +44,7 @@ The page should support simple one-step tasks while also scaling to advanced wor
 4. The Create page fetches the preset metadata, including `input_schema` and optional `ui_schema`.
 5. The generic schema-form renderer generates required and optional inputs.
 6. User fills required inputs, such as selecting a Jira issue.
-7. User may preview/apply the preset or leave it unexpanded.
+7. User may apply the preset or leave it unexpanded.
 8. User clicks **Create Task**.
 9. The backend validates inputs, expands the preset, validates the final expanded workflow, and submits the task.
 
@@ -81,7 +81,7 @@ The desired Create page is organized into these regions:
    - step type selector
    - capability selector for the selected type
    - schema-generated capability inputs
-   - preview/apply controls for presets
+   - apply controls for presets
    - validation state per step
 
 4. **Context and Attachments**
@@ -91,7 +91,7 @@ The desired Create page is organized into these regions:
 
 5. **Review and Submit**
    - final validation summary
-   - generated/expanded step preview where needed
+   - generated/expanded step summary where needed
    - Create Task action
 
 The page may visually group these regions differently, but the underlying information architecture should remain stable.
@@ -281,17 +281,13 @@ When a user selects `Preset` as a step type:
 3. If the preset has an `inputSchema`, the schema-form renderer appears under the selector.
 4. Required fields are marked and validated.
 5. Optional fields are available without cluttering the default path.
-6. Preset-specific preview/apply controls appear only after required inputs are valid enough to attempt expansion.
+6. Preset-specific apply controls appear only after required inputs are valid enough to attempt expansion.
 
 Preset configuration should be saved in the task draft even if the preset is not expanded.
 
-## Preview, Apply, and Reapply
+## Apply and Reapply
 
-The Create page supports three preset-related actions:
-
-### Preview
-
-Preview calls the backend expansion service and shows the generated steps without replacing the preset step.
+The Create page supports two preset-related actions:
 
 ### Apply
 
@@ -430,15 +426,14 @@ Draft state should include:
 - selected capability IDs
 - capability input values
 - preset expansion state
-- preview results where appropriate
 - applied-step provenance
 - attachments and contextual references
 
-Configured preset inputs must survive preview/apply/reapply and submit validation failures.
+Configured preset inputs must survive apply/reapply and submit validation failures.
 
 ## Generated Step Provenance
 
-When a preset is previewed, applied, or auto-expanded at submit time, each generated step should retain provenance metadata.
+When a preset is applied or auto-expanded at submit time, each generated step should retain provenance metadata.
 
 Example:
 
@@ -494,7 +489,7 @@ To complete this design, MoonMind needs:
 3. A reusable widget registry with Jira issue picker support.
 4. Preset step draft state that stores `presetId`, `inputs`, and `expansionState`.
 5. Backend validation endpoints or service calls for preset/skill inputs.
-6. A shared backend preset expansion service for preview, apply, reapply, and submit-time expansion.
+6. A shared backend preset expansion service for apply, reapply, and submit-time expansion.
 7. Field-addressable error handling from backend validation and expansion.
 8. Submit-time auto-expansion of unexpanded preset steps.
 9. Provenance display for generated/applied preset steps.
@@ -508,7 +503,6 @@ Tests should verify:
 - required preset inputs block submission when missing
 - Jira issue picker is selected by widget metadata, not preset ID
 - manually entered Jira issue keys are preserved
-- preview uses backend expansion and does not mutate the draft
 - apply inserts generated steps and preserves provenance
 - Create Task expands unexpanded preset steps at submit time
 - nested presets produce field-addressable errors
