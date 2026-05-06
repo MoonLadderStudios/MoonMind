@@ -796,9 +796,61 @@ describe('Mission Control shared entry', () => {
     const navBlocks = cssRuleBlocks(missionControlCss, '.route-nav');
     expect(
       navBlocks.some(
-        (block) => block.includes('position: absolute;') && block.includes('z-index: 30;'),
+        (block) =>
+          block.includes('position: absolute;') &&
+          block.includes('top: 100%;') &&
+          block.includes('left: 0.875rem;') &&
+          block.includes('right: 0.875rem;') &&
+          block.includes('z-index: 50;'),
       ),
     ).toBe(true);
+  });
+
+  it('uses a mobile top-sheet navigation with row-style links', async () => {
+    const navBlocks = cssRuleBlocks(missionControlCss, '.route-nav');
+    expect(
+      navBlocks.some(
+        (block) =>
+          block.includes('border-radius: 1.5rem;') &&
+          block.includes('background: var(--mm-mobile-nav-fill);') &&
+          block.includes('max-height: min(28rem, calc(100dvh - 1rem));') &&
+          block.includes('overflow-y: auto;') &&
+          block.includes('backdrop-filter: blur(18px);'),
+      ),
+    ).toBe(true);
+
+    const linkBlocks = cssRuleBlocks(missionControlCss, '.route-nav a');
+    expect(
+      linkBlocks.some(
+        (block) =>
+          block.includes('min-height: 3.25rem;') &&
+          block.includes('border: 0;') &&
+          block.includes('border-radius: 1rem;') &&
+          block.includes('background: transparent;'),
+      ),
+    ).toBe(true);
+
+    const activeBlocks = cssRuleBlocks(missionControlCss, '.route-nav a.active');
+    expect(
+      activeBlocks.some(
+        (block) =>
+          block.includes('background: linear-gradient(') &&
+          block.includes('var(--mm-mobile-nav-active-start)') &&
+          block.includes('inset 3px 0 0 var(--mm-mobile-nav-active-edge)'),
+      ),
+    ).toBe(true);
+  });
+
+  it('derives mobile navigation colors from theme tokens', async () => {
+    const rootBlock = cssRuleBlock(missionControlCss, ':root');
+    const darkBlock = cssRuleBlock(missionControlCss, '.dark');
+
+    expect(rootBlock).toContain('--mm-mobile-nav-fill: var(--mm-glass-fill);');
+    expect(rootBlock).toContain('--mm-mobile-nav-border: var(--mm-glass-border);');
+    expect(rootBlock).toContain('--mm-mobile-nav-hover: var(--mm-control-shell-hover);');
+    expect(rootBlock).toContain('--mm-mobile-nav-active-start: rgb(var(--mm-accent) / 0.16);');
+    expect(darkBlock).toContain('--mm-mobile-nav-fill: var(--mm-glass-fill);');
+    expect(darkBlock).toContain('--mm-mobile-nav-active-edge: rgb(var(--mm-accent-2) / 0.86);');
   });
 
   it('keeps the wider masthead breakpoint isolated from the shared mobile layout rules', async () => {
