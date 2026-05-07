@@ -13,7 +13,7 @@
 
 - Unit tests: `python -m pytest tests/unit/workflows/temporal/test_proposal_activities.py tests/unit/workflows/task_proposals/test_service.py -q`
 - Integration tests: `python -m pytest tests/unit/workflows/temporal/test_proposal_activities.py -q`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -80,7 +80,7 @@
 
 - [X] T012 Update `specs/310-generate-proposal-candidates/verification.md` with final MoonSpec verification evidence preserving MM-596 and DESIGN-REQ-001 through DESIGN-REQ-007
 - [X] T013 Run `./tools/test_unit.sh` for required unit verification, or record the exact blocker in `specs/310-generate-proposal-candidates/verification.md`
-- [X] T014 Run `/speckit.verify` to validate the final implementation against the MM-596 source request and record the result in `specs/310-generate-proposal-candidates/verification.md`
+- [X] T014 Run `/moonspec-verify` to validate the final implementation against the MM-596 source request and record the result in `specs/310-generate-proposal-candidates/verification.md`
 
 ---
 
