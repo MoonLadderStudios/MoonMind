@@ -231,6 +231,8 @@ Key diagnostics:
 - Existing `task_proposals` table and `311_proposal_delivery_records` migration fields; no new persistent table planned unless provider decision audit cannot reuse existing proposal metadata/decision fields (312-proposal-review-delivery)
 - Python 3.12 + FastAPI, Pydantic v2, SQLAlchemy async ORM, Temporal Python SDK, existing `TemporalExecutionService`, trusted Jira/GitHub integration services, pytest (313-process-tracker-decisions)
 - Existing `task_proposals` table and `provider_metadata`/delivery fields; no new persistent table planned unless provider decision audit or idempotency cannot safely reuse existing metadata (313-process-tracker-decisions)
+- Python 3.12 + Pydantic v2, Temporal Python SDK activity boundaries, pytest, existing MoonMind agent-skill resolver/materializer services (314-skill-projection-noninterference)
+- Existing artifact-backed resolved skill snapshots and runtime filesystem materialization only; no new persistent tables planned (314-skill-projection-noninterference)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

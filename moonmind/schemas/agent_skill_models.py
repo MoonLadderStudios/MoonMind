@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -94,3 +94,22 @@ class RuntimeSkillMaterialization(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     
     model_config = ConfigDict(extra="forbid")
+
+
+RuntimeSkillProjectionStatus = Literal[
+    "created", "reused", "skipped", "blocked", "failed"
+]
+
+
+class RuntimeSkillProjectionDiagnostic(BaseModel):
+    """Structured diagnostic for a runtime skill alias projection decision."""
+
+    active_visible_path: str = Field(..., alias="activeVisiblePath")
+    alias_path: str = Field(..., alias="aliasPath")
+    event: str
+    reason: str | None = None
+    snapshot_id: str = Field(..., alias="snapshotId")
+    status: RuntimeSkillProjectionStatus
+    workspace: str
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)

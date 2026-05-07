@@ -216,6 +216,67 @@ async def test_materializer_preserves_existing_agents_skills_directory_on_succes
     assert result.metadata["repoSkillSourcePreserved"] is True
     assert (backing_dir / "active" / "SKILL.md").is_file()
 
+
+@pytest.mark.asyncio
+async def test_materializer_reports_structured_alias_projection_diagnostics(
+    tmp_path: Path,
+):
+    source_dir = tmp_path / ".agents" / "skills"
+    source_skill = source_dir / "repo-skill" / "SKILL.md"
+    source_skill.parent.mkdir(parents=True)
+    source_skill.write_text("repo authored\n", encoding="utf-8")
+    artifact_service = _StaticArtifactService(
+        {"artifact-active": b"---\nname: active\ndescription: active\n---\n"}
+    )
+    materializer = AgentSkillMaterializer(
+        str(tmp_path),
+        artifact_service=artifact_service,
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="active_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[_skill("active", "artifact-active")],
+    )
+
+    result = await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="test_runtime",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+
+    diagnostics = result.metadata["projectionDiagnostics"]
+    assert diagnostics == [
+        {
+            "activeVisiblePath": str(
+                tmp_path / "runtime" / "skills_active" / "active_snap"
+            ),
+            "aliasPath": str(source_dir),
+            "event": "skill_projection_alias_skipped",
+            "reason": "repo_authored_skills_present",
+            "snapshotId": "active_snap",
+            "status": "skipped",
+            "workspace": str(tmp_path),
+        },
+        {
+            "activeVisiblePath": str(
+                tmp_path / "runtime" / "skills_active" / "active_snap"
+            ),
+            "aliasPath": str(tmp_path / ".gemini" / "skills"),
+            "event": "skill_projection_alias_created",
+            "reason": None,
+            "snapshotId": "active_snap",
+            "status": "created",
+            "workspace": str(tmp_path),
+        },
+    ]
+
+
+def test_materializer_does_not_expose_preserve_and_link_helper_surface() -> None:
+    assert not hasattr(AgentSkillMaterializer, "_move_visible_source_to_preservation_root")
+    assert not hasattr(AgentSkillMaterializer, "_restore_preserved_visible_source")
+    assert not hasattr(AgentSkillMaterializer, "_should_preserve_visible_source_dir")
+
+
 @pytest.mark.asyncio
 async def test_materializer_refuses_unknown_agents_skills_symlink(tmp_path: Path):
     source_dir = tmp_path / ".agents" / "skills"
