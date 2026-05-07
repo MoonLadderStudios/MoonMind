@@ -1,12 +1,17 @@
 [
   {
-    "id": 3196972476,
+    "id": 4240227171,
     "disposition": "addressed",
-    "rationale": "Updated docs/Temporal/ManagedAndExternalAgentExecutionModel.md to use schema-valid failure_class = \"integration_error\" for exhausted provider rate limits while preserving rate-limit specificity in provider_error_code and metadata."
+    "rationale": "Addressed the review bundle: required-skill names now allow underscores, deployment skills are fetched by requested/required slug instead of scanning every definition, filesystem frontmatter reads run off the event loop, and deployment artifact metadata carries required-skill closure data."
   },
   {
-    "id": 4238924098,
+    "id": 3198079170,
+    "disposition": "addressed",
+    "rationale": "Deployment-sourced skills now persist and load required_skills metadata from version artifact metadata, and resolver closure fetches required deployment skills on demand before launch."
+  },
+  {
+    "id": 4240228995,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary body with no separate actionable request."
+    "rationale": "Informational automated Codex review banner with no actionable code feedback."
   }
 ]

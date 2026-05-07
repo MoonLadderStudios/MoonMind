@@ -1,3 +1,6 @@
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from moonmind.schemas.agent_skill_models import (
     SkillSelector,
@@ -287,7 +290,6 @@ async def test_local_skill_loader_scans_fs(tmp_path):
     assert results[0].skill_name == "local1"
 
 async def test_deployment_skill_loader_fetches_from_db():
-    from unittest.mock import MagicMock, AsyncMock
     loader = DeploymentSkillLoader()
     
     mock_session = AsyncMock()
@@ -304,24 +306,32 @@ async def test_deployment_skill_loader_fetches_from_db():
             self.slug = "db_skill"
             self.versions = [MockVersion()]
     
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = [MockDef()]
-    mock_session.execute.return_value = mock_result
-    
-    from contextlib import asynccontextmanager
+    def _result(definitions=None, artifact_rows=None):
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = list(definitions or [])
+        result.all.return_value = list(artifact_rows or [])
+        return result
+
+    mock_session.execute.side_effect = [
+        _result(definitions=[MockDef()]),
+        _result(artifact_rows=[("art_123", {"required_skills": []})]),
+    ]
     
     @asynccontextmanager
     async def mock_maker():
         yield mock_session
         
     context = SkillResolutionContext(snapshot_id="snap", async_session_maker=mock_maker)
-    selector = SkillSelector(include=[])
+    selector = SkillSelector(include=[{"name": "db_skill"}])
     
     results = await loader.load_skills(selector, context)
     assert len(results) == 1
     assert results[0].skill_name == "db_skill"
     assert results[0].version == "1.0.0"
     assert results[0].provenance.source_kind == AgentSkillSourceKind.DEPLOYMENT
+    assert mock_session.execute.call_count == 2
+    definition_stmt = str(mock_session.execute.call_args_list[0].args[0])
+    assert "WHERE agent_skill_definitions.slug IN" in definition_stmt
 
 async def test_resolver_respects_precedence():
     from unittest.mock import AsyncMock
@@ -439,6 +449,44 @@ async def test_resolver_expands_required_skills_from_strict_metadata(tmp_path):
         {"requiredBy": "orchestrator", "skill": "helper-skill"}
     ]
 
+async def test_resolver_allows_underscores_in_required_skill_names(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    orchestrator = skills_dir / "orchestrator"
+    helper = skills_dir / "helper_skill"
+    orchestrator.mkdir(parents=True)
+    helper.mkdir()
+    (orchestrator / "SKILL.md").write_text(
+        "---\n"
+        "name: orchestrator\n"
+        "description: Runs orchestration.\n"
+        "metadata:\n"
+        "  required-skills: \"helper_skill\"\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    (helper / "SKILL.md").write_text(
+        "---\n"
+        "name: helper_skill\n"
+        "description: Supports orchestration.\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "orchestrator"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert [skill.skill_name for skill in result.skills] == [
+        "helper_skill",
+        "orchestrator",
+    ]
+
 async def test_resolver_expands_packaged_pr_resolver_support_skills():
     resolver = AgentSkillResolver(loaders=[BuiltInSkillLoader()])
     context = SkillResolutionContext(snapshot_id="snap-123")
@@ -456,6 +504,97 @@ async def test_resolver_expands_packaged_pr_resolver_support_skills():
         {"requiredBy": "pr-resolver", "skill": "fix-ci"},
         {"requiredBy": "pr-resolver", "skill": "fix-comments"},
         {"requiredBy": "pr-resolver", "skill": "fix-merge-conflicts"},
+    ]
+
+async def test_resolver_expands_deployment_required_skills_from_artifact_metadata():
+    class MockVersion:
+        def __init__(self, version_string, artifact_ref):
+            self.version_string = version_string
+            self.format = MagicMock(value="markdown")
+            self.artifact_ref = artifact_ref
+            self.content_digest = f"digest-{artifact_ref}"
+
+    class MockDef:
+        def __init__(self, slug, artifact_ref):
+            self.slug = slug
+            self.versions = [MockVersion("1.0.0", artifact_ref)]
+
+    definitions = {
+        "primary_skill": MockDef("primary_skill", "art_primary"),
+        "helper_skill": MockDef("helper_skill", "art_helper"),
+    }
+    artifact_metadata = {
+        "art_primary": {"required_skills": ["helper_skill"]},
+        "art_helper": {"required_skills": []},
+    }
+    requested_slug_batches: list[set[str]] = []
+
+    def _result(definitions=None, artifact_rows=None):
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = list(definitions or [])
+        result.all.return_value = list(artifact_rows or [])
+        return result
+
+    mock_session = AsyncMock()
+
+    async def execute(stmt):
+        compiled = stmt.compile()
+        params = compiled.params
+        if "agent_skill_definitions" in str(stmt):
+            names = set()
+            for value in params.values():
+                if isinstance(value, list):
+                    names.update(value)
+                elif isinstance(value, str):
+                    names.add(value)
+            requested_slug_batches.append(names)
+            return _result(
+                definitions=[
+                    definition
+                    for name, definition in definitions.items()
+                    if name in names
+                ]
+            )
+        refs = set()
+        for value in params.values():
+            if isinstance(value, list):
+                refs.update(value)
+            elif isinstance(value, str):
+                refs.add(value)
+        return _result(
+            artifact_rows=[
+                (artifact_ref, metadata)
+                for artifact_ref, metadata in artifact_metadata.items()
+                if artifact_ref in refs
+            ]
+        )
+
+    mock_session.execute.side_effect = execute
+
+    @asynccontextmanager
+    async def mock_maker():
+        yield mock_session
+
+    resolver = AgentSkillResolver(loaders=[DeploymentSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        async_session_maker=mock_maker,
+    )
+    selector = SkillSelector(include=[{"name": "primary_skill"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert [skill.skill_name for skill in result.skills] == [
+        "helper_skill",
+        "primary_skill",
+    ]
+    by_name = {skill.skill_name: skill for skill in result.skills}
+    assert by_name["primary_skill"].selection_reason == "selected"
+    assert by_name["helper_skill"].selection_reason == "required"
+    assert by_name["helper_skill"].required_by == ["primary_skill"]
+    assert requested_slug_batches == [{"primary_skill"}, {"helper_skill"}]
+    assert result.source_trace["requiredSkillEdges"] == [
+        {"requiredBy": "primary_skill", "skill": "helper_skill"}
     ]
 
 async def test_resolver_rejects_excluded_required_skill(tmp_path):
