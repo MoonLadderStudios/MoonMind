@@ -78,6 +78,71 @@ async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None
     assert proposal is record
 
 @pytest.mark.asyncio
+async def test_create_proposal_rejects_agent_runtime_tool_before_repository_call() -> None:
+    repo = AsyncMock()
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(TaskProposalValidationError, match="agent_runtime"):
+        await service.create_proposal(
+            title="Unsafe runtime",
+            summary="Do not allow direct runtime tools in proposals.",
+            category="run_quality",
+            tags=["runtime"],
+            task_create_request={
+                "type": "task",
+                "payload": {
+                    "repository": "Moon/Repo",
+                    "task": {
+                        "instructions": "Run runtime directly.",
+                        "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                    },
+                },
+            },
+            origin_source="queue",
+            origin_id=None,
+            origin_metadata={},
+            proposed_by_worker_id="worker-1",
+            proposed_by_user_id=None,
+        )
+
+    repo.create_proposal.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_create_proposal_rejects_materialized_skill_body_before_repository_call() -> None:
+    repo = AsyncMock()
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(TaskProposalValidationError, match="skill body"):
+        await service.create_proposal(
+            title="Embedded skill body",
+            summary="Do not store materialized skill content in proposals.",
+            category="run_quality",
+            tags=["skills"],
+            task_create_request={
+                "type": "task",
+                "payload": {
+                    "repository": "Moon/Repo",
+                    "task": {
+                        "instructions": "Run selected skill.",
+                        "skills": {
+                            "include": [{"name": "moonspec-verify"}],
+                            "resolvedSkillset": {
+                                "skills": [{"name": "moonspec-verify", "body": "..."}]
+                            },
+                        },
+                    },
+                },
+            },
+            origin_source="queue",
+            origin_id=None,
+            origin_metadata={},
+            proposed_by_worker_id="worker-1",
+            proposed_by_user_id=None,
+        )
+
+    repo.create_proposal.assert_not_awaited()
+
+@pytest.mark.asyncio
 async def test_create_proposal_accepts_enum_origin_source() -> None:
     repo = AsyncMock()
     record = SimpleNamespace(

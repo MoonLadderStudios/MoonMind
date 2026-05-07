@@ -177,6 +177,104 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, [])
 
+    async def test_proposal_generate_preserves_explicit_skill_and_provenance_refs(
+        self,
+    ) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "wf-skills-provenance",
+                "parameters": {
+                    "repository": "Moon/Repo",
+                    "task": {
+                        "instructions": "Implement with preset context.",
+                        "skills": {"include": [{"name": "moonspec-implement"}]},
+                        "authoredPresets": [
+                            {
+                                "presetId": "runtime-quality-followup",
+                                "presetVersion": "2026-05-01",
+                            }
+                        ],
+                        "steps": [
+                            {
+                                "id": "verify",
+                                "instructions": "Verify behavior.",
+                                "skills": {"include": [{"name": "moonspec-verify"}]},
+                                "source": {
+                                    "kind": "preset-derived",
+                                    "presetId": "runtime-quality-followup",
+                                    "presetVersion": "2026-05-01",
+                                    "originalStepId": "verify",
+                                },
+                            }
+                        ],
+                    },
+                },
+                "proposalIdea": "Add follow-up validation",
+            }
+        )
+
+        task = result[0]["taskCreateRequest"]["payload"]["task"]
+        self.assertEqual(
+            task["skills"], {"include": [{"name": "moonspec-implement"}]}
+        )
+        self.assertEqual(
+            task["authoredPresets"],
+            [
+                {
+                    "presetId": "runtime-quality-followup",
+                    "presetVersion": "2026-05-01",
+                }
+            ],
+        )
+        self.assertEqual(
+            task["steps"][0]["skills"], {"include": [{"name": "moonspec-verify"}]}
+        )
+        self.assertEqual(
+            task["steps"][0]["source"],
+            {
+                "kind": "preset-derived",
+                "presetId": "runtime-quality-followup",
+                "presetVersion": "2026-05-01",
+                "originalStepId": "verify",
+            },
+        )
+
+    async def test_proposal_generate_does_not_fabricate_provenance_or_embed_skill_bodies(
+        self,
+    ) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "wf-no-provenance",
+                "parameters": {
+                    "repository": "Moon/Repo",
+                    "task": {
+                        "instructions": "Implement without preset context.",
+                        "skills": {
+                            "include": [{"name": "moonspec-implement"}],
+                            "resolvedSkillset": {"skills": [{"body": "large body"}]},
+                            "workspacePath": "/tmp/skills_active",
+                        },
+                    },
+                },
+                "proposalIdea": "Add follow-up validation",
+            }
+        )
+
+        task = result[0]["taskCreateRequest"]["payload"]["task"]
+        self.assertNotIn("authoredPresets", task)
+        self.assertNotIn("steps", task)
+        self.assertEqual(
+            task["skills"], {"include": [{"name": "moonspec-implement"}]}
+        )
+        serialized = str(result[0]["taskCreateRequest"])
+        self.assertNotIn("large body", serialized)
+        self.assertNotIn("resolvedSkillset", serialized)
+        self.assertNotIn("workspacePath", serialized)
+
 class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
     async def test_empty_candidates_returns_zeroes(self) -> None:
         activities = TemporalProposalActivities()
@@ -221,8 +319,8 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {"candidates": candidates, "policy": {}, "origin": {}}
         )
         self.assertEqual(result["generated_count"], 3)
-        self.assertEqual(result["submitted_count"], 1)
-        self.assertEqual(len(result["errors"]), 2)
+        self.assertEqual(result["submitted_count"], 0)
+        self.assertEqual(len(result["errors"]), 3)
 
     async def test_max_items_policy_respected(self) -> None:
         activities = TemporalProposalActivities()
@@ -366,6 +464,98 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             call_kwargs["task_create_request"]["payload"]["repository"],
             "MoonLadderStudios/MoonMind",
         )
+
+    async def test_proposal_submit_accepts_skill_tool_and_rejects_agent_runtime_tool(
+        self,
+    ) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        candidates = [
+            {
+                "title": "Skill proposal",
+                "summary": "Valid executable skill proposal.",
+                "taskCreateRequest": {
+                    "type": "task",
+                    "payload": {
+                        "repository": "Moon/Repo",
+                        "task": {
+                            "instructions": "Run skill tool.",
+                            "tool": {"type": "skill", "name": "repo.run_tests"},
+                        },
+                    },
+                },
+            },
+            {
+                "title": "Agent runtime proposal",
+                "summary": "Invalid executable runtime proposal.",
+                "taskCreateRequest": {
+                    "type": "task",
+                    "payload": {
+                        "repository": "Moon/Repo",
+                        "task": {
+                            "instructions": "Run runtime directly.",
+                            "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                        },
+                    },
+                },
+            },
+        ]
+
+        result = await activities.proposal_submit(
+            {"candidates": candidates, "policy": {}, "origin": {}}
+        )
+
+        self.assertEqual(result["generated_count"], 2)
+        self.assertEqual(result["submitted_count"], 1)
+        self.assertEqual(mock_service.create_proposal.await_count, 1)
+        submitted = mock_service.create_proposal.await_args.kwargs
+        self.assertEqual(submitted["title"], "Skill proposal")
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertIn("agent_runtime", result["errors"][0])
+
+    async def test_proposal_submit_rejects_malformed_skill_selectors_before_service(
+        self,
+    ) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Malformed skills",
+                        "summary": "Invalid skill selector.",
+                        "taskCreateRequest": {
+                            "type": "task",
+                            "payload": {
+                                "repository": "Moon/Repo",
+                                "task": {
+                                    "instructions": "Run with skills.",
+                                    "skills": {"include": "moonspec-verify"},
+                                },
+                            },
+                        },
+                    }
+                ],
+                "policy": {},
+                "origin": {},
+            }
+        )
+
+        self.assertEqual(result["generated_count"], 1)
+        self.assertEqual(result["submitted_count"], 0)
+        self.assertEqual(mock_service.create_proposal.await_count, 0)
+        self.assertIn("task.skills.include must be a list", result["errors"][0])
 
     async def test_service_factory_called(self) -> None:
         mock_service = AsyncMock()

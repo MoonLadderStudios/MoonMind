@@ -353,11 +353,62 @@ class TaskProposalService:
         skill_id = str(skill.get("id") or "").strip().lower()
         return bool(skill_id and skill_id != "auto")
 
+    @classmethod
+    def _reject_embedded_skill_materialization(cls, value: object) -> None:
+        if isinstance(value, Mapping):
+            for key, child in value.items():
+                normalized_key = str(key).strip()
+                if normalized_key in {
+                    "resolvedSkillset",
+                    "resolved_skillset",
+                    "skillBody",
+                    "skillBodies",
+                    "workspacePath",
+                    "workspaceRoot",
+                    "materializedPath",
+                    "activeSkillsPath",
+                    "skillsActivePath",
+                }:
+                    raise TaskProposalValidationError(
+                        "taskCreateRequest must not embed skill body or runtime "
+                        "materialization state"
+                    )
+                if normalized_key in {"body", "content"} and isinstance(child, str):
+                    raise TaskProposalValidationError(
+                        "taskCreateRequest must not embed skill body or runtime "
+                        "materialization state"
+                    )
+                cls._reject_embedded_skill_materialization(child)
+            return
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            for item in value:
+                cls._reject_embedded_skill_materialization(item)
+
+    @classmethod
+    def _reject_agent_runtime_tool_selectors(cls, value: object) -> None:
+        if isinstance(value, Mapping):
+            tool = value.get("tool")
+            if isinstance(tool, Mapping):
+                tool_type = str(tool.get("type") or tool.get("kind") or "").strip()
+                if tool_type == "agent_runtime":
+                    raise TaskProposalValidationError(
+                        "taskCreateRequest tool.type=agent_runtime is not allowed "
+                        "for proposal candidates"
+                    )
+            for child in value.values():
+                cls._reject_agent_runtime_tool_selectors(child)
+            return
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            for item in value:
+                cls._reject_agent_runtime_tool_selectors(item)
+
     def _normalize_proposal_task_payload(
         self, payload: dict[str, Any]
     ) -> tuple[dict[str, Any], str]:
         """Validate proposal payload shape without applying runtime defaults."""
 
+        self._reject_agent_runtime_tool_selectors(payload)
+        self._reject_embedded_skill_materialization(payload)
         payload_for_validation = self._normalize_proposal_runtime_payload(payload)
         task_node = payload_for_validation.get("task")
         task = dict(task_node) if isinstance(task_node, Mapping) else {}
@@ -489,6 +540,8 @@ class TaskProposalService:
             raise TaskProposalValidationError(
                 "taskCreateRequest.payload must be an object"
             )
+        self._reject_agent_runtime_tool_selectors(payload)
+        self._reject_embedded_skill_materialization(payload)
         if apply_runtime_defaults:
             try:
                 normalized_payload_input = self._normalize_proposal_runtime_payload(

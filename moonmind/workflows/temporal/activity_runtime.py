@@ -14,6 +14,7 @@ import shlex
 import shutil
 import tempfile
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -2586,6 +2587,141 @@ class TemporalProposalActivities:
             f"{normalized_instructions}"
         )
 
+    @classmethod
+    def _compact_skill_selection(cls, value: object) -> dict[str, Any] | None:
+        if not isinstance(value, Mapping):
+            return None
+        compact: dict[str, Any] = {}
+        sets = value.get("sets")
+        if isinstance(sets, list):
+            compact["sets"] = deepcopy(sets)
+        include = value.get("include")
+        if isinstance(include, list):
+            compact["include"] = []
+            for item in include:
+                if isinstance(item, Mapping):
+                    entry: dict[str, Any] = {}
+                    for key in ("name", "version"):
+                        if item.get(key) not in (None, ""):
+                            entry[key] = item.get(key)
+                    if entry:
+                        compact["include"].append(entry)
+                elif isinstance(item, str) and item.strip():
+                    compact["include"].append({"name": item.strip()})
+            if not compact["include"]:
+                compact.pop("include")
+        exclude = value.get("exclude")
+        if isinstance(exclude, list):
+            compact["exclude"] = deepcopy(exclude)
+        materialization_mode = value.get("materializationMode")
+        if isinstance(materialization_mode, str) and materialization_mode.strip():
+            compact["materializationMode"] = materialization_mode.strip()
+        return compact or None
+
+    @staticmethod
+    def _compact_skill(value: object) -> dict[str, Any] | None:
+        if not isinstance(value, Mapping):
+            return None
+        skill_id = str(value.get("id") or "").strip()
+        if not skill_id:
+            return None
+        compact: dict[str, Any] = {"id": skill_id}
+        args = value.get("args")
+        if isinstance(args, Mapping):
+            compact["args"] = deepcopy(dict(args))
+        required = value.get("requiredCapabilities")
+        if isinstance(required, list):
+            compact["requiredCapabilities"] = deepcopy(required)
+        return compact
+
+    @staticmethod
+    def _compact_authored_presets(value: object) -> list[dict[str, Any]] | None:
+        if not isinstance(value, list):
+            return None
+        compact: list[dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, Mapping):
+                continue
+            entry = {
+                key: deepcopy(item[key])
+                for key in (
+                    "presetId",
+                    "presetSlug",
+                    "presetVersion",
+                    "alias",
+                    "includePath",
+                    "inputMapping",
+                    "scope",
+                )
+                if item.get(key) not in (None, "", [])
+            }
+            if entry:
+                compact.append(entry)
+        return compact or None
+
+    @staticmethod
+    def _compact_step_source(value: object) -> dict[str, Any] | None:
+        if not isinstance(value, Mapping):
+            return None
+        source = {
+            key: deepcopy(value[key])
+            for key in (
+                "kind",
+                "presetId",
+                "presetSlug",
+                "presetVersion",
+                "includePath",
+                "originalStepId",
+            )
+            if value.get(key) not in (None, "", [])
+        }
+        return source or None
+
+    @classmethod
+    def _preserved_proposal_steps(
+        cls,
+        steps: object,
+    ) -> list[dict[str, Any]] | None:
+        if not isinstance(steps, list):
+            return None
+        preserved: list[dict[str, Any]] = []
+        for index, raw_step in enumerate(steps, start=1):
+            if not isinstance(raw_step, Mapping):
+                continue
+            step: dict[str, Any] = {}
+            step_id = str(raw_step.get("id") or f"source-step-{index}").strip()
+            if step_id:
+                step["id"] = step_id
+            title = str(raw_step.get("title") or "").strip()
+            if title:
+                step["title"] = title
+            skill = cls._compact_skill(raw_step.get("skill"))
+            if skill is not None:
+                step["skill"] = skill
+            skills = cls._compact_skill_selection(raw_step.get("skills"))
+            if skills is not None:
+                step["skills"] = skills
+            source = cls._compact_step_source(raw_step.get("source"))
+            if source is not None:
+                step["source"] = source
+            if any(key in step for key in ("skill", "skills", "source")):
+                preserved.append(step)
+        return preserved or None
+
+    @staticmethod
+    def _redacted_validation_error(exc: Exception) -> str:
+        return re.sub(r"\s+", " ", str(exc)).strip()[:200]
+
+    @staticmethod
+    def _validate_candidate_task_create_request(request: Mapping[str, Any]) -> None:
+        from moonmind.workflows.task_proposals.service import TaskProposalService
+
+        validator = TaskProposalService(object())  # type: ignore[arg-type]
+        validator._prepare_task_create_request(
+            dict(request),
+            apply_runtime_defaults=False,
+        )
+
     async def proposal_generate(
         self,
         request: Mapping[str, Any] | None = None,
@@ -2660,6 +2796,21 @@ class TemporalProposalActivities:
                 },
             },
         }
+        proposal_task = task_create_request["payload"]["task"]
+        skill = self._compact_skill(task.get("skill"))
+        if skill is not None:
+            proposal_task["skill"] = skill
+        skills = self._compact_skill_selection(task.get("skills"))
+        if skills is not None:
+            proposal_task["skills"] = skills
+        authored_presets = self._compact_authored_presets(
+            task.get("authoredPresets")
+        )
+        if authored_presets is not None:
+            proposal_task["authoredPresets"] = authored_presets
+        preserved_steps = self._preserved_proposal_steps(task.get("steps"))
+        if preserved_steps is not None:
+            proposal_task["steps"] = preserved_steps
 
         candidate: dict[str, Any] = {
             "title": normalized_title,
@@ -2797,6 +2948,14 @@ class TemporalProposalActivities:
                             payload_node["task"] = {
                                 "runtime": {"mode": default_runtime}
                             }
+                try:
+                    self._validate_candidate_task_create_request(stamped_request)
+                except Exception as exc:
+                    errors.append(
+                        f"validation failed for {title!r}: "
+                        f"{self._redacted_validation_error(exc)}"
+                    )
+                    continue
 
                 payload_node = stamped_request.get("payload")
                 target_repo = ""

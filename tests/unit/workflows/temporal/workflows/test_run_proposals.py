@@ -44,6 +44,20 @@ def _to_serializable(obj: Any) -> Any:
         return obj.dict()
     return str(obj)
 
+def test_proposal_activity_catalog_keeps_generation_and_submission_separate() -> None:
+    generate = run_workflow_module.DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+        "proposal.generate"
+    )
+    submit = run_workflow_module.DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+        "proposal.submit"
+    )
+
+    assert generate.activity_type == "proposal.generate"
+    assert submit.activity_type == "proposal.submit"
+    assert generate.capability_class == "llm"
+    assert submit.capability_class != generate.capability_class
+    assert submit.task_queue != generate.task_queue
+
 @pytest.mark.asyncio
 async def test_run_proposals_stage_propagates_policy(
     mock_run_workflow: MoonMindRunWorkflow,
