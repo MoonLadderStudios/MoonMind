@@ -44,3 +44,13 @@ If no compose-backed integration is needed, still include boundary-style unit te
 4. Inspect the persisted delivery record; confirm canonical fields, selected provider/external fields, dedup identity, origin identity, and provider metadata separation.
 5. Confirm workflow-origin metadata uses `origin.source = "workflow"`, `origin.id = workflow_id`, and snake_case metadata keys.
 6. Confirm `MM-597` remains preserved in MoonSpec artifacts and final verification output.
+
+## Final MoonSpec Verification
+
+After implementation and required tests pass, run the final read-only verification step:
+
+```bash
+/moonspec-verify
+```
+
+The verification report should preserve MM-597, the canonical Jira preset brief, and DESIGN-REQ-001 through DESIGN-REQ-008.

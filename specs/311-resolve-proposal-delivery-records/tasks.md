@@ -57,19 +57,19 @@
 
 ### Unit Tests (write first)
 
-- [ ] T006 [P] Add failing unit tests for explicit-over-default policy resolution, destination allowlist rejection, capacity/gate rejection, and successful defaulted delivery in `tests/unit/workflows/temporal/test_proposal_activities.py`. (FR-001, FR-002, FR-003, SC-001, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003)
-- [ ] T007 [P] Add failing unit tests for project repository preservation and MoonMind run-quality repository rewrite after category, severity, and approved tag gates in `tests/unit/workflows/temporal/test_proposal_activities.py`. (FR-004, FR-005, SC-002, DESIGN-REQ-004)
-- [ ] T008 [P] Add failing unit tests for dedup key/hash identity and local open duplicate update/link behavior in `tests/unit/workflows/task_proposals/test_service.py`. (FR-008, FR-009, FR-010, SC-003, SC-004, DESIGN-REQ-006)
-- [ ] T009 [P] Add failing unit tests for canonical delivery-record fields and provider-specific metadata separation in `tests/unit/workflows/task_proposals/test_service.py`. (FR-006, FR-007, FR-013, SC-005, DESIGN-REQ-005, DESIGN-REQ-008)
-- [ ] T010 [P] Add failing unit tests for workflow origin identity and snake_case origin metadata in `tests/unit/workflows/temporal/test_proposal_activities.py` and update the old camelCase expectation. (FR-011, FR-012, SC-006, DESIGN-REQ-007)
-- [ ] T011 [P] Add failing unit tests for proposal policy provider/delivery fields in `moonmind/workflows/tasks/task_contract.py` through `tests/unit/workflows/temporal/test_proposal_activities.py` or `tests/unit/workflows/task_proposals/test_service.py`. (FR-001, FR-003, DESIGN-REQ-002, DESIGN-REQ-003)
+- [ ] T006 Add failing unit tests for explicit-over-default policy resolution, destination allowlist rejection, capacity/gate rejection, and successful defaulted delivery in `tests/unit/workflows/temporal/test_proposal_activities.py`. (FR-001, FR-002, FR-003, SC-001, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003)
+- [ ] T007 Add failing unit tests for project repository preservation and MoonMind run-quality repository rewrite after category, severity, and approved tag gates in `tests/unit/workflows/temporal/test_proposal_activities.py`. (FR-004, FR-005, SC-002, DESIGN-REQ-004)
+- [ ] T008 Add failing unit tests for dedup key/hash identity and local open duplicate update/link behavior in `tests/unit/workflows/task_proposals/test_service.py`. (FR-008, FR-009, FR-010, SC-003, SC-004, DESIGN-REQ-006)
+- [ ] T009 Add failing unit tests for canonical delivery-record fields and provider-specific metadata separation in `tests/unit/workflows/task_proposals/test_service.py`. (FR-006, FR-007, FR-013, SC-005, DESIGN-REQ-005, DESIGN-REQ-008)
+- [ ] T010 Add failing unit tests for workflow origin identity and snake_case origin metadata in `tests/unit/workflows/temporal/test_proposal_activities.py` and update the old camelCase expectation. (FR-011, FR-012, SC-006, DESIGN-REQ-007)
+- [ ] T011 Add failing unit tests for proposal policy provider/delivery fields in `moonmind/workflows/tasks/task_contract.py` through `tests/unit/workflows/temporal/test_proposal_activities.py` or `tests/unit/workflows/task_proposals/test_service.py`. (FR-001, FR-003, DESIGN-REQ-002, DESIGN-REQ-003)
 
 ### Integration Tests (write first)
 
-- [ ] T012 [P] Add failing boundary test for `TemporalProposalActivities.proposal_submit` passing resolved decisions, snake_case origin metadata, and provider metadata to the trusted service in `tests/unit/workflows/temporal/test_proposal_activities.py`. (Acceptance scenarios 1, 2, 3, 7; FR-001, FR-005, FR-011, FR-012)
-- [ ] T013 [P] Add failing DB-backed repository/service test for local open duplicate lookup and update/link behavior in `tests/unit/workflows/task_proposals/test_service.py`. (Acceptance scenarios 4, 5; FR-009, FR-010, SC-003, SC-004)
+- [ ] T012 Add failing boundary test for `TemporalProposalActivities.proposal_submit` passing resolved decisions, snake_case origin metadata, and provider metadata to the trusted service in `tests/unit/workflows/temporal/test_proposal_activities.py`. (Acceptance scenarios 1, 2, 3, 7; FR-001, FR-005, FR-011, FR-012)
+- [ ] T013 Add failing DB-backed repository/service test for local open duplicate lookup and update/link behavior in `tests/unit/workflows/task_proposals/test_service.py`. (Acceptance scenarios 4, 5; FR-009, FR-010, SC-003, SC-004)
 - [ ] T014 [P] Add failing API or serialization test for delivery-record canonical fields and provider metadata in `tests/unit/api/routers/test_task_proposals.py` when implementation exposes new fields through proposal responses. (Acceptance scenario 6; FR-006, FR-007, FR-013, SC-005)
-- [ ] T015 [P] Add failing migration/schema round-trip test in `tests/unit/workflows/task_proposals/test_service.py` if `api_service/migrations/versions/311_proposal_delivery_records.py` is created for task proposal delivery-record fields. (FR-006, FR-007, FR-013, DESIGN-REQ-005, DESIGN-REQ-008)
+- [ ] T015 Add failing migration/schema round-trip test in `tests/unit/workflows/task_proposals/test_service.py` if `api_service/migrations/versions/311_proposal_delivery_records.py` is created for task proposal delivery-record fields. (FR-006, FR-007, FR-013, DESIGN-REQ-005, DESIGN-REQ-008)
 
 ### Red-First Confirmation
 
@@ -107,8 +107,8 @@
 
 **Purpose**: Strengthen the completed MM-597 story without adding hidden scope.
 
-- [ ] T032 [P] Review `moonmind/workflows/task_proposals/service.py`, `moonmind/workflows/task_proposals/repositories.py`, and `moonmind/workflows/temporal/activity_runtime.py` for duplicated policy/dedup logic and refactor only within MM-597 scope. (FR-001, FR-008, FR-010)
-- [ ] T033 [P] Review redaction of provider metadata, origin metadata, and task snapshots in `moonmind/workflows/task_proposals/service.py` and tests for secret-like values. (FR-013, DESIGN-REQ-008)
+- [ ] T032 Review `moonmind/workflows/task_proposals/service.py`, `moonmind/workflows/task_proposals/repositories.py`, and `moonmind/workflows/temporal/activity_runtime.py` for duplicated policy/dedup logic and refactor only within MM-597 scope. (FR-001, FR-008, FR-010)
+- [ ] T033 Review redaction of provider metadata, origin metadata, and task snapshots in `moonmind/workflows/task_proposals/service.py` and tests for secret-like values. (FR-013, DESIGN-REQ-008)
 - [ ] T034 [P] Update `specs/311-resolve-proposal-delivery-records/quickstart.md` with final focused commands, integration decision, and any environment blockers observed during implementation. (SC-001 through SC-007)
 - [ ] T035 Confirm `MM-597` appears in `specs/311-resolve-proposal-delivery-records/spec.md`, `specs/311-resolve-proposal-delivery-records/plan.md`, `specs/311-resolve-proposal-delivery-records/tasks.md`, implementation notes, commit text, and PR metadata before publishing. (FR-014, SC-007)
 - [ ] T036 Run `/moonspec-verify` for `specs/311-resolve-proposal-delivery-records/spec.md` after implementation and tests pass, and save the verification result under `specs/311-resolve-proposal-delivery-records/verification.md`. (Final verification)
@@ -139,18 +139,18 @@
 ### Parallel Opportunities
 
 - T003, T004, and T005 can run in parallel after Phase 1.
-- T006 through T011 can be authored in parallel when coordinating same-file edits carefully by file owner.
-- T012 through T015 can be authored in parallel because they target distinct boundary/API/schema concerns.
+- T006 through T011 should be grouped by target file and authored serially within each file to avoid same-file conflicts.
+- T012 and T014 can run in parallel because they target different files; T013 and T015 should be coordinated with other `test_service.py` edits.
 - T021 and T022 can start in parallel after red-first confirmation; T023-T027 depend on their outputs.
-- T032, T033, and T034 can run in parallel after story validation.
+- T034 can run in parallel with final review tasks only after story validation; T032 and T033 should be serialized because they both inspect `service.py`.
 
 ## Parallel Example
 
 ```bash
-# After Phase 2, split test authoring by file:
-Task: "T006/T007/T010/T011 in tests/unit/workflows/temporal/test_proposal_activities.py"
-Task: "T008/T009/T013 in tests/unit/workflows/task_proposals/test_service.py"
-Task: "T014 in tests/unit/api/routers/test_task_proposals.py if API fields are exposed"
+# After Phase 2, split ownership by file:
+Task owner A: "T006/T007/T010/T011/T012 in tests/unit/workflows/temporal/test_proposal_activities.py"
+Task owner B: "T008/T009/T013/T015 in tests/unit/workflows/task_proposals/test_service.py"
+Task owner C: "T014 in tests/unit/api/routers/test_task_proposals.py if API fields are exposed"
 ```
 
 ## Implementation Strategy
