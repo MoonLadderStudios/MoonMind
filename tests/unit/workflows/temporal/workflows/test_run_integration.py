@@ -12,8 +12,11 @@ from moonmind.workflows.temporal.workflows.run import (
     NATIVE_PR_BRANCH_DEFAULTS_PATCH,
     NATIVE_PR_PUSH_STATUS_GATE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
+    RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     MoonMindRunWorkflow,
 )
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.managed_session_models import CodexManagedSessionBinding
 from moonmind.workloads.tool_bridge import build_dood_tool_definition_payload
 
 def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> bytes:
@@ -1186,6 +1189,98 @@ def test_determine_publish_completion_fails_when_pr_publish_creates_no_pr(
     assert status == "failed"
     assert message == "publishMode 'pr' requested but no PR was created"
     assert publish_failure is True
+
+def test_publish_repair_feedback_names_branch_and_managed_publish_contract(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._publish_context["branch"] = "feature/expected"
+    mock_run_workflow._publish_context["baseRef"] = "origin/main"
+
+    feedback = mock_run_workflow._publish_repair_feedback_instruction(
+        failure_message=(
+            "publishMode 'pr' requested, but no publishable diff was produced."
+        )
+    )
+
+    assert "Publish postcondition repair required" in feedback
+    assert "feature/expected" in feedback
+    assert "origin/main" in feedback
+    assert "cherry-pick" in feedback
+    assert "managed publishing will push and create the PR" in feedback
+    assert "Do not transition Jira" in feedback
+
+
+def test_publish_repair_identifies_jira_agent_skill_names(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    assert mock_run_workflow._is_jira_agent_skill_name("jira-issue-updater") is True
+    assert mock_run_workflow._is_jira_agent_skill_name("moonspec-implement") is False
+
+
+@pytest.mark.asyncio
+async def test_publish_repair_runs_one_managed_child_and_returns_result(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = CodexManagedSessionBinding(
+        workflowId="wf-1:session:codex_cli",
+        taskRunId="wf-1",
+        sessionId="sess:wf-1:codex_cli",
+        runtimeId="codex_cli",
+    )
+    mock_run_workflow._codex_session_binding = binding
+    mock_run_workflow._last_publish_repair_node_id = "step-2"
+    mock_run_workflow._last_publish_repair_request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="wf-1",
+        idempotencyKey="wf-1:step-2:run-1",
+        instructionRef="original instructions",
+        managedSession=binding,
+        parameters={"publishMode": "pr"},
+    )
+    mock_run_workflow._publish_context["branch"] = "feature/expected"
+
+    child_requests: list[AgentExecutionRequest] = []
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        request: AgentExecutionRequest,
+        **_kwargs: Any,
+    ) -> AgentRunResult:
+        child_requests.append(request)
+        return AgentRunResult(
+            summary="repair complete",
+            metadata={"push_status": "pushed", "push_branch": "feature/expected"},
+        )
+
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == RUN_PUBLISH_REPAIR_FEEDBACK_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+
+    result = await mock_run_workflow._attempt_publish_repair(
+        parameters={"publishMode": "pr"},
+        failure_message="branch has no commits ahead of origin/main",
+    )
+
+    assert result is not None
+    assert result["status"] == "COMPLETED"
+    assert result["outputs"]["push_status"] == "pushed"
+    assert len(child_requests) == 1
+    assert "branch has no commits" in (child_requests[0].instruction_ref or "")
+    assert (
+        child_requests[0].parameters["metadata"]["moonmind"]["publishRepair"][
+            "sourceNodeId"
+        ]
+        == "step-2"
+    )
+
 
 def test_determine_publish_completion_requires_integration_pr_url(
     mock_run_workflow: MoonMindRunWorkflow,
