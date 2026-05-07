@@ -780,7 +780,7 @@ describe('Mission Control shared entry', () => {
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,
     );
     expect(missionControlCss).toMatch(
-      /\.masthead-nav\s*\{[^}]*justify-content:\s*center;[^}]*justify-self:\s*center;/s,
+      /\.masthead-nav\s*\{[^}]*align-self:\s*stretch;[^}]*justify-content:\s*center;[^}]*justify-self:\s*center;/s,
     );
     expect(missionControlCss).toMatch(
       /\.masthead-title-meta\s*\{[^}]*justify-self:\s*end;[^}]*justify-content:\s*flex-end;/s,
@@ -797,11 +797,15 @@ describe('Mission Control shared entry', () => {
       block.includes('padding: 0.48rem 0.82rem;'),
     );
     expect(desktopLinkBlock).toBeDefined();
+    expect(desktopLinkBlock).toContain('display: inline-flex;');
+    expect(desktopLinkBlock).toContain('align-items: center;');
     expect(desktopLinkBlock).not.toMatch(/margin-bottom:\s*-/);
 
     const underlineBlocks = cssRuleBlocks(missionControlCss, '.route-nav a::after');
     expect(
-      underlineBlocks.some((block) => block.includes('bottom: -0.46rem;')),
+      underlineBlocks.some((block) =>
+        block.includes('bottom: calc(-1 * var(--masthead-padding-block-end));'),
+      ),
     ).toBe(true);
     expect(underlineBlocks.some((block) => block.includes('height: 3px;'))).toBe(true);
 
