@@ -210,6 +210,8 @@ Key diagnostics:
 - No new persistent storage; reuse existing retrieval settings, runtime metadata, provider-profile rows, and artifact-backed retrieval outputs (256-retrieval-transport-separation)
 - Python 3.12 + Pydantic v2, FastAPI, existing MoonMind RAG services, Temporal runtime launcher and managed-session helpers, pytest (257-retrieval-evidence-guardrails)
 - Existing artifact-backed retrieval outputs and runtime metadata only; no new persistent storage planned (257-retrieval-evidence-guardrails)
+- Python 3.12; TypeScript/React for Mission Control task details + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Zod, existing Temporal artifact service/helpers (310-resume-from-last-failed-step)
+- Existing Temporal execution records, canonical execution parameters/memo/search attributes, Temporal artifact metadata/content store, and existing workflow history; no new persistent database table is planned unless reverse related-run queries cannot be implemented safely from existing execution records (310-resume-from-last-failed-step)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
