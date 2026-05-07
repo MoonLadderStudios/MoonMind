@@ -311,6 +311,25 @@ async def test_repo_loader_rejects_active_projection_as_repo_source(tmp_path):
     with pytest.raises(RuntimeError, match="workspace-contamination error"):
         await loader.load_skills(SkillSelector(include=[]), context)
 
+async def test_repo_loader_rejects_workspace_runtime_projection_without_manifest(tmp_path):
+    active_root = tmp_path / "runtime" / "skills_active" / "snap"
+    active_skill = active_root / "active"
+    active_skill.mkdir(parents=True)
+    (active_skill / "SKILL.md").write_text("# Active\n", encoding="utf-8")
+    agents_dir = tmp_path / ".agents"
+    agents_dir.mkdir()
+    (agents_dir / "skills").symlink_to(active_root)
+
+    loader = RepoSkillLoader()
+    context = SkillResolutionContext(
+        snapshot_id="snap",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+
+    with pytest.raises(RuntimeError, match="workspace-contamination error"):
+        await loader.load_skills(SkillSelector(include=[]), context)
+
 async def test_local_loader_rejects_hidden_local_overlay(tmp_path):
     active_root = tmp_path / "runtime" / "skills_active" / "snap"
     active_root.mkdir(parents=True)

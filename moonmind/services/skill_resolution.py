@@ -225,6 +225,7 @@ def _is_moonmind_active_projection(skills_dir: Path) -> bool:
     if (resolved / "_manifest.json").is_file():
         return True
     for root in [
+        skills_dir.parent.parent / "runtime" / "skills_active",
         skills_dir.parent.parent.parent / "runtime" / "skills_active",
         skills_dir.parent.parent.parent / "skills_active",
     ]:

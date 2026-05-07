@@ -166,7 +166,6 @@ def ensure_shared_skill_links(
         optional=not require_agents_link,
     )
     gemini_skills_available = True
-    gemini_skills_status = SkillAliasStatus.REUSED.value
     gemini_skills_error = None
     try:
         gemini_result = _replace_link(
