@@ -1225,7 +1225,7 @@ async def test_record_provider_decision_event_persists_idempotent_metadata() -> 
         external_key="42",
         external_url="https://github.example/Moon/Repo/issues/42",
         provider_metadata={"delivery": {"status": "delivered"}},
-        resolved_policy={"allowedActions": ["promote", "dismiss", "defer", "priority"]},
+        resolved_policy={"allowedActions": ["promote", "dismiss", "defer", "reprioritize"]},
         review_priority=TaskProposalReviewPriority.NORMAL,
         decision_note=None,
     )
@@ -1250,12 +1250,12 @@ async def test_record_provider_decision_event_persists_idempotent_metadata() -> 
     assert decision_row["externalKey"] == "42"
     assert decision_row["providerEventId"] == "evt-1"
     assert decision_row["actor"] == "reviewer"
-    assert decision_row["decision"] == "priority"
+    assert decision_row["decision"] == "reprioritize"
     assert decision_row["accepted"] is True
     assert decision_row["note"] == "urgent"
     assert decision_row["priority"] == "urgent"
     assert decision_row["deferUntil"] is None
-    assert decision_row["resultingExternalState"] == "priority"
+    assert decision_row["resultingExternalState"] == "reprioritized"
     assert decision_row["observedAt"]
     repo.commit.assert_awaited_once()
     repo.refresh.assert_awaited_once_with(proposal)
@@ -1273,6 +1273,178 @@ async def test_record_provider_decision_event_persists_idempotent_metadata() -> 
 
     assert duplicate.accepted is True
     assert len(proposal.provider_metadata["providerDecisions"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_provider_decision_event_rejects_unverified_actor_before_state_change() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        provider="github",
+        external_key="42",
+        external_url="https://github.example/Moon/Repo/issues/42",
+        provider_metadata={},
+        resolved_policy={"allowedActions": ["promote"], "allowedActors": ["lead"]},
+        review_priority=TaskProposalReviewPriority.NORMAL,
+        decision_note=None,
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor(["ghp_secret"], "***"))
+
+    result = await service.record_provider_decision_event(
+        proposal_id=proposal.id,
+        event=ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id="evt-auth",
+            actor="reviewer",
+            body="/moonmind promote ghp_secret",
+            authenticity_verified=False,
+        ),
+    )
+
+    assert result.accepted is False
+    assert result.reason == "provider_auth_failed"
+    assert proposal.status is TaskProposalStatus.OPEN
+    persisted = proposal.provider_metadata["providerDecisions"][0]
+    assert persisted["accepted"] is False
+    assert persisted["reason"] == "provider_auth_failed"
+    assert "ghp_secret" not in str(persisted)
+
+
+@pytest.mark.asyncio
+async def test_record_provider_decision_event_records_non_executing_outcomes() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        provider="jira",
+        external_key="MM-599",
+        external_url="https://jira.example/browse/MM-599",
+        provider_metadata={},
+        resolved_policy={
+            "allowedActions": ["dismiss", "defer", "reprioritize", "request_revision"],
+            "allowedActors": ["reviewer"],
+        },
+        review_priority=TaskProposalReviewPriority.NORMAL,
+        decision_note=None,
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    decisions = [
+        ("evt-dismiss", "dismiss", "closed"),
+        ("evt-defer", "defer", "deferred"),
+        ("evt-priority", "reprioritize", "triage"),
+        ("evt-revision", "request_revision", "needs-author"),
+    ]
+    for event_id, action, external_state in decisions:
+        result = await service.record_provider_decision_event(
+            proposal_id=proposal.id,
+            event=ProviderDecisionEvent(
+                provider="jira",
+                external_key="MM-599",
+                provider_event_id=event_id,
+                actor="reviewer",
+                action=action,
+                note="urgent" if action == "reprioritize" else "noted",
+                external_state=external_state,
+            ),
+        )
+        assert result.accepted is True
+
+    rows = proposal.provider_metadata["providerDecisions"]
+    assert [row["decision"] for row in rows] == [
+        "dismiss",
+        "defer",
+        "reprioritize",
+        "request_revision",
+    ]
+    assert rows[1]["resultingExternalState"] == "deferred"
+    assert rows[2]["priority"] == "urgent"
+    assert rows[3]["resultingExternalState"] == "needs-author"
+    assert proposal.review_priority is TaskProposalReviewPriority.URGENT
+
+
+@pytest.mark.asyncio
+async def test_promote_proposal_allows_provider_accepted_snapshot_with_runtime_control() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.ACCEPTED,
+        repository="Moon/Repo",
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        task_create_request={
+            "payload": {
+                "repository": "Moon/Repo",
+                "targetRuntime": "gemini_cli",
+                "task": {
+                    "instructions": "Implement MM-599",
+                    "runtime": {"mode": "gemini_cli"},
+                    "authoredPresets": [{"presetId": "runtime-quality-followup"}],
+                    "steps": [
+                        {
+                            "type": "skill",
+                            "title": "Run implementation",
+                            "skill": {"id": "moonspec-implement"},
+                            "source": {
+                                "kind": "preset-derived",
+                                "presetId": "runtime-quality-followup",
+                            },
+                        }
+                    ],
+                },
+            }
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    updated, final_request = await service.promote_proposal(
+        proposal_id=proposal.id,
+        promoted_by_user_id=uuid4(),
+        runtime_mode_override="codex",
+    )
+
+    assert updated.status is TaskProposalStatus.PROMOTED
+    assert final_request["payload"]["targetRuntime"] == "codex"
+    task = final_request["payload"]["task"]
+    assert task["runtime"]["mode"] == "codex"
+    assert task["authoredPresets"] == [{"presetId": "runtime-quality-followup"}]
+    assert task["steps"][0]["source"]["kind"] == "preset-derived"
+
+
+@pytest.mark.asyncio
+async def test_attach_provider_decision_execution_persists_promoted_run_id() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        provider_metadata={
+            "providerDecisions": [
+                {
+                    "providerEventId": "evt-promote",
+                    "decision": "promote",
+                    "accepted": True,
+                }
+            ]
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    updated = await service.attach_provider_decision_execution(
+        proposal_id=proposal.id,
+        provider_event_id="evt-promote",
+        promoted_execution_id="wf-promoted-1",
+    )
+
+    row = updated.provider_metadata["providerDecisions"][0]
+    assert row["promotedExecutionId"] == "wf-promoted-1"
+    assert row["resultingExternalState"] == "promoted"
 
 
 @pytest.mark.asyncio

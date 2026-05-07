@@ -125,6 +125,8 @@ class TaskProposalService:
         normalized: set[str] = set()
         for value in values or ():
             token = str(value or "").strip().lower()
+            if token == "priority":
+                token = "reprioritize"
             if token:
                 normalized.add(token)
         return normalized
@@ -960,13 +962,29 @@ class TaskProposalService:
                     reason="duplicate_event",
                     priority=self._clean_str(row.get("priority")) or None,
                     defer_until=self._clean_str(row.get("deferUntil")) or None,
+                    runtime_mode=self._clean_str(row.get("runtimeMode")) or None,
+                    external_state=self._clean_str(row.get("resultingExternalState"))
+                    or None,
+                    promoted_execution_id=self._clean_str(
+                        row.get("promotedExecutionId")
+                    )
+                    or None,
                 )
 
         proposal_provider = self._clean_str(getattr(proposal, "provider", "")).lower()
         event_provider = self._clean_str(event.provider).lower()
         proposal_external_key = self._clean_str(getattr(proposal, "external_key", ""))
         event_external_key = self._clean_str(event.external_key)
-        if (
+        if not self._clean_str(event.provider_event_id):
+            result = ProviderDecisionResult(
+                accepted=False,
+                decision=None,
+                note=None,
+                actor=event.actor,
+                provider_event_id=event.provider_event_id,
+                reason="missing_provider_event_id",
+            )
+        elif (
             not proposal_provider
             or not proposal_external_key
             or event_provider != proposal_provider
@@ -979,6 +997,24 @@ class TaskProposalService:
                 actor=event.actor,
                 provider_event_id=event.provider_event_id,
                 reason="provider_identity_mismatch",
+            )
+        elif not event.authenticity_verified:
+            result = ProviderDecisionResult(
+                accepted=False,
+                decision=None,
+                note=None,
+                actor=event.actor,
+                provider_event_id=event.provider_event_id,
+                reason="provider_auth_failed",
+            )
+        elif not event.actor_authorized:
+            result = ProviderDecisionResult(
+                accepted=False,
+                decision=None,
+                note=None,
+                actor=event.actor,
+                provider_event_id=event.provider_event_id,
+                reason="actor_not_authorized",
             )
         else:
             result = parse_provider_decision(event)
@@ -993,7 +1029,28 @@ class TaskProposalService:
             and not isinstance(policy.get("allowedActions"), (str, bytes))
             else None
         )
-        if result.accepted and allowed_actions and result.decision not in allowed_actions:
+        allowed_actors = self._normalize_policy_tokens(
+            policy.get("allowedActors")
+            if isinstance(policy.get("allowedActors"), Sequence)
+            and not isinstance(policy.get("allowedActors"), (str, bytes))
+            else None
+        )
+        actor_token = self._clean_str(event.actor).lower()
+        if result.accepted and allowed_actors and actor_token not in allowed_actors:
+            result = ProviderDecisionResult(
+                accepted=False,
+                decision=result.decision,
+                note=None,
+                actor=result.actor,
+                provider_event_id=result.provider_event_id,
+                reason="actor_not_authorized",
+                runtime_mode=result.runtime_mode,
+            )
+        if (
+            result.accepted
+            and allowed_actions
+            and result.decision not in allowed_actions
+        ):
             result = ProviderDecisionResult(
                 accepted=False,
                 decision=result.decision,
@@ -1001,24 +1058,40 @@ class TaskProposalService:
                 actor=result.actor,
                 provider_event_id=result.provider_event_id,
                 reason="action_not_allowed",
+                runtime_mode=result.runtime_mode,
             )
 
-        resulting_state = result.decision or result.reason or "ignored"
+        resulting_state = (
+            result.external_state or result.decision or result.reason or "ignored"
+        )
         if result.accepted and result.decision == "dismiss":
             proposal.status = TaskProposalStatus.DISMISSED
-            proposal.decision_note = self._scrub_text(self._clean_str(result.note)) or None
+            proposal.decision_note = (
+                self._scrub_text(self._clean_str(result.note)) or None
+            )
             resulting_state = TaskProposalStatus.DISMISSED.value
         elif result.accepted and result.decision == "promote":
             proposal.status = TaskProposalStatus.ACCEPTED
-            proposal.decision_note = self._scrub_text(self._clean_str(result.note)) or None
+            proposal.decision_note = (
+                self._scrub_text(self._clean_str(result.note)) or None
+            )
             resulting_state = TaskProposalStatus.ACCEPTED.value
-        elif result.accepted and result.decision == "priority" and result.priority:
+        elif result.accepted and result.decision == "reprioritize" and result.priority:
             proposal.review_priority = self._normalize_review_priority(result.priority)
-            proposal.decision_note = self._scrub_text(self._clean_str(result.note)) or None
-            resulting_state = "priority"
+            proposal.decision_note = (
+                self._scrub_text(self._clean_str(result.note)) or None
+            )
+            resulting_state = result.external_state or "reprioritized"
         elif result.accepted and result.decision == "defer":
-            proposal.decision_note = self._scrub_text(self._clean_str(result.note)) or None
-            resulting_state = "deferred"
+            proposal.decision_note = (
+                self._scrub_text(self._clean_str(result.note)) or None
+            )
+            resulting_state = result.external_state or "deferred"
+        elif result.accepted and result.decision == "request_revision":
+            proposal.decision_note = (
+                self._scrub_text(self._clean_str(result.note)) or None
+            )
+            resulting_state = result.external_state or "revision_requested"
 
         decisions.append(
             self._scrub_json(
@@ -1032,6 +1105,7 @@ class TaskProposalService:
                     "note": result.note,
                     "priority": result.priority,
                     "deferUntil": result.defer_until,
+                    "runtimeMode": result.runtime_mode,
                     "observedAt": event.observed_at.isoformat(),
                     "resultingExternalState": resulting_state,
                     "reason": result.reason,
@@ -1040,9 +1114,119 @@ class TaskProposalService:
         )
         provider_metadata["providerDecisions"] = decisions
         proposal.provider_metadata = provider_metadata
+        await self._sync_provider_decision_state_if_configured(
+            proposal=proposal,
+            result=result,
+            resulting_state=resulting_state,
+            promoted_execution_id=None,
+        )
         await self._repository.commit()
         await self._repository.refresh(proposal)
         return result
+
+    async def _sync_provider_decision_state_if_configured(
+        self,
+        *,
+        proposal: TaskProposal,
+        result: ProviderDecisionResult,
+        resulting_state: str,
+        promoted_execution_id: str | None,
+    ) -> None:
+        """Best-effort external review state update through a trusted adapter."""
+
+        updater = getattr(self._delivery_service, "record_decision", None)
+        if not callable(updater):
+            return
+        payload = self._scrub_json(
+            {
+                "proposalId": str(getattr(proposal, "id", "")),
+                "provider": getattr(proposal, "provider", None),
+                "externalKey": getattr(proposal, "external_key", None),
+                "decision": result.decision,
+                "accepted": result.accepted,
+                "actor": result.actor,
+                "providerEventId": result.provider_event_id,
+                "reason": result.reason,
+                "note": result.note,
+                "resultingExternalState": resulting_state,
+                "promotedExecutionId": promoted_execution_id,
+            }
+        )
+        try:
+            await updater(payload)
+        except Exception as exc:  # pragma: no cover - adapter-specific
+            provider_metadata = (
+                dict(getattr(proposal, "provider_metadata", {}))
+                if isinstance(getattr(proposal, "provider_metadata", {}), Mapping)
+                else {}
+            )
+            warnings = provider_metadata.get("providerDecisionUpdateWarnings")
+            warning_rows: list[dict[str, Any]] = (
+                list(warnings) if isinstance(warnings, list) else []
+            )
+            warning_rows.append(
+                self._scrub_json(
+                    {
+                        "providerEventId": result.provider_event_id,
+                        "errorType": type(exc).__name__,
+                        "sanitizedReason": str(exc),
+                    }
+                )
+            )
+            provider_metadata["providerDecisionUpdateWarnings"] = warning_rows
+            proposal.provider_metadata = provider_metadata
+
+    async def attach_provider_decision_execution(
+        self,
+        *,
+        proposal_id: UUID,
+        provider_event_id: str,
+        promoted_execution_id: str,
+    ) -> TaskProposal:
+        """Attach a created execution id to an accepted provider decision row."""
+
+        proposal = await self._repository.get_proposal_for_update(proposal_id)
+        provider_metadata = (
+            dict(getattr(proposal, "provider_metadata", {}))
+            if isinstance(getattr(proposal, "provider_metadata", {}), Mapping)
+            else {}
+        )
+        decision_rows = provider_metadata.get("providerDecisions")
+        decisions: list[dict[str, Any]] = (
+            list(decision_rows) if isinstance(decision_rows, list) else []
+        )
+        result: ProviderDecisionResult | None = None
+        for row in decisions:
+            if not isinstance(row, dict):
+                continue
+            if row.get("providerEventId") == provider_event_id:
+                row["promotedExecutionId"] = self._scrub_text(
+                    self._clean_str(promoted_execution_id)
+                )
+                row["resultingExternalState"] = "promoted"
+                result = ProviderDecisionResult(
+                    accepted=bool(row.get("accepted")),
+                    decision=self._clean_str(row.get("decision")) or None,
+                    note=self._clean_str(row.get("note")) or None,
+                    actor=self._clean_str(row.get("actor")),
+                    provider_event_id=provider_event_id,
+                    reason=self._clean_str(row.get("reason")) or None,
+                    runtime_mode=self._clean_str(row.get("runtimeMode")) or None,
+                    promoted_execution_id=promoted_execution_id,
+                )
+                break
+        provider_metadata["providerDecisions"] = decisions
+        proposal.provider_metadata = self._scrub_json(provider_metadata)
+        if result is not None:
+            await self._sync_provider_decision_state_if_configured(
+                proposal=proposal,
+                result=result,
+                resulting_state="promoted",
+                promoted_execution_id=promoted_execution_id,
+            )
+        await self._repository.commit()
+        await self._repository.refresh(proposal)
+        return proposal
 
     async def promote_proposal(
         self,
@@ -1063,7 +1247,10 @@ class TaskProposalService:
         stored proposal payload.
         """
         proposal = await self._repository.get_proposal_for_update(proposal_id)
-        if proposal.status is not TaskProposalStatus.OPEN:
+        if proposal.status not in {
+            TaskProposalStatus.OPEN,
+            TaskProposalStatus.ACCEPTED,
+        }:
             raise TaskProposalStatusError(
                 f"proposal status {proposal.status.value} cannot be promoted"
             )

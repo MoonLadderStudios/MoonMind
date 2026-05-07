@@ -162,3 +162,54 @@ class TaskProposalPriorityRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     priority: str = Field(..., alias="priority")
+
+
+class TaskProposalProviderAuthenticityModel(BaseModel):
+    """Provider authenticity verification summary for decision ingress."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    verified: bool = Field(False, alias="verified")
+    method: Optional[str] = Field(None, alias="method")
+
+
+class TaskProposalProviderDecisionRequest(BaseModel):
+    """Trusted provider decision ingress payload."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    provider: str = Field(..., alias="provider")
+    external_key: str = Field(..., alias="externalKey")
+    provider_event_id: str = Field(..., alias="providerEventId")
+    actor: str = Field(..., alias="actor")
+    action: Optional[str] = Field(None, alias="action")
+    body: str = Field("", alias="body")
+    note: Optional[str] = Field(None, alias="note")
+    observed_at: Optional[datetime] = Field(None, alias="observedAt")
+    authenticity: TaskProposalProviderAuthenticityModel = Field(
+        default_factory=TaskProposalProviderAuthenticityModel,
+        alias="authenticity",
+    )
+    runtime_mode: Optional[str] = Field(None, alias="runtimeMode")
+    external_state: Optional[str] = Field(None, alias="externalState")
+
+
+class TaskProposalProviderDecisionResponse(BaseModel):
+    """Sanitized provider decision ingestion response."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    accepted: bool = Field(..., alias="accepted")
+    decision: Optional[str] = Field(None, alias="decision")
+    reason: Optional[str] = Field(None, alias="reason")
+    actor: str = Field(..., alias="actor")
+    provider_event_id: str = Field(..., alias="providerEventId")
+    note: Optional[str] = Field(None, alias="note")
+    priority: Optional[str] = Field(None, alias="priority")
+    defer_until: Optional[str] = Field(None, alias="deferUntil")
+    runtime_mode: Optional[str] = Field(None, alias="runtimeMode")
+    resulting_external_state: Optional[str] = Field(
+        None, alias="resultingExternalState"
+    )
+    promoted_execution_id: Optional[str] = Field(None, alias="promotedExecutionId")
+    proposal: TaskProposalModel = Field(..., alias="proposal")

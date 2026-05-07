@@ -1599,6 +1599,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/proposals/{proposal_id}/provider-decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Provider Decision */
+        post: operations["provider_decision_api_proposals__proposal_id__provider_decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/proposals/{proposal_id}/delivery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect Proposal Delivery */
+        get: operations["inspect_proposal_delivery_api_proposals__proposal_id__delivery_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/proposals/{proposal_id}/dismiss": {
         parameters: {
             query?: never;
@@ -6598,6 +6632,78 @@ export interface components {
             promotedExecutionId: string;
         };
         /**
+         * TaskProposalProviderAuthenticityModel
+         * @description Provider authenticity verification summary for decision ingress.
+         */
+        TaskProposalProviderAuthenticityModel: {
+            /**
+             * Verified
+             * @default false
+             */
+            verified: boolean;
+            /** Method */
+            method?: string | null;
+        };
+        /**
+         * TaskProposalProviderDecisionRequest
+         * @description Trusted provider decision ingress payload.
+         */
+        TaskProposalProviderDecisionRequest: {
+            /** Provider */
+            provider: string;
+            /** Externalkey */
+            externalKey: string;
+            /** Providereventid */
+            providerEventId: string;
+            /** Actor */
+            actor: string;
+            /** Action */
+            action?: string | null;
+            /**
+             * Body
+             * @default
+             */
+            body: string;
+            /** Note */
+            note?: string | null;
+            /** Observedat */
+            observedAt?: string | null;
+            authenticity?: components["schemas"]["TaskProposalProviderAuthenticityModel"];
+            /** Runtimemode */
+            runtimeMode?: string | null;
+            /** Externalstate */
+            externalState?: string | null;
+        };
+        /**
+         * TaskProposalProviderDecisionResponse
+         * @description Sanitized provider decision ingestion response.
+         */
+        TaskProposalProviderDecisionResponse: {
+            /** Accepted */
+            accepted: boolean;
+            /** Decision */
+            decision?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Actor */
+            actor: string;
+            /** Providereventid */
+            providerEventId: string;
+            /** Note */
+            note?: string | null;
+            /** Priority */
+            priority?: string | null;
+            /** Deferuntil */
+            deferUntil?: string | null;
+            /** Runtimemode */
+            runtimeMode?: string | null;
+            /** Resultingexternalstate */
+            resultingExternalState?: string | null;
+            /** Promotedexecutionid */
+            promotedExecutionId?: string | null;
+            proposal: components["schemas"]["TaskProposalModel"];
+        };
+        /**
          * TaskProposalReviewPriority
          * @description Reviewer-defined triage priority.
          * @enum {string}
@@ -10933,6 +11039,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskProposalPromoteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    provider_decision_api_proposals__proposal_id__provider_decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskProposalProviderDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskProposalProviderDecisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_proposal_delivery_api_proposals__proposal_id__delivery_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskProposalModel"];
                 };
             };
             /** @description Validation Error */

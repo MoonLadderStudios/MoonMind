@@ -83,6 +83,82 @@ def _record() -> SimpleNamespace:
     )
 
 
+def _delivered_record() -> SimpleNamespace:
+    record = _record()
+    record.external_key = "42"
+    record.external_url = "https://tracker.example/issues/42"
+    record.provider_metadata = {
+        "delivery": {"status": "delivered", "storedSnapshotNotice": True}
+    }
+    record.resolved_policy = {
+        "allowedActions": [
+            "promote",
+            "dismiss",
+            "defer",
+            "reprioritize",
+            "request_revision",
+        ],
+        "allowedActors": ["reviewer"],
+    }
+    record.task_create_request = {
+        "payload": {
+            "repository": "Moon/Repo",
+            "targetRuntime": "gemini_cli",
+            "task": {
+                "instructions": "Implement from stored snapshot",
+                "runtime": {"mode": "gemini_cli"},
+                "authoredPresets": [{"presetId": "runtime-quality-followup"}],
+                "steps": [
+                    {
+                        "type": "skill",
+                        "title": "Implement",
+                        "skill": {"id": "moonspec-implement"},
+                        "source": {"kind": "preset-derived"},
+                    }
+                ],
+            },
+        }
+    }
+    return record
+
+
+async def _promote_provider_event(
+    service: TaskProposalService,
+    record: SimpleNamespace,
+    event: ProviderDecisionEvent,
+    executions: list[dict[str, object]],
+) -> object:
+    result = await service.record_provider_decision_event(
+        proposal_id=record.id,
+        event=event,
+    )
+    if result.accepted and result.decision == "promote" and not result.promoted_execution_id:
+        _proposal, final_request = await service.promote_proposal(
+            proposal_id=record.id,
+            promoted_by_user_id=uuid4(),
+            runtime_mode_override=result.runtime_mode,
+        )
+        workflow_id = f"wf-{len(executions) + 1}"
+        executions.append(
+            {
+                "workflowType": "MoonMind.Run",
+                "idempotencyKey": f"proposal-provider-{record.id}-{event.provider_event_id}",
+                "initialParameters": final_request["payload"],
+                "workflowId": workflow_id,
+            }
+        )
+        await service.attach_provider_decision_execution(
+            proposal_id=record.id,
+            provider_event_id=event.provider_event_id,
+            promoted_execution_id=workflow_id,
+        )
+        result = await service.record_provider_decision_event(
+            proposal_id=record.id,
+            event=event,
+        )
+    return result
+
+
 @pytest.mark.asyncio
 async def test_proposal_submit_persists_external_delivery_result() -> None:
     repo = AsyncMock()
@@ -169,3 +245,105 @@ async def test_provider_decision_event_records_snapshot_safe_action() -> None:
     assert persisted["providerEventId"] == "evt-safe"
     assert persisted["decision"] == "dismiss"
     assert "unsafe text" not in str(persisted)
+
+
+@pytest.mark.asyncio
+async def test_provider_approval_creates_one_run_from_stored_snapshot() -> None:
+    repo = AsyncMock()
+    record = _delivered_record()
+    repo.get_proposal_for_update.return_value = record
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "[REDACTED]"))
+    executions: list[dict[str, object]] = []
+
+    result = await _promote_provider_event(
+        service,
+        record,
+        ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id="evt-promote",
+            actor="reviewer",
+            body="replace with unsafe edited text\n/moonmind promote --runtime codex",
+        ),
+        executions,
+    )
+
+    assert result.accepted is True
+    assert result.decision == "promote"
+    assert result.promoted_execution_id == "wf-1"
+    assert len(executions) == 1
+    payload = executions[0]["initialParameters"]
+    assert payload["targetRuntime"] == "codex"
+    assert payload["task"]["authoredPresets"] == [
+        {"presetId": "runtime-quality-followup"}
+    ]
+    assert payload["task"]["steps"][0]["source"] == {"kind": "preset-derived"}
+    assert "unsafe edited text" not in str(payload)
+
+    duplicate = await _promote_provider_event(
+        service,
+        record,
+        ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id="evt-promote",
+            actor="reviewer",
+            body="/moonmind promote --runtime codex",
+        ),
+        executions,
+    )
+
+    assert duplicate.reason == "duplicate_event"
+    assert duplicate.promoted_execution_id == "wf-1"
+    assert len(executions) == 1
+
+
+@pytest.mark.asyncio
+async def test_non_executing_and_rejected_provider_events_create_zero_runs() -> None:
+    repo = AsyncMock()
+    record = _delivered_record()
+    repo.get_proposal_for_update.return_value = record
+    service = TaskProposalService(
+        repo,
+        redactor=SecretRedactor(["github_pat_secret"], "[REDACTED]"),
+    )
+    executions: list[dict[str, object]] = []
+
+    for event_id, action in (
+        ("evt-dismiss", "dismiss"),
+        ("evt-defer", "defer"),
+        ("evt-priority", "reprioritize"),
+        ("evt-revision", "request_revision"),
+    ):
+        result = await _promote_provider_event(
+            service,
+            record,
+            ProviderDecisionEvent(
+                provider="github",
+                external_key="42",
+                provider_event_id=event_id,
+                actor="reviewer",
+                action=action,
+                note="urgent" if action == "reprioritize" else "noted",
+            ),
+            executions,
+        )
+        assert result.accepted is True
+
+    rejected = await _promote_provider_event(
+        service,
+        record,
+        ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id="evt-rejected",
+            actor="intruder",
+            body="/moonmind promote github_pat_secret",
+        ),
+        executions,
+    )
+
+    assert rejected.accepted is False
+    assert rejected.reason == "actor_not_authorized"
+    assert len(executions) == 0
+    assert "github_pat_secret" not in str(record.provider_metadata["providerDecisions"])

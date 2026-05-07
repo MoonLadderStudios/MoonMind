@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Optional
 from uuid import UUID
 
@@ -17,6 +18,8 @@ from moonmind.schemas.task_proposal_models import (
     TaskProposalListResponse,
     TaskProposalModel,
     TaskProposalOriginModel,
+    TaskProposalProviderDecisionRequest,
+    TaskProposalProviderDecisionResponse,
     TaskProposalPriorityRequest,
     TaskProposalPromoteRequest,
     TaskProposalPromoteResponse,
@@ -35,15 +38,18 @@ from moonmind.workflows.task_proposals.service import (
     TaskProposalStatusError,
     TaskProposalValidationError,
 )
+from moonmind.workflows.task_proposals.delivery import ProviderDecisionEvent
 
 router = APIRouter(prefix="/api/proposals", tags=["task-proposals"])
 
 _PRESET_SOURCE_KINDS = frozenset({"preset-derived", "preset-include", "detached"})
 
+
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TaskProposalService:
     return get_task_proposal_service(session)
+
 
 def _build_task_preview(
     task_request: dict[str, object],
@@ -246,6 +252,45 @@ async def _resolve_actor(
         },
     )
 
+def _promotion_title(
+    proposal: TaskProposal, initial_parameters: dict[str, object]
+) -> str:
+    task_node = initial_parameters.get("task")
+    task = task_node if isinstance(task_node, dict) else {}
+    instructions = str(task.get("instructions") or "")
+    title_lines = [line.strip() for line in instructions.splitlines() if line.strip()]
+    if title_lines:
+        title = title_lines[0][:200]
+    else:
+        title = str(proposal.title or "").strip()[:200]
+    return title or "Promoted Task"
+
+
+def _decision_external_state(
+    *,
+    accepted: bool,
+    decision: str | None,
+    reason: str | None,
+    existing: str | None,
+    promoted_execution_id: str | None,
+) -> str:
+    if existing:
+        return existing
+    if not accepted:
+        return reason or "ignored"
+    if decision == "promote" and promoted_execution_id:
+        return "promoted"
+    if decision == "dismiss":
+        return "dismissed"
+    if decision == "defer":
+        return "deferred"
+    if decision == "reprioritize":
+        return "reprioritized"
+    if decision == "request_revision":
+        return "revision_requested"
+    return decision or "accepted"
+
+
 @router.post("", response_model=TaskProposalModel, status_code=status.HTTP_201_CREATED)
 async def create_proposal(
     payload: TaskProposalCreateRequest = Body(...),
@@ -378,6 +423,35 @@ def _get_temporal_execution_service(
         ),
     )
 
+
+async def _create_promoted_execution(
+    *,
+    execution_service: TemporalExecutionService,
+    proposal: TaskProposal,
+    final_request: dict[str, object],
+    user: User,
+    idempotency_key: str,
+) -> str:
+    initial_parameters = dict(final_request.get("payload") or {})
+    execution_record = await execution_service.create_execution(
+        workflow_type="MoonMind.Run",
+        owner_id=getattr(user, "id"),
+        owner_type="user",
+        title=_promotion_title(proposal, initial_parameters),
+        input_artifact_ref=None,
+        plan_artifact_ref=None,
+        manifest_artifact_ref=None,
+        failure_policy=None,
+        initial_parameters=initial_parameters,
+        idempotency_key=idempotency_key,
+        repository=proposal.repository,
+        integration=None,
+        summary=proposal.summary,
+        start_delay=None,
+        scheduled_for=None,
+    )
+    return execution_record.workflow_id
+
 @router.post("/{proposal_id}/promote", response_model=TaskProposalPromoteResponse)
 async def promote_proposal(
     *,
@@ -386,7 +460,9 @@ async def promote_proposal(
         default_factory=TaskProposalPromoteRequest
     ),
     service: TaskProposalService = Depends(_get_service),
-    execution_service: TemporalExecutionService = Depends(_get_temporal_execution_service),
+    execution_service: TemporalExecutionService = Depends(
+        _get_temporal_execution_service
+    ),
     user: User = Depends(get_current_user()),
 ) -> TaskProposalPromoteResponse:
     try:
@@ -411,34 +487,12 @@ async def promote_proposal(
             runtime_mode_override=runtime_mode_override,
         )
 
-        initial_parameters = dict(final_request.get("payload") or {})
-        instructions = str(
-            initial_parameters.get("task", {}).get("instructions") or ""
-        )
-        title_lines = [line.strip() for line in instructions.splitlines() if line.strip()]
-        if title_lines:
-            title = title_lines[0][:200]
-        else:
-            title = str(proposal.title or "").strip()[:200]
-        if not title:
-            title = "Promoted Task"
-
-        execution_record = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
-            owner_id=getattr(user, "id"),
-            owner_type="user",
-            title=title,
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref=None,
-            failure_policy=None,
-            initial_parameters=initial_parameters,
+        promoted_execution_id = await _create_promoted_execution(
+            execution_service=execution_service,
+            proposal=proposal,
+            final_request=final_request,
+            user=user,
             idempotency_key=f"proposal-promote-{proposal_id}",
-            repository=proposal.repository,
-            integration=None,
-            summary=proposal.summary,
-            start_delay=None,
-            scheduled_for=None,
         )
 
     except TaskProposalStatusError as exc:
@@ -459,8 +513,122 @@ async def promote_proposal(
         
     return TaskProposalPromoteResponse(
         proposal=_serialize_proposal(proposal),
-        promoted_execution_id=execution_record.workflow_id,
+        promoted_execution_id=promoted_execution_id,
     )
+
+
+@router.post(
+    "/{proposal_id}/provider-decision",
+    response_model=TaskProposalProviderDecisionResponse,
+)
+async def provider_decision(
+    *,
+    proposal_id: UUID,
+    payload: TaskProposalProviderDecisionRequest = Body(...),
+    service: TaskProposalService = Depends(_get_service),
+    execution_service: TemporalExecutionService = Depends(
+        _get_temporal_execution_service
+    ),
+    user: User = Depends(get_current_user()),
+) -> TaskProposalProviderDecisionResponse:
+    try:
+        result = await service.record_provider_decision_event(
+            proposal_id=proposal_id,
+            event=ProviderDecisionEvent(
+                provider=payload.provider,
+                external_key=payload.external_key,
+                provider_event_id=payload.provider_event_id,
+                actor=payload.actor,
+                body=payload.body,
+                action=payload.action,
+                note=payload.note,
+                observed_at=payload.observed_at or datetime.now(UTC),
+                authenticity_verified=payload.authenticity.verified,
+                runtime_mode=payload.runtime_mode,
+                external_state=payload.external_state,
+            ),
+        )
+        promoted_execution_id = result.promoted_execution_id
+        if (
+            result.accepted
+            and result.decision == "promote"
+            and not promoted_execution_id
+        ):
+            proposal, final_request = await service.promote_proposal(
+                proposal_id=proposal_id,
+                promoted_by_user_id=getattr(user, "id"),
+                note=result.note,
+                runtime_mode_override=result.runtime_mode,
+            )
+            promoted_execution_id = await _create_promoted_execution(
+                execution_service=execution_service,
+                proposal=proposal,
+                final_request=final_request,
+                user=user,
+                idempotency_key=(
+                    f"proposal-provider-{proposal_id}-{payload.provider_event_id}"
+                ),
+            )
+            proposal = await service.attach_provider_decision_execution(
+                proposal_id=proposal_id,
+                provider_event_id=payload.provider_event_id,
+                promoted_execution_id=promoted_execution_id,
+            )
+        else:
+            proposal = await service.get_proposal(proposal_id)
+    except TaskProposalStatusError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_state", "message": str(exc)},
+        ) from exc
+    except TaskProposalValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_request", "message": str(exc)},
+        ) from exc
+    except TaskProposalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "proposal_not_found", "message": str(exc)},
+        ) from exc
+
+    return TaskProposalProviderDecisionResponse(
+        accepted=result.accepted,
+        decision=result.decision,
+        reason=result.reason,
+        actor=result.actor,
+        providerEventId=result.provider_event_id,
+        note=result.note,
+        priority=result.priority,
+        deferUntil=result.defer_until,
+        runtimeMode=result.runtime_mode,
+        resultingExternalState=_decision_external_state(
+            accepted=result.accepted,
+            decision=result.decision,
+            reason=result.reason,
+            existing=result.external_state,
+            promoted_execution_id=promoted_execution_id,
+        ),
+        promotedExecutionId=promoted_execution_id,
+        proposal=_serialize_proposal(proposal),
+    )
+
+
+@router.get("/{proposal_id}/delivery", response_model=TaskProposalModel)
+async def inspect_proposal_delivery(
+    *,
+    proposal_id: UUID,
+    service: TaskProposalService = Depends(_get_service),
+    _user: User = Depends(get_current_user()),
+) -> TaskProposalModel:
+    try:
+        proposal = await service.get_proposal(proposal_id)
+    except TaskProposalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "proposal_not_found", "message": str(exc)},
+        ) from exc
+    return _serialize_proposal(proposal)
 
 @router.post("/{proposal_id}/dismiss", response_model=TaskProposalModel)
 async def dismiss_proposal(
