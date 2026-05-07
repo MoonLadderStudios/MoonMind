@@ -2699,8 +2699,8 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
     )
 
     assert result.startswith("Active MoonMind skill snapshot:")
+    assert "Full active MoonMind skill content is available at:" in result
     assert ".agents/skills/pr-resolver/SKILL.md" in result
-    assert "resolved active skill projection" in result
     backing_skill = (
         job_root
         / "runtime"
@@ -2816,7 +2816,7 @@ async def test_agent_runtime_prepare_turn_instructions_fails_before_launch_when_
 
     with pytest.raises(
         TemporalActivityRuntimeError,
-        match=r"\.agents/skills projection is missing",
+        match=r"active skills visiblePath metadata is missing",
     ):
         await activities.agent_runtime_prepare_turn_instructions(
             {
@@ -2873,7 +2873,7 @@ async def test_agent_runtime_selected_skill_projection_rejects_non_mapping_manif
         match="active skill manifest is unreadable",
     ):
         TemporalAgentRuntimeActivities._validate_selected_skill_projection(
-            workspace=workspace,
+            visible_path=workspace / ".agents" / "skills",
             selected_skill="pr-resolver",
             resolved_skillset=resolved_skillset,
         )
@@ -2941,20 +2941,23 @@ async def test_agent_runtime_prepare_turn_instructions_preserves_checked_in_skil
 
     assert result.startswith("Active MoonMind skill snapshot:")
     visible_skills = workspace / ".agents" / "skills"
-    assert visible_skills.is_symlink()
+    assert visible_skills.is_dir()
+    assert not visible_skills.is_symlink()
     assert (visible_skills / "pr-resolver" / "SKILL.md").read_text(
         encoding="utf-8"
-    ) == "resolved active body\n"
-    preserved_skill = (
+    ) == "checked-in source input\n"
+    active_skill = (
         managed_root
         / "job-1"
         / "runtime"
-        / "skill_sources"
-        / "repo_agents_skills"
+        / "skills_active"
+        / "skillset-pr-resolver"
         / "pr-resolver"
         / "SKILL.md"
     )
-    assert preserved_skill.read_text(encoding="utf-8") == "checked-in source input\n"
+    assert active_skill.read_text(encoding="utf-8") == "resolved active body\n"
+    assert str(active_skill) in result
+    assert "repo-authored source" in result
 
 
 @pytest.mark.asyncio

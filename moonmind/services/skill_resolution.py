@@ -66,7 +66,6 @@ class BuiltInSkillLoader(SkillLoader):
             return self._skills_root
         candidates = [
             Path("/app/.agents/skills"),
-            Path.cwd() / ".agents" / "skills",
             Path(settings.workflow.skills_legacy_mirror_root).expanduser(),
             Path(__file__).resolve().parents[2] / ".agents" / "skills",
         ]
@@ -218,6 +217,24 @@ def _scan_for_skills(
                 )
             )
     return results
+
+def _is_moonmind_active_projection(skills_dir: Path) -> bool:
+    if not skills_dir.is_symlink():
+        return False
+    resolved = skills_dir.resolve(strict=False)
+    if (resolved / "_manifest.json").is_file():
+        return True
+    for root in [
+        skills_dir.parent.parent.parent / "runtime" / "skills_active",
+        skills_dir.parent.parent.parent / "skills_active",
+    ]:
+        root_resolved = root.resolve(strict=False)
+        try:
+            resolved.relative_to(root_resolved)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def _load_skill_frontmatter(skill_dir: Path) -> dict[str, typing.Any]:
@@ -393,6 +410,11 @@ class RepoSkillLoader(SkillLoader):
         if not context.allow_repo_skills or not context.workspace_root:
             return []
         skills_dir = Path(context.workspace_root) / ".agents" / "skills"
+        if _is_moonmind_active_projection(skills_dir):
+            raise RuntimeError(
+                "workspace-contamination error: .agents/skills is a MoonMind "
+                "active skill projection and cannot be scanned as repo-authored source"
+            )
         return _scan_for_skills(skills_dir, AgentSkillSourceKind.REPO)
 
 class LocalSkillLoader(SkillLoader):
@@ -403,9 +425,13 @@ class LocalSkillLoader(SkillLoader):
     ) -> list[ResolvedSkillEntry]:
         if not context.allow_local_skills or not context.workspace_root:
             return []
-        skills_dir = (
-            Path(context.workspace_root) / ".agents" / "skills" / "local"
-        )
+        repo_skills_dir = Path(context.workspace_root) / ".agents" / "skills"
+        if _is_moonmind_active_projection(repo_skills_dir):
+            raise RuntimeError(
+                "workspace-contamination error: .agents/skills/local is hidden by "
+                "a MoonMind active skill projection"
+            )
+        skills_dir = repo_skills_dir / "local"
         return _scan_for_skills(skills_dir, AgentSkillSourceKind.LOCAL)
 
 class AgentSkillResolver:

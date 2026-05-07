@@ -48,8 +48,8 @@ async def test_materializer_projects_selected_skill_to_agents_skills(tmp_path: P
     )
 
     visible_dir = tmp_path / ".agents" / "skills"
-    backing_dir = tmp_path / "skills_active"
-    manifest_path = visible_dir / "_manifest.json"
+    backing_dir = tmp_path / "runtime" / "skills_active" / "test_snap_123"
+    manifest_path = backing_dir / "_manifest.json"
 
     assert result.runtime_id == "test_runtime"
     assert result.materialization_mode == RuntimeMaterializationMode.WORKSPACE_MOUNTED
@@ -81,6 +81,9 @@ async def test_materializer_projects_selected_skill_to_agents_skills(tmp_path: P
     }
     assert result.metadata["visiblePath"] == str(visible_dir)
     assert result.metadata["backingPath"] == str(backing_dir)
+    assert result.metadata["canonicalAliasAvailable"] is True
+    assert result.metadata["canonicalAliasPath"] == ".agents/skills"
+    assert result.metadata["canonicalAliasSkippedReason"] is None
     assert result.metadata["manifestPath"] == str(manifest_path)
     assert result.metadata["activeSkills"] == ["my_skill"]
 
@@ -172,11 +175,54 @@ async def test_materializer_extracts_skill_bundle_with_companion_files(
     ) == "print('run')\n"
 
 @pytest.mark.asyncio
-async def test_materializer_rejects_incompatible_agents_skills_path(tmp_path: Path):
+async def test_materializer_preserves_existing_agents_skills_directory_on_success(
+    tmp_path: Path,
+):
     source_dir = tmp_path / ".agents" / "skills"
-    source_dir.mkdir(parents=True)
-    source_file = source_dir / "SKILL.md"
-    source_file.write_text("do not rewrite", encoding="utf-8")
+    source_skill = source_dir / "repo-skill" / "SKILL.md"
+    source_skill.parent.mkdir(parents=True)
+    source_skill.write_text("do not rewrite", encoding="utf-8")
+    artifact_service = _StaticArtifactService(
+        {"artifact-active": b"---\nname: active\ndescription: active\n---\n"}
+    )
+    materializer = AgentSkillMaterializer(
+        str(tmp_path),
+        artifact_service=artifact_service,
+        source_preservation_root=str(tmp_path / "runtime" / "repo_agents_skills"),
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="active_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[_skill("active", "artifact-active")],
+    )
+
+    result = await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="test_runtime",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+
+    backing_dir = tmp_path / "runtime" / "skills_active" / "active_snap"
+    assert source_dir.is_dir()
+    assert not source_dir.is_symlink()
+    assert source_skill.read_text(encoding="utf-8") == "do not rewrite"
+    assert not (tmp_path / "runtime" / "repo_agents_skills").exists()
+    assert result.metadata["visiblePath"] == str(backing_dir)
+    assert result.metadata["canonicalAliasAvailable"] is False
+    assert (
+        result.metadata["canonicalAliasSkippedReason"]
+        == "repo_authored_skills_present"
+    )
+    assert result.metadata["repoSkillSourcePreserved"] is True
+    assert (backing_dir / "active" / "SKILL.md").is_file()
+
+@pytest.mark.asyncio
+async def test_materializer_refuses_unknown_agents_skills_symlink(tmp_path: Path):
+    source_dir = tmp_path / ".agents" / "skills"
+    external_target = tmp_path / "external-skills"
+    external_target.mkdir()
+    source_dir.parent.mkdir(parents=True)
+    source_dir.symlink_to(external_target)
     materializer = AgentSkillMaterializer(str(tmp_path))
     skillset = ResolvedSkillSet(
         snapshot_id="blocked_snap",
@@ -193,10 +239,9 @@ async def test_materializer_rejects_incompatible_agents_skills_path(tmp_path: Pa
 
     message = str(exc_info.value)
     assert str(source_dir) in message
-    assert "object kind: directory" in message
+    assert "object kind: symlink" in message
     assert "attempted action: project active skill snapshot" in message
-    assert "remediation:" in message
-    assert source_file.read_text(encoding="utf-8") == "do not rewrite"
+    assert "existing symlink does not resolve under a MoonMind-owned active skill root" in message
 
 @pytest.mark.asyncio
 async def test_materializer_preserves_checked_in_skills_until_projection_ready(
@@ -234,7 +279,8 @@ async def test_materializer_refuses_to_clear_symlinked_active_dir(tmp_path: Path
     outside.mkdir()
     sentinel = outside / "keep.txt"
     sentinel.write_text("keep", encoding="utf-8")
-    backing_link = tmp_path / "skills_active"
+    backing_link = tmp_path / "runtime" / "skills_active" / "symlink_snap"
+    backing_link.parent.mkdir(parents=True)
     backing_link.symlink_to(outside)
     materializer = AgentSkillMaterializer(str(tmp_path))
     skillset = ResolvedSkillSet(
@@ -326,7 +372,7 @@ async def test_materializer_prompt_bundle_mode(tmp_path: Path):
     )
 
     assert result.materialization_mode == RuntimeMaterializationMode.PROMPT_BUNDLED
-    active_dir = tmp_path / "skills_active"
+    active_dir = tmp_path / "runtime" / "skills_active" / "snap_prompt"
     assert not active_dir.exists()
     assert result.prompt_index_ref == "index_snap_prompt"
 

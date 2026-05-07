@@ -10593,15 +10593,17 @@ class CodexWorker:
             )
         else:
             instruction += (
-                "- Skills are available via .agents/skills and .gemini/skills links.\n"
-                "- Selected skills are materialized under .agents/skills/<skill-id>/."
+                "- Selected skill content is available at the active skill path "
+                "provided by MoonMind turn preparation.\n"
+                "- .agents/skills is a compatibility alias only when MoonMind can "
+                "create it without masking repo-authored skill source."
             )
             instruction += (
                 f"\n\nRUNTIME ADAPTER: {runtime_mode}"
                 "\n\nSKILL USAGE:\n"
-                "Use the selected skill's files under .agents/skills/{skill}/ "
-                "as the procedure for this step. "
-                "Fail fast if that active skill projection is missing."
+                "Use the selected skill's files under the active skill path as "
+                "the procedure for this step. Fail fast if the active skill path "
+                "from the activation summary is missing."
             ).format(skill=step.effective_skill_id)
         return instruction
 

@@ -73,6 +73,28 @@ async def test_built_in_loader_discovers_packaged_agent_skills():
     assert discovered["moonspec-breakdown"].content_ref is None
     assert discovered["moonspec-breakdown"].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
     assert discovered["moonspec-breakdown"].provenance.source_path
+
+async def test_builtin_loader_ignores_cwd_agents_skills_projection(
+    monkeypatch,
+    tmp_path,
+):
+    cwd_projection_root = tmp_path / "runtime" / "skills_active" / "snap"
+    projected_skill = cwd_projection_root / "cwd-only"
+    projected_skill.mkdir(parents=True)
+    (projected_skill / "SKILL.md").write_text("# CWD only\n", encoding="utf-8")
+    (cwd_projection_root / "_manifest.json").write_text("{}\n", encoding="utf-8")
+    agents_dir = tmp_path / ".agents"
+    agents_dir.mkdir()
+    (agents_dir / "skills").symlink_to(cwd_projection_root)
+    monkeypatch.chdir(tmp_path)
+
+    loader = BuiltInSkillLoader()
+    results = await loader.load_skills(
+        SkillSelector(include=[]),
+        SkillResolutionContext(snapshot_id="snap"),
+    )
+
+    assert "cwd-only" not in {entry.skill_name for entry in results}
     
 async def test_resolver_resolves_local_skills_when_allowed():
     loader = LocalSkillLoader()
@@ -268,6 +290,44 @@ async def test_repo_skill_loader_scans_fs(tmp_path):
     assert "skill1" in names
     assert "skill2" in names
     assert "not_a_skill" not in names
+
+async def test_repo_loader_rejects_active_projection_as_repo_source(tmp_path):
+    active_root = tmp_path / "runtime" / "skills_active" / "snap"
+    active_skill = active_root / "active"
+    active_skill.mkdir(parents=True)
+    (active_skill / "SKILL.md").write_text("# Active\n", encoding="utf-8")
+    (active_root / "_manifest.json").write_text("{}\n", encoding="utf-8")
+    agents_dir = tmp_path / ".agents"
+    agents_dir.mkdir()
+    (agents_dir / "skills").symlink_to(active_root)
+
+    loader = RepoSkillLoader()
+    context = SkillResolutionContext(
+        snapshot_id="snap",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+
+    with pytest.raises(RuntimeError, match="workspace-contamination error"):
+        await loader.load_skills(SkillSelector(include=[]), context)
+
+async def test_local_loader_rejects_hidden_local_overlay(tmp_path):
+    active_root = tmp_path / "runtime" / "skills_active" / "snap"
+    active_root.mkdir(parents=True)
+    (active_root / "_manifest.json").write_text("{}\n", encoding="utf-8")
+    agents_dir = tmp_path / ".agents"
+    agents_dir.mkdir()
+    (agents_dir / "skills").symlink_to(active_root)
+
+    loader = LocalSkillLoader()
+    context = SkillResolutionContext(
+        snapshot_id="snap",
+        workspace_root=str(tmp_path),
+        allow_local_skills=True,
+    )
+
+    with pytest.raises(RuntimeError, match=".agents/skills/local is hidden"):
+        await loader.load_skills(SkillSelector(include=[]), context)
 
 async def test_local_skill_loader_scans_fs(tmp_path):
     loader = LocalSkillLoader()
