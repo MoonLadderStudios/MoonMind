@@ -268,6 +268,80 @@ async def test_publish_artifacts_captures_story_breakdown_handoff(tmp_path):
     )
 
 @pytest.mark.asyncio
+async def test_publish_artifacts_captures_story_breakdown_from_job_artifact_root(
+    tmp_path,
+):
+    repo_path = tmp_path / "repo"
+    story_json_path = tmp_path / "artifacts/story-breakdowns/example/stories.json"
+    story_md_path = tmp_path / "artifacts/story-breakdowns/example/stories.md"
+    repo_path.mkdir()
+    story_json_path.parent.mkdir(parents=True)
+    story_json_path.write_text('{"stories":[]}\n', encoding="utf-8")
+    story_md_path.write_text("# Stories\n", encoding="utf-8")
+
+    class _RunStore:
+        def load(self, run_id: str):
+            assert run_id == "task-run-1"
+            return SimpleNamespace(workspace_path=str(repo_path))
+
+    mock_service = MagicMock()
+    mock_service.create = AsyncMock(
+        side_effect=[
+            (SimpleNamespace(artifact_id="art-story-json"), None),
+            (SimpleNamespace(artifact_id="art-story-md"), None),
+        ]
+    )
+    mock_service.write_complete = AsyncMock(
+        side_effect=[
+            SimpleNamespace(artifact_id="art-story-json"),
+            SimpleNamespace(artifact_id="art-story-md"),
+        ]
+    )
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=mock_service,
+        run_store=_RunStore(),
+    )
+    input_result = AgentRunResult(
+        summary="Completed successfully",
+        metadata={
+            "taskRunId": "task-run-1",
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
+            "storyBreakdownMarkdownPath": (
+                "artifacts/story-breakdowns/example/stories.md"
+            ),
+            "storyOutput": {"mode": "jira"},
+        },
+    )
+
+    with (
+        patch(
+            "moonmind.workflows.temporal.activity_runtime._write_json_artifact",
+            side_effect=[
+                SimpleNamespace(artifact_id="art-summary"),
+                SimpleNamespace(artifact_id="art-result"),
+            ],
+        ),
+        patch(
+            "temporalio.activity.info",
+            return_value=SimpleNamespace(
+                namespace="default",
+                workflow_id="wf-1",
+                workflow_run_id="run-1",
+            ),
+        ),
+    ):
+        result = await activities.agent_runtime_publish_artifacts(input_result)
+
+    assert isinstance(result, AgentRunResult)
+    assert result.metadata["storyBreakdownArtifactRef"] == "art-story-json"
+    assert result.metadata["storyOutput"]["storyBreakdownArtifactRef"] == (
+        "art-story-json"
+    )
+    assert mock_service.write_complete.await_args_list[0].kwargs["payload"] == (
+        b'{"stories":[]}\n'
+    )
+
+@pytest.mark.asyncio
 async def test_publish_artifacts_skips_story_breakdown_handoff_when_run_missing():
     class _RunStore:
         def load(self, run_id: str):

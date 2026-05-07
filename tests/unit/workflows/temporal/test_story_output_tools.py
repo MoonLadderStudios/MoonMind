@@ -242,6 +242,37 @@ async def test_create_jira_issues_reads_story_breakdown_artifact_before_repo_pat
     assert service.requests[0].summary == "Create artifact-backed Jira story"
 
 @pytest.mark.asyncio
+async def test_create_jira_issues_requires_artifact_handoff_when_marked():
+    fetch_calls: list[tuple[str, str, str]] = []
+
+    async def fetcher(repo: str, ref: str, path: str) -> str:
+        fetch_calls.append((repo, ref, path))
+        raise AssertionError("repo fetch should not run for artifact handoff")
+
+    with pytest.raises(ValueError, match="durable storyBreakdownArtifactRef"):
+        await create_jira_issues_from_stories(
+            {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetBranch": "breakdown-branch",
+                "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
+                "storyOutput": {
+                    "mode": "jira",
+                    "handoff": "artifact",
+                    "requiresStoryBreakdownArtifactRef": True,
+                    "fallback": "fail",
+                    "jira": {
+                        "projectKey": "MM",
+                        "issueTypeName": "Story",
+                        "dependencyMode": "none",
+                    },
+                },
+            },
+            story_fetcher=fetcher,
+        )
+
+    assert fetch_calls == []
+
+@pytest.mark.asyncio
 async def test_create_jira_issues_reads_story_payload_from_previous_outputs():
     service = _FakeJiraService()
 
@@ -391,6 +422,36 @@ async def test_create_jira_issues_explains_no_commit_handoff_failure():
             },
             story_fetcher=fetcher,
         )
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_explains_repo_handoff_read_failure():
+    async def fetcher(_repo: str, _ref: str, _path: str) -> str:
+        raise RuntimeError("404 Not Found")
+
+    with pytest.raises(ValueError) as exc_info:
+        await create_jira_issues_from_stories(
+            {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetBranch": "breakdown-branch",
+                "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
+                "storyOutput": {
+                    "mode": "jira",
+                    "fallback": "fail",
+                    "jira": {
+                        "projectKey": "MM",
+                        "issueTypeName": "Story",
+                        "dependencyMode": "none",
+                    },
+                },
+            },
+            story_fetcher=fetcher,
+        )
+
+    message = str(exc_info.value)
+    assert "MoonLadderStudios/MoonMind" in message
+    assert "breakdown-branch" in message
+    assert "storyBreakdownArtifactRef" in message
+    assert "404 Not Found" in message
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_preserves_source_reference_when_description_truncates():
