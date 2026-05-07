@@ -257,6 +257,19 @@ const MergeAutomationSchema = z
   })
   .passthrough();
 
+const ProposalSummarySchema = z
+  .object({
+    requested: z.boolean().optional(),
+    generatedCount: z.number().optional(),
+    submittedCount: z.number().optional(),
+    deliveredCount: z.number().optional(),
+    validationErrors: z.array(z.record(z.string(), z.unknown())).default([]),
+    deliveryFailures: z.array(z.record(z.string(), z.unknown())).default([]),
+    externalLinks: z.array(z.record(z.string(), z.unknown())).default([]),
+    dedupUpdates: z.array(z.record(z.string(), z.unknown())).default([]),
+  })
+  .passthrough();
+
 const ExecutionDetailSchema = z
   .object({
     taskId: z.string(),
@@ -284,6 +297,8 @@ const ExecutionDetailSchema = z
     failedDependencyId: z.string().nullable().optional(),
     blockedOnDependencies: z.boolean().optional(),
     dependencyOutcomes: z.array(DependencyOutcomeSchema).default([]),
+    proposalSummary: ProposalSummarySchema.nullable().optional(),
+    proposalOutcomes: z.array(z.record(z.string(), z.unknown())).default([]),
     prerequisites: z.array(DependencySummarySchema).default([]),
     dependents: z.array(DependencySummarySchema).default([]),
     attentionRequired: z.boolean().optional(),
@@ -785,6 +800,7 @@ const RunSummaryArtifactSchema = z
       .passthrough()
       .optional(),
     mergeAutomation: MergeAutomationSchema.optional(),
+    proposals: ProposalSummarySchema.optional(),
   })
   .passthrough();
 
@@ -3658,6 +3674,8 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const displayedMergeAutomation =
     execution?.mergeAutomation || runSummary?.mergeAutomation || null;
   const displayedSummary = runSummary?.operatorSummary || execution?.summary || '—';
+  const proposalSummary = runSummary?.proposals || execution?.proposalSummary || null;
+  const proposalOutcomes = execution?.proposalOutcomes || [];
   const prUrl =
     normalizeGitHubPullRequestUrl(execution?.prUrl) ||
     normalizeGitHubPullRequestUrl(runSummary?.publishContext?.pullRequestUrl);
@@ -4211,6 +4229,49 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                 </div>
               ) : null}
               {runSummary.nextAction ? <p className="small">{runSummary.nextAction}</p> : null}
+            </section>
+          ) : null}
+
+          {proposalSummary ? (
+            <section className="stack td-run-summary-region td-evidence-region">
+              <h3>Proposal Outcomes</h3>
+              <div className="grid-2">
+                <Card label="Requested">{proposalSummary.requested ? 'Yes' : 'No'}</Card>
+                <Card label="Generated">{String(proposalSummary.generatedCount ?? 0)}</Card>
+                <Card label="Submitted">{String(proposalSummary.submittedCount ?? 0)}</Card>
+                <Card label="Delivered">{String(proposalSummary.deliveredCount ?? 0)}</Card>
+              </div>
+              {proposalSummary.externalLinks.length > 0 ? (
+                <div className="stack">
+                  <strong>External Review Links</strong>
+                  {proposalSummary.externalLinks.map((item, index) => {
+                    const externalUrl = typeof item.externalUrl === 'string' ? item.externalUrl : '';
+                    const externalKey = typeof item.externalKey === 'string' ? item.externalKey : externalUrl || `Link ${index + 1}`;
+                    const provider = typeof item.provider === 'string' ? item.provider : 'tracker';
+                    return externalUrl ? (
+                      <a key={`${provider}-${externalKey}-${index}`} href={externalUrl}>
+                        {provider}: {externalKey}
+                      </a>
+                    ) : (
+                      <span key={`${provider}-${externalKey}-${index}`} className="small">
+                        {provider}: {externalKey}
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {proposalSummary.dedupUpdates.length > 0 ? (
+                <p className="small">{proposalSummary.dedupUpdates.length} dedup update(s)</p>
+              ) : null}
+              {proposalSummary.validationErrors.length > 0 ? (
+                <p className="small">{proposalSummary.validationErrors.length} validation error(s)</p>
+              ) : null}
+              {proposalSummary.deliveryFailures.length > 0 ? (
+                <p className="small">{proposalSummary.deliveryFailures.length} delivery failure(s)</p>
+              ) : null}
+              {proposalOutcomes.length > 0 && !runSummary?.proposals ? (
+                <p className="small">{proposalOutcomes.length} proposal outcome(s) available from execution detail.</p>
+              ) : null}
             </section>
           ) : null}
 

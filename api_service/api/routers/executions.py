@@ -1746,6 +1746,8 @@ def _serialize_execution(
     )
     resume_summary = _build_resume_summary(record, actions=actions)
     related_runs = _build_resume_related_runs(record, params=params)
+    proposal_summary = _proposal_summary_from_memo(memo)
+    proposal_outcomes = _proposal_outcomes_from_summary(proposal_summary)
 
     started_at = getattr(record, "started_at", None)
     created_at = getattr(record, "created_at", None) or started_at or record.updated_at
@@ -1832,6 +1834,8 @@ def _serialize_execution(
         actions=actions,
         resume=resume_summary,
         related_runs=related_runs,
+        proposal_summary=proposal_summary,
+        proposal_outcomes=proposal_outcomes,
         debug_fields=debug_fields,
         redirect_path=f"/tasks/{record.workflow_id}?source=temporal",
         integration=(
@@ -1855,6 +1859,40 @@ def _serialize_execution(
         stale_state=False,
         refreshed_at=_compatibility_refreshed_at(record),
     )
+
+
+def _proposal_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:
+    direct = memo.get("proposals")
+    if isinstance(direct, Mapping):
+        return dict(direct)
+    finish_summary = memo.get("finishSummary") or memo.get("finish_summary")
+    if isinstance(finish_summary, Mapping):
+        proposals = finish_summary.get("proposals")
+        if isinstance(proposals, Mapping):
+            return dict(proposals)
+    return None
+
+
+def _proposal_outcomes_from_summary(
+    proposal_summary: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not proposal_summary:
+        return []
+    outcomes: list[dict[str, Any]] = []
+    for item in proposal_summary.get("externalLinks") or []:
+        if not isinstance(item, Mapping):
+            continue
+        outcome = dict(item)
+        outcome.setdefault("deliveryStatus", "delivered")
+        outcomes.append(outcome)
+    for item in proposal_summary.get("dedupUpdates") or []:
+        if not isinstance(item, Mapping):
+            continue
+        outcome = dict(item)
+        outcome.setdefault("deliveryStatus", "updated")
+        outcomes.append(outcome)
+    return outcomes
+
 
 def _resume_checkpoint_ref_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})

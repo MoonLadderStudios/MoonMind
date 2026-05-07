@@ -33,6 +33,8 @@ class TaskProposalTaskPreview(BaseModel):
     skill_id: Optional[str] = Field(None, alias="skillId")
     task_skills: Optional[list[str]] = Field(None, alias="taskSkills")
     publish_mode: Optional[str] = Field(None, alias="publishMode")
+    priority: Optional[int] = Field(None, alias="priority")
+    max_attempts: Optional[int] = Field(None, alias="maxAttempts")
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
     target_branch: Optional[str] = Field(None, alias="targetBranch")
     instructions: Optional[str] = Field(None, alias="instructions")
@@ -83,6 +85,7 @@ class TaskProposalModel(BaseModel):
     origin: TaskProposalOriginModel = Field(..., alias="origin")
     task_create_request: dict[str, Any] = Field(..., alias="taskCreateRequest")
     task_preview: Optional[TaskProposalTaskPreview] = Field(None, alias="taskPreview")
+    promotion_result: dict[str, Any] | None = Field(None, alias="promotionResult")
     similar: list["TaskProposalSimilarModel"] = Field(
         default_factory=list, alias="similar"
     )

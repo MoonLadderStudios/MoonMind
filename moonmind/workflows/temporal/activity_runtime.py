@@ -3144,6 +3144,10 @@ class TemporalProposalActivities:
                                 )
                                 if "created" in delivery_node:
                                     decision["created"] = delivery_node["created"]
+                                if "duplicateSource" in delivery_node:
+                                    decision["duplicateSource"] = delivery_node[
+                                        "duplicateSource"
+                                    ]
                         submitted_count += 1
                     else:
                         logger.info(
@@ -3164,9 +3168,56 @@ class TemporalProposalActivities:
                         redacted_error,
                     )
 
+        delivered_count = 0
+        external_links: list[dict[str, Any]] = []
+        dedup_updates: list[dict[str, Any]] = []
+        delivery_failures: list[dict[str, Any]] = []
+        for decision in delivery_decisions:
+            if not isinstance(decision, Mapping) or not decision.get("accepted"):
+                continue
+            status = str(decision.get("deliveryStatus") or "").strip().lower()
+            external_url = str(decision.get("externalUrl") or "").strip()
+            external_key = str(decision.get("externalKey") or "").strip()
+            provider = str(decision.get("provider") or delivery_provider).strip()
+            if external_url:
+                link: dict[str, Any] = {"externalUrl": external_url}
+                if provider:
+                    link["provider"] = provider
+                if external_key:
+                    link["externalKey"] = external_key
+                external_links.append(link)
+            if external_url and status in {"", "delivered", "updated", "deduped"}:
+                delivered_count += 1
+            if decision.get("created") is False or decision.get("duplicateSource"):
+                dedup: dict[str, Any] = {"created": bool(decision.get("created"))}
+                if provider:
+                    dedup["provider"] = provider
+                if external_key:
+                    dedup["externalKey"] = external_key
+                if decision.get("duplicateSource"):
+                    dedup["duplicateSource"] = decision["duplicateSource"]
+                dedup_updates.append(dedup)
+            if status == "failed":
+                delivery_failures.append(
+                    {
+                        "provider": provider,
+                        "code": "delivery_failed",
+                        "message": "delivery failed",
+                    }
+                )
+
         return {
             "generated_count": generated_count,
             "submitted_count": submitted_count,
+            "deliveredCount": delivered_count,
+            "validationErrors": [
+                {"code": "proposal_validation_error", "message": error}
+                for error in errors
+                if "invalid" in error or "malformed" in error or "skipped" in error
+            ],
+            "deliveryFailures": delivery_failures,
+            "externalLinks": external_links,
+            "dedupUpdates": dedup_updates,
             "errors": errors,
             "delivery_decisions": delivery_decisions,
         }

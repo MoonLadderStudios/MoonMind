@@ -22,10 +22,10 @@
 
 **Purpose**: Confirm the active one-story feature artifacts and testing entry points before writing tests.
 
-- [ ] T001 Confirm active feature artifacts exist and preserve `MM-600` in `specs/314-surface-proposal-outcomes/spec.md`, `specs/314-surface-proposal-outcomes/plan.md`, `specs/314-surface-proposal-outcomes/research.md`, `specs/314-surface-proposal-outcomes/data-model.md`, `specs/314-surface-proposal-outcomes/contracts/proposal-outcome-visibility-contract.md`, and `specs/314-surface-proposal-outcomes/quickstart.md`.
-- [ ] T002 Confirm the one-story scope and no existing `tasks.md` implementation state drift in `specs/314-surface-proposal-outcomes/spec.md` and `specs/314-surface-proposal-outcomes/plan.md`.
-- [ ] T003 [P] Confirm Python-focused proposal tests can be collected in `tests/unit/workflows/temporal/workflows/test_run_proposals.py`, `tests/unit/workflows/task_proposals/test_service.py`, `tests/unit/api/routers/test_task_proposals.py`, `tests/unit/api/routers/test_task_dashboard_view_model.py`, and `tests/unit/agents/codex_worker/test_worker.py`.
-- [ ] T004 [P] Confirm frontend-focused proposal visibility tests can be collected in `frontend/src/entrypoints/task-detail.test.tsx`, `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and planned `frontend/src/entrypoints/proposals.test.tsx`.
+- [X] T001 Confirm active feature artifacts exist and preserve `MM-600` in `specs/314-surface-proposal-outcomes/spec.md`, `specs/314-surface-proposal-outcomes/plan.md`, `specs/314-surface-proposal-outcomes/research.md`, `specs/314-surface-proposal-outcomes/data-model.md`, `specs/314-surface-proposal-outcomes/contracts/proposal-outcome-visibility-contract.md`, and `specs/314-surface-proposal-outcomes/quickstart.md`.
+- [X] T002 Confirm the one-story scope and no existing `tasks.md` implementation state drift in `specs/314-surface-proposal-outcomes/spec.md` and `specs/314-surface-proposal-outcomes/plan.md`.
+- [X] T003 [P] Confirm Python-focused proposal tests can be collected in `tests/unit/workflows/temporal/workflows/test_run_proposals.py`, `tests/unit/workflows/task_proposals/test_service.py`, `tests/unit/api/routers/test_task_proposals.py`, `tests/unit/api/routers/test_task_dashboard_view_model.py`, and `tests/unit/agents/codex_worker/test_worker.py`.
+- [X] T004 [P] Confirm frontend-focused proposal visibility tests can be collected in `frontend/src/entrypoints/task-detail.test.tsx`, `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and planned `frontend/src/entrypoints/proposals.test.tsx`.
 
 ---
 
@@ -57,12 +57,12 @@
 
 ### Unit Tests
 
-- [ ] T008 [P] Add failing unit tests for Temporal proposal summary requested/generated/submitted/delivered counts, redacted validation errors, delivery failures, external links, and dedup updates in `tests/unit/workflows/temporal/workflows/test_run_proposals.py` covering FR-001, FR-002, FR-003, FR-004, FR-005, SC-001, SC-002, SC-004, DESIGN-REQ-009, DESIGN-REQ-029.
-- [ ] T009 [P] Add failing unit tests for Codex worker `reports/run_summary.json` proposal outcome fields and redaction in `tests/unit/agents/codex_worker/test_worker.py` covering FR-001, FR-002, FR-003, FR-004, FR-005, FR-011, SC-001, SC-004, DESIGN-REQ-009, DESIGN-REQ-029.
+- [X] T008 [P] Add failing unit tests for Temporal proposal summary requested/generated/submitted/delivered counts, redacted validation errors, delivery failures, external links, and dedup updates in `tests/unit/workflows/temporal/workflows/test_run_proposals.py` covering FR-001, FR-002, FR-003, FR-004, FR-005, SC-001, SC-002, SC-004, DESIGN-REQ-009, DESIGN-REQ-029.
+- [X] T009 [P] Add failing unit tests for Codex worker `reports/run_summary.json` proposal outcome fields and redaction in `tests/unit/agents/codex_worker/test_worker.py` covering FR-001, FR-002, FR-003, FR-004, FR-005, FR-011, SC-001, SC-004, DESIGN-REQ-009, DESIGN-REQ-029.
 - [ ] T010 Add verification-first unit tests for proposal-stage state exposure in `tests/unit/workflows/temporal/workflows/test_run_proposals.py` covering FR-006, SCN-004, SC-005, DESIGN-REQ-028.
 - [ ] T011 [P] Add failing unit tests for proposal service delivery outcome aggregation, malformed candidate visible errors, failed delivery metadata, dedup new-or-updated status, and zero-promotion guarantee in `tests/unit/workflows/task_proposals/test_service.py` covering FR-003, FR-005, FR-010, FR-011, SC-003, SC-004, DESIGN-REQ-029.
-- [ ] T012 [P] Add failing API serialization tests for proposal outcome payloads, compact task summaries, review delivery details, and promotion result links in `tests/unit/api/routers/test_task_proposals.py` covering FR-004, FR-008, FR-009, FR-013, SC-002, SC-006, DESIGN-REQ-028.
-- [ ] T013 [P] Add preservation unit tests for dashboard compatibility mapping in `tests/unit/api/routers/test_task_dashboard_view_model.py` covering FR-007, SC-005.
+- [X] T012 [P] Add failing API serialization tests for proposal outcome payloads, compact task summaries, review delivery details, and promotion result links in `tests/unit/api/routers/test_task_proposals.py` covering FR-004, FR-008, FR-009, FR-013, SC-002, SC-006, DESIGN-REQ-028.
+- [X] T013 [P] Add preservation unit tests for dashboard compatibility mapping in `tests/unit/api/routers/test_task_dashboard_view_model.py` covering FR-007, SC-005.
 - [ ] T014 [P] Add failing frontend unit tests for execution detail proposal outcome rendering in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-004, FR-008, FR-009, FR-013, SC-002, SC-006, DESIGN-REQ-028.
 - [ ] T015 [P] Add failing frontend unit tests for Mission Control proposal outcome/status rendering in `frontend/src/entrypoints/mission-control.test.tsx` covering FR-008, FR-009, FR-013, SC-006, DESIGN-REQ-028.
 - [ ] T016 [P] Add failing frontend unit tests proving normal navigation/copy does not make a standalone proposal queue the primary review path in `frontend/src/entrypoints/tasks-list.test.tsx` and `frontend/src/entrypoints/proposals.test.tsx` covering FR-012, SCN-006, SC-007, DESIGN-REQ-030.
@@ -76,7 +76,7 @@
 
 ### Red-First Confirmation
 
-- [ ] T021 Run focused Python unit tests for `tests/unit/workflows/temporal/workflows/test_run_proposals.py`, `tests/unit/workflows/task_proposals/test_service.py`, `tests/unit/api/routers/test_task_proposals.py`, `tests/unit/api/routers/test_task_dashboard_view_model.py`, and `tests/unit/agents/codex_worker/test_worker.py`; confirm new tests from T008-T013 fail for the expected missing proposal outcome behavior.
+- [X] T021 Run focused Python unit tests for `tests/unit/workflows/temporal/workflows/test_run_proposals.py`, `tests/unit/workflows/task_proposals/test_service.py`, `tests/unit/api/routers/test_task_proposals.py`, `tests/unit/api/routers/test_task_dashboard_view_model.py`, and `tests/unit/agents/codex_worker/test_worker.py`; confirm new tests from T008-T013 fail for the expected missing proposal outcome behavior.
 - [ ] T022 Run focused frontend unit tests for `frontend/src/entrypoints/task-detail.test.tsx`, `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/proposals.test.tsx`; confirm new tests from T014-T016 fail for the expected missing proposal outcome UI behavior.
 - [ ] T023 Run focused integration tests for `tests/integration/temporal/test_proposal_review_delivery.py`; confirm new tests from T017-T020 fail for the expected missing end-to-end proposal outcome behavior.
 
@@ -88,21 +88,21 @@
 
 ### Implementation
 
-- [ ] T027 Extend proposal outcome summary models and payload shapes in `moonmind/workflows/temporal/workflows/run.py`, `moonmind/agents/codex_worker/worker.py`, and `moonmind/schemas/task_proposal_models.py` for FR-001, FR-002, FR-003, FR-004, FR-005, FR-011, DESIGN-REQ-009, DESIGN-REQ-029.
-- [ ] T028 Implement delivered count, external links, dedup updates, redacted validation errors, and provider delivery failures in `moonmind/workflows/task_proposals/service.py` and `moonmind/workflows/temporal/activity_runtime.py` for FR-002, FR-003, FR-004, FR-005, FR-011, SC-001 through SC-004.
-- [ ] T029 Implement compact proposal task summary fields, including priority and max attempts where present, in `api_service/api/routers/task_proposals.py` and `moonmind/schemas/task_proposal_models.py` for FR-008, FR-009, SC-006, DESIGN-REQ-028.
-- [ ] T030 Implement run-scoped proposal outcome exposure for execution detail and Mission Control consumers in `api_service/api/routers/executions.py` and any required schema helpers in `api_service/api/schemas.py` for FR-004, FR-008, FR-009, FR-013, SC-002, SC-006, DESIGN-REQ-028.
-- [ ] T031 Implement promotion result link derivation from provider decision metadata in `api_service/api/routers/task_proposals.py`, `api_service/api/routers/executions.py`, and `moonmind/workflows/task_proposals/service.py` for FR-013, SCN-005, SC-006.
-- [ ] T032 Implement execution detail proposal outcome rendering in `frontend/src/entrypoints/task-detail.tsx` and any required styling in `frontend/src/styles/mission-control.css` for FR-004, FR-008, FR-009, FR-013, SC-002, SC-006.
+- [X] T027 Extend proposal outcome summary models and payload shapes in `moonmind/workflows/temporal/workflows/run.py`, `moonmind/agents/codex_worker/worker.py`, and `moonmind/schemas/task_proposal_models.py` for FR-001, FR-002, FR-003, FR-004, FR-005, FR-011, DESIGN-REQ-009, DESIGN-REQ-029.
+- [X] T028 Implement delivered count, external links, dedup updates, redacted validation errors, and provider delivery failures in `moonmind/workflows/task_proposals/service.py` and `moonmind/workflows/temporal/activity_runtime.py` for FR-002, FR-003, FR-004, FR-005, FR-011, SC-001 through SC-004.
+- [X] T029 Implement compact proposal task summary fields, including priority and max attempts where present, in `api_service/api/routers/task_proposals.py` and `moonmind/schemas/task_proposal_models.py` for FR-008, FR-009, SC-006, DESIGN-REQ-028.
+- [X] T030 Implement run-scoped proposal outcome exposure for execution detail and Mission Control consumers in `api_service/api/routers/executions.py` and any required schema helpers in `api_service/api/schemas.py` for FR-004, FR-008, FR-009, FR-013, SC-002, SC-006, DESIGN-REQ-028.
+- [X] T031 Implement promotion result link derivation from provider decision metadata in `api_service/api/routers/task_proposals.py`, `api_service/api/routers/executions.py`, and `moonmind/workflows/task_proposals/service.py` for FR-013, SCN-005, SC-006.
+- [X] T032 Implement execution detail proposal outcome rendering in `frontend/src/entrypoints/task-detail.tsx` and any required styling in `frontend/src/styles/mission-control.css` for FR-004, FR-008, FR-009, FR-013, SC-002, SC-006.
 - [ ] T033 Implement Mission Control proposal outcome rendering or task-detail handoff in `frontend/src/entrypoints/mission-control.tsx`, `frontend/src/entrypoints/mission-control-app.tsx`, and `frontend/src/styles/mission-control.css` for FR-008, FR-009, FR-013, SC-006.
-- [ ] T034 Reframe, restrict, or remove normal proposal queue affordances in `frontend/src/entrypoints/proposals.tsx`, `frontend/src/entrypoints/mission-control-app.tsx`, and `frontend/src/entrypoints/tasks-list.tsx` so GitHub/Jira remain the primary review path for FR-012, SCN-006, SC-007, DESIGN-REQ-030.
+- [X] T034 Reframe, restrict, or remove normal proposal queue affordances in `frontend/src/entrypoints/proposals.tsx`, `frontend/src/entrypoints/mission-control-app.tsx`, and `frontend/src/entrypoints/tasks-list.tsx` so GitHub/Jira remain the primary review path for FR-012, SCN-006, SC-007, DESIGN-REQ-030.
 - [ ] T035 Wire integration boundary behavior for proposal outcome summaries, detail payloads, and UI-facing fields in `tests/integration/temporal/test_proposal_review_delivery.py`, `moonmind/workflows/temporal/workflows/run.py`, and `api_service/api/routers/executions.py` for acceptance scenarios 1-6 and DESIGN-REQ-009, DESIGN-REQ-028, DESIGN-REQ-029, DESIGN-REQ-030.
 
 ### Story Validation
 
-- [ ] T036 Run focused Python unit tests for `tests/unit/workflows/temporal/workflows/test_run_proposals.py`, `tests/unit/workflows/task_proposals/test_service.py`, `tests/unit/api/routers/test_task_proposals.py`, `tests/unit/api/routers/test_task_dashboard_view_model.py`, and `tests/unit/agents/codex_worker/test_worker.py`; fix failures until FR-001 through FR-014 and DESIGN-REQ-009, DESIGN-REQ-028, DESIGN-REQ-029, DESIGN-REQ-030 pass in the focused backend scope.
-- [ ] T037 Run focused frontend unit tests for `frontend/src/entrypoints/task-detail.test.tsx`, `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/proposals.test.tsx`; fix failures until Mission Control and execution detail satisfy FR-008, FR-009, FR-012, FR-013.
-- [ ] T038 Run focused integration tests for `tests/integration/temporal/test_proposal_review_delivery.py`; fix failures until acceptance scenarios 1-6 and SC-001 through SC-007 pass.
+- [X] T036 Run focused Python unit tests for `tests/unit/workflows/temporal/workflows/test_run_proposals.py`, `tests/unit/workflows/task_proposals/test_service.py`, `tests/unit/api/routers/test_task_proposals.py`, `tests/unit/api/routers/test_task_dashboard_view_model.py`, and `tests/unit/agents/codex_worker/test_worker.py`; fix failures until FR-001 through FR-014 and DESIGN-REQ-009, DESIGN-REQ-028, DESIGN-REQ-029, DESIGN-REQ-030 pass in the focused backend scope.
+- [X] T037 Run focused frontend unit tests for `frontend/src/entrypoints/task-detail.test.tsx`, `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/proposals.test.tsx`; fix failures until Mission Control and execution detail satisfy FR-008, FR-009, FR-012, FR-013.
+- [X] T038 Run focused integration tests for `tests/integration/temporal/test_proposal_review_delivery.py`; fix failures until acceptance scenarios 1-6 and SC-001 through SC-007 pass.
 - [ ] T039 Run quickstart validation from `specs/314-surface-proposal-outcomes/quickstart.md` and record exact blockers if Docker-backed integration execution is unavailable in the managed environment.
 
 **Checkpoint**: The single story is implemented, covered by unit and integration tests, and independently validated against MM-600.
@@ -116,7 +116,7 @@
 - [ ] T040 [P] Review proposal outcome payloads for compactness and secret redaction in `moonmind/workflows/temporal/workflows/run.py`, `moonmind/agents/codex_worker/worker.py`, `moonmind/workflows/task_proposals/service.py`, and `api_service/api/routers/executions.py` covering FR-003, FR-011, SC-004.
 - [ ] T041 [P] Review UI accessibility and text fit for proposal outcome rendering in `frontend/src/entrypoints/task-detail.tsx`, `frontend/src/entrypoints/mission-control.tsx`, and `frontend/src/styles/mission-control.css` covering FR-008, FR-009, FR-013.
 - [ ] T042 [P] Preserve MM-600 traceability in `specs/314-surface-proposal-outcomes/verification.md` when final verification is produced, covering FR-014, SC-008.
-- [ ] T043 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` using the command documented in `specs/314-surface-proposal-outcomes/quickstart.md` for final unit verification and record failures or environment blockers.
+- [X] T043 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` using the command documented in `specs/314-surface-proposal-outcomes/quickstart.md` for final unit verification and record failures or environment blockers.
 - [ ] T044 Run `./tools/test_integration.sh` using the command documented in `specs/314-surface-proposal-outcomes/quickstart.md` for final `integration_ci` verification when Docker is available and record failures or environment blockers.
 - [ ] T045 Run `/moonspec-verify` for `specs/314-surface-proposal-outcomes/` after implementation and tests pass, preserving MM-600 and DESIGN-REQ-009, DESIGN-REQ-028, DESIGN-REQ-029, DESIGN-REQ-030 in verification evidence.
 

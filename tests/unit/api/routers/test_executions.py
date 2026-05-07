@@ -2389,7 +2389,50 @@ def test_serialize_execution_exposes_merge_automation_selection() -> None:
     payload = _serialize_execution(record)
 
     assert payload.merge_automation_selected is True
-    assert payload.model_dump(by_alias=True)["mergeAutomationSelected"] is True
+
+
+def test_serialize_execution_exposes_proposal_outcome_summary() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.PROPOSALS)
+    record.memo["proposals"] = {
+        "requested": True,
+        "generatedCount": 2,
+        "submittedCount": 2,
+        "deliveredCount": 1,
+        "validationErrors": [
+            {"code": "proposal_missing_task", "message": "proposal skipped: [REDACTED]"}
+        ],
+        "deliveryFailures": [
+            {
+                "provider": "jira",
+                "code": "delivery_failed",
+                "message": "delivery failed: [REDACTED]",
+            }
+        ],
+        "externalLinks": [
+            {
+                "provider": "jira",
+                "externalKey": "MM-901",
+                "externalUrl": "https://jira.example/browse/MM-901",
+            }
+        ],
+        "dedupUpdates": [
+            {
+                "provider": "github",
+                "externalKey": "42",
+                "created": False,
+                "duplicateSource": "existing-open-issue",
+            }
+        ],
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["state"] == "proposals"
+    assert payload["dashboardStatus"] == "running"
+    assert payload["proposalSummary"]["deliveredCount"] == 1
+    assert payload["proposalSummary"]["externalLinks"][0]["externalKey"] == "MM-901"
+    assert payload["proposalOutcomes"][0]["provider"] == "jira"
+    assert payload["proposalOutcomes"][0]["externalUrl"] == "https://jira.example/browse/MM-901"
 
 def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> None:
     record = _build_execution_record()

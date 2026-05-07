@@ -74,6 +74,8 @@ def _build_task_preview(
     runtime_mode = runtime.get("mode") or payload.get("targetRuntime")
     skill_id = skill.get("id")
     publish_mode = publish.get("mode")
+    priority = task_request.get("priority")
+    max_attempts = task_request.get("maxAttempts")
     starting_branch = git.get("startingBranch")
     target_branch = git.get("targetBranch")
     raw_skills = task.get("skills") or payload.get("skills")
@@ -141,6 +143,8 @@ def _build_task_preview(
         skillId=skill_value,
         taskSkills=task_skills,
         publishMode=publish_value,
+        priority=priority if isinstance(priority, int) else None,
+        maxAttempts=max_attempts if isinstance(max_attempts, int) else None,
         startingBranch=starting_value,
         targetBranch=target_branch_value,
         instructions=instructions_value,
@@ -182,13 +186,46 @@ def _serialize_review_delivery(proposal: TaskProposal) -> dict[str, object]:
         "status": status_value,
         "externalKey": getattr(proposal, "external_key", None),
         "externalUrl": getattr(proposal, "external_url", None),
+        "deliveredAt": getattr(proposal, "delivered_at", None),
+        "lastSyncedAt": getattr(proposal, "last_synced_at", None),
         "taskSnapshotRef": getattr(proposal, "task_snapshot_ref", None),
         "storedSnapshotNotice": bool(delivery.get("storedSnapshotNotice")),
     }
-    for key in ("created", "duplicateSource", "warnings"):
+    for key in ("created", "duplicateSource", "warnings", "error"):
         if key in delivery:
             result[key] = delivery[key]
     return result
+
+
+def _serialize_promotion_result(proposal: TaskProposal) -> dict[str, object] | None:
+    provider_metadata = getattr(proposal, "provider_metadata", None)
+    decision_rows = (
+        provider_metadata.get("providerDecisions")
+        if isinstance(provider_metadata, dict)
+        else None
+    )
+    if not isinstance(decision_rows, list):
+        return None
+    for row in reversed(decision_rows):
+        if not isinstance(row, dict):
+            continue
+        promoted_execution_id = str(row.get("promotedExecutionId") or "").strip()
+        if not promoted_execution_id:
+            continue
+        result: dict[str, object] = {
+            "promotedExecutionId": promoted_execution_id,
+            "promotedExecutionUrl": f"/tasks/temporal/{promoted_execution_id}",
+        }
+        for source_key, target_key in (
+            ("providerEventId", "providerEventId"),
+            ("resultingExternalState", "resultingExternalState"),
+            ("promotedAt", "promotedAt"),
+        ):
+            value = row.get(source_key)
+            if value not in (None, ""):
+                result[target_key] = value
+        return result
+    return None
 
 def _serialize_proposal(
     proposal: TaskProposal, *, similar: list[TaskProposal] | None = None
@@ -234,6 +271,7 @@ def _serialize_proposal(
         "origin": origin,
         "taskCreateRequest": proposal.task_create_request or {},
         "taskPreview": preview,
+        "promotionResult": _serialize_promotion_result(proposal),
         "similar": _serialize_similar(similar),
     }
     return TaskProposalModel.model_validate(data)

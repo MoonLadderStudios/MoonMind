@@ -1167,6 +1167,11 @@ class ProposalSubmissionReport:
     generated_count: int
     submitted_count: int
     errors: list[str]
+    delivered_count: int = 0
+    validation_errors: tuple[dict[str, Any], ...] = ()
+    delivery_failures: tuple[dict[str, Any], ...] = ()
+    external_links: tuple[dict[str, Any], ...] = ()
+    dedup_updates: tuple[dict[str, Any], ...] = ()
 
 @dataclass(frozen=True, slots=True)
 class FinishOutcome:
@@ -3685,6 +3690,11 @@ class CodexWorker:
                 "hookSkills": proposal_report.hook_skills,
                 "generatedCount": proposal_report.generated_count,
                 "submittedCount": proposal_report.submitted_count,
+                "deliveredCount": proposal_report.delivered_count,
+                "validationErrors": list(proposal_report.validation_errors),
+                "deliveryFailures": list(proposal_report.delivery_failures),
+                "externalLinks": list(proposal_report.external_links),
+                "dedupUpdates": list(proposal_report.dedup_updates),
                 "errors": proposal_report.errors,
             },
         }
@@ -11512,6 +11522,10 @@ class CodexWorker:
         approved_ci_tags = _MOONMIND_SIGNAL_TAGS
 
         submitted = 0
+        delivered_count = 0
+        delivery_failures: list[dict[str, Any]] = []
+        external_links: list[dict[str, Any]] = []
+        dedup_updates: list[dict[str, Any]] = []
         for candidate in proposals:
             if not isinstance(candidate, dict):
                 continue
@@ -11569,9 +11583,14 @@ class CodexWorker:
                     proposals_path=proposals_path,
                 ):
                     try:
-                        await self._queue_client.create_task_proposal(
+                        response = await self._queue_client.create_task_proposal(
                             proposal=project_payload
                         )
+                        outcome = self._proposal_submission_outcome(response)
+                        delivered_count += outcome["delivered_count"]
+                        external_links.extend(outcome["external_links"])
+                        dedup_updates.extend(outcome["dedup_updates"])
+                        delivery_failures.extend(outcome["delivery_failures"])
                         effective_policy.consume_project_slot()
                         submitted += 1
                     except Exception as exc:
@@ -11631,9 +11650,14 @@ class CodexWorker:
                     proposals_path=proposals_path,
                 ):
                     try:
-                        await self._queue_client.create_task_proposal(
+                        response = await self._queue_client.create_task_proposal(
                             proposal=moonmind_payload
                         )
+                        outcome = self._proposal_submission_outcome(response)
+                        delivered_count += outcome["delivered_count"]
+                        external_links.extend(outcome["external_links"])
+                        dedup_updates.extend(outcome["dedup_updates"])
+                        delivery_failures.extend(outcome["delivery_failures"])
                         effective_policy.consume_moonmind_slot()
                         submitted += 1
                     except Exception as exc:
@@ -11670,7 +11694,63 @@ class CodexWorker:
             generated_count=generated_count,
             submitted_count=submitted,
             errors=errors,
+            delivered_count=delivered_count,
+            validation_errors=tuple(
+                {"code": "proposal_validation_error", "message": error}
+                for error in errors
+                if "missing" in error or "invalid" in error
+            ),
+            delivery_failures=tuple(delivery_failures),
+            external_links=tuple(external_links),
+            dedup_updates=tuple(dedup_updates),
         )
+
+    @staticmethod
+    def _proposal_submission_outcome(response: Mapping[str, Any]) -> dict[str, Any]:
+        delivery = response.get("reviewDelivery")
+        delivery = delivery if isinstance(delivery, Mapping) else {}
+        status = str(delivery.get("status") or "").strip().lower()
+        external_url = str(delivery.get("externalUrl") or "").strip()
+        external_key = str(delivery.get("externalKey") or "").strip()
+        provider = str(
+            delivery.get("provider") or response.get("provider") or ""
+        ).strip()
+        delivered = bool(external_url and status in {"delivered", "updated", "deduped"})
+        external_links: list[dict[str, Any]] = []
+        if external_url:
+            link: dict[str, Any] = {"externalUrl": external_url}
+            if provider:
+                link["provider"] = provider
+            if external_key:
+                link["externalKey"] = external_key
+            external_links.append(link)
+        dedup_updates: list[dict[str, Any]] = []
+        if delivery.get("created") is False or delivery.get("duplicateSource"):
+            update: dict[str, Any] = {"created": bool(delivery.get("created"))}
+            if provider:
+                update["provider"] = provider
+            if external_key:
+                update["externalKey"] = external_key
+            if delivery.get("duplicateSource"):
+                update["duplicateSource"] = delivery["duplicateSource"]
+            dedup_updates.append(update)
+        delivery_failures: list[dict[str, Any]] = []
+        if status == "failed":
+            failure: dict[str, Any] = {}
+            if provider:
+                failure["provider"] = provider
+            error = delivery.get("error")
+            if isinstance(error, Mapping):
+                failure.update(dict(error))
+            else:
+                failure["message"] = "delivery failed"
+            delivery_failures.append(failure)
+        return {
+            "delivered_count": 1 if delivered else 0,
+            "external_links": external_links,
+            "dedup_updates": dedup_updates,
+            "delivery_failures": delivery_failures,
+        }
 
     async def _emit_event(
         self,

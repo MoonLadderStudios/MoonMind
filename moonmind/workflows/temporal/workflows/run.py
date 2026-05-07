@@ -322,7 +322,12 @@ class MoonMindRunWorkflow:
         # Proposal tracking
         self._proposals_generated = 0
         self._proposals_submitted = 0
+        self._proposals_delivered = 0
         self._proposals_errors: list[str] = []
+        self._proposal_validation_errors: list[dict[str, Any]] = []
+        self._proposal_delivery_failures: list[dict[str, Any]] = []
+        self._proposal_external_links: list[dict[str, Any]] = []
+        self._proposal_dedup_updates: list[dict[str, Any]] = []
 
         # Auth profile slot tracking for managed agent runs.
         # Set when a child AgentRun acquires a slot so the parent can
@@ -3291,6 +3296,12 @@ class MoonMindRunWorkflow:
         else:
             return _coerce_bool(parameters.get("proposeTasks"), default=False)
 
+    @staticmethod
+    def _compact_proposal_rows(raw: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw, list):
+            return []
+        return [dict(item) for item in raw if isinstance(item, dict)]
+
     def _resolve_task_body_instructions(self, task_payload: Mapping[str, Any]) -> str | None:
         instructions = self._coerce_text(task_payload.get("instructions"), flatten=False)
         if instructions:
@@ -5570,7 +5581,40 @@ class MoonMindRunWorkflow:
                 **self._execute_kwargs_for_route(submit_route),
             )
             if isinstance(submit_result, dict):
-                self._proposals_submitted = submit_result.get("submitted_count", 0)
+                self._proposals_submitted = int(
+                    submit_result.get("submitted_count")
+                    or submit_result.get("submittedCount")
+                    or 0
+                )
+                self._proposals_delivered = int(
+                    submit_result.get("delivered_count")
+                    or submit_result.get("deliveredCount")
+                    or 0
+                )
+                self._proposal_validation_errors.extend(
+                    self._compact_proposal_rows(
+                        submit_result.get("validation_errors")
+                        or submit_result.get("validationErrors")
+                    )
+                )
+                self._proposal_delivery_failures.extend(
+                    self._compact_proposal_rows(
+                        submit_result.get("delivery_failures")
+                        or submit_result.get("deliveryFailures")
+                    )
+                )
+                self._proposal_external_links.extend(
+                    self._compact_proposal_rows(
+                        submit_result.get("external_links")
+                        or submit_result.get("externalLinks")
+                    )
+                )
+                self._proposal_dedup_updates.extend(
+                    self._compact_proposal_rows(
+                        submit_result.get("dedup_updates")
+                        or submit_result.get("dedupUpdates")
+                    )
+                )
                 errors = submit_result.get("errors") or []
                 self._proposals_errors.extend(errors)
         except Exception as exc:
@@ -5688,6 +5732,11 @@ class MoonMindRunWorkflow:
                     "requested": self._proposal_generation_requested(parameters),
                     "generatedCount": self._proposals_generated,
                     "submittedCount": self._proposals_submitted,
+                    "deliveredCount": self._proposals_delivered,
+                    "validationErrors": self._proposal_validation_errors,
+                    "deliveryFailures": self._proposal_delivery_failures,
+                    "externalLinks": self._proposal_external_links,
+                    "dedupUpdates": self._proposal_dedup_updates,
                     "errors": self._proposals_errors,
                 },
                 "dependencies": {
