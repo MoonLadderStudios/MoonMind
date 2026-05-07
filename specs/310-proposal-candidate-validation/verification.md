@@ -11,8 +11,8 @@
 | Suite | Command | Result | Notes |
 | --- | --- | --- | --- |
 | Focused unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_proposal_activities.py tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/workflows/test_run_proposals.py` | PASS | 57 proposal-focused Python tests passed; frontend unit phase invoked by runner also passed. |
-| Full unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | PASS | 4400 Python tests passed, 1 xpassed, 16 subtests passed; frontend Vitest 20 files / 322 tests passed with 223 skipped. Existing warnings only. |
-| Hermetic integration | `./tools/test_integration.sh` | NOT RUN | Docker socket unavailable in the managed container: `dial unix /var/run/docker.sock: connect: no such file or directory`. |
+| Full unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | BLOCKED | Latest implement-pass run completed proposal-focused tests but failed unrelated PR-resolver/skill-resolver tests because this managed step's active `.agents/skills` projection lacks repo skill tool files such as `.agents/skills/fix-comments/tools/get_pr_comments.py` and `.agents/skills/pr-resolver/bin/pr_resolve_snapshot.py`. Earlier full unit verification passed before the runtime-managed skill projection changed. |
+| Hermetic integration | `./tools/test_integration.sh` | BLOCKED | Docker socket unavailable in the managed container: `dial unix /var/run/docker.sock: connect: no such file or directory`. |
 
 ## Requirement Coverage
 
@@ -76,11 +76,11 @@
 
 ## Gaps
 
-- None blocking. Hermetic integration could not run because Docker is unavailable in this managed container; equivalent workflow-boundary behavior is covered by unit tests.
+- None blocking for `MM-596`. Hermetic integration could not run because Docker is unavailable in this managed container; equivalent workflow-boundary behavior is covered by unit tests. The latest full unit suite is also blocked outside this story by the runtime-managed `.agents/skills` projection missing repo skill tool files required by PR-resolver tests.
 
 ## Remaining Work
 
-- None for `MM-596`.
+- None for `MM-596`. To rerun the full repository unit suite in this managed step, restore a full repo-compatible `.agents/skills` projection that includes the PR resolver and fix-comments tool files expected by unrelated tests.
 
 ## Decision
 

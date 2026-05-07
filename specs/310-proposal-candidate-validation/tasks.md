@@ -17,16 +17,16 @@ This task list covers exactly one runtime story: proposal generation emits side-
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm active feature context in `.specify/feature.json` points to `specs/310-proposal-candidate-validation` and verify `MM-596` is preserved in `specs/310-proposal-candidate-validation/spec.md`.
-- [ ] T002 Inspect refreshed planning inputs in `specs/310-proposal-candidate-validation/plan.md`, `specs/310-proposal-candidate-validation/research.md`, `specs/310-proposal-candidate-validation/data-model.md`, `specs/310-proposal-candidate-validation/contracts/proposal-candidate-contract.md`, and `specs/310-proposal-candidate-validation/quickstart.md`.
-- [ ] T003 [P] Confirm unit test tooling command from `specs/310-proposal-candidate-validation/quickstart.md` targets `tests/unit/workflows/temporal/test_proposal_activities.py`, `tests/unit/workflows/task_proposals/test_service.py`, and `tests/unit/workflows/temporal/workflows/test_run_proposals.py`.
-- [ ] T004 [P] Confirm integration test tooling command from `specs/310-proposal-candidate-validation/quickstart.md` uses `./tools/test_integration.sh` and documents the Docker-socket managed-container blocker.
+- [X] T001 Confirm active feature context in `.specify/feature.json` points to `specs/310-proposal-candidate-validation` and verify `MM-596` is preserved in `specs/310-proposal-candidate-validation/spec.md`.
+- [X] T002 Inspect refreshed planning inputs in `specs/310-proposal-candidate-validation/plan.md`, `specs/310-proposal-candidate-validation/research.md`, `specs/310-proposal-candidate-validation/data-model.md`, `specs/310-proposal-candidate-validation/contracts/proposal-candidate-contract.md`, and `specs/310-proposal-candidate-validation/quickstart.md`.
+- [X] T003 [P] Confirm unit test tooling command from `specs/310-proposal-candidate-validation/quickstart.md` targets `tests/unit/workflows/temporal/test_proposal_activities.py`, `tests/unit/workflows/task_proposals/test_service.py`, and `tests/unit/workflows/temporal/workflows/test_run_proposals.py`.
+- [X] T004 [P] Confirm integration test tooling command from `specs/310-proposal-candidate-validation/quickstart.md` uses `./tools/test_integration.sh` and documents the Docker-socket managed-container blocker.
 
 ## Phase 2: Foundational
 
-- [ ] T005 Inspect proposal activity and task-queue mappings in `moonmind/workflows/temporal/activity_runtime.py` for `proposal.generate` and `proposal.submit`. Covers FR-008, SC-006, DESIGN-REQ-032.
-- [ ] T006 Inspect trusted proposal service validation boundaries in `moonmind/workflows/task_proposals/service.py` before modifying candidate validation. Covers FR-002, FR-003, FR-009, DESIGN-REQ-008, DESIGN-REQ-017, DESIGN-REQ-018.
-- [ ] T007 Inspect canonical task payload and skill/provenance models in `moonmind/workflows/tasks/task_contract.py` before modifying proposal candidate shape handling. Covers FR-002, FR-004, FR-005, FR-006, DESIGN-REQ-017, DESIGN-REQ-019.
+- [X] T005 Inspect proposal activity and task-queue mappings in `moonmind/workflows/temporal/activity_runtime.py` for `proposal.generate` and `proposal.submit`. Covers FR-008, SC-006, DESIGN-REQ-032.
+- [X] T006 Inspect trusted proposal service validation boundaries in `moonmind/workflows/task_proposals/service.py` before modifying candidate validation. Covers FR-002, FR-003, FR-009, DESIGN-REQ-008, DESIGN-REQ-017, DESIGN-REQ-018.
+- [X] T007 Inspect canonical task payload and skill/provenance models in `moonmind/workflows/tasks/task_contract.py` before modifying proposal candidate shape handling. Covers FR-002, FR-004, FR-005, FR-006, DESIGN-REQ-017, DESIGN-REQ-019.
 
 ## Phase 3: Story - Generate Validated Proposal Candidates
 
@@ -43,40 +43,40 @@ This task list covers exactly one runtime story: proposal generation emits side-
 
 ### Unit Tests
 
-- [ ] T008 [P] Add or verify red-first proposal generation unit coverage in `tests/unit/workflows/temporal/test_proposal_activities.py` for explicit `task.skills`, `steps[].skills`, `task.authoredPresets`, `steps[].source`, and absent-provenance non-fabrication. Covers FR-004, FR-005, FR-006, SC-004, SC-005, DESIGN-REQ-019.
-- [ ] T009 [P] Add or verify red-first no-side-effect and no-large-body unit coverage in `tests/unit/workflows/temporal/test_proposal_activities.py` proving generation has no proposal service dependency and does not embed skill bodies or runtime materialization state. Covers FR-001, FR-007, SC-001, DESIGN-REQ-007.
-- [ ] T010 [P] Add or verify red-first proposal submission unit coverage in `tests/unit/workflows/temporal/test_proposal_activities.py` proving `tool.type=skill` is accepted, `tool.type=agent_runtime` is rejected with redacted errors, malformed skill selectors are rejected, and rejected candidates do not call the proposal service. Covers FR-002, FR-003, FR-009, SC-002, SC-003, DESIGN-REQ-008, DESIGN-REQ-017, DESIGN-REQ-018.
-- [ ] T011 [P] Add or verify red-first service validation unit coverage in `tests/unit/workflows/task_proposals/test_service.py` proving unsafe executable tool types and materialized skill bodies are rejected before repository creation. Covers FR-003, FR-004, FR-009, DESIGN-REQ-017, DESIGN-REQ-018, DESIGN-REQ-019.
+- [X] T008 [P] Add or verify red-first proposal generation unit coverage in `tests/unit/workflows/temporal/test_proposal_activities.py` for explicit `task.skills`, `steps[].skills`, `task.authoredPresets`, `steps[].source`, and absent-provenance non-fabrication. Covers FR-004, FR-005, FR-006, SC-004, SC-005, DESIGN-REQ-019.
+- [X] T009 [P] Add or verify red-first no-side-effect and no-large-body unit coverage in `tests/unit/workflows/temporal/test_proposal_activities.py` proving generation has no proposal service dependency and does not embed skill bodies or runtime materialization state. Covers FR-001, FR-007, SC-001, DESIGN-REQ-007.
+- [X] T010 [P] Add or verify red-first proposal submission unit coverage in `tests/unit/workflows/temporal/test_proposal_activities.py` proving `tool.type=skill` is accepted, `tool.type=agent_runtime` is rejected with redacted errors, malformed skill selectors are rejected, and rejected candidates do not call the proposal service. Covers FR-002, FR-003, FR-009, SC-002, SC-003, DESIGN-REQ-008, DESIGN-REQ-017, DESIGN-REQ-018.
+- [X] T011 [P] Add or verify red-first service validation unit coverage in `tests/unit/workflows/task_proposals/test_service.py` proving unsafe executable tool types and materialized skill bodies are rejected before repository creation. Covers FR-003, FR-004, FR-009, DESIGN-REQ-017, DESIGN-REQ-018, DESIGN-REQ-019.
 
 ### Integration / Boundary Tests
 
-- [ ] T012 [P] Add or verify workflow-boundary coverage in `tests/unit/workflows/temporal/workflows/test_run_proposals.py` proving `proposal.generate` and `proposal.submit` remain distinct scheduled activities and submission receives candidates only after generation. Covers FR-008, SC-006, DESIGN-REQ-032.
-- [ ] T013 Run `./tools/test_integration.sh` for hermetic integration coverage when Docker is available; if unavailable, record the exact `/var/run/docker.sock` blocker in `specs/310-proposal-candidate-validation/verification.md`. Covers acceptance scenarios 1-7 and SC-001 through SC-007.
+- [X] T012 [P] Add or verify workflow-boundary coverage in `tests/unit/workflows/temporal/workflows/test_run_proposals.py` proving `proposal.generate` and `proposal.submit` remain distinct scheduled activities and submission receives candidates only after generation. Covers FR-008, SC-006, DESIGN-REQ-032.
+- [X] T013 Run `./tools/test_integration.sh` for hermetic integration coverage when Docker is available; if unavailable, record the exact `/var/run/docker.sock` blocker in `specs/310-proposal-candidate-validation/verification.md`. Covers acceptance scenarios 1-7 and SC-001 through SC-007.
 
 ### Red-First Confirmation
 
-- [ ] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_proposal_activities.py tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/workflows/test_run_proposals.py` on a pre-implementation baseline when replaying this plan and confirm T008-T012 fail for the expected missing behavior.
-- [ ] T015 Confirm any red-first failures are tied to missing proposal candidate validation, skill/provenance preservation, unsafe tool rejection, no-side-effect generation, or workflow-boundary separation rather than fixture or environment errors in `tests/unit/workflows/temporal/test_proposal_activities.py`.
+- [X] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_proposal_activities.py tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/workflows/test_run_proposals.py` on a pre-implementation baseline when replaying this plan and confirm T008-T012 fail for the expected missing behavior.
+- [X] T015 Confirm any red-first failures are tied to missing proposal candidate validation, skill/provenance preservation, unsafe tool rejection, no-side-effect generation, or workflow-boundary separation rather than fixture or environment errors in `tests/unit/workflows/temporal/test_proposal_activities.py`.
 
 ### Implementation
 
-- [ ] T016 Implement or preserve candidate validation helpers in `moonmind/workflows/temporal/activity_runtime.py` so `proposal_submit()` validates every candidate before counting or service calls, accepts `tool.type=skill`, rejects `tool.type=agent_runtime`, rejects malformed skill selectors, and returns bounded redacted errors. Covers FR-002, FR-003, FR-009, DESIGN-REQ-008, DESIGN-REQ-017, DESIGN-REQ-018.
-- [ ] T017 Implement or preserve skill/provenance preservation in `moonmind/workflows/temporal/activity_runtime.py` so `proposal_generate()` copies only explicit parent task evidence and does not fabricate absent provenance. Covers FR-004, FR-005, FR-006, DESIGN-REQ-019.
-- [ ] T018 Implement or preserve guardrails in `moonmind/workflows/temporal/activity_runtime.py` that omit skill bodies, resolved active skill snapshots, runtime materialization state, and large embedded context bodies from generated candidates. Covers FR-001, FR-004, FR-007, DESIGN-REQ-007, DESIGN-REQ-019.
-- [ ] T019 Implement or preserve service-level proposal payload validation in `moonmind/workflows/task_proposals/service.py` so unsafe executable tool types and materialized skill bodies are rejected before `create_proposal()` repository calls. Covers FR-002, FR-003, FR-004, FR-009, DESIGN-REQ-017, DESIGN-REQ-018, DESIGN-REQ-019.
-- [ ] T020 Preserve workflow activity separation in `moonmind/workflows/temporal/workflows/run.py` and `moonmind/workflows/temporal/activity_catalog.py`; adjust only if T012 exposes a boundary regression. Covers FR-008, SC-006, DESIGN-REQ-032.
+- [X] T016 Implement or preserve candidate validation helpers in `moonmind/workflows/temporal/activity_runtime.py` so `proposal_submit()` validates every candidate before counting or service calls, accepts `tool.type=skill`, rejects `tool.type=agent_runtime`, rejects malformed skill selectors, and returns bounded redacted errors. Covers FR-002, FR-003, FR-009, DESIGN-REQ-008, DESIGN-REQ-017, DESIGN-REQ-018.
+- [X] T017 Implement or preserve skill/provenance preservation in `moonmind/workflows/temporal/activity_runtime.py` so `proposal_generate()` copies only explicit parent task evidence and does not fabricate absent provenance. Covers FR-004, FR-005, FR-006, DESIGN-REQ-019.
+- [X] T018 Implement or preserve guardrails in `moonmind/workflows/temporal/activity_runtime.py` that omit skill bodies, resolved active skill snapshots, runtime materialization state, and large embedded context bodies from generated candidates. Covers FR-001, FR-004, FR-007, DESIGN-REQ-007, DESIGN-REQ-019.
+- [X] T019 Implement or preserve service-level proposal payload validation in `moonmind/workflows/task_proposals/service.py` so unsafe executable tool types and materialized skill bodies are rejected before `create_proposal()` repository calls. Covers FR-002, FR-003, FR-004, FR-009, DESIGN-REQ-017, DESIGN-REQ-018, DESIGN-REQ-019.
+- [X] T020 Preserve workflow activity separation in `moonmind/workflows/temporal/workflows/run.py` and `moonmind/workflows/temporal/activity_catalog.py`; adjust only if T012 exposes a boundary regression. Covers FR-008, SC-006, DESIGN-REQ-032.
 
 ### Story Validation
 
-- [ ] T021 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_proposal_activities.py tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/workflows/test_run_proposals.py` until focused unit and workflow-boundary coverage passes.
-- [ ] T022 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full unit validation and record results in `specs/310-proposal-candidate-validation/verification.md`.
-- [ ] T023 Run `rg -n "MM-596|DESIGN-REQ-007|DESIGN-REQ-008|DESIGN-REQ-017|DESIGN-REQ-018|DESIGN-REQ-019|DESIGN-REQ-032" specs/310-proposal-candidate-validation moonmind/workflows/temporal/activity_runtime.py moonmind/workflows/task_proposals/service.py tests/unit/workflows/temporal/test_proposal_activities.py tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/workflows/test_run_proposals.py` and confirm traceability remains present. Covers FR-010, SC-007.
+- [X] T021 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_proposal_activities.py tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/workflows/test_run_proposals.py` until focused unit and workflow-boundary coverage passes.
+- [X] T022 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full unit validation and record results in `specs/310-proposal-candidate-validation/verification.md`.
+- [X] T023 Run `rg -n "MM-596|DESIGN-REQ-007|DESIGN-REQ-008|DESIGN-REQ-017|DESIGN-REQ-018|DESIGN-REQ-019|DESIGN-REQ-032" specs/310-proposal-candidate-validation moonmind/workflows/temporal/activity_runtime.py moonmind/workflows/task_proposals/service.py tests/unit/workflows/temporal/test_proposal_activities.py tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/workflows/test_run_proposals.py` and confirm traceability remains present. Covers FR-010, SC-007.
 
 ## Final Phase: Polish And Verification
 
-- [ ] T024 [P] Review `specs/310-proposal-candidate-validation/spec.md`, `specs/310-proposal-candidate-validation/plan.md`, `specs/310-proposal-candidate-validation/research.md`, `specs/310-proposal-candidate-validation/data-model.md`, `specs/310-proposal-candidate-validation/contracts/proposal-candidate-contract.md`, `specs/310-proposal-candidate-validation/quickstart.md`, and `specs/310-proposal-candidate-validation/tasks.md` for single-story scope and `MM-596` traceability.
-- [ ] T025 [P] Confirm `specs/310-proposal-candidate-validation/tasks.md` contains red-first unit tests, integration tests, implementation tasks, story validation, and final `/speckit.verify` work.
-- [ ] T026 Run `/speckit.verify` equivalent through `moonspec-verify` for `specs/310-proposal-candidate-validation/` and update `specs/310-proposal-candidate-validation/verification.md` with a FULLY_IMPLEMENTED, ADDITIONAL_WORK_NEEDED, or NO_DETERMINATION verdict.
+- [X] T024 [P] Review `specs/310-proposal-candidate-validation/spec.md`, `specs/310-proposal-candidate-validation/plan.md`, `specs/310-proposal-candidate-validation/research.md`, `specs/310-proposal-candidate-validation/data-model.md`, `specs/310-proposal-candidate-validation/contracts/proposal-candidate-contract.md`, `specs/310-proposal-candidate-validation/quickstart.md`, and `specs/310-proposal-candidate-validation/tasks.md` for single-story scope and `MM-596` traceability.
+- [X] T025 [P] Confirm `specs/310-proposal-candidate-validation/tasks.md` contains red-first unit tests, integration tests, implementation tasks, story validation, and final `/speckit.verify` work.
+- [X] T026 Run `/speckit.verify` equivalent through `moonspec-verify` for `specs/310-proposal-candidate-validation/` and update `specs/310-proposal-candidate-validation/verification.md` with a FULLY_IMPLEMENTED, ADDITIONAL_WORK_NEEDED, or NO_DETERMINATION verdict.
 
 ## Dependencies And Execution Order
 
