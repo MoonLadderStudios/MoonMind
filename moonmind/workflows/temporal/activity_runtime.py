@@ -2618,12 +2618,12 @@ class TemporalProposalActivities:
         if not isinstance(steps, Sequence) or isinstance(steps, (str, bytes)):
             return
 
-        preserved_steps: list[dict[str, Any]] = []
+        source_steps: list[dict[str, Any]] = []
         for raw_step in steps:
             if not isinstance(raw_step, Mapping):
                 continue
             preserved: dict[str, Any] = {}
-            for key in ("id", "title", "instructions", "type"):
+            for key in ("id", "title", "type"):
                 value = raw_step.get(key)
                 if isinstance(value, str) and value.strip():
                     preserved[key] = value
@@ -2631,7 +2631,9 @@ class TemporalProposalActivities:
                 value = cls._compact_mapping(raw_step.get(key))
                 if value is not None:
                     preserved[key] = value
-            if "source" not in preserved and "skills" not in preserved:
+            if not any(
+                key in preserved for key in ("source", "skills", "skill", "tool")
+            ):
                 continue
             step_type = str(preserved.get("type") or "").strip().lower()
             source_kind = ""
@@ -2640,16 +2642,19 @@ class TemporalProposalActivities:
                 source_kind = str(source.get("kind") or "").strip()
             if source_kind in {"preset-derived", "preset-include", "detached"}:
                 if step_type == "tool" and isinstance(preserved.get("tool"), Mapping):
-                    preserved_steps.append(preserved)
-                elif step_type == "skill" and isinstance(
-                    preserved.get("skill"), Mapping
+                    source_steps.append(preserved)
+                elif step_type == "skill" and (
+                    isinstance(preserved.get("skill"), Mapping)
+                    or isinstance(preserved.get("skills"), Mapping)
                 ):
-                    preserved_steps.append(preserved)
+                    source_steps.append(preserved)
+                elif step_type not in {"tool", "skill"}:
+                    source_steps.append(preserved)
                 continue
-            preserved_steps.append(preserved)
+            source_steps.append(preserved)
 
-        if preserved_steps:
-            target_task["steps"] = preserved_steps
+        if source_steps:
+            target_task["sourceSteps"] = source_steps
 
     @staticmethod
     def _reject_unsupported_tool_selectors(payload: Mapping[str, Any]) -> None:

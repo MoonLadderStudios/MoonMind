@@ -201,6 +201,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
                             {
                                 "id": "step-1",
                                 "title": "Inspect diagnostics",
+                                "instructions": "Original diagnostic inspection",
                                 "type": "tool",
                                 "tool": {
                                     "type": "skill",
@@ -214,7 +215,25 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
                                     "includePath": ["root", "quality"],
                                     "originalStepId": "inspect-diagnostics",
                                 },
-                            }
+                            },
+                            {
+                                "id": "step-2",
+                                "title": "Run selected remediation skill",
+                                "instructions": "Original skill remediation",
+                                "type": "skill",
+                                "skill": {"id": "fix-comments"},
+                            },
+                            {
+                                "id": "step-3",
+                                "title": "Run selected skill set",
+                                "instructions": "Original skill-set remediation",
+                                "type": "skill",
+                                "skills": {"sets": ["review-fixers"]},
+                                "source": {
+                                    "kind": "preset-derived",
+                                    "presetId": "runtime-followup",
+                                },
+                            },
                         ],
                     }
                 },
@@ -229,14 +248,20 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
             task["authoredPresets"][0]["presetId"],
             "runtime-followup",
         )
+        self.assertNotIn("steps", task)
+        self.assertEqual(len(task["sourceSteps"]), 3)
         self.assertEqual(
-            task["steps"][0]["source"]["originalStepId"],
+            task["sourceSteps"][0]["source"]["originalStepId"],
             "inspect-diagnostics",
         )
         self.assertEqual(
-            task["steps"][0]["skills"],
+            task["sourceSteps"][0]["skills"],
             {"include": [{"name": "runtime-quality"}]},
         )
+        self.assertEqual(task["sourceSteps"][1]["skill"], {"id": "fix-comments"})
+        self.assertEqual(task["sourceSteps"][2]["skills"], {"sets": ["review-fixers"]})
+        for source_step in task["sourceSteps"]:
+            self.assertNotIn("instructions", source_step)
         self.assertNotIn("materializedSkills", task)
 
     async def test_proposal_generate_does_not_fabricate_absent_provenance(self) -> None:
@@ -258,6 +283,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         task = result[0]["taskCreateRequest"]["payload"]["task"]
         self.assertNotIn("authoredPresets", task)
         self.assertNotIn("steps", task)
+        self.assertNotIn("sourceSteps", task)
 
     async def test_proposal_generate_does_not_touch_submission_service(self) -> None:
         factory = AsyncMock(side_effect=AssertionError("generation used service"))
