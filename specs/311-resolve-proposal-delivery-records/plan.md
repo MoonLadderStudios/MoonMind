@@ -45,15 +45,15 @@ Implement MM-597 by making proposal submission deterministically resolve project
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Pydantic v2 task contract models, SQLAlchemy async ORM, Temporal Python SDK activity boundary helpers, FastAPI proposal API schemas, pytest  
-**Storage**: Existing `task_proposals` table and proposal repository; likely Alembic/SQLAlchemy model changes if provider/external delivery fields or provider metadata are added  
-**Unit Testing**: pytest through `./tools/test_unit.sh`; focused iteration with `python -m pytest tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/test_proposal_activities.py -q`  
-**Integration Testing**: pytest boundary/integration coverage for real proposal repository/service persistence; use `./tools/test_integration.sh` only if DB migration or compose-backed integration_ci coverage is added  
-**Target Platform**: MoonMind backend control plane and Temporal worker runtime on Linux  
-**Project Type**: Python backend workflow/runtime service with persisted control-plane records  
-**Performance Goals**: Policy and dedup resolution remain bounded to submitted candidate count; local duplicate search uses indexed dedup fields; no provider call before local validation and duplicate checks  
-**Constraints**: Trusted provider credentials stay outside agent/runtime code; external side effects must be retry-safe and deduplicated; workflow/activity payload changes must remain boundary-tested; canonical docs remain desired-state only  
+**Language/Version**: Python 3.12
+**Primary Dependencies**: Pydantic v2 task contract models, SQLAlchemy async ORM, Temporal Python SDK activity boundary helpers, FastAPI proposal API schemas, pytest
+**Storage**: Existing `task_proposals` table and proposal repository; likely Alembic/SQLAlchemy model changes if provider/external delivery fields or provider metadata are added
+**Unit Testing**: pytest through `./tools/test_unit.sh`; focused iteration with `python -m pytest tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/test_proposal_activities.py -q`
+**Integration Testing**: pytest boundary/integration coverage for real proposal repository/service persistence; use `./tools/test_integration.sh` only if DB migration or compose-backed integration_ci coverage is added
+**Target Platform**: MoonMind backend control plane and Temporal worker runtime on Linux
+**Project Type**: Python backend workflow/runtime service with persisted control-plane records
+**Performance Goals**: Policy and dedup resolution remain bounded to submitted candidate count; local duplicate search uses indexed dedup fields; no provider call before local validation and duplicate checks
+**Constraints**: Trusted provider credentials stay outside agent/runtime code; external side effects must be retry-safe and deduplicated; workflow/activity payload changes must remain boundary-tested; canonical docs remain desired-state only
 **Scale/Scope**: One proposal submission/delivery-record story covering policy resolution, repository target choice, deduplication, origin metadata, and delivery-record persistence
 
 ## Constitution Check
