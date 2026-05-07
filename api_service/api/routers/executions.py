@@ -90,6 +90,7 @@ from moonmind.schemas.temporal_models import (
 )
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
+    TemporalExecutionResumeCheckpointError,
     TemporalExecutionService,
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
@@ -3599,6 +3600,56 @@ def _artifact_id_from_ref(value: Any) -> str | None:
     return ref.strip() or None
 
 
+async def _hydrate_resume_checkpoint_payload(
+    *,
+    session: AsyncSession,
+    user: User,
+    checkpoint_ref: str | None,
+) -> Mapping[str, Any]:
+    artifact_id = _artifact_id_from_ref(checkpoint_ref)
+    if not artifact_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Failed-step Resume is not available for this execution.",
+                "reason": "resume_checkpoint_missing",
+            },
+        )
+    try:
+        artifact_service = get_temporal_artifact_service(session)
+        _artifact, body = await artifact_service.read(
+            artifact_id=artifact_id,
+            principal=str(getattr(user, "id", "") or "system"),
+            allow_restricted_raw=True,
+        )
+        decoded = json.loads(body.decode("utf-8"))
+    except Exception as exc:
+        logger.warning(
+            "Failed to hydrate Resume checkpoint artifact %s: %s",
+            artifact_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Failed-step Resume is not available for this execution.",
+                "reason": "resume_checkpoint_missing",
+            },
+        ) from exc
+    if not isinstance(decoded, Mapping):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Failed-step Resume is not available for this execution.",
+                "reason": "resume_checkpoint_missing",
+            },
+        )
+    return decoded
+
+
 def _snapshot_task_from_artifact_payload(
     artifact_payload: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -6013,25 +6064,37 @@ async def resume_execution_from_failed_step(
                 "message": "Source execution was not found or is not visible.",
             },
         )
+    checkpoint_ref = request.resume_checkpoint_ref or _resume_checkpoint_ref_from_record(
+        canonical
+    )
+    checkpoint_payload = await _hydrate_resume_checkpoint_payload(
+        session=session,
+        user=user,
+        checkpoint_ref=checkpoint_ref,
+    )
     try:
         result = await service.create_failed_step_resume_execution(
             canonical,
             resume_checkpoint_ref=request.resume_checkpoint_ref,
             idempotency_key=request.idempotency_key,
+            checkpoint_payload=checkpoint_payload,
         )
-    except TemporalExecutionValidationError as exc:
-        message = str(exc)
-        reason = (
-            "resume_checkpoint_missing"
-            if "checkpoint" in message.lower()
-            else "state_not_eligible"
-        )
+    except TemporalExecutionResumeCheckpointError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "resume_not_available",
                 "message": "Failed-step Resume is not available for this execution.",
-                "reason": reason,
+                "reason": "resume_checkpoint_missing",
+            },
+        ) from exc
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Failed-step Resume is not available for this execution.",
+                "reason": "state_not_eligible",
             },
         ) from exc
     await session.commit()

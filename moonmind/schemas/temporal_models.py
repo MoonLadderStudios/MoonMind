@@ -565,16 +565,6 @@ class ResumeCheckpointModel(BaseModel):
     def _normalize_prepared_refs(cls, value: list[str]) -> list[str]:
         return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
-    @model_validator(mode="after")
-    def _validate_checkpoint(self) -> "ResumeCheckpointModel":
-        if not self.preserved_steps:
-            raise ValueError("resume checkpoint requires preservedSteps")
-        if not self.prepared_artifact_refs:
-            raise ValueError("resume checkpoint requires preparedArtifactRefs")
-        if not self.resume_workspace:
-            raise ValueError("resume checkpoint requires resumeWorkspace")
-        return self
-
 class ResumeSourceModel(BaseModel):
     """Compact source provenance carried by a resumed execution."""
 

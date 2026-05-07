@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
 from sqlalchemy import Select, case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -178,6 +179,11 @@ class TemporalExecutionNotFoundError(TemporalExecutionError):
 
 class TemporalExecutionValidationError(TemporalExecutionError):
     """Raised when lifecycle invariants are violated."""
+
+
+class TemporalExecutionResumeCheckpointError(TemporalExecutionValidationError):
+    """Raised when failed-step Resume checkpoint evidence is missing or invalid."""
+
 
 @dataclass(slots=True)
 class TemporalExecutionListResult:
@@ -2547,53 +2553,61 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError("Resume source runId is required.")
 
         memo = dict(record.memo or {})
-        checkpoint_ref = (
-            str(resume_checkpoint_ref or "").strip()
-            or str(memo.get("resume_checkpoint_ref") or "").strip()
+        canonical_checkpoint_ref = (
+            str(memo.get("resume_checkpoint_ref") or "").strip()
             or str(memo.get("resumeCheckpointRef") or "").strip()
         )
-        if not checkpoint_ref:
-            raise TemporalExecutionValidationError("Resume checkpoint ref is required.")
+        if not canonical_checkpoint_ref:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint ref is required."
+            )
+        requested_checkpoint_ref = str(resume_checkpoint_ref or "").strip()
+        if (
+            requested_checkpoint_ref
+            and requested_checkpoint_ref != canonical_checkpoint_ref
+        ):
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint ref does not match source execution."
+            )
+        checkpoint_ref = canonical_checkpoint_ref
         source_snapshot_ref = str(
             memo.get("task_input_snapshot_ref")
             or memo.get("taskInputSnapshotRef")
             or ""
         ).strip()
         if not source_snapshot_ref:
-            raise TemporalExecutionValidationError(
+            raise TemporalExecutionResumeCheckpointError(
                 "Original task input snapshot ref is required for failed-step Resume."
             )
 
-        checkpoint = (
-            ResumeCheckpointModel.model_validate(checkpoint_payload)
-            if checkpoint_payload is not None
-            else None
-        )
-        if checkpoint is not None:
-            if checkpoint.source.workflow_id != record.workflow_id:
-                raise TemporalExecutionValidationError(
-                    "Resume checkpoint workflowId does not match source execution."
-                )
-            if checkpoint.source.run_id != source_run_id:
-                raise TemporalExecutionValidationError(
-                    "Resume checkpoint runId does not match source execution."
-                )
-            if checkpoint.task_input_snapshot_ref != source_snapshot_ref:
-                raise TemporalExecutionValidationError(
-                    "Resume checkpoint task input snapshot does not match source execution."
-                )
-        failed_step_id = (
-            checkpoint.failed_step.logical_step_id
-            if checkpoint is not None
-            else str(memo.get("resume_failed_step_id") or "").strip()
-        )
-        failed_step_attempt = (
-            checkpoint.failed_step.attempt
-            if checkpoint is not None
-            else int(memo.get("resume_failed_step_attempt") or 1)
-        )
+        if checkpoint_payload is None:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint payload is required."
+            )
+        try:
+            checkpoint = ResumeCheckpointModel.model_validate(checkpoint_payload)
+        except ValidationError as exc:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint payload is invalid."
+            ) from exc
+        if checkpoint.source.workflow_id != record.workflow_id:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint workflowId does not match source execution."
+            )
+        if checkpoint.source.run_id != source_run_id:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint runId does not match source execution."
+            )
+        if checkpoint.task_input_snapshot_ref != source_snapshot_ref:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint task input snapshot does not match source execution."
+            )
+        failed_step_id = checkpoint.failed_step.logical_step_id
+        failed_step_attempt = checkpoint.failed_step.attempt
         if not failed_step_id:
-            raise TemporalExecutionValidationError("Resume failed step id is required.")
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume failed step id is required."
+            )
 
         params = dict(record.parameters or {})
         for key in TASK_RUN_ID_PARAM_KEYS:

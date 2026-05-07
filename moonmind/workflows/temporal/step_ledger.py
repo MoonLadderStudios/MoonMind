@@ -122,9 +122,12 @@ def materialize_preserved_steps(
             for key, value in raw_artifacts.items():
                 if key in artifacts:
                     artifacts[key] = value
-        source_attempt = int(
-            preserved.get("sourceAttempt") or preserved.get("source_attempt") or 1
-        )
+        try:
+            source_attempt = int(
+                preserved.get("sourceAttempt") or preserved.get("source_attempt") or 1
+            )
+        except (TypeError, ValueError):
+            source_attempt = 1
         row["status"] = str(preserved.get("status") or "succeeded")
         row["attempt"] = 0
         row["summary"] = "Preserved from source run."
