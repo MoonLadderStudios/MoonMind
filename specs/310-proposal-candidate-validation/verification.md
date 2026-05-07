@@ -41,6 +41,18 @@
 | Scenario 6 - distinct generation/submission boundaries | `test_run_proposals.py:47` | VERIFIED | Distinct activity type, capability class, and task queue. |
 | Scenario 7 - traceability | `rg` traceability check passed across feature artifacts and touched code/tests | VERIFIED | `MM-596` and all design IDs remain visible. |
 
+## Success Criteria Coverage
+
+| Success Criterion | Evidence | Status | Notes |
+| --- | --- | --- | --- |
+| SC-001 | Focused proposal generation tests demonstrate zero repository, task-creation, proposal-delivery, or external-tracker side effects during generation. | VERIFIED | Mirrors Scenario 1 and FR-007 evidence. |
+| SC-002 | Activity and service tests prove every accepted candidate passes canonical task payload validation before delivery side effects. | VERIFIED | Mirrors Scenario 2 and FR-002 evidence. |
+| SC-003 | Activity and service tests include accepted `tool.type=skill` and rejected `tool.type=agent_runtime` candidates. | VERIFIED | Mirrors Scenario 3 and FR-003 evidence. |
+| SC-004 | Skill selector preservation tests assert selectors remain compact and no skill bodies/runtime materialization state are embedded. | VERIFIED | Mirrors Scenario 4 and FR-004 evidence. |
+| SC-005 | Provenance tests cover preservation from reliable evidence and non-fabrication when evidence is absent. | VERIFIED | Mirrors Scenario 5, FR-005, and FR-006 evidence. |
+| SC-006 | Workflow-boundary tests prove generation and trusted submission execute through distinct activity boundaries. | VERIFIED | Mirrors Scenario 6 and FR-008 evidence. |
+| SC-007 | Traceability checks confirm `MM-596`, the canonical Jira preset brief, and DESIGN-REQ IDs remain visible in MoonSpec artifacts and final implementation evidence. | VERIFIED | Mirrors Scenario 7 and FR-010 evidence. |
+
 ## Constitution And Source Design Coverage
 
 | Item | Evidence | Status | Notes |
@@ -52,7 +64,7 @@
 | DESIGN-REQ-019 | Skill/provenance preservation and materialization rejection tests | VERIFIED | Selector intent is preserved without skill bodies. |
 | DESIGN-REQ-032 | Workflow activity catalog boundary test | VERIFIED | LLM generation and trusted submission remain separate. |
 | Constitution IX | Best-effort proposal behavior with redacted errors | VERIFIED | Invalid candidates do not fail the parent workflow path and do not apply side effects. |
-| Constitution XI | MoonSpec artifacts and tasks completed | VERIFIED | Spec-driven traceability preserved. |
+| Constitution XI | MoonSpec artifacts and tasks generated, aligned, and verified | VERIFIED | Spec-driven traceability preserved. |
 | Constitution XII | Runtime work remains in `specs/`; canonical docs were not converted into migration notes | VERIFIED | No canonical docs changed for this story. |
 
 ## Original Request Alignment
