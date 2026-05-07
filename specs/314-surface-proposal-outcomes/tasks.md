@@ -13,7 +13,7 @@
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - Focused Python unit tests: `python -m pytest tests/unit/workflows/temporal/workflows/test_run_proposals.py tests/unit/workflows/task_proposals/test_service.py tests/unit/api/routers/test_task_proposals.py tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/agents/codex_worker/test_worker.py -q`
-- Focused frontend unit tests: `npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/tasks-list.test.tsx`
+- Focused frontend unit tests: `npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/proposals.test.tsx`
 - Integration tests: `./tools/test_integration.sh`
 - Focused integration tests: `python -m pytest tests/integration/temporal/test_proposal_review_delivery.py -q`
 - Final verification: `/moonspec-verify`
@@ -59,7 +59,7 @@
 
 - [ ] T008 [P] Add failing unit tests for Temporal proposal summary requested/generated/submitted/delivered counts, redacted validation errors, delivery failures, external links, and dedup updates in `tests/unit/workflows/temporal/workflows/test_run_proposals.py` covering FR-001, FR-002, FR-003, FR-004, FR-005, SC-001, SC-002, SC-004, DESIGN-REQ-009, DESIGN-REQ-029.
 - [ ] T009 [P] Add failing unit tests for Codex worker `reports/run_summary.json` proposal outcome fields and redaction in `tests/unit/agents/codex_worker/test_worker.py` covering FR-001, FR-002, FR-003, FR-004, FR-005, FR-011, SC-001, SC-004, DESIGN-REQ-009, DESIGN-REQ-029.
-- [ ] T010 [P] Add verification-first unit tests for proposal-stage state exposure in `tests/unit/workflows/temporal/workflows/test_run_proposals.py` covering FR-006, SCN-004, SC-005, DESIGN-REQ-028.
+- [ ] T010 Add verification-first unit tests for proposal-stage state exposure in `tests/unit/workflows/temporal/workflows/test_run_proposals.py` covering FR-006, SCN-004, SC-005, DESIGN-REQ-028.
 - [ ] T011 [P] Add failing unit tests for proposal service delivery outcome aggregation, malformed candidate visible errors, failed delivery metadata, dedup new-or-updated status, and zero-promotion guarantee in `tests/unit/workflows/task_proposals/test_service.py` covering FR-003, FR-005, FR-010, FR-011, SC-003, SC-004, DESIGN-REQ-029.
 - [ ] T012 [P] Add failing API serialization tests for proposal outcome payloads, compact task summaries, review delivery details, and promotion result links in `tests/unit/api/routers/test_task_proposals.py` covering FR-004, FR-008, FR-009, FR-013, SC-002, SC-006, DESIGN-REQ-028.
 - [ ] T013 [P] Add preservation unit tests for dashboard compatibility mapping in `tests/unit/api/routers/test_task_dashboard_view_model.py` covering FR-007, SC-005.
@@ -69,10 +69,10 @@
 
 ### Integration Tests
 
-- [ ] T017 [P] Add failing integration test for a proposal-capable run with delivered and duplicate proposal outcomes in `tests/integration/temporal/test_proposal_review_delivery.py` covering acceptance scenarios 1-2, FR-001, FR-002, FR-004, FR-005, SC-001, SC-002, DESIGN-REQ-009.
-- [ ] T018 [P] Add failing integration test for malformed candidate and provider delivery failure visibility in `tests/integration/temporal/test_proposal_review_delivery.py` covering acceptance scenario 3, FR-003, FR-010, FR-011, SC-003, SC-004, DESIGN-REQ-029.
-- [ ] T019 [P] Add failing integration test for proposal-stage state, detail payload, compact task summary, and promotion result links in `tests/integration/temporal/test_proposal_review_delivery.py` covering acceptance scenarios 4-5, FR-006, FR-008, FR-009, FR-013, SC-005, SC-006, DESIGN-REQ-028.
-- [ ] T020 [P] Add failing integration or UI-boundary test proving external GitHub/Jira tracker review remains primary and MoonMind proposal UI is admin/recovery-only if retained in `tests/integration/temporal/test_proposal_review_delivery.py` covering acceptance scenario 6, FR-012, SC-007, DESIGN-REQ-030.
+- [ ] T017 Add failing integration test for a proposal-capable run with delivered and duplicate proposal outcomes in `tests/integration/temporal/test_proposal_review_delivery.py` covering acceptance scenarios 1-2, FR-001, FR-002, FR-004, FR-005, SC-001, SC-002, DESIGN-REQ-009.
+- [ ] T018 Add failing integration test for malformed candidate and provider delivery failure visibility in `tests/integration/temporal/test_proposal_review_delivery.py` covering acceptance scenario 3, FR-003, FR-010, FR-011, SC-003, SC-004, DESIGN-REQ-029.
+- [ ] T019 Add failing integration test for proposal-stage state, detail payload, compact task summary, and promotion result links in `tests/integration/temporal/test_proposal_review_delivery.py` covering acceptance scenarios 4-5, FR-006, FR-008, FR-009, FR-013, SC-005, SC-006, DESIGN-REQ-028.
+- [ ] T020 Add failing integration or UI-boundary test proving external GitHub/Jira tracker review remains primary and MoonMind proposal UI is admin/recovery-only if retained in `tests/integration/temporal/test_proposal_review_delivery.py` covering acceptance scenario 6, FR-012, SC-007, DESIGN-REQ-030.
 
 ### Red-First Confirmation
 
@@ -146,7 +146,7 @@
 - T003 and T004 can run in parallel after T001-T002.
 - T006 and T007 can run in parallel after T005.
 - T008-T016 can be authored in parallel because they touch different test files.
-- T017-T020 can be authored in parallel within the same integration file only with careful non-overlapping test additions.
+- T017-T020 are ordered because they all modify `tests/integration/temporal/test_proposal_review_delivery.py`.
 - T024-T026 are conditional and independent by file set.
 - T040-T042 can run in parallel during polish.
 

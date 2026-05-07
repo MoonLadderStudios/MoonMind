@@ -38,7 +38,8 @@ After JS dependencies are prepared:
 npm run ui:test -- \
   frontend/src/entrypoints/task-detail.test.tsx \
   frontend/src/entrypoints/mission-control.test.tsx \
-  frontend/src/entrypoints/tasks-list.test.tsx
+  frontend/src/entrypoints/tasks-list.test.tsx \
+  frontend/src/entrypoints/proposals.test.tsx
 ```
 
 Expected coverage:

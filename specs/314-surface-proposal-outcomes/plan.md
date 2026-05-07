@@ -51,7 +51,7 @@ Deliver MM-600 by turning existing proposal-generation, proposal-delivery, and p
 **Language/Version**: Python 3.12; TypeScript/React for Mission Control UI  
 **Primary Dependencies**: Pydantic v2, FastAPI, SQLAlchemy async ORM, Temporal Python SDK, existing proposal service/repository, existing Temporal workflow/activity catalog, React, TanStack Query, Zod, Vitest, pytest  
 **Storage**: Existing `task_proposals` table and provider metadata fields; no new persistent table planned unless summary/detail visibility cannot safely derive from existing proposal delivery records and workflow artifacts  
-**Unit Testing**: pytest through `./tools/test_unit.sh`; focused Python iteration with `python -m pytest tests/unit/workflows/temporal/workflows/test_run_proposals.py tests/unit/workflows/task_proposals/test_service.py tests/unit/api/routers/test_task_proposals.py tests/unit/api/routers/test_task_dashboard_view_model.py -q`; focused UI iteration with `npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/tasks-list.test.tsx` after JS deps are prepared  
+**Unit Testing**: pytest through `./tools/test_unit.sh`; focused Python iteration with `python -m pytest tests/unit/workflows/temporal/workflows/test_run_proposals.py tests/unit/workflows/task_proposals/test_service.py tests/unit/api/routers/test_task_proposals.py tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/agents/codex_worker/test_worker.py -q`; focused UI iteration with `npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/proposals.test.tsx` after JS deps are prepared  
 **Integration Testing**: pytest integration/boundary coverage, preferably extending `tests/integration/temporal/test_proposal_review_delivery.py`; run `./tools/test_integration.sh` when adding or changing `integration_ci` tests  
 **Target Platform**: MoonMind backend control plane, Temporal workflow/worker runtime, and Mission Control web UI on Linux  
 **Project Type**: Backend workflow/control-plane service plus frontend operational dashboard  
@@ -120,6 +120,7 @@ frontend/src/
 │   ├── mission-control.test.tsx                     # Mission Control rendering tests
 │   ├── task-detail.test.tsx                         # detail rendering tests
 │   ├── tasks-list.tsx                               # status option and navigation behavior
+│   ├── proposals.test.tsx                           # proposal admin/recovery path guardrail tests
 │   └── proposals.tsx                                # admin/recovery-only proposal surface if retained
 └── styles/mission-control.css                       # any compact outcome card/status styling
 
