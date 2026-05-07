@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import inspect
 import json
+from copy import deepcopy
 from logging import getLogger
 import os
 import re
@@ -2492,6 +2493,7 @@ class TemporalProposalActivities:
     ) -> None:
         self._artifact_service = artifact_service
         self._proposal_service_factory = proposal_service_factory
+        self._redactor = SecretRedactor.from_environ(placeholder="[REDACTED]")
 
     @staticmethod
     def _resolve_task_instructions(parameters: Mapping[str, Any]) -> str:
@@ -2586,6 +2588,182 @@ class TemporalProposalActivities:
             f"{normalized_instructions}"
         )
 
+    @staticmethod
+    def _compact_mapping(value: object) -> dict[str, Any] | None:
+        if not isinstance(value, Mapping):
+            return None
+        return deepcopy(dict(value))
+
+    @classmethod
+    def _preserve_compact_task_metadata(
+        cls, *, source_task: Mapping[str, Any], target_task: dict[str, Any]
+    ) -> None:
+        """Carry compact selector/provenance metadata into generated candidates.
+
+        Runtime-local materialization outputs and full skill bodies are not part
+        of the canonical task contract, so only already-structured selector and
+        provenance fields are copied.
+        """
+
+        for key in ("skill", "tool", "skills"):
+            value = cls._compact_mapping(source_task.get(key))
+            if value is not None:
+                target_task[key] = value
+
+        authored_presets = source_task.get("authoredPresets")
+        if isinstance(authored_presets, list) and authored_presets:
+            target_task["authoredPresets"] = deepcopy(authored_presets)
+
+        steps = source_task.get("steps")
+        if not isinstance(steps, Sequence) or isinstance(steps, (str, bytes)):
+            return
+
+        preserved_steps: list[dict[str, Any]] = []
+        for raw_step in steps:
+            if not isinstance(raw_step, Mapping):
+                continue
+            preserved: dict[str, Any] = {}
+            for key in ("id", "title", "instructions", "type"):
+                value = raw_step.get(key)
+                if isinstance(value, str) and value.strip():
+                    preserved[key] = value
+            for key in ("tool", "skill", "skills", "source"):
+                value = cls._compact_mapping(raw_step.get(key))
+                if value is not None:
+                    preserved[key] = value
+            if "source" not in preserved and "skills" not in preserved:
+                continue
+            step_type = str(preserved.get("type") or "").strip().lower()
+            source_kind = ""
+            source = preserved.get("source")
+            if isinstance(source, Mapping):
+                source_kind = str(source.get("kind") or "").strip()
+            if source_kind in {"preset-derived", "preset-include", "detached"}:
+                if step_type == "tool" and isinstance(preserved.get("tool"), Mapping):
+                    preserved_steps.append(preserved)
+                elif step_type == "skill" and isinstance(
+                    preserved.get("skill"), Mapping
+                ):
+                    preserved_steps.append(preserved)
+                continue
+            preserved_steps.append(preserved)
+
+        if preserved_steps:
+            target_task["steps"] = preserved_steps
+
+    @staticmethod
+    def _reject_unsupported_tool_selectors(payload: Mapping[str, Any]) -> None:
+        task_node = payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+
+        def check_tool(tool_node: object, path: str) -> None:
+            if not isinstance(tool_node, Mapping):
+                return
+            tool_type = str(
+                tool_node.get("type") or tool_node.get("kind") or "skill"
+            ).strip()
+            if tool_type and tool_type.lower() != "skill":
+                raise ValueError(f"{path}.type must be 'skill'")
+
+        check_tool(task.get("tool"), "payload.task.tool")
+        steps = task.get("steps")
+        if not isinstance(steps, Sequence) or isinstance(steps, (str, bytes)):
+            return
+        for index, step_node in enumerate(steps):
+            if not isinstance(step_node, Mapping):
+                continue
+            check_tool(step_node.get("tool"), f"payload.task.steps[{index}].tool")
+
+    @classmethod
+    def _stamp_default_runtime(
+        cls, request: Mapping[str, Any], default_runtime: str | None
+    ) -> dict[str, Any]:
+        stamped_request = deepcopy(dict(request))
+        if not default_runtime:
+            return stamped_request
+        payload_node = stamped_request.get("payload")
+        if not isinstance(payload_node, dict):
+            return stamped_request
+        task_node = payload_node.get("task")
+        if isinstance(task_node, dict):
+            runtime_node = task_node.get("runtime")
+            if isinstance(runtime_node, dict):
+                if not runtime_node.get("mode"):
+                    runtime_node["mode"] = default_runtime
+            else:
+                task_node["runtime"] = {"mode": default_runtime}
+        else:
+            payload_node["task"] = {"runtime": {"mode": default_runtime}}
+        return stamped_request
+
+    @classmethod
+    def _validate_candidate_task_create_request(
+        cls, request: Mapping[str, Any], *, default_runtime: str | None
+    ) -> dict[str, Any]:
+        from moonmind.workflows.task_proposals.service import TaskProposalService
+        from moonmind.workflows.tasks.task_contract import (
+            CanonicalTaskPayload,
+            TaskContractError,
+        )
+
+        stamped_request = cls._stamp_default_runtime(request, default_runtime)
+        job_type = str(stamped_request.get("type") or "task").strip().lower()
+        if job_type != "task":
+            raise ValueError("taskCreateRequest.type must be 'task'")
+        max_attempts = stamped_request.get("maxAttempts", 3)
+        try:
+            if int(max_attempts) < 1:
+                raise ValueError("maxAttempts must be >= 1")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("taskCreateRequest.maxAttempts must be an integer >= 1") from exc
+
+        payload_node = stamped_request.get("payload")
+        if not isinstance(payload_node, Mapping):
+            raise ValueError("taskCreateRequest.payload must be an object")
+        normalized_payload = TaskProposalService._normalize_proposal_runtime_payload(
+            payload_node
+        )
+        validation_payload = deepcopy(normalized_payload)
+        task_node = validation_payload.get("task")
+        task = dict(task_node) if isinstance(task_node, Mapping) else {}
+        if not task:
+            task = {
+                "instructions": (
+                    str(
+                        validation_payload.get("instructions")
+                        or validation_payload.get("instruction")
+                        or ""
+                    ).strip()
+                    or "Queue job"
+                ),
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": None, "model": None, "effort": None},
+                "git": {"startingBranch": None, "targetBranch": None},
+                "publish": {"mode": "pr"},
+            }
+        elif not str(task.get("instructions") or "").strip():
+            skill = task.get("skill")
+            has_explicit_skill = False
+            if isinstance(skill, Mapping):
+                skill_id = str(skill.get("id") or "").strip().lower()
+                has_explicit_skill = bool(skill_id and skill_id != "auto")
+            if not has_explicit_skill:
+                task["instructions"] = (
+                    str(
+                        validation_payload.get("instructions")
+                        or validation_payload.get("instruction")
+                        or ""
+                    ).strip()
+                    or "Queue job"
+                )
+        validation_payload["task"] = task
+        cls._reject_unsupported_tool_selectors(validation_payload)
+        try:
+            CanonicalTaskPayload.model_validate(validation_payload)
+        except (ValidationError, TaskContractError) as exc:
+            raise ValueError(str(exc)) from exc
+        return stamped_request
+
     async def proposal_generate(
         self,
         request: Mapping[str, Any] | None = None,
@@ -2660,6 +2838,10 @@ class TemporalProposalActivities:
                 },
             },
         }
+        self._preserve_compact_task_metadata(
+            source_task=task,
+            target_task=task_create_request["payload"]["task"],
+        )
 
         candidate: dict[str, Any] = {
             "title": normalized_title,
@@ -2781,22 +2963,19 @@ class TemporalProposalActivities:
                     continue
 
                 # Stamp default runtime into taskCreateRequest if not already set
-                stamped_request = dict(task_create_request)
-                if default_runtime and isinstance(default_runtime, str):
-                    payload_node = stamped_request.get("payload")
-                    if isinstance(payload_node, dict):
-                        task_node = payload_node.get("task")
-                        if isinstance(task_node, dict):
-                            runtime_node = task_node.get("runtime")
-                            if isinstance(runtime_node, dict):
-                                if not runtime_node.get("mode"):
-                                    runtime_node["mode"] = default_runtime
-                            else:
-                                task_node["runtime"] = {"mode": default_runtime}
-                        else:
-                            payload_node["task"] = {
-                                "runtime": {"mode": default_runtime}
-                            }
+                try:
+                    stamped_request = self._validate_candidate_task_create_request(
+                        task_create_request,
+                        default_runtime=(
+                            default_runtime if isinstance(default_runtime, str) else None
+                        ),
+                    )
+                except Exception as exc:
+                    redacted_error = self._redactor.scrub(str(exc))[:200]
+                    errors.append(
+                        f"invalid taskCreateRequest for {title!r}: {redacted_error}"
+                    )
+                    continue
 
                 payload_node = stamped_request.get("payload")
                 target_repo = ""
