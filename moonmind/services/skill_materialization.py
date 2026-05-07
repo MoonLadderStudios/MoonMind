@@ -8,6 +8,7 @@ from typing import Any
 from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
     ResolvedSkillSet,
+    RuntimeSkillProjectionDiagnostic,
     RuntimeMaterializationMode,
     RuntimeSkillMaterialization,
 )
@@ -248,16 +249,17 @@ class AgentSkillMaterializer:
         visible_path: Path,
         snapshot_id: str,
         reason: str | None,
-    ) -> dict[str, str | None]:
-        return {
-            "activeVisiblePath": str(visible_path),
-            "aliasPath": str(alias_path),
-            "event": f"skill_projection_alias_{status}",
-            "reason": reason,
-            "snapshotId": snapshot_id,
-            "status": status,
-            "workspace": str(self.workspace_root),
-        }
+    ) -> dict[str, Any]:
+        diagnostic = RuntimeSkillProjectionDiagnostic(
+            active_visible_path=str(visible_path),
+            alias_path=str(alias_path),
+            event=f"skill_projection_alias_{status}",
+            reason=reason,
+            snapshot_id=snapshot_id,
+            status=status,
+            workspace=str(self.workspace_root),
+        )
+        return diagnostic.model_dump(mode="json", by_alias=True)
 
     @staticmethod
     def _clear_directory(path: Path) -> None:
