@@ -212,9 +212,12 @@ async def test_materialize_activity_returns_canonical_agents_skills_metadata(
     )
 
     visible_path = tmp_path / ".agents" / "skills"
+    backing_path = tmp_path / "runtime" / "skills_active" / "snap-canonical"
     assert result.workspace_paths == [str(visible_path)]
     assert result.metadata["visiblePath"] == str(visible_path)
-    assert result.metadata["manifestPath"] == str(visible_path / "_manifest.json")
+    assert result.metadata["backingPath"] == str(backing_path)
+    assert result.metadata["manifestPath"] == str(backing_path / "_manifest.json")
+    assert result.metadata["canonicalAliasAvailable"] is True
     assert result.metadata["activeSkills"] == ["read_file"]
 
 

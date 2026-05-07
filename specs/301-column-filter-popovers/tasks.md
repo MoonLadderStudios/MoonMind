@@ -97,7 +97,7 @@
 - [X] T031 Update `specs/301-column-filter-popovers/tasks.md` to mark completed implementation tasks and preserve MM-588/MM-594 traceability.
 - [X] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full required unit verification.
 - [X] T033 Run final `/moonspec-verify` (`/speckit.verify` equivalent) and write `specs/301-column-filter-popovers/verification.md` with verdict, test evidence, requirement coverage, and MM-588 traceability.
-- [ ] T034 Run final `/moonspec-verify` (`/speckit.verify` equivalent) after the MM-594 traceability refresh and update `specs/301-column-filter-popovers/verification.md` with verdict, test evidence, requirement coverage, and MM-588/MM-594 traceability.
+- [X] T034 Run final `/moonspec-verify` (`/speckit.verify` equivalent) after the MM-594 traceability refresh and update `specs/301-column-filter-popovers/verification.md` with verdict, test evidence, requirement coverage, and MM-588/MM-594 traceability.
 
 ## Dependencies and Execution Order
 

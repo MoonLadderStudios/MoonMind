@@ -225,6 +225,8 @@ Key diagnostics:
 - Existing `managed_agent_oauth_sessions` and Provider Profile rows; existing auth volumes; no new persistent tables planned (306-finalize-oauth-terminal)
 - Python 3.12; TypeScript/React for Mission Control Create page + FastAPI, SQLAlchemy async ORM, Pydantic v2, React, TanStack Query, Vitest/Testing Library, pytest (308-schema-driven-capability-inputs)
 - Existing `task_step_template_versions.inputs_schema` JSON and task draft/submission payloads; no new persistent tables planned (308-schema-driven-capability-inputs)
+- Python 3.12; TypeScript/React for Mission Control task details + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Zod, existing Temporal artifact service/helpers (310-resume-from-last-failed-step)
+- Existing Temporal execution records, canonical execution parameters/memo/search attributes, Temporal artifact metadata/content store, and existing workflow history; no new persistent database table is planned unless reverse related-run queries cannot be implemented safely from existing execution records (310-resume-from-last-failed-step)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

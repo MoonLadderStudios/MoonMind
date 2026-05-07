@@ -65,7 +65,7 @@ The desired-state skill model is:
 5. MoonMind supports built-in, deployment-stored, repo-checked-in, and local-only agent skill sources.
 6. At run or step start, MoonMind resolves skill intent into an immutable `ResolvedSkillSet`.
 7. Workflows and runtime requests carry compact refs to resolved skill snapshots, not large skill bodies.
-8. Managed runtimes receive a compact activation summary inline and a full read-only active skill bundle projected at `.agents/skills`.
+8. Managed runtimes receive a compact activation summary inline and a full read-only active skill bundle at the materialized `visiblePath`; `.agents/skills` is used only as a safe compatibility alias.
 9. Runtime adapters consume the resolved snapshot; they must not rediscover, broaden, or re-resolve Skills during execution.
 10. `.agents/skills/local` remains a local-only overlay input convention, not the active runtime projection.
 
@@ -245,7 +245,7 @@ New authoring surfaces, docs, and API contracts should use:
 7. Every run or step uses an immutable `ResolvedSkillSet` when Skill content participates.
 8. Workflows carry refs to resolved snapshots, not large skill bodies.
 9. Runtime adapters own final materialization for their runtime, but must preserve the resolved snapshot.
-10. Managed runtimes see the active selected skill set at `.agents/skills`.
+10. Managed runtimes see the active selected skill set at the materialized `visiblePath`; `.agents/skills` remains the repo-authored source path and optional safe alias.
 11. `.agents/skills/local` is the local-only overlay input path.
 12. MoonMind must not mutate checked-in skill files in place during runtime materialization.
 13. Reruns reuse the original resolved snapshot by default.
@@ -887,7 +887,10 @@ Rules:
 
 ### 14.4 Projection Mechanics
 
-MoonMind may expose the active backing store at `.agents/skills` through:
+MoonMind materializes the active backing store in a MoonMind-owned run-scoped
+path. It may expose that store at `.agents/skills` only when doing so cannot
+mask repo-authored skill source files. Otherwise the runtime activation summary
+must point to the actual run-scoped active path.
 
 - bind mount,
 - symlink,
@@ -899,10 +902,13 @@ The mechanism is not the contract.
 
 The contract is:
 
-1. the runtime sees the active Skill set at `.agents/skills`;
+1. the runtime sees the active Skill set at the materialized `visiblePath`;
 2. the content corresponds exactly to the resolved snapshot;
 3. the runtime is not expected to discover Skills anywhere else;
-4. projection must fail before runtime launch if it cannot be installed safely.
+4. `.agents/skills` is an optional compatibility alias, not the authoritative
+   active path;
+5. projection must fail before runtime launch if a requested alias cannot be
+   installed safely.
 
 #### 14.4.1 Projection Strategy Order
 
@@ -914,18 +920,20 @@ files:
    store at `.agents/skills` inside the launched runtime container, PTY, or
    process namespace. This is preferred because the runtime sees the canonical
    path while the repo checkout remains unchanged.
-2. **Isolated execution workspace**: run the agent in a prepared staging
+2. **Run-scoped visible path**: instruct the agent to read the active backing
+   store from the MoonMind-owned materialized `visiblePath` when a repo-authored
+   `.agents/skills` directory exists in the publishable checkout.
+3. **Isolated execution workspace**: run the agent in a prepared staging
    workspace where `.agents/skills` can be owned by MoonMind, while publishing
    code changes back to the canonical checkout through controlled sync rules.
-3. **Symlink projection**: create or update `.agents/skills` only when that path
+4. **Symlink projection**: create or update `.agents/skills` only when that path
    is absent, already a MoonMind-owned projection link, or the workspace is an
    explicitly disposable non-publishing clone.
-4. **Transactional preserve-and-link fallback**: when a managed job checkout is
-   disposable but also the source used for publication, the adapter may move an
-   existing repo-authored `.agents/skills` directory into run-scoped preservation
-   storage and link the active backing store in its place only after active
-   materialization has succeeded. This fallback must restore the original tree
-   on projection failure and publication must exclude projection-only changes.
+5. **Transactional preserve-and-link fallback**: this is a disposable-workspace
+   fallback only. It is not the normal managed runtime path. If ever selected,
+   it must create a projection lease, restore the original tree in a `finally`
+   path before verification, publish, or task completion, and exclude
+   projection-only changes.
 
 Adapters must not replace a tracked or repo-authored `.agents/skills` directory
 with a symlink in the publishable checkout as the normal projection mechanism.
@@ -941,7 +949,7 @@ Every managed runtime Skill step should include a compact activation block.
 Required contents:
 
 1. active Skill names,
-2. visible path `.agents/skills`,
+2. actual materialized `visiblePath`,
 3. first-read hints,
 4. hard rules that must be applied immediately,
 5. optional selected Tool or autonomy constraints.
@@ -953,8 +961,8 @@ Active MoonMind skills for this step:
 - code-implementation: implement the requested change and prepare reviewable output
 - repo-coding-conventions: follow repository style and contribution rules
 
-Full skill content is available under .agents/skills.
-Read .agents/skills/code-implementation/SKILL.md before preparing the plan.
+Full skill content is available under /work/agent_jobs/job_123/runtime/skills_active/rss_123.
+Read /work/agent_jobs/job_123/runtime/skills_active/rss_123/code-implementation/SKILL.md before preparing the plan.
 
 Hard rules:
 - do not broaden scope beyond the requested issue
@@ -974,7 +982,7 @@ Suggested fields:
 {
   "snapshot_id": "rss_123",
   "resolved_at": "2026-04-29T00:00:00Z",
-  "visible_path": ".agents/skills",
+  "visible_path": "/work/agent_jobs/job_123/runtime/skills_active/rss_123",
   "backing_path": "/work/agent_jobs/job_123/runtime/skills_active/rss_123",
   "read_only": true,
   "skills": [
@@ -997,9 +1005,10 @@ The manifest is for observability and adapter introspection. The agent should pr
 
 ### 14.7 Collision Policy
 
-MoonMind owns the runtime-visible active projection at `.agents/skills` for the duration of the run.
+MoonMind owns the runtime-visible active `visiblePath` for the duration of the run.
 
-A collision exists when MoonMind cannot safely expose the active root at `.agents/skills`.
+A collision exists when MoonMind cannot safely expose the active root through a
+requested compatibility alias such as `.agents/skills`.
 
 Examples:
 
@@ -1025,7 +1034,7 @@ publishable workspace.
 | `.agents` is a directory and `.agents/skills` missing | Project active root. | No |
 | `.agents/skills` is a MoonMind-owned symlink to the same backing store | Reuse it. | No |
 | `.agents/skills` is a MoonMind-owned stale symlink | Replace it with the current active projection and record the replacement. | No |
-| `.agents/skills` is a checked-in directory | Prefer runtime namespace projection or isolated execution workspace. If unavailable, use transactional preserve-and-link only with restore-on-failure and publication guards. | No, unless no safe projection strategy exists |
+| `.agents/skills` is a checked-in directory | Leave it untouched and use the MoonMind-owned run-scoped active `visiblePath`; use transactional preserve-and-link only in an explicitly disposable workspace. | No |
 | `.agents` is a file | Fail before runtime launch with actionable diagnostics. | Yes |
 | `.agents/skills` is a file | Fail before runtime launch with actionable diagnostics. | Yes |
 | `.agents/skills` is an external or unknown symlink | Replace only if ownership can be proven; otherwise fail before runtime launch. | Conditional |
@@ -1034,7 +1043,7 @@ publishable workspace.
 Preferred behavior:
 
 1. materialize the active set outside the repo;
-2. project it at `.agents/skills`;
+2. expose it at `.agents/skills` only when the alias is absent or proven MoonMind-owned;
 3. avoid mutating checked-in Skill sources;
 4. fail before runtime launch if projection cannot be installed safely.
 

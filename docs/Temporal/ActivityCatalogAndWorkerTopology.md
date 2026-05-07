@@ -444,6 +444,7 @@ Current implemented activities:
 
 - `agent_runtime.launch`
 - `agent_runtime.launch_session`
+- `agent_runtime.prepare_turn_instructions`
 - `agent_runtime.publish_artifacts`
 - `agent_runtime.session_status`
 - `agent_runtime.send_turn`
@@ -467,6 +468,7 @@ Worker queue: `mm.activity.agent_runtime`
 - `agent_runtime.cancel(...) -> AgentRunStatus`
 - `agent_runtime.launch_session(...) -> CodexManagedSessionHandle`
 - `agent_runtime.session_status(...) -> CodexManagedSessionHandle`
+- `agent_runtime.prepare_turn_instructions(...) -> str | prepared-instructions payload`
 - `agent_runtime.send_turn(...) -> CodexManagedSessionTurnResponse`
 - `agent_runtime.steer_turn(...) -> CodexManagedSessionTurnResponse`
 - `agent_runtime.interrupt_turn(...) -> CodexManagedSessionTurnResponse`
@@ -483,6 +485,14 @@ Worker queue: `mm.activity.agent_runtime`
 The session-oriented activities are remote-session contracts. They must delegate through a session controller or adapter boundary and must not fall back to the worker-local managed runtime launcher/process loop.
 
 The current session-oriented return types are Codex-specific because Codex is the live managed-session implementation. When a second runtime adopts task-scoped managed sessions, introduce a neutral managed-session request/response surface above runtime-specific adapters rather than spreading Codex contracts into the public workflow boundary.
+
+`agent_runtime.prepare_turn_instructions` is replay-visible when scheduled by
+`MoonMind.AgentRun`. Moving it before or after session launch/status activities,
+or before or after `agent_runtime.send_turn`, changes Temporal command order.
+Such changes must be guarded by Temporal patch/version markers or Worker
+Versioning so in-flight histories keep their recorded order while new histories
+use the current order. Activity retry cannot repair a workflow-task
+nondeterminism caused by an unguarded order change.
 
 ## 8.10 Proposal and review activities
 

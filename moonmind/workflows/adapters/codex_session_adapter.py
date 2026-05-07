@@ -271,6 +271,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         apply_session_control_action: SessionControlSignaler,
         workspace_root: str,
         session_image_ref: str,
+        defer_turn_instructions_until_session_launch: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -288,6 +289,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._apply_session_control_action = apply_session_control_action
         self._workspace_root = Path(workspace_root).resolve()
         self._session_image_ref = str(session_image_ref).strip()
+        self._defer_turn_instructions_until_session_launch = bool(
+            defer_turn_instructions_until_session_launch
+        )
         self._run_states: dict[str, CodexSessionExecutionState] = {}
 
     async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
@@ -338,10 +342,18 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             raise ValueError(
                 "CodexSessionAdapter does not support inputRefs for managed session turns"
             )
-        await self._prepare_launch_metadata_for_request(
-            request=request,
-            workspace_path=workspace_path,
-        )
+        prepared_instructions: str | None = None
+        if self._defer_turn_instructions_until_session_launch:
+            await self._prepare_launch_metadata_for_request(
+                request=request,
+                workspace_path=workspace_path,
+            )
+        else:
+            prepared_instructions = await self._instructions_for_request(
+                binding=binding,
+                request=request,
+                workspace_path=workspace_path,
+            )
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
@@ -386,10 +398,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         failed_state_persisted = False
 
         try:
-            instructions = await self._instructions_for_request(
-                binding=binding,
-                request=request,
-                workspace_path=workspace_path,
+            instructions = (
+                prepared_instructions
+                if prepared_instructions is not None
+                else await self._instructions_for_request(
+                    binding=binding,
+                    request=request,
+                    workspace_path=workspace_path,
+                )
             )
             turn_response = await self._coerce_turn_response(
                 self._send_turn(

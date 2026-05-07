@@ -3668,23 +3668,54 @@ class TemporalAgentRuntimeActivities:
                     return value.strip()
             return ""
 
-        def _workspace_story_path(workspace: Path, raw_path: str) -> Path | None:
+        def _workspace_story_path_candidates(
+            workspace: Path,
+            raw_path: str,
+        ) -> list[Path]:
             if not raw_path:
-                return None
+                return []
             candidate = Path(raw_path)
+            candidates: list[Path] = []
             if not candidate.is_absolute():
-                candidate = workspace / candidate
-            resolved = candidate.expanduser().resolve()
-            try:
-                resolved.relative_to(workspace)
-            except ValueError:
+                candidates.append(workspace / candidate)
+                # Managed agent workspaces have a checked-out repo plus a
+                # sibling job-level artifact root. If repo-local artifacts/ is
+                # not writable, agents may still correctly write to the
+                # per-job artifact directory.
+                if candidate.parts and candidate.parts[0] == "artifacts":
+                    candidates.append(workspace.parent / candidate)
+            else:
+                candidates.append(candidate)
+
+            resolved_candidates: list[Path] = []
+            job_artifact_root = (workspace.parent / "artifacts").resolve()
+            for path in candidates:
+                resolved = path.expanduser().resolve()
+                allowed = resolved.is_relative_to(workspace) or resolved.is_relative_to(
+                    job_artifact_root
+                )
+                if not allowed:
+                    logger.warning(
+                        "Skipping story breakdown artifact publication outside "
+                        "workspace or job artifact root: %s",
+                        raw_path,
+                    )
+                    continue
+                if resolved not in resolved_candidates:
+                    resolved_candidates.append(resolved)
+            return resolved_candidates
+
+        def _workspace_story_path(workspace: Path, raw_path: str) -> Path | None:
+            candidates = _workspace_story_path_candidates(workspace, raw_path)
+            for candidate in candidates:
+                if candidate.is_file():
+                    return candidate
+            if candidates:
                 logger.warning(
-                    "Skipping story breakdown artifact publication outside "
-                    "workspace: %s",
+                    "Story breakdown handoff file was not found for publication: %s",
                     raw_path,
                 )
-                return None
-            return resolved
+            return None
 
         async def _publish_story_breakdown_file(
             *,
@@ -3697,12 +3728,6 @@ class TemporalAgentRuntimeActivities:
         ) -> str:
             path = _workspace_story_path(workspace, raw_path)
             if path is None:
-                return ""
-            if not path.is_file():
-                logger.warning(
-                    "Story breakdown handoff file was not found for publication: %s",
-                    raw_path,
-                )
                 return ""
             payload = path.read_bytes()
             artifact, _upload = await self._artifact_service.create(
@@ -4379,9 +4404,9 @@ class TemporalAgentRuntimeActivities:
             payload.get("skipSkillMaterialization")
             or payload.get("skip_skill_materialization")
         )
-        skill_snapshot_materialized = False
+        skill_materialization_metadata: Mapping[str, Any] | None = None
         if not skip_skill_materialization:
-            skill_snapshot_materialized = await self._materialize_selected_agent_skill_for_turn(
+            skill_materialization_metadata = await self._materialize_selected_agent_skill_for_turn(
                 request=request,
                 workspace_path=workspace_path_raw,
             )
@@ -4403,7 +4428,7 @@ class TemporalAgentRuntimeActivities:
                 prepared = self._prepare_managed_codex_turn_text(
                     instruction_ref,
                     parameters=request.parameters,
-                    skill_snapshot_materialized=skill_snapshot_materialized,
+                    skill_materialization_metadata=skill_materialization_metadata,
                 )
                 if payload.get("includePreparedRequestMetadata"):
                     return {
@@ -4419,7 +4444,7 @@ class TemporalAgentRuntimeActivities:
             prepared = self._prepare_managed_codex_turn_text(
                 instructions,
                 parameters=parameters,
-                skill_snapshot_materialized=skill_snapshot_materialized,
+                skill_materialization_metadata=skill_materialization_metadata,
             )
             if payload.get("includePreparedRequestMetadata"):
                 return {
@@ -4438,7 +4463,7 @@ class TemporalAgentRuntimeActivities:
         *,
         request: AgentExecutionRequest,
         workspace_path: str,
-    ) -> bool:
+    ) -> Mapping[str, Any] | None:
         """Materialize the resolved active skill snapshot for a managed-session turn."""
 
         params = request.parameters if isinstance(request.parameters, Mapping) else {}
@@ -4448,12 +4473,12 @@ class TemporalAgentRuntimeActivities:
             or selected_skill == _AUTO_SKILL_SENTINEL
             or not workspace_path
         ):
-            return False
+            return None
 
         workspace = Path(workspace_path).expanduser().resolve()
         run_root = self._managed_session_run_root_for_workspace(workspace)
         if run_root is None:
-            return False
+            return None
 
         skillset_ref = str(request.resolved_skillset_ref or "").strip()
         if not skillset_ref:
@@ -4485,13 +4510,25 @@ class TemporalAgentRuntimeActivities:
                 backing_root=str(skills_backing_root),
                 source_preservation_root=str(skill_source_preservation_root),
             )
-            await materializer.materialize(
+            materialization = await materializer.materialize(
                 resolved_skillset=resolved_skillset,
                 runtime_id=str(request.agent_id or "managed-runtime"),
                 mode=RuntimeMaterializationMode.HYBRID,
             )
+            if materialization is None:
+                raise TemporalActivityRuntimeError(
+                    "selected skill materialization failed before runtime launch: "
+                    "active skills visiblePath metadata is missing"
+                )
+            metadata = materialization.metadata
+            visible_path_raw = str(metadata.get("visiblePath") or "").strip()
+            if not visible_path_raw:
+                raise TemporalActivityRuntimeError(
+                    "selected skill materialization failed before runtime launch: "
+                    "active skills visiblePath metadata is missing"
+                )
             self._validate_selected_skill_projection(
-                workspace=workspace,
+                visible_path=Path(visible_path_raw),
                 selected_skill=selected_skill,
                 resolved_skillset=resolved_skillset,
             )
@@ -4502,22 +4539,22 @@ class TemporalAgentRuntimeActivities:
                 f"selected skill materialization failed for '{selected_skill}': {exc}"
             ) from exc
 
-        return True
+        return metadata
 
     @staticmethod
     def _validate_selected_skill_projection(
         *,
-        workspace: Path,
+        visible_path: Path,
         selected_skill: str,
         resolved_skillset: ResolvedSkillSet,
     ) -> None:
         """Fail before launch if the runtime-visible active skill projection is absent."""
 
-        visible_skills_dir = workspace / ".agents" / "skills"
+        visible_skills_dir = visible_path.expanduser()
         if not visible_skills_dir.exists() or not visible_skills_dir.is_dir():
             raise TemporalActivityRuntimeError(
                 "selected skill materialization failed before runtime launch: "
-                f".agents/skills projection is missing at {visible_skills_dir}"
+                f"active skills visiblePath is missing at {visible_skills_dir}"
             )
 
         selected_skill_doc = visible_skills_dir / selected_skill / "SKILL.md"
@@ -4606,7 +4643,7 @@ class TemporalAgentRuntimeActivities:
         instructions: str,
         *,
         parameters: Mapping[str, Any] | None,
-        skill_snapshot_materialized: bool = False,
+        skill_materialization_metadata: Mapping[str, Any] | None = None,
     ) -> str:
         prepared = cls._append_selected_jira_tool_hint(
             instructions,
@@ -4615,7 +4652,7 @@ class TemporalAgentRuntimeActivities:
         prepared = cls._prepend_selected_skill_activation(
             prepared,
             parameters=parameters,
-            skill_snapshot_materialized=skill_snapshot_materialized,
+            skill_materialization_metadata=skill_materialization_metadata,
         )
         prepared = cls._append_managed_step_boundary(prepared)
         return append_managed_codex_runtime_note(prepared)
@@ -4647,24 +4684,35 @@ class TemporalAgentRuntimeActivities:
         instructions: str,
         *,
         parameters: Mapping[str, Any] | None,
-        skill_snapshot_materialized: bool = False,
+        skill_materialization_metadata: Mapping[str, Any] | None = None,
     ) -> str:
         selected_skill = selected_agent_skill(parameters)
         if (
             not selected_skill
             or selected_skill == _AUTO_SKILL_SENTINEL
-            or not skill_snapshot_materialized
+            or not skill_materialization_metadata
         ):
             return instructions
         if "Active MoonMind skill snapshot:" in instructions:
             return instructions
+        visible_path = str(skill_materialization_metadata.get("visiblePath") or "").strip()
+        skill_doc = f"{visible_path}/{selected_skill}/SKILL.md" if visible_path else ""
+        alias_available = bool(
+            skill_materialization_metadata.get("canonicalAliasAvailable")
+        )
         block = (
             "Active MoonMind skill snapshot:\n"
             f"- Selected skill: {selected_skill}\n"
-            f"- Read `.agents/skills/{selected_skill}/SKILL.md` first and follow that active snapshot.\n"
-            "- `.agents/skills` is the resolved active skill projection for this managed step.\n"
+            f"- Full active MoonMind skill content is available at: {visible_path}\n"
+            f"- Read `{skill_doc}` first and follow that active snapshot.\n"
             "- Do not discover skills from repo-local or local-only source folders during execution.\n\n"
         )
+        if not alias_available:
+            block = block.rstrip() + (
+                "\n- The repository also contains `.agents/skills`; that directory "
+                "is repo-authored source and must not be modified or treated as "
+                "the active selected skill snapshot.\n\n"
+            )
         return block + instructions
 
     @staticmethod
@@ -5722,7 +5770,21 @@ class TemporalAgentRuntimeActivities:
             else:
                 projection = workspace.expanduser().resolve() / "skills_active"
             if projection.is_symlink():
-                return True
+                projection_resolved = projection.resolve(strict=False)
+                if (projection_resolved / "_manifest.json").is_file():
+                    return True
+                for owned_root in [
+                    workspace.expanduser().resolve() / "runtime" / "skills_active",
+                    workspace.expanduser().resolve().parent / "runtime" / "skills_active",
+                    workspace.expanduser().resolve() / "skills_active",
+                ]:
+                    try:
+                        projection_resolved.relative_to(
+                            owned_root.resolve(strict=False)
+                        )
+                        return True
+                    except ValueError:
+                        continue
         return False
 
     @staticmethod

@@ -165,6 +165,23 @@ Rules:
 * reruns reuse the original snapshot by default
 * explicit re-resolution is a separate action, not an implicit side effect of retry
 
+Replay compatibility is part of the retry boundary. A failed or timed-out
+activity can be retried only if the workflow can replay to the same activity
+command. If workflow code changes add, remove, or reorder activities in
+`MoonMind.AgentRun`, the change must use Temporal patch/version markers or Worker
+Versioning so in-flight histories continue on their recorded command path. For
+session-backed Codex runs this includes the relative order of
+`agent_runtime.prepare_turn_instructions`, session launch/status activities, and
+`agent_runtime.send_turn`.
+
+Automatic step recovery therefore has two layers:
+
+* activity-level retry for idempotent side-effecting work, controlled by the
+  activity catalog and durable idempotency keys;
+* workflow-level replay recovery for command-order changes, controlled by
+  Temporal versioning or a reset/resume operation from a safe parent/child
+  boundary.
+
 ---
 
 ## 3. Canonical contract rule

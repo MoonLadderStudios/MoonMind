@@ -90,6 +90,29 @@ Parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then derive:
 
 If shell arguments contain single quotes, use shell-safe escaping such as `'I'\''m Groot'`, or double quotes when possible.
 
+## Workspace Projection Preflight
+
+Before running full-suite verification commands, ensure the repository view is not
+contaminated by a MoonMind active skill projection:
+
+```bash
+test ! -L .agents/skills
+test ! -L .gemini/skills
+test ! -e skills_active || test -L skills_active
+git status --porcelain -- .agents/skills .gemini/skills skills_active
+```
+
+If `.agents/skills` or `.gemini/skills` is an active projection symlink, repair
+the checkout view before running full-suite evidence. Prefer restoring the
+tracked repository files or using a clean reclone/worktree. If repair is not
+possible, stop with verdict `ADDITIONAL_WORK_NEEDED`, include the diagnostic
+`ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION`, and do not report
+`NO_DETERMINATION` merely because MoonMind's active projection masked tracked
+skill files.
+
+Real repo-authored `.agents/skills` directories are valid source input and must
+not be deleted, moved, or treated as the active selected skill snapshot.
+
 ## Load Verification Sources
 
 Read:

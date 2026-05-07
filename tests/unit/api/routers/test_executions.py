@@ -5525,6 +5525,136 @@ def test_describe_execution_exposes_edit_for_rerun_for_failed_task(
     assert body["actions"]["canEditForRerun"] is True
     assert body["actions"]["canRerun"] is True
 
+def test_describe_execution_exposes_failed_step_resume_distinct_from_lifecycle_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.memo = {
+        **record.memo,
+        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "resume_failed_step_id": "implement",
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["actions"]["canResume"] is False
+    assert body["actions"]["canResumeFromFailedStep"] is True
+    assert body["resume"]["available"] is True
+    assert (
+        body["resume"]["checkpointRef"]
+        == "artifact://resume-checkpoints/source/checkpoint-v1"
+    )
+    assert body["resume"]["failedStepId"] == "implement"
+    assert body["resume"]["sourceRunId"] == "run-2"
+
+def test_failed_step_resume_request_rejects_edited_task_payload_fields() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED
+    )
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = _empty_session_override
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/resume-from-failed-step",
+            json={
+                "idempotencyKey": "resume-1",
+                "task": {"instructions": "change the task"},
+                "runtime": {"model": "gpt-5.4"},
+            },
+        )
+
+    assert response.status_code == 400
+    body = response.json()["detail"]
+    assert body["code"] == "resume_payload_not_allowed"
+    assert body["fields"] == ["runtime", "task"]
+
+
+def test_failed_step_resume_hydrates_checkpoint_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.memo = {
+        **canonical.memo,
+        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "task_input_snapshot_ref": "artifact://snapshot/source",
+    }
+    mock_service.describe_execution.return_value = canonical
+    mock_service.create_failed_step_resume_execution.return_value = {
+        "accepted": True,
+        "applied": "created_resumed_execution",
+        "source": {"workflowId": canonical.workflow_id, "runId": canonical.run_id},
+        "execution": {
+            "workflowId": "mm:resumed",
+            "runId": "run-resumed",
+            "detailHref": "/tasks/mm:resumed",
+        },
+        "relationship": "Resumed from failed step",
+        "resumeCheckpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+    }
+
+    checkpoint_payload = {
+        "schemaVersion": "v1",
+        "source": {"workflowId": canonical.workflow_id, "runId": canonical.run_id},
+        "taskInputSnapshotRef": "artifact://snapshot/source",
+        "failedStep": {
+            "logicalStepId": "implement",
+            "order": 2,
+            "attempt": 1,
+        },
+    }
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(SimpleNamespace(), json.dumps(checkpoint_payload).encode())
+        )
+    )
+
+    class Session:
+        async def get(self, model, key):
+            return canonical
+
+        async def commit(self):
+            return None
+
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: Session()
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/resume-from-failed-step",
+            json={"idempotencyKey": "resume-1"},
+        )
+
+    assert response.status_code == 201
+    artifact_service.read.assert_awaited_once()
+    call_kwargs = mock_service.create_failed_step_resume_execution.await_args.kwargs
+    assert call_kwargs["checkpoint_payload"] == checkpoint_payload
+    assert call_kwargs["resume_checkpoint_ref"] is None
+
 def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

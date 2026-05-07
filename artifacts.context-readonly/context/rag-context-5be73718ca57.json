@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/test_jira_story_planner.py (score: 1.000, trust: canonical)\n    line 5: from moonmind.planning import JiraStoryPlanner, JiraStoryPlannerError, StoryDraft\n2. api_service/main.py (score: 1.000, trust: canonical)\n    line 45: from api_service.api.routers.jira_browser import router as jira_browser_router\n3. moonmind/config/logging.py (score: 1.000, trust: canonical)\n    line 89: structured: When true, emit JSON logs that preserve ``extra`` fields.\n4. moonmind/config/settings.py (score: 1.000, trust: canonical)\n    line 24: _JIRA_PROJECT_KEY_PATTERN = re.compile(r\"^[A-Za-z][A-Za-z0-9]+$\")\n5. moonmind/core/artifacts.py (score: 1.000, trust: canonical)\n    line 32: PREVIEW_ONLY = \"preview_only\"\n6. moonmind/observability/transport.py (score: 1.000, trust: canonical)\n    line 23: # but in our architecture, only the single supervisor writes to it.\n7. moonmind/planning/__init__.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"\n8. moonmind/planning/jira_story_planner.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/test_jira_story_planner.py",
+      "text": "line 5: from moonmind.planning import JiraStoryPlanner, JiraStoryPlannerError, StoryDraft",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/main.py",
+      "text": "line 45: from api_service.api.routers.jira_browser import router as jira_browser_router",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 45,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/config/logging.py",
+      "text": "line 89: structured: When true, emit JSON logs that preserve ``extra`` fields.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 89,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/config/settings.py",
+      "text": "line 24: _JIRA_PROJECT_KEY_PATTERN = re.compile(r\"^[A-Za-z][A-Za-z0-9]+$\")",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 24,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/core/artifacts.py",
+      "text": "line 32: PREVIEW_ONLY = \"preview_only\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 32,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/observability/transport.py",
+      "text": "line 23: # but in our architecture, only the single supervisor writes to it.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 23,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/__init__.py",
+      "text": "line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/jira_story_planner.py",
+      "text": "line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-07T06:59:46Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

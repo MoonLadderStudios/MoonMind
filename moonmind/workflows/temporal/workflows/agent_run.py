@@ -125,6 +125,9 @@ STORY_BREAKDOWN_ARTIFACT_HANDOFF_PATCH_ID = (
 MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-prepare-turn-instructions-activity-v1"
 )
+MANAGED_SESSION_DEFER_TURN_INSTRUCTIONS_UNTIL_LAUNCH_PATCH_ID = (
+    "agent-run-managed-session-defer-turn-instructions-until-launch-v1"
+)
 PR_RESOLVER_PAYLOAD_SKILL_DETECTION_PATCH_ID = (
     "agent-run-pr-resolver-payload-skill-detection-v1"
 )
@@ -1573,6 +1576,9 @@ class MoonMindAgentRun:
                         use_prepare_turn_instructions_activity = workflow.patched(
                             MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID
                         )
+                        defer_turn_instructions_until_session_launch = workflow.patched(
+                            MANAGED_SESSION_DEFER_TURN_INSTRUCTIONS_UNTIL_LAUNCH_PATCH_ID
+                        )
                         if request.managed_session is None:
                             raise ApplicationError(
                                 "managedSession is required for Codex session-backed runs",
@@ -1706,6 +1712,9 @@ class MoonMindAgentRun:
                             workspace_root=_MANAGED_RUNTIME_STORE_ROOT,
                             session_image_ref=_DEFAULT_SESSION_IMAGE_REF,
                             launch_context_builder=_launch_context_builder,
+                            defer_turn_instructions_until_session_launch=(
+                                defer_turn_instructions_until_session_launch
+                            ),
                         )
                     else:
                         adapter = ManagedAgentAdapter(

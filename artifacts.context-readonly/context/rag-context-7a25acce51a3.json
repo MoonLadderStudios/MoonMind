@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. specs/013-queue-hardening-quality/data-model.md (score: 1.000, trust: canonical)\n    line 27: - `status` adds `dead_letter` enum value.\n2. specs/084-live-log-tailing/plan.md (score: 1.000, trust: canonical)\n    line 26: | Principle | Status | Notes |\n3. specs/084-live-log-tailing/data-model.md (score: 1.000, trust: canonical)\n    line 15: | `status` | Enum | Drives panel state rendering (DISABLED, STARTING, READY, ENDED, ERROR, REVOKED) |\n4. specs/084-live-log-tailing/spec.md (score: 1.000, trust: canonical)\n    line 5: **Status**: Draft\n5. specs/143-live-logs-continuity-unification/spec.md (score: 1.000, trust: canonical)\n    line 5: **Status**: Draft\n6. specs/084-live-log-tailing/contracts/requirements-traceability.md (score: 1.000, trust: canonical)\n    line 12: | DOC-REQ-006 | FR-004 | `dashboard.js`: show loading spinner when session status is `STARTING` | Manual: observe on provisioning task; Unit: mock STARTING state |\n7. specs/053-resubmit-terminal-tasks/data-model.md (score: 1.000, trust: canonical)\n    line 9: - `status` (enum queue status)\n8. specs/250-unrestricted-container-and-docker-cli-contracts/plan.md (score: 1.000, trust: canonical)\n    line 10: ## Requirement Status",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "specs/013-queue-hardening-quality/data-model.md",
+      "text": "line 27: - `status` adds `dead_letter` enum value.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 27,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "specs/084-live-log-tailing/plan.md",
+      "text": "line 26: | Principle | Status | Notes |",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 26,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "specs/084-live-log-tailing/data-model.md",
+      "text": "line 15: | `status` | Enum | Drives panel state rendering (DISABLED, STARTING, READY, ENDED, ERROR, REVOKED) |",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 15,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "specs/084-live-log-tailing/spec.md",
+      "text": "line 5: **Status**: Draft",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "specs/143-live-logs-continuity-unification/spec.md",
+      "text": "line 5: **Status**: Draft",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "specs/084-live-log-tailing/contracts/requirements-traceability.md",
+      "text": "line 12: | DOC-REQ-006 | FR-004 | `dashboard.js`: show loading spinner when session status is `STARTING` | Manual: observe on provisioning task; Unit: mock STARTING state |",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 12,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "specs/053-resubmit-terminal-tasks/data-model.md",
+      "text": "line 9: - `status` (enum queue status)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 9,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "specs/250-unrestricted-container-and-docker-cli-contracts/plan.md",
+      "text": "line 10: ## Requirement Status",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 10,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-07T06:51:30Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
