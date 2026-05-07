@@ -3561,13 +3561,18 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: 0;
   background: radial-gradient(
     circle at center,
-    rgb(255 255 255 / 0.48) 0%,
-    rgb(var(--mm-accent-2) / 0.3) 22%,
-    rgb(var(--mm-action-primary) / 0.18) 48%,
-    rgb(var(--mm-action-primary) / 0.08) 68%,
-    rgb(var(--mm-action-primary) / 0) 88%
+    rgb(255 255 255 / 0.22) 0%,
+    rgb(var(--mm-action-primary) / 0.08) 28%,
+    rgb(var(--mm-action-primary) / 0.5) 41%,
+    rgb(var(--mm-action-primary) / 0.28) 54%,
+    rgb(var(--mm-action-primary) / 0.16) 68%,
+    rgb(var(--mm-action-primary) / 0) 100%
   );
-  filter: blur(8px);
+  box-shadow:
+    0 0 0 1px rgb(var(--mm-action-primary) / 0.54),
+    0 0 22px 3px rgb(var(--mm-action-primary) / 0.42),
+    0 0 38px 8px rgb(var(--mm-action-primary) / 0.18);
+  filter: blur(2px);
   transform-origin: center;
   animation: queue-submit-primary-ripple 620ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
 }
