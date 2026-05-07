@@ -61,6 +61,33 @@ def test_ensure_shared_skill_links_can_treat_gemini_link_as_optional(tmp_path):
     assert "existing non-symlink path present" in links.gemini_skills_error
     validate_shared_skill_links(links, require_gemini_link=False)
 
+
+def test_ensure_shared_skill_links_replaces_stale_owned_agents_symlink(tmp_path):
+    run_root = tmp_path / "runs" / "run-stale-owned"
+    skills_active = run_root / "runtime" / "skills_active" / "active"
+    stale_active = run_root / "runtime" / "skills_active" / "stale"
+    skills_active.mkdir(parents=True)
+    stale_active.mkdir(parents=True)
+    (stale_active / "_manifest.json").write_text(
+        '{"snapshot_id": "stale"}\n',
+        encoding="utf-8",
+    )
+    agents = run_root / ".agents" / "skills"
+    agents.parent.mkdir(parents=True)
+    agents.symlink_to(stale_active)
+
+    links = ensure_shared_skill_links(
+        run_root=run_root,
+        skills_active_path=skills_active,
+        owned_roots=(run_root / "runtime" / "skills_active",),
+    )
+
+    assert links.agents_skills_path.is_symlink()
+    assert links.agents_skills_path.resolve() == skills_active.resolve()
+    assert links.agents_skills_status == "created"
+    validate_shared_skill_links(links)
+
+
 def test_validate_shared_skill_links_detects_target_drift(tmp_path):
     run_root = tmp_path / "runs" / "run-3"
     skills_active = run_root / "skills_active"

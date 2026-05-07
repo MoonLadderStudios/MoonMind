@@ -167,6 +167,22 @@ class AgentSkillMaterializer:
                 compatibility_paths["agentsSkillsError"] = links.agents_skills_error
             if links.gemini_skills_error:
                 compatibility_paths["geminiSkillsError"] = links.gemini_skills_error
+            projection_diagnostics = [
+                self._alias_projection_diagnostic(
+                    alias_path=links.agents_skills_path,
+                    status=links.agents_skills_status,
+                    visible_path=visible_path,
+                    snapshot_id=resolved_skillset.snapshot_id,
+                    reason=alias_skipped_reason or links.agents_skills_error,
+                ),
+                self._alias_projection_diagnostic(
+                    alias_path=links.gemini_skills_path,
+                    status=links.gemini_skills_status,
+                    visible_path=visible_path,
+                    snapshot_id=resolved_skillset.snapshot_id,
+                    reason=links.gemini_skills_error,
+                ),
+            ]
             result.metadata.update(
                 {
                     "activeSkills": [
@@ -178,6 +194,7 @@ class AgentSkillMaterializer:
                     "canonicalAliasSkippedReason": alias_skipped_reason,
                     "compatibilityPaths": compatibility_paths,
                     "manifestPath": str(manifest_path),
+                    "projectionDiagnostics": projection_diagnostics,
                     "repoSkillSourcePreserved": self._repo_skill_source_preserved(alias_dir),
                     "visiblePath": str(visible_path),
                 }
@@ -213,13 +230,6 @@ class AgentSkillMaterializer:
             payload["selection_reason"] = entry.selection_reason
         return payload
 
-    def _should_preserve_visible_source_dir(self, visible_dir: Path) -> bool:
-        if self.source_preservation_root is None:
-            return False
-        if not visible_dir.exists() or visible_dir.is_symlink():
-            return False
-        return visible_dir.is_dir()
-
     @staticmethod
     def _is_repo_authored_skills_dir(visible_dir: Path) -> bool:
         return visible_dir.exists() and visible_dir.is_dir() and not visible_dir.is_symlink()
@@ -230,33 +240,24 @@ class AgentSkillMaterializer:
             return False
         return not visible_dir.exists() or visible_dir.is_dir()
 
-    def _move_visible_source_to_preservation_root(self, visible_dir: Path) -> None:
-        if self.source_preservation_root is None:
-            return
-        try:
-            self.source_preservation_root.parent.mkdir(parents=True, exist_ok=True)
-            if self.source_preservation_root.exists():
-                self._remove_directory_path(self.source_preservation_root)
-            shutil.move(str(visible_dir), str(self.source_preservation_root))
-        except OSError as ex:
-            raise RuntimeError(
-                self._projection_error_message(visible_dir, cause=str(ex))
-            ) from ex
-
-    def _restore_preserved_visible_source(self, visible_dir: Path) -> None:
-        if self.source_preservation_root is None:
-            return
-        try:
-            if visible_dir.is_symlink():
-                visible_dir.unlink()
-            elif visible_dir.exists():
-                self._remove_directory_path(visible_dir)
-            if self.source_preservation_root.exists():
-                shutil.move(str(self.source_preservation_root), str(visible_dir))
-        except OSError as ex:
-            raise RuntimeError(
-                self._projection_error_message(visible_dir, cause=str(ex))
-            ) from ex
+    def _alias_projection_diagnostic(
+        self,
+        *,
+        alias_path: Path,
+        status: str,
+        visible_path: Path,
+        snapshot_id: str,
+        reason: str | None,
+    ) -> dict[str, str | None]:
+        return {
+            "activeVisiblePath": str(visible_path),
+            "aliasPath": str(alias_path),
+            "event": f"skill_projection_alias_{status}",
+            "reason": reason,
+            "snapshotId": snapshot_id,
+            "status": status,
+            "workspace": str(self.workspace_root),
+        }
 
     @staticmethod
     def _clear_directory(path: Path) -> None:

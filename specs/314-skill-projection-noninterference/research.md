@@ -50,9 +50,9 @@ Test implications: unit.
 
 ## FR-008 / DESIGN-REQ-005
 
-Decision: partial. Preserve-and-link is not the normal flow, but dormant helper methods remain without explicit mode or lease semantics.
-Evidence: `AgentSkillMaterializer` still defines `_move_visible_source_to_preservation_root()` and `_restore_preserved_visible_source()`, but the current `materialize()` flow does not call them.
-Rationale: The story requires preserve-and-link not be default and, if retained, be explicit and lease-backed. Implementation must either remove inaccessible helpers or make fallback mode explicit.
+Decision: implemented. Preserve-and-link is not the normal flow, and the dormant helper methods that encoded the old move/restore behavior have been removed.
+Evidence: `tests/unit/services/test_skill_materialization.py` asserts `AgentSkillMaterializer` no longer exposes `_move_visible_source_to_preservation_root()`, `_restore_preserved_visible_source()`, or `_should_preserve_visible_source_dir()`.
+Rationale: The story requires preserve-and-link not be default and, if retained, be explicit and lease-backed. Removing the inaccessible helpers avoids an accidental return to the old unsafe normal path.
 Alternatives considered: Ignore dormant helpers; rejected because they encode the old unsafe behavior and may be reused accidentally.
 Test implications: unit.
 
