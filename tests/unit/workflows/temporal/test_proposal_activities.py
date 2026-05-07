@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 import contextlib
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -947,6 +947,39 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("triggerRepo", call_kwargs["origin_metadata"])
         self.assertIn("delivery_decisions", result)
+        self.assertEqual(result["delivery_decisions"][0]["provider"], "jira")
+
+    async def test_auto_delivery_provider_uses_configured_default(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        with patch(
+            "moonmind.workflows.temporal.activity_runtime.settings.task_proposals.proposal_delivery_provider_default",
+            "jira",
+        ):
+            result = await activities.proposal_submit(
+                {
+                    "candidates": [
+                        {
+                            "title": "Fix bug",
+                            "summary": "Bug in module X",
+                            "taskCreateRequest": {
+                                "payload": {"repository": "org/repo"}
+                            },
+                        }
+                    ],
+                    "policy": {"delivery": {"provider": "auto"}},
+                    "origin": {"workflow_id": "wf-1"},
+                }
+            )
+
+        self.assertEqual(result["submitted_count"], 1)
+        call_kwargs = mock_service.create_proposal.await_args.kwargs
+        self.assertEqual(call_kwargs["provider"], "jira")
         self.assertEqual(result["delivery_decisions"][0]["provider"], "jira")
 
     async def test_moonmind_target_rewrites_repository_after_gates(self) -> None:

@@ -2954,10 +2954,11 @@ class TemporalProposalActivities:
 
         provider_metadata = dict(effective_policy.provider_metadata or {})
         delivery_provider = effective_policy.delivery_provider
-        if delivery_provider == "github" and (
+        if delivery_provider == "auto" or (
             not parsed_policy
             or not parsed_policy.delivery
             or not parsed_policy.delivery.provider
+            or parsed_policy.delivery.provider == "auto"
         ):
             delivery_provider = str(
                 getattr(

@@ -132,6 +132,18 @@ class TaskProposalService:
         scrubbed = self._redactor.scrub(serialized)
         return json.loads(scrubbed)
 
+    def _merge_json_objects(
+        self, existing: Mapping[str, Any], incoming: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        merged = dict(existing)
+        for key, value in incoming.items():
+            old_value = merged.get(key)
+            if isinstance(old_value, Mapping) and isinstance(value, Mapping):
+                merged[key] = self._merge_json_objects(old_value, value)
+            else:
+                merged[key] = value
+        return merged
+
     @staticmethod
     def _slugify_title(title: str) -> str:
         normalized = _DEDUP_SLUG_PATTERN.sub("-", title.lower()).strip("-")
@@ -722,13 +734,37 @@ class TaskProposalService:
                     normalized_provider,
                     repository,
                 )
-                duplicate.last_synced_at = datetime.now(UTC)
-                duplicate.provider_metadata = scrubbed_provider_metadata
-                duplicate.resolved_policy = {
-                    **scrubbed_resolved_policy,
-                    "duplicate": True,
-                    "duplicate_record_id": str(getattr(duplicate, "id", "")),
-                }
+                now = datetime.now(UTC)
+                duplicate.last_synced_at = last_synced_at or now
+                existing_provider_metadata = (
+                    dict(getattr(duplicate, "provider_metadata", {}))
+                    if isinstance(getattr(duplicate, "provider_metadata", {}), Mapping)
+                    else {}
+                )
+                existing_resolved_policy = (
+                    dict(getattr(duplicate, "resolved_policy", {}))
+                    if isinstance(getattr(duplicate, "resolved_policy", {}), Mapping)
+                    else {}
+                )
+                duplicate.provider_metadata = self._merge_json_objects(
+                    existing_provider_metadata, scrubbed_provider_metadata
+                )
+                duplicate.resolved_policy = self._merge_json_objects(
+                    existing_resolved_policy,
+                    {
+                        **scrubbed_resolved_policy,
+                        "duplicate": True,
+                        "duplicate_record_id": str(getattr(duplicate, "id", "")),
+                    },
+                )
+                if cleaned_external_key is not None:
+                    duplicate.external_key = cleaned_external_key
+                if cleaned_external_url is not None:
+                    duplicate.external_url = cleaned_external_url
+                if delivered_at is not None:
+                    duplicate.delivered_at = delivered_at
+                if cleaned_task_snapshot_ref is not None:
+                    duplicate.task_snapshot_ref = cleaned_task_snapshot_ref
                 duplicate.origin_external_id = (
                     getattr(duplicate, "origin_external_id", None)
                     or cleaned_origin_external_id

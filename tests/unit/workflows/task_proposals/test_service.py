@@ -758,6 +758,99 @@ async def test_create_proposal_returns_existing_open_duplicate_before_create() -
     service._emit_notification.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_create_proposal_merges_duplicate_delivery_metadata() -> None:
+    repo = AsyncMock()
+    existing_id = uuid4()
+    existing = SimpleNamespace(
+        id=existing_id,
+        status=TaskProposalStatus.OPEN,
+        title="Add tests",
+        summary="Existing follow-up",
+        category="tests",
+        tags=["tests"],
+        repository="Moon/Repo",
+        dedup_key="moon/repo:add-tests",
+        dedup_hash="hash",
+        review_priority=TaskProposalReviewPriority.NORMAL,
+        priority_override_reason=None,
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        origin_source=TaskProposalOriginSource.WORKFLOW,
+        origin_id=None,
+        origin_metadata={},
+        origin_external_id=None,
+        provider="jira",
+        external_key=None,
+        external_url=None,
+        delivered_at=None,
+        last_synced_at=None,
+        task_snapshot_ref=None,
+        provider_metadata={"jira": {"projectKey": "MM"}, "audit": "kept"},
+        resolved_policy={"provider": "jira", "decision": "kept"},
+        task_create_request={"payload": {"repository": "Moon/Repo"}},
+    )
+    delivered_at = datetime.now(UTC)
+    last_synced_at = datetime.now(UTC)
+    repo.find_open_duplicate.return_value = existing
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+    service._emit_notification = AsyncMock()
+
+    proposal = await service.create_proposal(
+        title="Add Tests",
+        summary="Ensure coverage",
+        category="Tests",
+        tags=["tests"],
+        task_create_request={
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {"repository": "Moon/Repo"},
+        },
+        origin_source="workflow",
+        origin_id=None,
+        origin_metadata={"workflow_id": "wf-1"},
+        origin_external_id="wf-1",
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        provider="jira",
+        external_key="MM-597",
+        external_url="https://example.atlassian.net/browse/MM-597",
+        delivered_at=delivered_at,
+        last_synced_at=last_synced_at,
+        task_snapshot_ref="artifact://task-snapshot",
+        provider_metadata={"jira": {"issueType": "Task"}},
+        resolved_policy={"target": "project"},
+    )
+
+    assert proposal is existing
+    assert existing.provider_metadata == {
+        "jira": {"projectKey": "MM", "issueType": "Task"},
+        "audit": "kept",
+    }
+    assert existing.resolved_policy == {
+        "provider": "jira",
+        "decision": "kept",
+        "target": "project",
+        "duplicate": True,
+        "duplicate_record_id": str(existing_id),
+    }
+    assert existing.external_key == "MM-597"
+    assert existing.external_url == "https://example.atlassian.net/browse/MM-597"
+    assert existing.delivered_at is delivered_at
+    assert existing.last_synced_at is last_synced_at
+    assert existing.task_snapshot_ref == "artifact://task-snapshot"
+    repo.create_proposal.assert_not_awaited()
+    repo.commit.assert_awaited_once()
+    service._emit_notification.assert_not_awaited()
+
+
 def test_compute_dedup_fields_are_repository_aware_and_title_normalized() -> None:
     service = TaskProposalService(AsyncMock(), redactor=SecretRedactor([], "***"))
 

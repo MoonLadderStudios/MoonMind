@@ -1818,9 +1818,8 @@ def build_effective_proposal_policy(
                 policy
                 and policy.delivery
                 and policy.delivery.provider
-                and policy.delivery.provider != "auto"
             )
-            else "github"
+            else "auto"
         ),
         provider_metadata=(
             policy.delivery.model_dump(by_alias=False, exclude_none=True)
