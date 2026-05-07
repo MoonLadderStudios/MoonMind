@@ -4236,6 +4236,14 @@ export interface components {
             resume?: components["schemas"]["ExecutionResumeSummaryModel"] | null;
             /** Relatedruns */
             relatedRuns?: components["schemas"]["ExecutionRelatedRunModel"][];
+            /** Proposalsummary */
+            proposalSummary?: {
+                [key: string]: unknown;
+            } | null;
+            /** Proposaloutcomes */
+            proposalOutcomes?: {
+                [key: string]: unknown;
+            }[];
             debugFields?: components["schemas"]["ExecutionDebugFieldsModel"] | null;
             /** Redirectpath */
             redirectPath?: string | null;
@@ -6575,6 +6583,10 @@ export interface components {
                 [key: string]: unknown;
             };
             taskPreview?: components["schemas"]["TaskProposalTaskPreview"] | null;
+            /** Promotionresult */
+            promotionResult?: {
+                [key: string]: unknown;
+            } | null;
             /** Similar */
             similar?: components["schemas"]["TaskProposalSimilarModel"][];
         };
@@ -6752,6 +6764,10 @@ export interface components {
             taskSkills?: string[] | null;
             /** Publishmode */
             publishMode?: string | null;
+            /** Priority */
+            priority?: number | null;
+            /** Maxattempts */
+            maxAttempts?: number | null;
             /** Startingbranch */
             startingBranch?: string | null;
             /** Targetbranch */

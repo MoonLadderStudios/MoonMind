@@ -11698,7 +11698,12 @@ class CodexWorker:
             validation_errors=tuple(
                 {"code": "proposal_validation_error", "message": error}
                 for error in errors
-                if "missing" in error or "invalid" in error
+                if (
+                    "missing" in error
+                    or "invalid" in error
+                    or "malformed" in error
+                    or "skipped" in error
+                )
             ),
             delivery_failures=tuple(delivery_failures),
             external_links=tuple(external_links),
@@ -11742,8 +11747,15 @@ class CodexWorker:
             error = delivery.get("error")
             if isinstance(error, Mapping):
                 failure.update(dict(error))
-            else:
-                failure["message"] = "delivery failed"
+            failure.setdefault("code", "delivery_failed")
+            failure.setdefault(
+                "message",
+                str(
+                    failure.get("sanitizedReason")
+                    or failure.get("reason")
+                    or "delivery failed"
+                ),
+            )
             delivery_failures.append(failure)
         return {
             "delivered_count": 1 if delivered else 0,

@@ -3148,6 +3148,8 @@ class TemporalProposalActivities:
                                     decision["duplicateSource"] = delivery_node[
                                         "duplicateSource"
                                     ]
+                                if "error" in delivery_node:
+                                    decision["error"] = delivery_node["error"]
                         submitted_count += 1
                     else:
                         logger.info(
@@ -3186,7 +3188,7 @@ class TemporalProposalActivities:
                 if external_key:
                     link["externalKey"] = external_key
                 external_links.append(link)
-            if external_url and status in {"", "delivered", "updated", "deduped"}:
+            if external_url and status in {"delivered", "updated", "deduped"}:
                 delivered_count += 1
             if decision.get("created") is False or decision.get("duplicateSource"):
                 dedup: dict[str, Any] = {"created": bool(decision.get("created"))}
@@ -3198,13 +3200,22 @@ class TemporalProposalActivities:
                     dedup["duplicateSource"] = decision["duplicateSource"]
                 dedup_updates.append(dedup)
             if status == "failed":
-                delivery_failures.append(
-                    {
-                        "provider": provider,
-                        "code": "delivery_failed",
-                        "message": "delivery failed",
-                    }
+                failure: dict[str, Any] = {}
+                if provider:
+                    failure["provider"] = provider
+                error = decision.get("error")
+                if isinstance(error, Mapping):
+                    failure.update(dict(error))
+                failure.setdefault("code", "delivery_failed")
+                failure.setdefault(
+                    "message",
+                    str(
+                        failure.get("sanitizedReason")
+                        or failure.get("reason")
+                        or "delivery failed"
+                    ),
                 )
+                delivery_failures.append(failure)
 
         return {
             "generated_count": generated_count,
@@ -3213,7 +3224,12 @@ class TemporalProposalActivities:
             "validationErrors": [
                 {"code": "proposal_validation_error", "message": error}
                 for error in errors
-                if "invalid" in error or "malformed" in error or "skipped" in error
+                if (
+                    "missing" in error
+                    or "invalid" in error
+                    or "malformed" in error
+                    or "skipped" in error
+                )
             ],
             "deliveryFailures": delivery_failures,
             "externalLinks": external_links,

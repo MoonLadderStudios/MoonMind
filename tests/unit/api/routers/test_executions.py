@@ -2432,7 +2432,45 @@ def test_serialize_execution_exposes_proposal_outcome_summary() -> None:
     assert payload["proposalSummary"]["deliveredCount"] == 1
     assert payload["proposalSummary"]["externalLinks"][0]["externalKey"] == "MM-901"
     assert payload["proposalOutcomes"][0]["provider"] == "jira"
-    assert payload["proposalOutcomes"][0]["externalUrl"] == "https://jira.example/browse/MM-901"
+    assert (
+        payload["proposalOutcomes"][0]["externalUrl"]
+        == "https://jira.example/browse/MM-901"
+    )
+
+
+def test_serialize_execution_deduplicates_proposal_outcomes_by_external_key() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.PROPOSALS)
+    record.memo["proposals"] = {
+        "externalLinks": [
+            {
+                "provider": "jira",
+                "externalKey": "MM-901",
+                "externalUrl": "https://jira.example/browse/MM-901",
+            }
+        ],
+        "dedupUpdates": [
+            {
+                "provider": "jira",
+                "externalKey": "MM-901",
+                "created": False,
+                "duplicateSource": "existing-open-issue",
+            }
+        ],
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["proposalOutcomes"] == [
+        {
+            "provider": "jira",
+            "externalKey": "MM-901",
+            "externalUrl": "https://jira.example/browse/MM-901",
+            "deliveryStatus": "updated",
+            "created": False,
+            "duplicateSource": "existing-open-issue",
+        }
+    ]
+
 
 def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> None:
     record = _build_execution_record()

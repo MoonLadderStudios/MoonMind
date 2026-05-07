@@ -655,6 +655,94 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["errors"]), 1)
         self.assertIn("DB down", result["errors"][0])
 
+    async def test_delivery_summary_preserves_failure_details_and_validation_keywords(
+        self,
+    ) -> None:
+        mock_service = AsyncMock()
+        mock_service.create_proposal.return_value = SimpleNamespace(
+            external_key="MM-901",
+            external_url="https://jira.example/browse/MM-901",
+            provider_metadata={
+                "delivery": {
+                    "status": "failed",
+                    "error": {
+                        "code": "provider_rejected",
+                        "sanitizedReason": "provider rejected delivery",
+                        "retryable": False,
+                    },
+                }
+            },
+        )
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "",
+                        "summary": "Missing title",
+                        "taskCreateRequest": {},
+                    },
+                    {
+                        "title": "Deliver proposal",
+                        "summary": "Exercise failed delivery summaries",
+                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                    },
+                ],
+                "policy": {},
+                "origin": {},
+            }
+        )
+
+        self.assertEqual(result["deliveredCount"], 0)
+        self.assertEqual(
+            result["deliveryFailures"],
+            [
+                {
+                    "provider": "github",
+                    "code": "provider_rejected",
+                    "sanitizedReason": "provider rejected delivery",
+                    "retryable": False,
+                    "message": "provider rejected delivery",
+                }
+            ],
+        )
+        self.assertIn("malformed", result["validationErrors"][0]["message"])
+
+    async def test_blank_delivery_status_is_not_counted_as_delivered(self) -> None:
+        mock_service = AsyncMock()
+        mock_service.create_proposal.return_value = SimpleNamespace(
+            external_key="MM-901",
+            external_url="https://jira.example/browse/MM-901",
+            provider_metadata={"delivery": {"status": ""}},
+        )
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Deliver proposal",
+                        "summary": "Blank status should not count as delivered",
+                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                    },
+                ],
+                "policy": {},
+                "origin": {},
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        self.assertEqual(result["deliveredCount"], 0)
+
 class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
     async def test_default_runtime_stamped_into_candidate(self) -> None:
         """When default_runtime is set and candidate has no runtime, stamp it."""

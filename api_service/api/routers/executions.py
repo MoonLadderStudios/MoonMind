@@ -1879,18 +1879,41 @@ def _proposal_outcomes_from_summary(
     if not proposal_summary:
         return []
     outcomes: list[dict[str, Any]] = []
+    outcome_index: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def merge_outcome(item: Mapping[str, Any], *, default_status: str) -> None:
+        outcome = dict(item)
+        outcome.setdefault("deliveryStatus", default_status)
+        external_url = str(outcome.get("externalUrl") or "").strip()
+        external_key = str(outcome.get("externalKey") or "").strip()
+        keys: list[tuple[str, str]] = []
+        if external_url:
+            keys.append(("url", external_url))
+        if external_key:
+            keys.append(("key", external_key))
+        if not keys:
+            outcomes.append(outcome)
+            return
+        existing = next(
+            (outcome_index[key] for key in keys if key in outcome_index), None
+        )
+        if existing is None:
+            for key in keys:
+                outcome_index[key] = outcome
+            outcomes.append(outcome)
+            return
+        existing.update({k: v for k, v in outcome.items() if v is not None})
+        for key in keys:
+            outcome_index[key] = existing
+
     for item in proposal_summary.get("externalLinks") or []:
         if not isinstance(item, Mapping):
             continue
-        outcome = dict(item)
-        outcome.setdefault("deliveryStatus", "delivered")
-        outcomes.append(outcome)
+        merge_outcome(item, default_status="delivered")
     for item in proposal_summary.get("dedupUpdates") or []:
         if not isinstance(item, Mapping):
             continue
-        outcome = dict(item)
-        outcome.setdefault("deliveryStatus", "updated")
-        outcomes.append(outcome)
+        merge_outcome(item, default_status="updated")
     return outcomes
 
 

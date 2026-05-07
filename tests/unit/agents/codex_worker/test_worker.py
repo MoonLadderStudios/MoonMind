@@ -1270,6 +1270,35 @@ async def test_worker_submission_report_aggregates_delivery_outcomes(
         },
     )
 
+
+async def test_worker_submission_outcome_preserves_delivery_failure_details() -> None:
+    outcome = CodexWorker._proposal_submission_outcome(
+        {
+            "provider": "jira",
+            "reviewDelivery": {
+                "provider": "jira",
+                "status": "failed",
+                "error": {
+                    "code": "provider_rejected",
+                    "sanitizedReason": "provider rejected delivery",
+                    "retryable": False,
+                },
+            },
+        }
+    )
+
+    assert outcome["delivered_count"] == 0
+    assert outcome["delivery_failures"] == [
+        {
+            "provider": "jira",
+            "code": "provider_rejected",
+            "sanitizedReason": "provider rejected delivery",
+            "retryable": False,
+            "message": "provider rejected delivery",
+        }
+    ]
+
+
 async def test_task_proposal_request_uses_task_flag_with_config_gate(
     tmp_path: Path,
 ) -> None:
