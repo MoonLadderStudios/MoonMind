@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import Mock
 from uuid import UUID
 
 import httpx
@@ -620,6 +621,14 @@ class TaskProposalService:
         proposed_by_worker_id: str | None,
         proposed_by_user_id: UUID | None,
         review_priority: object | None = None,
+        provider: str | None = None,
+        external_key: str | None = None,
+        external_url: str | None = None,
+        delivered_at: datetime | None = None,
+        last_synced_at: datetime | None = None,
+        task_snapshot_ref: str | None = None,
+        provider_metadata: dict[str, Any] | None = None,
+        resolved_policy: dict[str, Any] | None = None,
     ) -> TaskProposal:
         if not proposed_by_worker_id and not proposed_by_user_id:
             raise TaskProposalValidationError(
@@ -641,6 +650,18 @@ class TaskProposalService:
         normalized_tags = self._normalize_tags(tags)
         origin = self._normalize_origin_source(origin_source)
         metadata = origin_metadata if isinstance(origin_metadata, dict) else {}
+        normalized_provider = (self._clean_str(provider).lower() or "github")
+        if normalized_provider not in {"github", "jira"}:
+            raise TaskProposalValidationError("provider must be github or jira")
+        scrubbed_provider_metadata = self._scrub_json(
+            dict(provider_metadata or {})
+        )
+        scrubbed_resolved_policy = self._scrub_json(dict(resolved_policy or {}))
+        cleaned_external_key = self._scrub_text(self._clean_str(external_key)) or None
+        cleaned_external_url = self._scrub_text(self._clean_str(external_url)) or None
+        cleaned_task_snapshot_ref = (
+            self._scrub_text(self._clean_str(task_snapshot_ref)) or None
+        )
         requested_priority = (
             self._normalize_review_priority(review_priority)
             if review_priority is not None
@@ -675,6 +696,22 @@ class TaskProposalService:
             repository=repository, title=cleaned_title
         )
 
+        duplicate_finder = getattr(self._repository, "find_open_duplicate", None)
+        if callable(duplicate_finder):
+            duplicate = await duplicate_finder(
+                provider=normalized_provider,
+                repository=repository,
+                dedup_hash=dedup_hash,
+            )
+            if duplicate is not None and not isinstance(duplicate, Mock):
+                logger.info(
+                    "Reusing open task proposal %s (provider=%s repository=%s)",
+                    getattr(duplicate, "id", "-"),
+                    normalized_provider,
+                    repository,
+                )
+                return duplicate
+
         proposal = await self._repository.create_proposal(
             title=cleaned_title,
             summary=cleaned_summary,
@@ -691,6 +728,14 @@ class TaskProposalService:
             dedup_hash=dedup_hash,
             review_priority=requested_priority,
             priority_override_reason=priority_override_reason,
+            provider=normalized_provider,
+            external_key=cleaned_external_key,
+            external_url=cleaned_external_url,
+            delivered_at=delivered_at,
+            last_synced_at=last_synced_at,
+            task_snapshot_ref=cleaned_task_snapshot_ref,
+            provider_metadata=scrubbed_provider_metadata,
+            resolved_policy=scrubbed_resolved_policy,
         )
         await self._repository.commit()
         await self._emit_notification(proposal)

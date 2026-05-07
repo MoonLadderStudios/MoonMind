@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -692,3 +693,159 @@ async def test_promote_proposal_rejects_unresolved_preset_steps() -> None:
         )
 
     repo.commit.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_create_proposal_returns_existing_open_duplicate_before_create() -> None:
+    repo = AsyncMock()
+    existing = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        title="Add tests",
+        summary="Existing follow-up",
+        category="tests",
+        tags=["tests"],
+        repository="Moon/Repo",
+        dedup_key="moon/repo:add-tests",
+        dedup_hash="hash",
+        review_priority=TaskProposalReviewPriority.NORMAL,
+        priority_override_reason=None,
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        origin_source=TaskProposalOriginSource.WORKFLOW,
+        origin_id=None,
+        origin_metadata={},
+        provider="jira",
+        provider_metadata={"jira": {"projectKey": "MM"}},
+        task_create_request={"payload": {"repository": "Moon/Repo"}},
+    )
+    repo.find_open_duplicate.return_value = existing
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+    service._emit_notification = AsyncMock()
+
+    proposal = await service.create_proposal(
+        title="Add Tests",
+        summary="Ensure coverage",
+        category="Tests",
+        tags=["tests"],
+        task_create_request={
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {"repository": "Moon/Repo"},
+        },
+        origin_source="workflow",
+        origin_id=None,
+        origin_metadata={"workflow_id": "wf-1"},
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        provider="jira",
+        provider_metadata={"jira": {"projectKey": "MM"}},
+    )
+
+    assert proposal is existing
+    repo.find_open_duplicate.assert_awaited_once()
+    repo.create_proposal.assert_not_awaited()
+    service._emit_notification.assert_not_awaited()
+
+
+def test_compute_dedup_fields_are_repository_aware_and_title_normalized() -> None:
+    service = TaskProposalService(AsyncMock(), redactor=SecretRedactor([], "***"))
+
+    first_key, first_hash = service._compute_dedup_fields(
+        repository="Moon/Repo", title="Add   Tests!!"
+    )
+    second_key, second_hash = service._compute_dedup_fields(
+        repository="moon/repo", title="add-tests"
+    )
+    other_key, other_hash = service._compute_dedup_fields(
+        repository="Other/Repo", title="Add Tests"
+    )
+
+    assert first_key == second_key == "moon/repo:add-tests"
+    assert first_hash == second_hash
+    assert other_key == "other/repo:add-tests"
+    assert other_hash != first_hash
+
+@pytest.mark.asyncio
+async def test_create_proposal_persists_provider_metadata_separately() -> None:
+    repo = AsyncMock()
+    record = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        title="Add tests",
+        summary="Add follow-up",
+        category="tests",
+        tags=["tests"],
+        repository="Moon/Repo",
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        origin_source=TaskProposalOriginSource.WORKFLOW,
+        origin_id=None,
+        origin_metadata={"workflow_id": "wf-1"},
+        provider="jira",
+        provider_metadata={"jira": {"projectKey": "MM", "labels": ["moonmind"]}},
+        task_create_request={},
+    )
+    repo.find_open_duplicate.return_value = None
+    repo.create_proposal.return_value = record
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+    service._emit_notification = AsyncMock()
+
+    await service.create_proposal(
+        title="Add Tests",
+        summary="Ensure coverage",
+        category="Tests",
+        tags=["Auth"],
+        task_create_request={
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {"repository": "Moon/Repo"},
+        },
+        origin_source="workflow",
+        origin_id=None,
+        origin_metadata={"workflow_id": "wf-1", "trigger_repo": "Moon/Repo"},
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        provider="jira",
+        provider_metadata={"jira": {"projectKey": "MM", "labels": ["moonmind"]}},
+        resolved_policy={"provider": "jira", "decision": "accepted"},
+    )
+
+    kwargs = repo.create_proposal.await_args.kwargs
+    assert kwargs["provider"] == "jira"
+    assert kwargs["provider_metadata"] == {
+        "jira": {"projectKey": "MM", "labels": ["moonmind"]}
+    }
+    assert kwargs["resolved_policy"] == {"provider": "jira", "decision": "accepted"}
+    assert "provider_metadata" not in kwargs["origin_metadata"]
+
+
+def test_delivery_record_migration_declares_canonical_columns() -> None:
+    migration = Path("api_service/migrations/versions/311_proposal_delivery_records.py")
+
+    text = migration.read_text()
+
+    for column_name in (
+        "provider",
+        "external_key",
+        "external_url",
+        "delivered_at",
+        "last_synced_at",
+        "task_snapshot_ref",
+        "provider_metadata",
+        "resolved_policy",
+    ):
+        assert column_name in text

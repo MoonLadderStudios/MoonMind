@@ -179,6 +179,14 @@ def _serialize_proposal(
         "repository": proposal.repository,
         "dedupKey": proposal.dedup_key,
         "dedupHash": proposal.dedup_hash,
+        "provider": getattr(proposal, "provider", "github") or "github",
+        "externalKey": getattr(proposal, "external_key", None),
+        "externalUrl": getattr(proposal, "external_url", None),
+        "deliveredAt": getattr(proposal, "delivered_at", None),
+        "lastSyncedAt": getattr(proposal, "last_synced_at", None),
+        "taskSnapshotRef": getattr(proposal, "task_snapshot_ref", None),
+        "providerMetadata": getattr(proposal, "provider_metadata", None) or {},
+        "resolvedPolicy": getattr(proposal, "resolved_policy", None) or {},
         "reviewPriority": proposal.review_priority,
         "priorityOverrideReason": proposal.priority_override_reason,
         "proposedByWorkerId": proposal.proposed_by_worker_id,
@@ -230,6 +238,9 @@ async def create_proposal(
             proposed_by_worker_id=proposed_by_worker_id,
             proposed_by_user_id=proposed_by_user_id,
             review_priority=payload.review_priority,
+            provider=payload.provider,
+            provider_metadata=payload.provider_metadata,
+            resolved_policy=payload.resolved_policy,
         )
     except TaskProposalValidationError as exc:
         raise HTTPException(

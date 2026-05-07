@@ -54,3 +54,22 @@ After implementation and required tests pass, run the final read-only verificati
 ```
 
 The verification report should preserve MM-597, the canonical Jira preset brief, and DESIGN-REQ-001 through DESIGN-REQ-008.
+
+## Implementation Evidence - 2026-05-07
+
+Focused MM-597 validation passed:
+
+```bash
+python -m pytest tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/test_proposal_activities.py tests/unit/api/routers/test_task_proposals.py -q
+# 67 passed
+```
+
+Required unit suite passed in managed local test mode:
+
+```bash
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
+# Python: 4442 passed, 1 xpassed, 16 subtests passed
+# Frontend: 20 files passed; 324 passed, 223 skipped
+```
+
+Compose-backed `./tools/test_integration.sh` was not run for this implementation step because no new `integration_ci` test target was added; MM-597 coverage is exercised through the Temporal proposal activity boundary, service/repository unit coverage, API serialization coverage, and the migration declaration test.

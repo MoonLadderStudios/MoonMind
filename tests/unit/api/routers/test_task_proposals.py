@@ -7,7 +7,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.task_proposals import _get_service, _get_temporal_execution_service, router
+from api_service.api.routers.task_proposals import (
+    _get_service,
+    _get_temporal_execution_service,
+    router,
+)
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from moonmind.workflows.task_proposals.models import (
     TaskProposalOriginSource,
@@ -102,7 +106,9 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock, Asy
     payload = response.json()
     assert payload["repository"] == "Moon/Repo"
 
-def test_create_proposal_accepts_workflow_origin(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+def test_create_proposal_accepts_workflow_origin(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()
     proposal.origin_source = TaskProposalOriginSource.WORKFLOW
@@ -155,6 +161,36 @@ def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock, As
     assert kwargs["origin_id"] == origin_id
     payload = response.json()
     assert payload["items"]
+
+def test_list_proposals_serializes_delivery_record_fields(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "jira"
+    proposal.external_key = "MM-901"
+    proposal.external_url = "https://jira.example/browse/MM-901"
+    proposal.delivered_at = datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
+    proposal.last_synced_at = datetime(2026, 5, 7, 12, 45, tzinfo=UTC)
+    proposal.task_snapshot_ref = "artifact://tasks/proposals/MM-901.json"
+    proposal.provider_metadata = {"jira": {"project_key": "MM", "labels": ["moonmind"]}}
+    proposal.resolved_policy = {"provider": "jira", "target": "project"}
+    service.list_proposals.return_value = ([proposal], None)
+
+    response = test_client.get("/api/proposals")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["provider"] == "jira"
+    assert item["externalKey"] == "MM-901"
+    assert item["externalUrl"] == "https://jira.example/browse/MM-901"
+    assert item["taskSnapshotRef"] == "artifact://tasks/proposals/MM-901.json"
+    assert item["providerMetadata"] == {
+        "jira": {"project_key": "MM", "labels": ["moonmind"]}
+    }
+    assert item["resolvedPolicy"] == {"provider": "jira", "target": "project"}
+    assert item["deliveredAt"] == "2026-05-07T12:30:00Z"
+    assert item["lastSyncedAt"] == "2026-05-07T12:45:00Z"
 
 def test_promote_proposal_returns_proposal(
     client: tuple[TestClient, AsyncMock, AsyncMock],

@@ -766,6 +766,63 @@ class TaskContainerSelection(BaseModel):
             )
         return self
 
+class TaskProposalProviderPolicy(BaseModel):
+    """Provider-specific proposal delivery metadata."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    repository: str | None = Field(None, alias="repository")
+    project_key: str | None = Field(None, alias="projectKey")
+    issue_type: str | None = Field(None, alias="issueType")
+    labels: list[str] | None = Field(None, alias="labels")
+    components: list[str] | None = Field(None, alias="components")
+
+    @field_validator("repository", "project_key", "issue_type", mode="before")
+    @classmethod
+    def _clean_optional(cls, value: object) -> str | None:
+        return _clean_optional_str(value)
+
+    @field_validator("labels", "components", mode="before")
+    @classmethod
+    def _normalize_string_list(cls, value: object) -> list[str] | None:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, list):
+            raise TaskContractError(
+                "task.proposalPolicy.delivery labels/components must be lists"
+            )
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            item = _clean_optional_str(raw)
+            if not item or item in seen:
+                continue
+            normalized.append(item)
+            seen.add(item)
+        return normalized or None
+
+class TaskProposalDeliveryPolicy(BaseModel):
+    """Optional provider routing policy for proposal delivery."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    provider: str | None = Field(None, alias="provider")
+    github: TaskProposalProviderPolicy | None = Field(None, alias="github")
+    jira: TaskProposalProviderPolicy | None = Field(None, alias="jira")
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _normalize_provider(cls, value: object) -> str | None:
+        cleaned = _clean_optional_str(value)
+        if not cleaned:
+            return None
+        lowered = cleaned.lower()
+        if lowered not in {"auto", "github", "jira"}:
+            raise TaskContractError(
+                "task.proposalPolicy.delivery.provider must be github, jira, or auto"
+            )
+        return lowered
+
 class TaskProposalPolicy(BaseModel):
     """Optional policy block controlling worker proposal emission."""
 
@@ -775,6 +832,7 @@ class TaskProposalPolicy(BaseModel):
     max_items: dict[str, int] | None = Field(None, alias="maxItems")
     min_severity_for_moonmind: str | None = Field(None, alias="minSeverityForMoonMind")
     default_runtime: str | None = Field(None, alias="defaultRuntime")
+    delivery: TaskProposalDeliveryPolicy | None = Field(None, alias="delivery")
 
     @field_validator("default_runtime", mode="before")
     @classmethod
@@ -1261,6 +1319,8 @@ class EffectiveProposalPolicy:
     max_items_moonmind: int
     min_severity_for_moonmind: str
     severity_rank: dict[str, int]
+    delivery_provider: str
+    provider_metadata: dict[str, Any] = field(default_factory=dict)
     remaining_project_slots: int = field(init=False)
     remaining_moonmind_slots: int = field(init=False)
 
@@ -1752,6 +1812,21 @@ def build_effective_proposal_policy(
         max_items_moonmind=max_items_moonmind,
         min_severity_for_moonmind=severity_floor,
         severity_rank=severity_rank,
+        delivery_provider=(
+            policy.delivery.provider
+            if (
+                policy
+                and policy.delivery
+                and policy.delivery.provider
+                and policy.delivery.provider != "auto"
+            )
+            else "github"
+        ),
+        provider_metadata=(
+            policy.delivery.model_dump(by_alias=False, exclude_none=True)
+            if policy and policy.delivery
+            else {}
+        ),
     )
 
 def normalize_queue_job_payload(

@@ -466,6 +466,9 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "MoonMind 1",
                 "summary": "Three",
+                "category": "run_quality",
+                "tags": ["loop_detected"],
+                "severity": "medium",
                 "taskCreateRequest": {
                     "payload": {"repository": "MoonLadderStudios/MoonMind"}
                 },
@@ -473,6 +476,9 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "MoonMind 2",
                 "summary": "Four",
+                "category": "run_quality",
+                "tags": ["artifact_gap"],
+                "severity": "medium",
                 "taskCreateRequest": {
                     "payload": {"repository": "MoonLadderStudios/MoonMind"}
                 },
@@ -590,8 +596,8 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["submitted_count"], 1)
         mock_service.create_proposal.assert_awaited_once()
 
-    async def test_origin_metadata_uses_camelcase_trigger_keys(self) -> None:
-        """origin_metadata must use camelCase triggerRepo/triggerJobId per spec."""
+    async def test_origin_metadata_uses_snake_case_trigger_keys(self) -> None:
+        """origin_metadata uses snake_case trigger_repo/trigger_job_id for MM-597."""
         mock_service = AsyncMock()
         @contextlib.asynccontextmanager
         async def factory():
@@ -619,12 +625,12 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         )
         call_kwargs = mock_service.create_proposal.call_args.kwargs
         meta = call_kwargs["origin_metadata"]
-        self.assertIn("triggerRepo", meta)
-        self.assertIn("triggerJobId", meta)
-        self.assertNotIn("trigger_repo", meta)
-        self.assertNotIn("trigger_job_id", meta)
-        self.assertEqual(meta["triggerRepo"], "org/repo")
-        self.assertEqual(meta["triggerJobId"], "run-1")
+        self.assertIn("trigger_repo", meta)
+        self.assertIn("trigger_job_id", meta)
+        self.assertNotIn("triggerRepo", meta)
+        self.assertNotIn("triggerJobId", meta)
+        self.assertEqual(meta["trigger_repo"], "org/repo")
+        self.assertEqual(meta["trigger_job_id"], "run-1")
 
     async def test_service_failure_recorded(self) -> None:
         mock_service = AsyncMock()
@@ -847,3 +853,140 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
         stamped = call_kwargs["task_create_request"]
         self.assertEqual(stamped["payload"]["targetRuntime"], "codex")
         self.assertEqual(stamped["payload"]["task"]["runtime"]["mode"], "claude")
+
+class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
+    async def test_invalid_delivery_provider_rejects_policy_before_service_call(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Fix bug",
+                        "summary": "Bug in module X",
+                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                    }
+                ],
+                "policy": {"delivery": {"provider": "slack"}},
+                "origin": {"workflow_id": "wf-1"},
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 0)
+        self.assertEqual(result["generated_count"], 1)
+        self.assertTrue(result["errors"])
+        self.assertIn("invalid proposal policy", result["errors"][0])
+        mock_service.create_proposal.assert_not_called()
+
+    async def test_jira_delivery_policy_passes_provider_metadata_and_snake_case_origin(
+        self,
+    ) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Fix bug",
+                        "summary": "Bug in module X",
+                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                    }
+                ],
+                "policy": {
+                    "delivery": {
+                        "provider": "jira",
+                        "jira": {
+                            "projectKey": "MM",
+                            "issueType": "Task",
+                            "labels": ["moonmind"],
+                        },
+                    }
+                },
+                "origin": {
+                    "workflow_id": "wf-1",
+                    "temporal_run_id": "run-1",
+                    "trigger_repo": "org/repo",
+                    "trigger_job_id": "job-1",
+                },
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        call_kwargs = mock_service.create_proposal.await_args.kwargs
+        self.assertEqual(call_kwargs["provider"], "jira")
+        self.assertEqual(
+            call_kwargs["provider_metadata"],
+            {
+                "jira": {
+                    "project_key": "MM",
+                    "issue_type": "Task",
+                    "labels": ["moonmind"],
+                }
+            },
+        )
+        self.assertEqual(
+            call_kwargs["origin_metadata"],
+            {
+                "workflow_id": "wf-1",
+                "temporal_run_id": "run-1",
+                "trigger_repo": "org/repo",
+                "trigger_job_id": "job-1",
+                "signal": {"severity": "normal", "type": "follow_up"},
+            },
+        )
+        self.assertNotIn("triggerRepo", call_kwargs["origin_metadata"])
+        self.assertIn("delivery_decisions", result)
+        self.assertEqual(result["delivery_decisions"][0]["provider"], "jira")
+
+    async def test_moonmind_target_rewrites_repository_after_gates(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Fix loop",
+                        "summary": "Loop detected",
+                        "category": "run_quality",
+                        "tags": ["loop_detected"],
+                        "severity": "high",
+                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                    }
+                ],
+                "policy": {
+                    "targets": ["moonmind"],
+                    "minSeverityForMoonMind": "medium",
+                },
+                "origin": {
+                    "workflow_id": "wf-1",
+                    "temporal_run_id": "run-1",
+                    "trigger_repo": "org/repo",
+                    "trigger_job_id": "job-1",
+                },
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        call_kwargs = mock_service.create_proposal.await_args.kwargs
+        self.assertEqual(
+            call_kwargs["task_create_request"]["payload"]["repository"],
+            "MoonLadderStudios/MoonMind",
+        )
+        self.assertEqual(call_kwargs["category"], "run_quality")
+        self.assertEqual(call_kwargs["tags"], ["loop_detected"])
+        self.assertEqual(result["delivery_decisions"][0]["target"], "moonmind")

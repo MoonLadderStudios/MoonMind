@@ -2865,29 +2865,41 @@ class TemporalProposalActivities:
     ) -> dict[str, Any]:
         """Validate, filter, and submit generated proposals to the Proposal Queue API.
 
-        Returns a summary dict with ``generated_count``, ``submitted_count``,
-        and ``errors`` (redacted).
+        Returns a summary dict with generated/submitted counts, compact delivery
+        decisions, and redacted errors.
         """
         logger = getLogger(__name__)
         payload = dict(request or {})
         candidates: list[Any] = payload.get("candidates") or []
         policy: dict[str, Any] = payload.get("policy") or {}
         origin: dict[str, Any] = payload.get("origin") or {}
-        workflow_id: str = origin.get("workflow_id") or ""
-        run_id: str = origin.get("temporal_run_id") or ""
-        trigger_repo: str = origin.get("trigger_repo") or ""
+        workflow_id: str = str(origin.get("workflow_id") or "")
+        run_id: str = str(origin.get("temporal_run_id") or "")
+        trigger_repo: str = str(origin.get("trigger_repo") or "")
+        trigger_job_id: str = str(origin.get("trigger_job_id") or run_id or "")
 
         from moonmind.workflows.tasks.task_contract import (
             TaskProposalPolicy,
             build_effective_proposal_policy,
         )
 
+        generated_count = len(candidates)
+        delivery_decisions: list[dict[str, Any]] = []
+        errors: list[str] = []
+
         parsed_policy: TaskProposalPolicy | None = None
         if isinstance(policy, Mapping) and policy:
             try:
                 parsed_policy = TaskProposalPolicy.model_validate(policy)
             except Exception as exc:
-                logger.warning("proposal.submit: invalid proposal policy: %s", exc)
+                redacted = self._redactor.scrub(str(exc))[:200]
+                logger.warning("proposal.submit: invalid proposal policy: %s", redacted)
+                return {
+                    "generated_count": generated_count,
+                    "submitted_count": 0,
+                    "errors": [f"invalid proposal policy: {redacted}"],
+                    "delivery_decisions": [],
+                }
 
         effective_policy = build_effective_proposal_policy(
             policy=parsed_policy,
@@ -2921,16 +2933,45 @@ class TemporalProposalActivities:
         moonmind_repo = str(
             getattr(settings.task_proposals, "moonmind_ci_repository", "") or ""
         ).strip()
-        generated_count = len(candidates)
+        approved_moonmind_tags = {
+            "retry",
+            "duplicate_output",
+            "missing_ref",
+            "conflicting_instructions",
+            "flaky_test",
+            "loop_detected",
+            "artifact_gap",
+        }
         submitted_count = 0
-        errors: list[str] = []
 
         if not candidates:
             return {
                 "generated_count": 0,
                 "submitted_count": 0,
                 "errors": [],
+                "delivery_decisions": [],
             }
+
+        provider_metadata = dict(effective_policy.provider_metadata or {})
+        delivery_provider = effective_policy.delivery_provider
+        if delivery_provider == "github" and (
+            not parsed_policy
+            or not parsed_policy.delivery
+            or not parsed_policy.delivery.provider
+        ):
+            delivery_provider = str(
+                getattr(
+                    settings.task_proposals,
+                    "proposal_delivery_provider_default",
+                    "github",
+                )
+                or "github"
+            ).strip().lower()
+        provider_payload = {
+            key: value
+            for key, value in provider_metadata.items()
+            if key in {"github", "jira"} and isinstance(value, Mapping)
+        }
 
         service_or_ctx = None
         if self._proposal_service_factory is not None:
@@ -2944,6 +2985,7 @@ class TemporalProposalActivities:
                     "generated_count": generated_count,
                     "submitted_count": 0,
                     "errors": ["proposal service unavailable"],
+                    "delivery_decisions": [],
                 }
 
         import contextlib
@@ -2963,11 +3005,14 @@ class TemporalProposalActivities:
                 title = str(candidate.get("title") or "").strip()
                 summary = str(candidate.get("summary") or "").strip()
                 task_create_request = candidate.get("taskCreateRequest")
-                if not title or not summary or not isinstance(task_create_request, Mapping):
+                if (
+                    not title
+                    or not summary
+                    or not isinstance(task_create_request, Mapping)
+                ):
                     errors.append(f"skipped malformed candidate: {title!r}")
                     continue
 
-                # Stamp default runtime into taskCreateRequest if not already set
                 try:
                     stamped_request = self._validate_candidate_task_create_request(
                         task_create_request,
@@ -2986,25 +3031,63 @@ class TemporalProposalActivities:
                 target_repo = ""
                 if isinstance(payload_node, Mapping):
                     target_repo = str(payload_node.get("repository") or "").strip()
-                
-                should_submit = False
-                if effective_policy.consume_project_slot():
-                    should_submit = True
-                else:
-                    severity = str(candidate.get("severity") or "medium")
-                    is_moonmind_repo = (
-                        bool(moonmind_repo)
-                        and target_repo.lower() == moonmind_repo.lower()
-                    )
-                    if (
-                        is_moonmind_repo
-                        and effective_policy.severity_meets_floor(severity)
-                        and effective_policy.consume_moonmind_slot()
-                    ):
-                        should_submit = True
 
-                if not should_submit:
-                    continue
+                tags = [
+                    str(tag or "").strip().lower()
+                    for tag in (candidate.get("tags") or [])
+                ]
+                tags = [tag for tag in tags if tag]
+                category = str(candidate.get("category") or "").strip().lower()
+                severity = str(candidate.get("severity") or "medium").strip().lower()
+                wants_moonmind = (
+                    bool(moonmind_repo)
+                    and effective_policy.allow_moonmind
+                    and (
+                        not effective_policy.allow_project
+                        or target_repo.lower() == moonmind_repo.lower()
+                        or category in {"run_quality", "moonmind_ci"}
+                    )
+                    and category in {"run_quality", "moonmind_ci"}
+                    and bool(set(tags) & approved_moonmind_tags)
+                    and effective_policy.severity_meets_floor(severity)
+                )
+
+                target = "project"
+                if wants_moonmind:
+                    if not effective_policy.consume_moonmind_slot():
+                        delivery_decisions.append(
+                            {
+                                "title": title,
+                                "target": "moonmind",
+                                "accepted": False,
+                                "reason": "capacity",
+                            }
+                        )
+                        continue
+                    target = "moonmind"
+                    if isinstance(payload_node, dict):
+                        payload_node["repository"] = moonmind_repo
+                        stamped_request["payload"] = payload_node
+                    target_repo = moonmind_repo
+                else:
+                    if not effective_policy.consume_project_slot():
+                        delivery_decisions.append(
+                            {
+                                "title": title,
+                                "target": "project",
+                                "accepted": False,
+                                "reason": "capacity",
+                            }
+                        )
+                        continue
+
+                decision = {
+                    "title": title,
+                    "target": target,
+                    "repository": target_repo,
+                    "provider": delivery_provider,
+                    "accepted": True,
+                }
 
                 try:
                     if service is not None:
@@ -3016,9 +3099,9 @@ class TemporalProposalActivities:
                         origin_metadata = {
                             "workflow_id": workflow_id,
                             "temporal_run_id": run_id,
-                            "triggerRepo": trigger_repo,
-                            "triggerJobId": run_id,
-                            "signal": {"severity": "normal", "type": "follow_up"}
+                            "trigger_repo": trigger_repo,
+                            "trigger_job_id": trigger_job_id,
+                            "signal": {"severity": "normal", "type": "follow_up"},
                         }
                         await service.create_proposal(
                             title=title,
@@ -3031,19 +3114,29 @@ class TemporalProposalActivities:
                             origin_metadata=origin_metadata,
                             proposed_by_worker_id=f"temporal:{workflow_id}",
                             proposed_by_user_id=None,
+                            provider=delivery_provider,
+                            provider_metadata=provider_payload,
+                            resolved_policy={
+                                "provider": delivery_provider,
+                                "target": target,
+                                "repository": target_repo,
+                                "workflow_id": workflow_id,
+                            },
                         )
                         submitted_count += 1
                     else:
-                        # No service available — log and count as submitted for
-                        # structural verification in tests.
                         logger.info(
                             "proposal.submit: would submit proposal %r (no service wired)",
                             title,
                         )
                         submitted_count += 1
+                    delivery_decisions.append(decision)
                 except Exception as exc:
-                    redacted_error = str(exc)[:200]
+                    redacted_error = self._redactor.scrub(str(exc))[:200]
                     errors.append(f"submission failed for {title!r}: {redacted_error}")
+                    decision["accepted"] = False
+                    decision["reason"] = "submission_failed"
+                    delivery_decisions.append(decision)
                     logger.warning(
                         "proposal.submit: failed to submit proposal %r: %s",
                         title,
@@ -3054,6 +3147,7 @@ class TemporalProposalActivities:
             "generated_count": generated_count,
             "submitted_count": submitted_count,
             "errors": errors,
+            "delivery_decisions": delivery_decisions,
         }
 
 class TemporalAgentRuntimeActivities:
