@@ -793,6 +793,16 @@ describe('Mission Control shared entry', () => {
 
     const linkBlocks = cssRuleBlocks(missionControlCss, '.route-nav a');
     expect(linkBlocks.join('\n')).not.toMatch(/transition:[^;]*\btransform\b/);
+    const desktopLinkBlock = linkBlocks.find((block) =>
+      block.includes('padding: 0.48rem 0.82rem;'),
+    );
+    expect(desktopLinkBlock).toBeDefined();
+    expect(desktopLinkBlock).not.toMatch(/margin-bottom:\s*-/);
+
+    const underlineBlocks = cssRuleBlocks(missionControlCss, '.route-nav a::after');
+    expect(
+      underlineBlocks.some((block) => block.includes('bottom: -0.62rem;')),
+    ).toBe(true);
 
     const activeBlocks = cssRuleBlocks(missionControlCss, '.route-nav a.active');
     expect(activeBlocks.join('\n')).not.toMatch(/transform:[^;]*\bscale\b/);
@@ -835,6 +845,7 @@ describe('Mission Control shared entry', () => {
       linkBlocks.some(
         (block) =>
           block.includes('min-height: 3.25rem;') &&
+          block.includes('margin-bottom: 0;') &&
           block.includes('border: 0;') &&
           block.includes('border-radius: 1rem;') &&
           block.includes('font-weight: 600;') &&

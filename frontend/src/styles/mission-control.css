@@ -432,7 +432,7 @@ h1 {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
+  bottom: -0.62rem;
   height: 2px;
   background: transparent;
   transition: background 130ms ease;
@@ -4215,6 +4215,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     gap: 0.75rem;
     min-height: 3.25rem;
     padding: 0 1rem;
+    margin-bottom: 0;
     border: 0;
     border-radius: 1rem;
     font-weight: 600;
