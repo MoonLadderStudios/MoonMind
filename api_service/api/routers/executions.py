@@ -4055,7 +4055,6 @@ async def _create_execution_from_task_request(
         "profileId": raw_profile_id if _provider_profile is not None else None,
         "effort": runtime_payload.get("effort"),
         "publishMode": publish_payload["mode"],
-        "proposeTasks": propose_tasks,
         "stepCount": step_count,
     }
     if story_output_payload:
@@ -4279,11 +4278,39 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
     Constructs the ``kind=queue_task`` envelope expected by
     ``RecurringTasksService.create_definition()``.
     """
+    target_payload = dict(request_payload)
+    root_propose_tasks = target_payload.pop("proposeTasks", None)
+    root_proposal_policy = target_payload.pop("proposalPolicy", None)
+    task_node = target_payload.get("task")
+    if isinstance(task_node, Mapping):
+        task_payload = dict(task_node)
+        propose_tasks_value = (
+            task_payload["proposeTasks"]
+            if "proposeTasks" in task_payload
+            else root_propose_tasks
+        )
+        proposal_policy_value = (
+            task_payload["proposalPolicy"]
+            if "proposalPolicy" in task_payload
+            else root_proposal_policy
+        )
+        task_payload["proposeTasks"] = _coerce_bool(
+            propose_tasks_value,
+            default=False,
+        )
+        normalized_proposal_policy = _normalize_task_proposal_policy(
+            proposal_policy_value
+        )
+        if normalized_proposal_policy is not None:
+            task_payload["proposalPolicy"] = normalized_proposal_policy
+        else:
+            task_payload.pop("proposalPolicy", None)
+        target_payload["task"] = task_payload
     return {
         "kind": "queue_task",
         "job": {
             "type": "task",
-            "payload": request_payload,
+            "payload": target_payload,
         },
     }
 
@@ -4314,7 +4341,9 @@ async def _handle_recurring_schedule(
     )
     return ScheduleCreatedResponse(
         definitionId=str(definition.id),
+        name=definition.name,
         cron=definition.cron,
+        timezone=definition.timezone,
         nextRunAt=definition.next_run_at,
         redirectPath=f"/tasks/schedules/{definition.id}",
     )

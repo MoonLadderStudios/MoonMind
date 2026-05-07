@@ -36,4 +36,4 @@ first-party executable tool that parses Jira `Blocks` link direction.
 1. Add deterministic Jira blocker-preflight parsing for `Blocks` link direction.
 2. Register the preflight as a first-party `mm.tool.execute` handler.
 3. Update Jira Orchestrate to use the deterministic tool step.
-4. Add regressions for outward-link continuation, inward-link blocking, status fetch, and preset seeding.
+4. Add regressions for inward-link continuation, outward-link blocking, status fetch, and preset seeding.

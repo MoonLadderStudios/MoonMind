@@ -121,8 +121,10 @@ def _blocking_issue_from_link(
             return outward_issue
         return None
 
-    if inward_issue and inward_key != target:
-        return inward_issue
+    # Jira issue GET responses include only the other side of the link. For a
+    # target blocked by another issue, Jira exposes that blocker as outwardIssue.
+    if outward_issue and outward_key != target:
+        return outward_issue
     return None
 
 def _coerce_story_payload(value: Any) -> list[dict[str, Any]]:

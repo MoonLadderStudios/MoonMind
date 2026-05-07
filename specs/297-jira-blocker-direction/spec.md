@@ -23,8 +23,9 @@ link interpretation.
 - **FR-001**: `linear_blocker_chain` MUST continue to create links where each
   earlier story blocks the immediately later story.
 - **FR-002**: Jira Orchestrate preflight MUST only block a target issue when
-  trusted Jira link data shows the target is on the blocked/inward side of a
-  `Blocks` relationship.
+  trusted Jira GET issue data exposes the other issue as `outwardIssue`,
+  meaning the other issue is on the outward "blocks" side and the target is on
+  the blocked/inward side of a `Blocks` relationship.
 - **FR-003**: A `Blocks` relationship where the target issue blocks another
   issue MUST NOT block the target orchestration.
 - **FR-004**: Blocker status MUST be read from trusted Jira data, fetching the
@@ -38,9 +39,10 @@ link interpretation.
 
 - **SC-001**: A three-story chain creates `story1 -> story2` and
   `story2 -> story3` Jira blocker requests.
-- **SC-002**: Target issue `MM-1` with an outward `Blocks` link to `MM-2`
-  continues even when `MM-2` is not Done.
-- **SC-003**: Target issue `MM-2` with an inward `Blocks` link from `MM-1`
+- **SC-002**: Target issue `MM-1` whose Jira GET response exposes `MM-2` as
+  `inwardIssue` continues even when `MM-2` is not Done.
+- **SC-003**: Target issue `MM-2` whose Jira GET response exposes `MM-1` as
+  `outwardIssue`
   blocks when `MM-1` is not Done.
 - **SC-004**: The seeded Jira Orchestrate preset uses the deterministic
   blocker-preflight tool before MoonSpec implementation.
