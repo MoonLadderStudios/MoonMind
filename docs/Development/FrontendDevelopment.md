@@ -8,18 +8,43 @@ Install frontend dependencies once:
 
 ```bash
 npm install
-````
+```
 
-## Production-like mode
+## Demo and review workflow
+
+Use the production-like workflow when you need another person to review a
+frontend change, when you are demoing over the network, or when visual
+correctness matters more than Hot Module Replacement (HMR).
 
 Build a fresh frontend bundle and let FastAPI serve the built assets:
 
 ```bash
 npm run ui:build
-# start FastAPI normally
+docker compose up -d api
+```
+
+Then open Mission Control through the normal FastAPI route:
+
+```text
+http://localhost:8000/tasks/list
+```
+
+For network demos, replace `localhost` with the host name or IP address that the
+reviewer can reach, for example:
+
+```text
+http://asus-laptop:8000/tasks/list
+http://192.168.0.20:8000/tasks/list
 ```
 
 In this mode, FastAPI serves the built `dist/` bundle through the Vite manifest.
+This is the preferred review path because the browser receives one coherent
+asset set from the same server that owns the Mission Control HTML shell and API
+routes.
+
+Do not open the Vite dev server root (`http://localhost:5173/`) for demos or
+reviews. MoonMind's Vite server serves frontend modules for development; it does
+not own the Mission Control HTML routes and may return `404` at `/`.
 
 ## Live development with Hot Module Replacement (HMR)
 
@@ -111,5 +136,3 @@ api_service/static/task_dashboard/dist/
 ```
 
 Do not edit files in `dist/` directly. Treat `dist/` as generated output, not hand-edited source.
-
-```

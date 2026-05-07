@@ -5,14 +5,14 @@
 
 **Tests**: Unit tests and integration tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.
 
-**Source Traceability**: The canonical `MM-588` Jira preset brief is preserved in `spec.md`. Tasks cover FR-001 through FR-025, acceptance scenarios 1 through 8, SC-001 through SC-008, and DESIGN-REQ-007, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015, and DESIGN-REQ-027.
+**Source Traceability**: The canonical `MM-588` and `MM-594` Jira preset briefs are preserved in `spec.md`. Tasks cover FR-001 through FR-025, acceptance scenarios 1 through 8, SC-001 through SC-008, and DESIGN-REQ-007, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015, and DESIGN-REQ-027.
 
 **Test Commands**:
 
 - Unit tests: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx`
 - Integration tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py`
 - Full unit verification: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify` (`/speckit.verify` equivalent)
 
 ## Format: `[ID] [P?] Description`
 
@@ -24,7 +24,7 @@
 
 **Purpose**: Confirm the existing Tasks List test harness and feature artifacts are ready.
 
-- [X] T001 Verify `specs/301-column-filter-popovers/spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/tasks-list-column-filter-popovers.md` are present and preserve `MM-588`.
+- [X] T001 Verify `specs/301-column-filter-popovers/spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/tasks-list-column-filter-popovers.md` are present and preserve `MM-588` and `MM-594`.
 - [X] T002 Confirm frontend test dependencies are prepared by running `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` before editing production code.
 - [X] T003 Confirm API route test dependencies are available by running `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py` before editing production code.
 
@@ -86,7 +86,7 @@
 
 ### Story Validation
 
-- [X] T028 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` and fix failures until the MM-588 UI story passes.
+- [X] T028 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` and fix failures until the MM-588/MM-594 UI story passes.
 - [X] T029 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py` and fix failures until canonical filter route coverage passes.
 - [X] T030 Review `frontend/src/entrypoints/tasks-list.tsx` and `api_service/api/routers/executions.py` against `specs/301-column-filter-popovers/contracts/tasks-list-column-filter-popovers.md` for FR-024 and DESIGN-REQ-027 non-goal safety.
 
@@ -94,9 +94,10 @@
 
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
-- [X] T031 Update `specs/301-column-filter-popovers/tasks.md` to mark completed implementation tasks and preserve MM-588 traceability.
+- [X] T031 Update `specs/301-column-filter-popovers/tasks.md` to mark completed implementation tasks and preserve MM-588/MM-594 traceability.
 - [X] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full required unit verification.
-- [X] T033 Run final `/speckit.verify` equivalent and write `specs/301-column-filter-popovers/verification.md` with verdict, test evidence, requirement coverage, and MM-588 traceability.
+- [X] T033 Run final `/moonspec-verify` (`/speckit.verify` equivalent) and write `specs/301-column-filter-popovers/verification.md` with verdict, test evidence, requirement coverage, and MM-588 traceability.
+- [ ] T034 Run final `/moonspec-verify` (`/speckit.verify` equivalent) after the MM-594 traceability refresh and update `specs/301-column-filter-popovers/verification.md` with verdict, test evidence, requirement coverage, and MM-588/MM-594 traceability.
 
 ## Dependencies and Execution Order
 
@@ -112,7 +113,7 @@
 - T008-T017 must be written before implementation.
 - T018-T019 must confirm red-first failures before T020-T027.
 - T020-T027 implement the missing and partial behavior.
-- T028-T030 validate the story before final verification.
+- T028-T030 validate the story before final verification; T034 refreshes final verification evidence after MM-594 traceability is added.
 
 ### Parallel Opportunities
 
@@ -123,7 +124,7 @@
 ## Implementation Strategy
 
 1. Preserve existing `MM-587` table/header behavior and tests.
-2. Add failing tests for every missing MM-588 behavior before implementation.
+2. Add failing tests for every missing MM-588/MM-594 behavior before implementation.
 3. Introduce a compact filter state model in the Tasks List entrypoint instead of spreading independent strings across controls.
 4. Keep the API route fail-safe and task-scoped while adding canonical include/exclude query parameters.
 5. Validate focused UI and API tests, then run full unit verification and final MoonSpec verification.
@@ -132,5 +133,5 @@
 
 - This task list covers exactly one story.
 - `implemented_verified` rows from `plan.md` are preserved through validation tasks instead of unnecessary rewrites.
-- `implemented_unverified` rows are covered by verification tests and extended only where MM-588 requires new behavior.
+- `implemented_unverified` rows are covered by verification tests and extended only where MM-588/MM-594 requires new behavior.
 - Do not add saved views, multi-column sort, raw Temporal query authoring, direct browser calls to Temporal, or system workflow browsing.

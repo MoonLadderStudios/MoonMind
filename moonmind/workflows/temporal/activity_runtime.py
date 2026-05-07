@@ -3468,6 +3468,147 @@ class TemporalAgentRuntimeActivities:
                     return value.strip()
             return ""
 
+        def _story_output_mapping() -> Mapping[str, Any]:
+            value = metadata.get("storyOutput") or metadata.get("story_output")
+            return value if isinstance(value, Mapping) else {}
+
+        story_output_metadata = _story_output_mapping()
+
+        def _story_metadata_text(*keys: str) -> str:
+            for key in keys:
+                value = metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+                value = story_output_metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return ""
+
+        def _workspace_story_path(workspace: Path, raw_path: str) -> Path | None:
+            if not raw_path:
+                return None
+            candidate = Path(raw_path)
+            if not candidate.is_absolute():
+                candidate = workspace / candidate
+            resolved = candidate.expanduser().resolve()
+            try:
+                resolved.relative_to(workspace)
+            except ValueError:
+                logger.warning(
+                    "Skipping story breakdown artifact publication outside "
+                    "workspace: %s",
+                    raw_path,
+                )
+                return None
+            return resolved
+
+        async def _publish_story_breakdown_file(
+            *,
+            workspace: Path,
+            raw_path: str,
+            link_type: str,
+            content_type: str,
+            metadata_name: str,
+            label: str,
+        ) -> str:
+            path = _workspace_story_path(workspace, raw_path)
+            if path is None:
+                return ""
+            if not path.is_file():
+                logger.warning(
+                    "Story breakdown handoff file was not found for publication: %s",
+                    raw_path,
+                )
+                return ""
+            payload = path.read_bytes()
+            artifact, _upload = await self._artifact_service.create(
+                principal="system:agent_runtime",
+                content_type=content_type,
+                size_bytes=len(payload),
+                link=_execution_ref(link_type),
+                metadata_json={
+                    "name": metadata_name,
+                    "path": raw_path,
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": ["agent_runtime", link_type, "story_breakdown"],
+                    **step_artifact_metadata,
+                },
+            )
+            completed = await self._artifact_service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="system:agent_runtime",
+                payload=payload,
+                content_type=content_type,
+            )
+            logger.info(
+                "Published %s story breakdown handoff artifact for %s",
+                label,
+                raw_path,
+            )
+            return completed.artifact_id
+
+        async def _publish_story_breakdown_handoff() -> dict[str, Any]:
+            json_path = _story_metadata_text(
+                "storyBreakdownPath",
+                "story_breakdown_path",
+            )
+            if not json_path:
+                return {}
+            task_run_id = _metadata_text("taskRunId", "task_run_id")
+            if not task_run_id or self._run_store is None:
+                return {}
+            record = self._run_store.load(task_run_id)
+            if record is None:
+                logger.warning(
+                    "Skipping story breakdown artifact publication: run record not "
+                    "found for %s",
+                    task_run_id,
+                )
+                return {}
+            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
+            if not workspace_path:
+                return {}
+            workspace = Path(workspace_path).expanduser().resolve()
+            published: dict[str, Any] = {}
+            json_ref = await _publish_story_breakdown_file(
+                workspace=workspace,
+                raw_path=json_path,
+                link_type="output.story_breakdown",
+                content_type="application/json",
+                metadata_name="stories.json",
+                label="JSON",
+            )
+            if json_ref:
+                published["storyBreakdownArtifactRef"] = json_ref
+            markdown_path = _story_metadata_text(
+                "storyBreakdownMarkdownPath",
+                "story_breakdown_markdown_path",
+            )
+            markdown_ref = await _publish_story_breakdown_file(
+                workspace=workspace,
+                raw_path=markdown_path,
+                link_type="output.story_breakdown_markdown",
+                content_type="text/markdown",
+                metadata_name="stories.md",
+                label="markdown",
+            )
+            if markdown_ref:
+                published["storyBreakdownMarkdownArtifactRef"] = markdown_ref
+            if not published:
+                return {}
+            story_output = (
+                dict(story_output_metadata)
+                if isinstance(story_output_metadata, Mapping)
+                else {}
+            )
+            story_output.update(published)
+            if json_path:
+                story_output.setdefault("storyBreakdownPath", json_path)
+            if markdown_path:
+                story_output.setdefault("storyBreakdownMarkdownPath", markdown_path)
+            published["storyOutput"] = story_output
+            return published
+
         result_summary = result_dict.get("summary") or result_dict.get("raw", "")
         operator_summary = self._sanitize_operator_summary(
             _metadata_text("operator_summary", "operatorSummary")
@@ -3563,6 +3704,27 @@ class TemporalAgentRuntimeActivities:
                     artifact_ref_value=resolved_skillset_ref,
                     field_name="resolvedSkillsetRef",
                 )
+            story_breakdown_refs = await _publish_story_breakdown_handoff()
+            if story_breakdown_refs:
+                published_refs.update(story_breakdown_refs)
+                enriched_metadata_for_result = (
+                    dict(result_dict.get("metadata") or {})
+                    if isinstance(result_dict.get("metadata"), Mapping)
+                    else {}
+                )
+                story_output_ref_payload = story_breakdown_refs.get("storyOutput")
+                enriched_metadata_for_result.update(
+                    {
+                        key: value
+                        for key, value in story_breakdown_refs.items()
+                        if key != "storyOutput"
+                    }
+                )
+                if isinstance(story_output_ref_payload, Mapping):
+                    enriched_metadata_for_result["storyOutput"] = dict(
+                        story_output_ref_payload
+                    )
+                result_dict["metadata"] = enriched_metadata_for_result
             summary_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",
@@ -4029,10 +4191,16 @@ class TemporalAgentRuntimeActivities:
         workspace_path_raw = str(
             payload.get("workspace_path") or payload.get("workspacePath") or ""
         ).strip()
-        skill_snapshot_materialized = await self._materialize_selected_agent_skill_for_turn(
-            request=request,
-            workspace_path=workspace_path_raw,
+        skip_skill_materialization = bool(
+            payload.get("skipSkillMaterialization")
+            or payload.get("skip_skill_materialization")
         )
+        skill_snapshot_materialized = False
+        if not skip_skill_materialization:
+            skill_snapshot_materialized = await self._materialize_selected_agent_skill_for_turn(
+                request=request,
+                workspace_path=workspace_path_raw,
+            )
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
             if not workspace_path_raw:
@@ -4138,6 +4306,11 @@ class TemporalAgentRuntimeActivities:
                 runtime_id=str(request.agent_id or "managed-runtime"),
                 mode=RuntimeMaterializationMode.HYBRID,
             )
+            self._validate_selected_skill_projection(
+                workspace=workspace,
+                selected_skill=selected_skill,
+                resolved_skillset=resolved_skillset,
+            )
         except TemporalActivityRuntimeError:
             raise
         except (RuntimeError, OSError, ValueError, ValidationError) as exc:
@@ -4146,6 +4319,63 @@ class TemporalAgentRuntimeActivities:
             ) from exc
 
         return True
+
+    @staticmethod
+    def _validate_selected_skill_projection(
+        *,
+        workspace: Path,
+        selected_skill: str,
+        resolved_skillset: ResolvedSkillSet,
+    ) -> None:
+        """Fail before launch if the runtime-visible active skill projection is absent."""
+
+        visible_skills_dir = workspace / ".agents" / "skills"
+        if not visible_skills_dir.exists() or not visible_skills_dir.is_dir():
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f".agents/skills projection is missing at {visible_skills_dir}"
+            )
+
+        selected_skill_doc = visible_skills_dir / selected_skill / "SKILL.md"
+        if not selected_skill_doc.exists() or not selected_skill_doc.is_file():
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"selected skill '{selected_skill}' is missing {selected_skill_doc}"
+            )
+
+        manifest_path = visible_skills_dir / "_manifest.json"
+        if not manifest_path.exists() or not manifest_path.is_file():
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"active skill manifest is missing at {manifest_path}"
+            )
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(manifest, Mapping):
+                raise ValueError(f"manifest at {manifest_path} is not a mapping")
+        except (OSError, TypeError, ValueError) as exc:
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"active skill manifest is unreadable at {manifest_path}: {exc}"
+            ) from exc
+
+        snapshot_id = str(manifest.get("snapshot_id") or "").strip()
+        if snapshot_id != resolved_skillset.snapshot_id:
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                "active skill manifest snapshot_id does not match resolvedSkillsetRef "
+                f"({snapshot_id!r} != {resolved_skillset.snapshot_id!r})"
+            )
+        manifest_skills = {
+            str(entry.get("name") or "").strip()
+            for entry in manifest.get("skills", [])
+            if isinstance(entry, Mapping)
+        }
+        if selected_skill not in manifest_skills:
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"active skill manifest does not include selected skill '{selected_skill}'"
+            )
 
     async def _load_resolved_skillset(self, skillset_ref: str) -> ResolvedSkillSet:
         if self._artifact_service is None:
@@ -4203,7 +4433,30 @@ class TemporalAgentRuntimeActivities:
             parameters=parameters,
             skill_snapshot_materialized=skill_snapshot_materialized,
         )
+        prepared = cls._append_managed_step_boundary(prepared)
         return append_managed_codex_runtime_note(prepared)
+
+    @staticmethod
+    def _append_managed_step_boundary(instructions: str) -> str:
+        if "MoonMind managed step boundary:" in instructions:
+            return instructions
+        block = (
+            "MoonMind managed step boundary:\n"
+            "- Treat the text under `TASK INSTRUCTION`, or the inline instruction "
+            "when no `TASK INSTRUCTION` header is present, as the only work "
+            "authorized for this turn.\n"
+            "- Execute only this current plan step. Do not perform later workflow "
+            "steps such as specification, planning, task generation, "
+            "implementation, verification, publishing, pull request creation, or "
+            "Jira transitions unless this turn's instruction explicitly asks for "
+            "them.\n"
+            "- Repository `AGENTS.md` autonomy instructions apply only within this "
+            "current step boundary.\n"
+            "- Always finish with a brief assistant message describing this step's "
+            "outcome. If the step is already satisfied and no action is needed, "
+            "say that explicitly with the evidence.\n"
+        )
+        return instructions.rstrip() + "\n\n" + block
 
     @staticmethod
     def _prepend_selected_skill_activation(
@@ -5272,8 +5525,18 @@ class TemporalAgentRuntimeActivities:
         if workspace is not None and (
             normalized == ".agents/skills"
             or normalized.startswith(".agents/skills/")
+            or normalized == ".gemini/skills"
+            or normalized.startswith(".gemini/skills/")
+            or normalized == "skills_active"
+            or normalized.startswith("skills_active/")
         ):
-            projection = workspace.expanduser().resolve() / ".agents" / "skills"
+            root = normalized.split("/", 2)
+            if root[:2] == [".agents", "skills"]:
+                projection = workspace.expanduser().resolve() / ".agents" / "skills"
+            elif root[:2] == [".gemini", "skills"]:
+                projection = workspace.expanduser().resolve() / ".gemini" / "skills"
+            else:
+                projection = workspace.expanduser().resolve() / "skills_active"
             if projection.is_symlink():
                 return True
         return False

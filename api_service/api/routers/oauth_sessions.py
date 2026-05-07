@@ -55,6 +55,15 @@ _TERMINAL_ATTACH_STATUSES = (
     OAuthSessionStatus.AWAITING_USER,
     OAuthSessionStatus.VERIFYING,
 )
+_FINALIZE_SUPERSEDING_STATUSES = (
+    OAuthSessionStatus.PENDING,
+    OAuthSessionStatus.STARTING,
+    OAuthSessionStatus.BRIDGE_READY,
+    OAuthSessionStatus.AWAITING_USER,
+    OAuthSessionStatus.VERIFYING,
+    OAuthSessionStatus.REGISTERING_PROFILE,
+    OAuthSessionStatus.SUCCEEDED,
+)
 _oauth_terminal_pty_adapter_factory = create_docker_exec_pty_adapter
 
 def _make_terminal_output_sender(websocket: WebSocket):
@@ -232,6 +241,24 @@ async def _get_profile_for_session(
         )
     )
     return result.scalars().first()
+
+async def _oauth_session_is_superseded(
+    db: AsyncSession,
+    session: ManagedAgentOAuthSession,
+) -> bool:
+    if not session.profile_id or not session.created_at:
+        return False
+    result = await db.execute(
+        select(ManagedAgentOAuthSession.session_id).where(
+            ManagedAgentOAuthSession.session_id != session.session_id,
+            ManagedAgentOAuthSession.profile_id == session.profile_id,
+            ManagedAgentOAuthSession.requested_by_user_id
+            == session.requested_by_user_id,
+            ManagedAgentOAuthSession.created_at > session.created_at,
+            ManagedAgentOAuthSession.status.in_(_FINALIZE_SUPERSEDING_STATUSES),
+        )
+    )
+    return result.first() is not None
 
 async def _expire_stale_active_sessions(
     db: AsyncSession, *, profile_id: str
@@ -580,7 +607,7 @@ async def oauth_terminal_websocket(
             bridge=bridge,
         )
 
-@router.post("/{session_id}/finalize")
+@router.post("/{session_id}/finalize", response_model=OAuthSessionResponse)
 async def finalize_oauth_session(
     session_id: str,
     db: AsyncSession = Depends(get_async_session),
@@ -595,60 +622,100 @@ async def finalize_oauth_session(
     session_obj = result.scalars().first()
     if not session_obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-        
-    if session_obj.status not in [OAuthSessionStatus.AWAITING_USER, OAuthSessionStatus.VERIFYING]:
+
+    if _oauth_session_is_expired(session_obj) and session_obj.status != OAuthSessionStatus.SUCCEEDED:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="OAuth session has expired.",
+        )
+
+    if (
+        session_obj.status != OAuthSessionStatus.SUCCEEDED
+        and await _oauth_session_is_superseded(db, session_obj)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="OAuth session has been superseded by a newer session.",
+        )
+
+    if session_obj.status == OAuthSessionStatus.SUCCEEDED:
+        profile = await _get_profile_for_session(
+            db, session_obj, current_user=current_user
+        )
+        return _oauth_session_response(session_obj, profile=profile)
+
+    skip_verification = False
+    if session_obj.status == OAuthSessionStatus.REGISTERING_PROFILE:
+        profile = await _get_profile_for_session(
+            db, session_obj, current_user=current_user
+        )
+        if profile is not None:
+            session_obj.status = OAuthSessionStatus.SUCCEEDED
+            session_obj.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+            await db.refresh(session_obj)
+            return _oauth_session_response(session_obj, profile=profile)
+        skip_verification = True
+
+    if session_obj.status not in [
+        OAuthSessionStatus.AWAITING_USER,
+        OAuthSessionStatus.VERIFYING,
+        OAuthSessionStatus.REGISTERING_PROFILE,
+    ]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot finalize session in {session_obj.status.name} state")
 
-    try:
-        from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
-            verify_volume_credentials,
-        )
+    if not skip_verification:
+        session_obj.status = OAuthSessionStatus.VERIFYING
+        await db.commit()
+        await db.refresh(session_obj)
 
-        verification = await verify_volume_credentials(
-            runtime_id=session_obj.runtime_id,
-            volume_ref=session_obj.volume_ref or "",
-            volume_mount_path=session_obj.volume_mount_path,
-        )
-        if not verification.get("verified", False):
+        try:
+            from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
+                verify_volume_credentials,
+            )
+
+            verification = await verify_volume_credentials(
+                runtime_id=session_obj.runtime_id,
+                volume_ref=session_obj.volume_ref or "",
+                volume_mount_path=session_obj.volume_mount_path,
+            )
+            if not verification.get("verified", False):
+                session_obj.status = OAuthSessionStatus.FAILED
+                session_obj.completed_at = datetime.now(timezone.utc)
+                session_obj.failure_reason = (
+                    "Volume verification failed: "
+                    f"{verification.get('reason', 'unknown')}"
+                )
+                await db.commit()
+                await _stop_oauth_auth_runner(session_obj)
+                await _fail_oauth_session_workflow(
+                    session_obj.session_id, session_obj.failure_reason
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=session_obj.failure_reason,
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            logger.warning(
+                "Volume verification unavailable for session %s",
+                session_id,
+                exc_info=True,
+            )
             session_obj.status = OAuthSessionStatus.FAILED
             session_obj.completed_at = datetime.now(timezone.utc)
-            session_obj.failure_reason = (
-                "Volume verification failed: "
-                f"{verification.get('reason', 'unknown')}"
-            )
+            session_obj.failure_reason = "Volume verification unavailable"
             await db.commit()
             await _stop_oauth_auth_runner(session_obj)
             await _fail_oauth_session_workflow(
                 session_obj.session_id, session_obj.failure_reason
             )
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=session_obj.failure_reason,
             )
-    except HTTPException:
-        raise
-    except Exception:
-        logger.warning(
-            "Volume verification unavailable for session %s",
-            session_id,
-            exc_info=True,
-        )
-        session_obj.status = OAuthSessionStatus.FAILED
-        session_obj.completed_at = datetime.now(timezone.utc)
-        session_obj.failure_reason = "Volume verification unavailable"
-        await db.commit()
-        await _stop_oauth_auth_runner(session_obj)
-        await _fail_oauth_session_workflow(
-            session_obj.session_id, session_obj.failure_reason
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=session_obj.failure_reason,
-        )
 
-    session_obj.status = OAuthSessionStatus.SUCCEEDED
-    session_obj.completed_at = datetime.now(timezone.utc)
-    
     profile_result = await db.execute(
         select(ManagedAgentProviderProfile).where(
             ManagedAgentProviderProfile.profile_id == session_obj.profile_id
@@ -716,9 +783,15 @@ async def finalize_oauth_session(
             detail=str(exc),
         ) from exc
 
+    session_obj.status = OAuthSessionStatus.REGISTERING_PROFILE
+    await db.commit()
+    await db.refresh(session_obj)
+
+    profile_obj: ManagedAgentProviderProfile
     if existing_profile:
         for key, value in profile_data.items():
             setattr(existing_profile, key, value)
+        profile_obj = existing_profile
     else:
         new_profile = ManagedAgentProviderProfile(
             profile_id=session_obj.profile_id,
@@ -726,14 +799,21 @@ async def finalize_oauth_session(
             **profile_data
         )
         db.add(new_profile)
+        profile_obj = new_profile
 
     await db.commit()
-    
+
     await sync_provider_profile_manager(session=db, runtime_id=session_obj.runtime_id)
+
+    session_obj.status = OAuthSessionStatus.SUCCEEDED
+    session_obj.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(session_obj)
+
     await _stop_oauth_auth_runner(session_obj)
     await _complete_oauth_session_workflow(session_obj.session_id)
-    
-    return {"status": "succeeded"}
+
+    return _oauth_session_response(session_obj, profile=profile_obj)
 
 async def _stop_oauth_auth_runner(session_obj: ManagedAgentOAuthSession) -> None:
     if not session_obj.container_name:

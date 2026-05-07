@@ -2592,6 +2592,55 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_issue_updater_t
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_adds_step_boundary() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-step-boundary",
+                "idempotencyKey": "idem-step-boundary",
+                "parameters": {
+                    "instructions": "Classify request and resume point.",
+                    "publishMode": "none",
+                    "metadata": {
+                        "moonmind": {
+                            "stepLedger": {
+                                "logicalStepId": "tpl:jira-orchestrate:1.0.0:04:demo",
+                                "attempt": 1,
+                                "scope": "step",
+                            },
+                        },
+                    },
+                },
+            },
+        }
+    )
+
+    assert "MoonMind managed step boundary:" in result
+    assert "Execute only this current plan step." in result
+    assert (
+        "Repository `AGENTS.md` autonomy instructions apply only within this "
+        "current step boundary."
+    ) in result
+    assert "Always finish with a brief assistant message" in result
+    assert "complete the current task instruction" in result
+    assert "verification requested by that instruction" in result
+    assert "make the requested commit when that instruction asks for one" in result
+    assert result.index("Classify request and resume point.") < result.index(
+        "MoonMind managed step boundary:"
+    )
+    assert result.index("MoonMind managed step boundary:") < result.index(
+        "MoonMind retrieval capability:"
+    )
+    assert result.index("MoonMind retrieval capability:") < result.index(
+        "Managed Codex CLI note:"
+    )
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_materializes_selected_skill_snapshot(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2667,6 +2716,167 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
         encoding="utf-8"
     ).endswith("active resolver body\n")
     assert not (workspace / "skills_active").exists()
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_can_skip_skill_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "agent_jobs" / "job-1" / "repo"
+    workspace.mkdir(parents=True)
+
+    class _FailingMaterializer:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError("skill materializer should not be constructed")
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "AgentSkillMaterializer",
+        _FailingMaterializer,
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "parameters": {
+                    "instructions": "Resolve the PR.",
+                    "publishMode": "none",
+                    "metadata": {
+                        "moonmind": {
+                            "selectedSkill": "pr-resolver",
+                        },
+                    },
+                },
+            },
+            "workspacePath": str(workspace),
+            "includePreparedRequestMetadata": True,
+            "skipSkillMaterialization": True,
+        }
+    )
+
+    assert isinstance(result, dict)
+    assert result["instructions"].startswith("Resolve the PR.")
+    assert "Active MoonMind skill snapshot:" not in result["instructions"]
+    assert result["durableRetrievalMetadata"] == {}
+    assert not (workspace / ".agents").exists()
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_fails_before_launch_when_projection_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    managed_root = tmp_path / "agent_jobs"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(managed_root))
+    workspace = managed_root / "job-1" / "repo"
+    workspace.mkdir(parents=True)
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-pr-resolver",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="pr-resolver",
+                version="1.0.0",
+                content_ref="art-pr-resolver-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.BUILT_IN
+                ),
+            )
+        ],
+    )
+    artifact_service = _StaticArtifactService(
+        {
+            "art-pr-resolver-snapshot": resolved_skillset.model_dump_json().encode(
+                "utf-8"
+            ),
+            "art-pr-resolver-body": b"active resolver body\n",
+        }
+    )
+
+    class _NoopMaterializer:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def materialize(self, **_kwargs: Any) -> None:
+            return None
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "AgentSkillMaterializer",
+        _NoopMaterializer,
+    )
+    activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match=r"\.agents/skills projection is missing",
+    ):
+        await activities.agent_runtime_prepare_turn_instructions(
+            {
+                "request": {
+                    "agentKind": "managed",
+                    "agentId": "codex",
+                    "correlationId": "corr-1",
+                    "idempotencyKey": "idem-1",
+                    "resolvedSkillsetRef": "art-pr-resolver-snapshot",
+                    "parameters": {
+                        "instructions": "Resolve the PR.",
+                        "metadata": {
+                            "moonmind": {
+                                "selectedSkill": "pr-resolver",
+                            },
+                        },
+                    },
+                },
+                "workspacePath": str(workspace),
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_selected_skill_projection_rejects_non_mapping_manifest(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    skill_dir = workspace / ".agents" / "skills" / "pr-resolver"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("resolver body\n", encoding="utf-8")
+    (workspace / ".agents" / "skills" / "_manifest.json").write_text(
+        "[]\n",
+        encoding="utf-8",
+    )
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-pr-resolver",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="pr-resolver",
+                version="1.0.0",
+                content_ref="art-pr-resolver-body",
+                content_digest="sha256:test",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.BUILT_IN
+                ),
+            )
+        ],
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="active skill manifest is unreadable",
+    ):
+        TemporalAgentRuntimeActivities._validate_selected_skill_projection(
+            workspace=workspace,
+            selected_skill="pr-resolver",
+            resolved_skillset=resolved_skillset,
+        )
 
 
 @pytest.mark.asyncio
@@ -2903,6 +3113,32 @@ async def test_publish_path_filter_normalizes_relative_workspace_path(
     assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
         ".agents/skills/pr-resolver/SKILL.md",
         workspace=Path("repo"),
+    )
+
+
+async def test_publish_path_filter_excludes_generated_compatibility_skill_links(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    backing = tmp_path / "runtime" / "skills_active"
+    backing.mkdir(parents=True)
+    gemini_projection = workspace / ".gemini" / "skills"
+    repo_projection = workspace / "skills_active"
+    gemini_projection.parent.mkdir(parents=True)
+    gemini_projection.symlink_to(backing, target_is_directory=True)
+    repo_projection.symlink_to(backing, target_is_directory=True)
+
+    assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
+        ".gemini/skills",
+        workspace=workspace,
+    )
+    assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
+        ".gemini/skills/pr-resolver/SKILL.md",
+        workspace=workspace,
+    )
+    assert TemporalAgentRuntimeActivities._should_exclude_publish_path(
+        "skills_active/pr-resolver/SKILL.md",
+        workspace=workspace,
     )
 
 

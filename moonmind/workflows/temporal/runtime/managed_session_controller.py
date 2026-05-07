@@ -42,6 +42,7 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     resolve_github_token_for_launch,
 )
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
+from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
 from .github_auth_broker import GitHubAuthBrokerManager
 from .git_auth import build_github_token_git_environment
@@ -221,6 +222,49 @@ class DockerCodexManagedSessionController:
         if self._docker_host:
             env["DOCKER_HOST"] = self._docker_host
         return env
+
+    def _apply_unrestricted_docker_session_environment(
+        self,
+        session_environment: dict[str, str],
+    ) -> bool:
+        raw_mode = session_environment.get("MOONMIND_WORKFLOW_DOCKER_MODE")
+        if raw_mode is None:
+            raw_mode = os.environ.get("MOONMIND_WORKFLOW_DOCKER_MODE")
+        workflow_docker_mode = normalize_workflow_docker_mode(raw_mode)
+        if workflow_docker_mode != "unrestricted":
+            return False
+
+        session_environment["MOONMIND_WORKFLOW_DOCKER_MODE"] = "unrestricted"
+        if self._docker_host:
+            session_environment.setdefault("DOCKER_HOST", self._docker_host)
+            session_environment.setdefault("SYSTEM_DOCKER_HOST", self._docker_host)
+        return True
+
+    def _unrestricted_docker_proxy_network(
+        self,
+        *,
+        session_environment: Mapping[str, str],
+        docker_network: str | None,
+    ) -> str | None:
+        mode = normalize_workflow_docker_mode(
+            session_environment.get("MOONMIND_WORKFLOW_DOCKER_MODE")
+            or os.environ.get("MOONMIND_WORKFLOW_DOCKER_MODE")
+        )
+        if mode != "unrestricted":
+            return None
+        docker_host = str(
+            session_environment.get("DOCKER_HOST") or self._docker_host or ""
+        ).strip()
+        if "docker-proxy" not in docker_host:
+            return None
+        proxy_network = (
+            os.environ.get("MOONMIND_DOCKER_PROXY_NETWORK")
+            or os.environ.get("MOONMIND_DOCKER_PROXY_NETWORK_NAME")
+            or "moonmind_docker-proxy-network"
+        ).strip()
+        if not proxy_network or proxy_network == docker_network:
+            return None
+        return proxy_network
 
     def _container_name(self, session_id: str) -> str:
         sanitized = _CONTAINER_NAME_SANITIZER.sub("-", session_id).strip("-")
@@ -701,6 +745,22 @@ class DockerCodexManagedSessionController:
         except RuntimeError:
             if not ignore_failure:
                 raise
+
+    async def _connect_container_network(
+        self,
+        *,
+        container_id: str,
+        network_name: str,
+    ) -> None:
+        await self._run(
+            (
+                self._docker_binary,
+                "network",
+                "connect",
+                network_name,
+                container_id,
+            )
+        )
 
     async def _run(
         self,
@@ -1589,6 +1649,7 @@ class DockerCodexManagedSessionController:
             existing_moonmind_url = session_environment.get("MOONMIND_URL")
             if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
                 session_environment["MOONMIND_URL"] = self._moonmind_url
+        self._apply_unrestricted_docker_session_environment(session_environment)
         github_broker_started = False
         container_secret_environment: dict[str, str] = {}
         try:
@@ -1602,6 +1663,10 @@ class DockerCodexManagedSessionController:
             raise
         docker_network = self._network_name or _managed_session_docker_network(
             session_environment
+        )
+        unrestricted_proxy_network = self._unrestricted_docker_proxy_network(
+            session_environment=session_environment,
+            docker_network=docker_network,
         )
         if docker_network:
             run_command.extend(["--network", docker_network])
@@ -1647,6 +1712,7 @@ class DockerCodexManagedSessionController:
                 "serve",
             ]
         )
+        container_id = ""
         try:
             stdout, _stderr = await self._run(
                 run_command,
@@ -1655,7 +1721,14 @@ class DockerCodexManagedSessionController:
             container_id = stdout.strip()
             if not container_id:
                 raise RuntimeError("docker run returned a blank container id")
+            if unrestricted_proxy_network:
+                await self._connect_container_network(
+                    container_id=container_id,
+                    network_name=unrestricted_proxy_network,
+                )
         except Exception:
+            if container_id:
+                await self._remove_container(container_id, ignore_failure=True)
             if github_broker_started:
                 await self._github_auth_brokers.stop(request.session_id)
             raise

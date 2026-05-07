@@ -19,6 +19,10 @@ def test_normalize_status_maps_temporal_executing_to_running() -> None:
 def test_normalize_status_maps_temporal_planning_to_running() -> None:
     assert dashboard_view_model.normalize_status("temporal", "planning") == "running"
 
+def test_normalize_status_maps_temporal_proposals_to_running() -> None:
+    assert dashboard_view_model.normalize_status("temporal", "proposals") == "running"
+    assert dashboard_view_model.status_maps()["temporal"]["proposals"] == "running"
+
 def test_normalize_status_maps_temporal_canceled_spellings_to_canceled() -> None:
     assert dashboard_view_model.normalize_status("temporal", "canceled") == "canceled"
     assert dashboard_view_model.normalize_status("temporal", "cancelled") == "canceled"

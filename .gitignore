@@ -43,7 +43,7 @@ agent_jobs/
 
 # Runtime / ephemeral data (never commit)
 var/
-artifacts/
+/artifacts/
 live_streams.spool
 
 # Local saved artifacts
@@ -81,5 +81,3 @@ tmp-comments*.json
 tmp-agentkit-analyze.md
 tmp_skill.md
 tmp_agentkit_clarify.md
-var/
-artifacts/

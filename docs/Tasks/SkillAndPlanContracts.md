@@ -435,6 +435,10 @@ All failures normalize to:
 * Activity retry policy is derived from ToolDefinition defaults.
 * `non_retryable_error_codes` stop retries immediately.
 * `retryable` is informative; the actual retry decision is policy-driven.
+* For model-provider rate limits in managed agent-runtime steps, see
+  [`docs/Temporal/ErrorTaxonomy.md`](../Temporal/ErrorTaxonomy.md),
+  [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md),
+  and [`docs/Temporal/StepLedgerAndProgressModel.md`](../Temporal/StepLedgerAndProgressModel.md).
 
 ---
 

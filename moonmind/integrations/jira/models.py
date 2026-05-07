@@ -55,6 +55,52 @@ class JiraBaseModel(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
+class JiraIssueInputValue(BaseModel):
+    """Safe Jira issue value carried by schema-driven capability inputs."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    key: str = Field(..., alias="key")
+    summary: str | None = Field(None, alias="summary")
+    description: str | None = Field(None, alias="description")
+    url: str | None = Field(None, alias="url")
+    status: str | None = Field(None, alias="status")
+    assignee: str | None = Field(None, alias="assignee")
+
+    @field_validator("key", mode="before")
+    @classmethod
+    def _normalize_key(cls, value: object) -> str:
+        normalized = str(value or "").strip().upper()
+        if not normalized:
+            raise ValueError("key is required")
+        if not _JIRA_ISSUE_KEY_RE.fullmatch(normalized):
+            raise ValueError("key must match a Jira issue-key pattern")
+        return normalized
+
+    @field_validator("summary", "description", "url", "status", "assignee", mode="before")
+    @classmethod
+    def _reject_secret_like_context(cls, value: object) -> str | None:
+        if value in (None, ""):
+            return None
+        normalized = str(value).strip()
+        lowered = normalized.lower()
+        if any(
+            marker in lowered
+            for marker in (
+                "token=",
+                "password=",
+                "bearer ",
+                "authorization:",
+                "ghp_",
+                "github_pat_",
+                "akia",
+                "atatt",
+                "-----begin",
+            )
+        ):
+            raise ValueError("Jira issue input values must not contain secrets")
+        return normalized
+
 class JiraProjectScopedRequest(JiraBaseModel):
     """Base request with a Jira project key."""
 

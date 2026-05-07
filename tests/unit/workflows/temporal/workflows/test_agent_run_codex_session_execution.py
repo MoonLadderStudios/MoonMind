@@ -148,6 +148,41 @@ async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     assert "instructionRef" not in result.metadata
     assert result.metadata["managedSession"]["taskRunId"] == "wf-task-1"
 
+async def test_managed_session_result_enrichment_carries_story_output_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={
+            "story_output": {
+                "story_breakdown_path": "artifacts/story-breakdowns/demo/stories.json",
+                "story_breakdown_markdown_path": (
+                    "artifacts/story-breakdowns/demo/stories.md"
+                ),
+            }
+        },
+    )
+
+    result = run._enrich_result_metadata(
+        request=request,
+        result=AgentRunResult(summary="done", metadata={}),
+    )
+
+    assert result is not None
+    assert result.metadata["storyBreakdownPath"] == (
+        "artifacts/story-breakdowns/demo/stories.json"
+    )
+    assert result.metadata["storyBreakdownMarkdownPath"] == (
+        "artifacts/story-breakdowns/demo/stories.md"
+    )
+    assert result.metadata["storyOutput"]["storyBreakdownPath"] == (
+        "artifacts/story-breakdowns/demo/stories.json"
+    )
+    assert result.metadata["storyOutput"]["storyBreakdownMarkdownPath"] == (
+        "artifacts/story-breakdowns/demo/stories.md"
+    )
+
 async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

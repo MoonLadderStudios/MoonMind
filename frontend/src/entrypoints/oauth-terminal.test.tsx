@@ -150,7 +150,11 @@ beforeEach(() => {
   vi.stubGlobal('WebSocket', MockWebSocket);
   Object.defineProperty(window, 'location', {
     configurable: true,
-    value: { origin: 'http://localhost', search: '' },
+    value: {
+      href: 'http://localhost/oauth-terminal?session_id=session-1',
+      origin: 'http://localhost',
+      search: '?session_id=session-1',
+    },
   });
 });
 
@@ -160,6 +164,166 @@ afterEach(() => {
 });
 
 describe('OAuthTerminalPage clipboard behavior', () => {
+  it('renders the session projection and finalizes through the shared OAuth endpoint', async () => {
+    const storageSetItem = vi.spyOn(window.localStorage.__proto__, 'setItem');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const href = String(url);
+        if (href.endsWith('/terminal/attach')) {
+          return new Response(
+            JSON.stringify({
+              session_id: 'session-1',
+              terminal_session_id: 'terminal-1',
+              terminal_bridge_id: 'bridge-1',
+              websocket_url: '/ws/oauth/terminal',
+              attach_token: 'attach-token',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (href.endsWith('/finalize')) {
+          expect(init?.method).toBe('POST');
+          expect(init?.body).toBeUndefined();
+          return new Response(
+            JSON.stringify({
+              session_id: 'session-1',
+              runtime_id: 'codex_cli',
+              profile_id: 'codex-oauth',
+              status: 'succeeded',
+              profile_summary: {
+                profile_id: 'codex-oauth',
+                runtime_id: 'codex_cli',
+                provider_id: 'openai',
+                provider_label: 'OpenAI',
+                credential_source: 'oauth_volume',
+                runtime_materialization_mode: 'oauth_home',
+                account_label: 'Codex Team',
+                enabled: true,
+                is_default: false,
+                rate_limit_policy: 'backoff',
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            session_id: 'session-1',
+            runtime_id: 'codex_cli',
+            profile_id: 'codex-oauth',
+            status: 'awaiting_user',
+            expires_at: '2026-05-05T22:00:00Z',
+            terminal_session_id: 'terminal-1',
+            terminal_bridge_id: 'bridge-1',
+            session_transport: 'moonmind_pty_ws',
+            profile_summary: {
+              profile_id: 'codex-oauth',
+              runtime_id: 'codex_cli',
+              provider_id: 'openai',
+              provider_label: 'OpenAI',
+              credential_source: 'oauth_volume',
+              runtime_materialization_mode: 'oauth_home',
+              account_label: 'Codex Team',
+              enabled: false,
+              is_default: false,
+              rate_limit_policy: 'backoff',
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }),
+    );
+
+    renderPage();
+    await waitForSocket();
+
+    expect(await screen.findByText('codex-oauth')).toBeTruthy();
+    expect(screen.getByText('codex cli')).toBeTruthy();
+    expect(screen.getByText('OpenAI')).toBeTruthy();
+    expect(screen.getByText('2026-05-05T22:00:00Z')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Finalize Provider Profile' }));
+
+    expect(await screen.findByText('Codex Team')).toBeTruthy();
+    expect((await screen.findAllByText('Succeeded')).length).toBeGreaterThan(0);
+    expect(storageSetItem).toHaveBeenCalledWith(
+      'moonmind:provider-profile-updated',
+      expect.stringContaining('codex-oauth'),
+    );
+  });
+
+  it('shows the recovery action only for recoverable terminal sessions', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            session_id: 'session-1',
+            runtime_id: 'codex_cli',
+            profile_id: 'codex-oauth',
+            status: 'failed',
+            failure_reason:
+              '"token": "json-secret", password: plain-secret, api_key=key-secret in /home/app/.codex/auth.json',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        '"token": "[REDACTED]", password: [REDACTED], api_key=[REDACTED] in [REDACTED_AUTH_PATH]',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Finalize Provider Profile' })).toBeNull();
+  });
+
+  it('navigates to the replacement session returned by reconnect', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const href = String(url);
+        if (href.endsWith('/reconnect')) {
+          expect(init?.method).toBe('POST');
+          return new Response(
+            JSON.stringify({
+              session_id: 'session-2',
+              runtime_id: 'codex_cli',
+              profile_id: 'codex-oauth',
+              status: 'bridge_ready',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            session_id: 'session-1',
+            runtime_id: 'codex_cli',
+            profile_id: 'codex-oauth',
+            status: 'failed',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }),
+    );
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+
+    await waitFor(() => {
+      expect(window.location.href).toBe(
+        'http://localhost/oauth-terminal?session_id=session-2',
+      );
+    });
+  });
+
   it('forwards browser paste events from the xterm helper textarea to the terminal bridge once', async () => {
     renderPage();
     const socket = await waitForSocket();

@@ -14,6 +14,44 @@ annotations:
   sourceSkill: moonspec-orchestrate
   jiraWorkflow: implementation-to-code-review
   output: pull-request
+  inputSchema:
+    type: object
+    required:
+      - jira_issue
+    properties:
+      jira_issue:
+        type: object
+        title: Jira issue
+        description: Issue that will seed the task instructions and orchestration context.
+        required:
+          - key
+        properties:
+          key:
+            type: string
+            title: Issue key
+          summary:
+            type: string
+            title: Summary
+          description:
+            type: string
+            title: Description
+          url:
+            type: string
+            format: uri
+            title: URL
+          status:
+            type: string
+            title: Status
+          assignee:
+            type: string
+            title: Assignee
+  uiSchema:
+    jira_issue:
+      widget: jira.issue-picker
+      dataSource: jira.issues
+      searchPlaceholder: Search Jira issues
+      allowManualKeyEntry: true
+  defaults: {}
 inputs:
   - name: jira_issue_key
     label: Jira Issue Key
@@ -43,7 +81,7 @@ steps:
     instructions: |-
       Check Jira issue {{ inputs.jira_issue_key }} through the deterministic trusted Jira blocker preflight before any MoonSpec implementation work starts.
 
-      Jira Blocks direction is strict for Jira GET issue responses: when the target issue response exposes the other issue as inwardIssue and the link type says the inward relationship is "is blocked by", that other issue blocks {{ inputs.jira_issue_key }}. When the target issue response exposes the other issue as outwardIssue and the link type says the outward relationship is "blocks", {{ inputs.jira_issue_key }} blocks a later issue and that link MUST NOT block this orchestration.
+      Jira Blocks direction is strict for Jira GET issue responses: when the target issue response exposes the other issue as outwardIssue and the link type says the outward relationship is "blocks", that other issue blocks {{ inputs.jira_issue_key }}. When the target issue response exposes the other issue as inwardIssue and the link type says the inward relationship is "is blocked by", {{ inputs.jira_issue_key }} blocks a later issue and that link MUST NOT block this orchestration.
 
       Ignore non-blocker issue links for the blocker decision.
 

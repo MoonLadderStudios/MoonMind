@@ -449,6 +449,9 @@ class TaskTemplateResponseSchema(TaskTemplateSummarySchema):
     """Detail response model for one template version."""
 
     inputs: list[TaskTemplateInputSchema] = Field(default_factory=list)
+    input_schema: dict[str, Any] = Field(default_factory=dict, alias="inputSchema")
+    ui_schema: dict[str, Any] = Field(default_factory=dict, alias="uiSchema")
+    defaults: dict[str, Any] = Field(default_factory=dict)
     steps: list[TaskTemplateStepBlueprintSchema] = Field(default_factory=list)
     annotations: dict[str, Any] = Field(default_factory=dict)
     reviewed_by: Optional[str] = Field(None, alias="reviewedBy")

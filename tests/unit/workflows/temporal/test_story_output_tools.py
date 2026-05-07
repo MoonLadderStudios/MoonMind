@@ -279,6 +279,60 @@ async def test_create_jira_issues_reads_story_payload_from_previous_outputs():
     assert service.requests[0].summary == "Create previous-output Jira story"
 
 @pytest.mark.asyncio
+async def test_create_jira_issues_reads_story_artifact_ref_from_previous_outputs():
+    service = _FakeJiraService()
+    breakdown = {
+        "source": {"referencePath": "docs/Designs/RuntimeTypes.md"},
+        "stories": [
+            {
+                "id": "STORY-001",
+                "summary": "Create previous-output artifact Jira story",
+                "description": "As an operator, I can reuse a durable handoff.",
+                "sourceReference": {"path": "docs/Designs/RuntimeTypes.md"},
+            }
+        ],
+    }
+    fetch_calls: list[tuple[str, str, str]] = []
+    artifact_reads: list[str] = []
+
+    async def artifact_reader(ref: str) -> bytes:
+        artifact_reads.append(ref)
+        return json.dumps(breakdown).encode("utf-8")
+
+    async def fetcher(repo: str, ref: str, path: str) -> str:
+        fetch_calls.append((repo, ref, path))
+        raise AssertionError("repo fetch should not run when previous artifact exists")
+
+    result = await create_jira_issues_from_stories(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetBranch": "breakdown-branch",
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeName": "Story",
+                    "dependencyMode": "none",
+                },
+            },
+        },
+        {
+            "previousOutputs": {
+                "storyBreakdownArtifactRef": "art_previous_story_breakdown",
+            }
+        },
+        jira_service_factory=lambda: service,
+        story_fetcher=fetcher,
+        artifact_reader=artifact_reader,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    assert artifact_reads == ["art_previous_story_breakdown"]
+    assert fetch_calls == []
+    assert service.requests[0].summary == "Create previous-output artifact Jira story"
+
+@pytest.mark.asyncio
 async def test_create_jira_issues_explains_protected_branch_handoff_failure():
     async def fetcher(_repo: str, _ref: str, _path: str) -> str:
         raise RuntimeError("404 Not Found")
@@ -779,7 +833,7 @@ async def test_create_jira_issues_linear_blocker_chain_creates_adjacent_links():
     assert [item["status"] for item in jira["linkResults"]] == ["created", "created"]
 
 @pytest.mark.asyncio
-async def test_check_jira_blockers_blocks_on_single_inward_unresolved_blocks_link():
+async def test_check_jira_blockers_blocks_on_single_outward_unresolved_blocks_link():
     service = _FakeJiraService()
     service.issue_responses["MM-2"] = {
         "key": "MM-2",
@@ -791,7 +845,7 @@ async def test_check_jira_blockers_blocks_on_single_inward_unresolved_blocks_lin
                         "outward": "blocks",
                         "inward": "is blocked by",
                     },
-                    "inwardIssue": {
+                    "outwardIssue": {
                         "key": "MM-1",
                         "fields": {"status": {"name": "Backlog"}},
                     },
@@ -822,7 +876,7 @@ async def test_check_jira_blockers_blocks_on_single_inward_unresolved_blocks_lin
     assert [request.issue_key for request in service.get_issue_requests] == ["MM-2"]
 
 @pytest.mark.asyncio
-async def test_check_jira_blockers_ignores_single_outward_links_from_target_issue():
+async def test_check_jira_blockers_ignores_single_inward_links_from_target_issue():
     service = _FakeJiraService()
     service.issue_responses["MM-1"] = {
         "key": "MM-1",
@@ -834,7 +888,7 @@ async def test_check_jira_blockers_ignores_single_outward_links_from_target_issu
                         "outward": "blocks",
                         "inward": "is blocked by",
                     },
-                    "outwardIssue": {
+                    "inwardIssue": {
                         "key": "MM-2",
                         "fields": {"status": {"name": "Backlog"}},
                     },
@@ -862,7 +916,7 @@ async def test_check_jira_blockers_fetches_missing_blocker_status_and_allows_don
             "issuelinks": [
                 {
                     "type": {"name": "Blocks"},
-                    "inwardIssue": {"key": "MM-1"},
+                    "outwardIssue": {"key": "MM-1"},
                 }
             ]
         },

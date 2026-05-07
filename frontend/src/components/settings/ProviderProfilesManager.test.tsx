@@ -593,6 +593,27 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByRole('button', { name: 'Retry codex-oauth' })).toBeNull();
   });
 
+  it('refreshes provider profiles when an OAuth terminal finalizes in another tab', async () => {
+    const { queryClient } = renderProviderProfilesManagerWithQuery([codexOauthProfile]);
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const storageEvent = new Event('storage');
+    Object.defineProperty(storageEvent, 'key', {
+      value: 'moonmind:provider-profile-updated',
+    });
+    Object.defineProperty(storageEvent, 'newValue', {
+      value: JSON.stringify({
+        profileId: 'codex-oauth',
+        sessionId: 'oas_terminal_finalize',
+      }),
+    });
+    window.dispatchEvent(storageEvent);
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+    });
+  });
+
   it('supports OAuth retry actions for failed Settings sessions', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch')
       .mockResolvedValueOnce({

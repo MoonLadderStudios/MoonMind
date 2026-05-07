@@ -41,6 +41,16 @@ async def test_list_tools_filters_by_enabled_actions() -> None:
 
     assert names == ["jira.get_issue", "jira.transition_issue"]
 
+async def test_list_tools_do_not_expose_secret_defaults() -> None:
+    registry = JiraToolRegistry(enabled_actions={"get_issue", "search_issues"})
+
+    schemas = [tool.input_schema for tool in registry.list_tools()]
+
+    serialized = repr(schemas).lower()
+    assert "token=" not in serialized
+    assert "authorization" not in serialized
+    assert "password" not in serialized
+
 @pytest.mark.parametrize(
     ("tool", "arguments", "expected_call"),
     [

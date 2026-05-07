@@ -203,7 +203,20 @@ refs and related session observability. The transitional in-container
 fallback or bring-up helpers, but they are not the production publication path while
 they return empty publication refs.
 
-## 9. Non-goals for This Contract Slice
+## 9. Rate-limit retry behavior
+
+Codex managed-session turns must surface model-provider rate limits through the
+shared managed-runtime failure taxonomy. The session controller should retry
+rate-limit failures with bounded exponential backoff and jitter, honor provider
+retry hints when available, and keep attempt evidence bounded in summaries and
+diagnostics.
+
+If retries are exhausted, the session summary and diagnostics must explicitly
+state that the turn hit a model-provider rate limit. The terminal result should
+set the same `AgentRunResult` rate-limit metadata used by other managed
+runtimes.
+
+## 10. Non-goals for This Contract Slice
 
 This contract does not define:
 

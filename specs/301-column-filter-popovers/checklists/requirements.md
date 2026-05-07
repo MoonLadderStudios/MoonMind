@@ -36,5 +36,6 @@
 
 ## Notes
 
-- PASS: The input is a single runtime UI story selected by MM-588 and preserves the canonical Jira preset brief.
+- PASS: The input is a single runtime UI story selected by MM-588; MM-594 maps to the same story and is now preserved with its canonical Jira preset brief in `spec.md`.
 - PASS: The source document is broader than the selected story, but the source mapping includes every MM-588 coverage ID and maps each in-scope requirement to functional requirements.
+- PASS: The updated traceability requirement and success criterion preserve both MM-588 and MM-594 without adding a second user story or regenerating later-stage artifacts.

@@ -224,9 +224,9 @@ def _default_publish_mode() -> str:
     return normalized if normalized in SUPPORTED_PUBLISH_MODES else "pr"
 
 def _default_propose_tasks() -> bool:
-    """Default queue-task proposal generation toggle."""
+    """Default queue-task proposal generation to explicit task opt-in."""
 
-    return bool(getattr(settings.workflow, "enable_task_proposals", True))
+    return False
 
 def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
     candidate = _clean_optional_str(value)

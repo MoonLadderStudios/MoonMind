@@ -3,67 +3,67 @@
 **Branch**: `301-column-filter-popovers`
 **Date**: 2026-05-05
 **Spec**: `specs/301-column-filter-popovers/spec.md`
-**Input**: Single-story runtime spec generated from the trusted Jira preset brief for `MM-588`.
+**Input**: Single-story runtime spec generated from the trusted Jira preset briefs for `MM-588` and `MM-594`.
 
 ## Summary
 
-Tasks List already has the `MM-587` desktop column/header foundation: task-focused columns, separated sort/filter header targets, simple status/repository/runtime filtering, active chips, and task-scope API safety. This story will extend that surface into real column filter popovers with staged edits, include/exclude modes, blank handling, Skill and date filters, removable chips, pagination reset, and canonical filter URL/API encoding. Verification will be UI-first with Vitest/Testing Library coverage for interaction semantics and FastAPI route-boundary coverage for canonical task-scoped query filters.
+Tasks List already has the `MM-587` desktop column/header foundation and the completed `MM-588` column filter implementation: task-focused columns, separated sort/filter header targets, column filter popovers with staged edits, include/exclude modes, blank handling, Skill and date filters, removable chips, pagination reset, canonical URL/API encoding, and task-scope API safety. MM-594 maps to this same single story and adds traceability for the requirement that filter buttons open a box/popover with multi-select options instead of standard single-select dropdowns. No new implementation work is planned unless refreshed verification exposes a regression; verification remains UI-first with Vitest/Testing Library coverage for interaction semantics and Python route-boundary coverage for canonical task-scoped query filters.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | partial | `frontend/src/entrypoints/tasks-list.tsx` has status/repository/runtime only | add Skill, Scheduled, Created, Finished filter controls | UI unit |
-| FR-002 | implemented_verified | top Status/Repository controls are absent; tests assert control deck has no old filter form | preserve behavior | UI unit |
-| FR-003 | missing | current select/input changes apply immediately | add staged draft state per popover and Apply | UI unit |
-| FR-004 | missing | popovers do not implement cancel/Escape/outside dismissal semantics | add non-applying dismissal paths | UI unit |
-| FR-005 | partial | empty select value approximates all state for simple filters | add Select all/no-filter model to value-list popovers | UI unit |
-| FR-006 | partial | current filters support one included status/repo/runtime value | add include arrays for value filters | UI unit + API route |
-| FR-007 | missing | no exclude filter state exists | add exclude arrays and status `not canceled` behavior | UI unit + API route |
-| FR-008 | partial | status options use canonical list, but query only supports one exact state | add lifecycle include/exclude mapping using row display precedence where possible | UI unit + API route |
-| FR-009 | implemented_unverified | runtime select stores raw value and displays `formatRuntimeLabel` | keep and extend to multi-value chips | UI unit |
-| FR-010 | missing | Skill filter has no active control | add Skill value-list filtering | UI unit + API route if supported |
-| FR-011 | partial | repository exact text behavior exists; value-list selection does not | add repository value selection while preserving exact text compatibility | UI unit + API route |
-| FR-012 | missing | date popovers are placeholders | add Scheduled/Finished bounds and blank handling | UI unit |
-| FR-013 | missing | Created date popover is placeholder | add Created bounds without blank filter | UI unit |
-| FR-014 | implemented_unverified | current runtime option list is bounded; dynamic long lists not yet needed | keep bounded value lists; document/server-search contingency | UI unit |
-| FR-015 | implemented_unverified | React text rendering escapes labels | keep labels as text; test malicious label rendering | UI unit |
-| FR-016 | partial | chips exist for three simple filters only | add chips for all active column filter types and modes | UI unit |
-| FR-017 | implemented_unverified | current chips reopen status/repository/runtime popovers | extend to all filters | UI unit |
-| FR-018 | missing | chips have no separate remove action | add remove button/action per chip | UI unit |
-| FR-019 | partial | Clear filters clears status/repo/runtime only | clear all new column filters and restore default task-run view | UI unit |
-| FR-020 | partial | existing changes reset pagination immediately | ensure Apply/remove/clear reset cursor pagination | UI unit |
-| FR-021 | implemented_verified | tests cover legacy `state=<value>` loading | preserve as Status include filter | UI unit |
-| FR-022 | implemented_verified | tests cover legacy `repo=<value>` loading | preserve as Repository exact include filter | UI unit |
-| FR-023 | partial | URL still writes legacy `state`, `repo`, `targetRuntime` names | add canonical filter encoding after new UI changes | UI unit |
-| FR-024 | implemented_verified | UI/API force `scope=tasks` and normalize unsafe workflow scope state | preserve task-scoped query | UI unit + API route |
-| FR-025 | partial | `spec.md` preserves MM-588 | carry MM-588 through plan/tasks/verification | final verify |
-| SC-001 | missing | no staged-edit test exists | add interaction test | UI unit |
-| SC-002 | missing | no cancel/Escape/outside test exists | add interaction test | UI unit |
-| SC-003 | missing | no exclude status chip exists | add exclude-mode test | UI unit + API route |
-| SC-004 | implemented_unverified | runtime display formatting test exists for simple select | extend to multi-value popover/chip | UI unit |
-| SC-005 | partial | legacy exact repo test exists | add repository value selection and exact mapping tests | UI unit |
-| SC-006 | partial | chip reopen and clear-all tests exist, no individual remove | add chip remove tests | UI unit |
-| SC-007 | partial | page reset happens on immediate changes | verify Apply/remove/clear reset pagination with task scope | UI unit + API route |
-| SC-008 | partial | MM-588 preserved in spec and plan | preserve through tasks and verification | final verify |
-| DESIGN-REQ-007 | partial | prior story covers header migration and chips for three filters | add all MM-588 filter semantics | UI unit |
-| DESIGN-REQ-012 | missing | current popovers are immediate simple controls | add staged, keyboard-accessible popover semantics | UI unit |
-| DESIGN-REQ-013 | missing | no include/exclude model | add AND-across-columns, OR-within-column state model | UI unit + API route |
-| DESIGN-REQ-014 | partial | current chips reopen filters, clear-all exists | add per-chip removal and all filter modes | UI unit |
-| DESIGN-REQ-015 | partial | status/runtime/repo simple behavior exists | add skill/date/blank/legacy/canonical behavior | UI unit + API route |
-| DESIGN-REQ-027 | implemented_verified | no raw Temporal query, direct Temporal call, or system browsing in current normal page | preserve non-goals | UI unit |
+| FR-001 | implemented_verified | `verification.md` maps filter controls to `frontend/src/entrypoints/tasks-list.tsx` and `tasks-list.test.tsx` | no new implementation; preserve behavior | UI unit final verify |
+| FR-002 | implemented_verified | `verification.md` confirms old top detached filters are replaced by column/mobile equivalents | no new implementation; preserve behavior | UI unit final verify |
+| FR-003 | implemented_verified | staged apply tests in `tasks-list.test.tsx` are cited by `verification.md` | no new implementation; preserve behavior | UI unit final verify |
+| FR-004 | implemented_verified | Cancel/Escape/outside-click tests in `tasks-list.test.tsx` are cited by `verification.md` | no new implementation; preserve behavior | UI unit final verify |
+| FR-005 | implemented_verified | status popover implementation/tests verify select-all/no-filter value-list behavior | no new implementation; preserve behavior | UI unit final verify |
+| FR-006 | implemented_verified | UI and route tests verify include arrays for value filters | no new implementation; preserve behavior | UI unit + route-boundary final verify |
+| FR-007 | implemented_verified | UI and route tests verify exclude filters and `Status: not canceled` | no new implementation; preserve behavior | UI unit + route-boundary final verify |
+| FR-008 | implemented_verified | lifecycle status order and route query tests are cited by `verification.md` | no new implementation; preserve behavior | UI unit + route-boundary final verify |
+| FR-009 | implemented_verified | runtime tests verify raw stored values with readable labels | no new implementation; preserve behavior | UI unit final verify |
+| FR-010 | implemented_verified | skill filter UI/API evidence is cited by `verification.md` | no new implementation; preserve behavior | UI unit + route-boundary final verify |
+| FR-011 | implemented_verified | repository value and exact text behavior are covered by UI/API tests | no new implementation; preserve behavior | UI unit + route-boundary final verify |
+| FR-012 | implemented_verified | Scheduled/Finished date bounds and blank behavior are covered by UI/API tests | no new implementation; preserve behavior | UI unit + route-boundary final verify |
+| FR-013 | implemented_verified | Created date bounds without blank filtering are covered by UI/API tests | no new implementation; preserve behavior | UI unit + route-boundary final verify |
+| FR-014 | implemented_verified | bounded option derivation is cited by `verification.md` | no new implementation; preserve behavior | UI unit final verify |
+| FR-015 | implemented_verified | React text rendering and malicious-label coverage are cited by `verification.md` | no new implementation; preserve behavior | UI unit final verify |
+| FR-016 | implemented_verified | active chip tests cover all active column filter summaries | no new implementation; preserve behavior | UI unit final verify |
+| FR-017 | implemented_verified | chip-open tests prove matching popovers reopen with applied state | no new implementation; preserve behavior | UI unit final verify |
+| FR-018 | implemented_verified | chip removal tests prove only the selected filter clears | no new implementation; preserve behavior | UI unit final verify |
+| FR-019 | implemented_verified | Clear filters behavior is covered by active chip tests | no new implementation; preserve behavior | UI unit final verify |
+| FR-020 | implemented_verified | pagination-reset assertions are cited by `verification.md` | no new implementation; preserve behavior | UI unit + route-boundary final verify |
+| FR-021 | implemented_verified | legacy `state=<value>` load mapping tests are cited by `verification.md` | no new implementation; preserve behavior | UI unit final verify |
+| FR-022 | implemented_verified | legacy `repo=<value>` load mapping tests are cited by `verification.md` | no new implementation; preserve behavior | UI unit final verify |
+| FR-023 | implemented_verified | canonical URL rewrite tests are cited by `verification.md` | no new implementation; preserve behavior | UI unit final verify |
+| FR-024 | implemented_verified | API scope/query tests verify task-scoped semantics | no new implementation; preserve behavior | route-boundary final verify |
+| FR-025 | implemented_verified | `spec.md` now preserves `MM-588` and `MM-594`; this plan carries both | no new implementation; preserve both keys downstream | final verify |
+| SC-001 | implemented_verified | staged apply tests are cited by `verification.md` | no new implementation; preserve behavior | UI unit final verify |
+| SC-002 | implemented_verified | cancel/Escape/outside-click tests are cited by `verification.md` | no new implementation; preserve behavior | UI unit final verify |
+| SC-003 | implemented_verified | exclude status chip tests and route assertions are cited by `verification.md` | no new implementation; preserve behavior | UI unit + route-boundary final verify |
+| SC-004 | implemented_verified | runtime and skill display tests are cited by `verification.md` | no new implementation; preserve behavior | UI unit final verify |
+| SC-005 | implemented_verified | repository selection and exact mapping tests are cited by `verification.md` | no new implementation; preserve behavior | UI unit final verify |
+| SC-006 | implemented_verified | chip reopen, individual removal, and clear-all tests are cited by `verification.md` | no new implementation; preserve behavior | UI unit final verify |
+| SC-007 | implemented_verified | API route tests verify canonical filters remain task-scoped | no new implementation; preserve behavior | route-boundary final verify |
+| SC-008 | implemented_verified | `spec.md` and this plan preserve `MM-588`, `MM-594`, and source design IDs | no new implementation; preserve both keys downstream | final verify |
+| DESIGN-REQ-007 | implemented_verified | `verification.md` maps layout/filter/chip behavior to implementation and tests | no new implementation; preserve behavior | UI unit final verify |
+| DESIGN-REQ-012 | implemented_verified | `verification.md` maps staged popover behavior to implementation and tests | no new implementation; preserve behavior | UI unit final verify |
+| DESIGN-REQ-013 | implemented_verified | include/exclude semantics are covered by UI and route tests | no new implementation; preserve behavior | UI unit + route-boundary final verify |
+| DESIGN-REQ-014 | implemented_verified | active chip behavior is covered by UI tests | no new implementation; preserve behavior | UI unit final verify |
+| DESIGN-REQ-015 | implemented_verified | field-specific status/runtime/repository/date behavior is covered by UI and route tests | no new implementation; preserve behavior | UI unit + route-boundary final verify |
+| DESIGN-REQ-027 | implemented_verified | task-scope route tests preserve non-goal safety | no new implementation; preserve behavior | route-boundary final verify |
 
 ## Technical Context
 
 **Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 for FastAPI route tests.
 **Primary Dependencies**: React, TanStack Query, Zod, Vitest, Testing Library, FastAPI, pytest, Temporal visibility query helpers.
 **Storage**: No new persistent storage; filter state is URL/query state and component state only.
-**Unit Testing**: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` for focused UI coverage; targeted Python route tests through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py`.
-**Integration Testing**: Existing route-boundary tests for `/api/executions` plus UI entrypoint tests cover the task-list workflow without external credentials.
+**Unit Testing**: Focused UI unit coverage runs with `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx`. Focused Python route-boundary unit coverage runs with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py`. Full required unit verification runs with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`.
+**Integration Testing**: No compose-backed `integration_ci` coverage is required for this UI and route-planning refresh because no service topology, artifact store, worker routing, or external dependency contract changes are planned. The integration strategy is route-boundary validation for `/api/executions` task-scope query construction plus UI entrypoint workflow tests, both running without external credentials.
 **Target Platform**: Browser Mission Control Tasks List and MoonMind API.
 **Project Type**: Existing full-stack web app.
 **Performance Goals**: Popover interactions must not fetch until Apply/remove/clear; value lists remain bounded; no unbounded DOM rendering for long lists.
-**Constraints**: Preserve task-only visibility, avoid raw Temporal query authoring, keep direct browser calls to MoonMind APIs only, keep page size/pagination outside filters, and preserve `MM-588` traceability.
+**Constraints**: Preserve task-only visibility, avoid raw Temporal query authoring, keep direct browser calls to MoonMind APIs only, keep page size/pagination outside filters, and preserve `MM-588` and `MM-594` traceability.
 **Scale/Scope**: One Tasks List entrypoint, shared Mission Control CSS, and one API list route filter surface.
 
 ## Constitution Check

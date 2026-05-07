@@ -4,7 +4,7 @@
 
 The Task Details page is the canonical view for inspecting a single MoonMind task execution. It presents the task identity, current state, original task configuration, execution history, outputs, errors, and all actions that are available for the task in its current state.
 
-The page is declarative and state-driven. Every visible control is derived from the task execution status, the task type, and explicit backend capabilities. A failed task always presents the user with the complete set of available recovery actions: **Remediate**, **Edit task**, and **Rerun**.
+The page is declarative and state-driven. Every visible control is derived from the task execution status, the task type, and explicit backend capabilities. A failed task presents the user with the complete set of available recovery actions, which may include **Remediate**, **Edit task**, **Rerun**, and **Resume**.
 
 ## Route
 
@@ -25,7 +25,7 @@ The page enables a user to:
 3. Inspect the exact steps, choices, instructions, and configuration used for the task.
 4. View progress, logs, outputs, artifacts, and failure information.
 5. Take the correct next action for the task state.
-6. For failed tasks, choose between remediation, editing the failed task for a new run, or rerunning the task exactly as originally submitted.
+6. For failed tasks, choose between remediation, editing the failed task for a new run, rerunning the task exactly as originally submitted, or resuming from the last failed step when prior work can be restored.
 
 ## Source of truth
 
@@ -57,6 +57,7 @@ type TaskExecutionCapabilities = {
   canRemediate: boolean;
   canRerun: boolean;
   canEditForRerun: boolean;
+  canResumeFromFailedStep: boolean;
   canUpdateInputs: boolean;
   canCancel: boolean;
   canPause: boolean;
@@ -105,7 +106,7 @@ Tasks / Customer Renewal Research
 Customer Renewal Research                     [Failed]
 Research customer renewal risks and summarize next steps.
 
-[Remediate] [Edit task] [Rerun] [More]
+[Remediate] [Edit task] [Rerun] [Resume] [More]
 ```
 
 ### Title behavior
@@ -136,14 +137,14 @@ The status badge is not the only indicator of status. The status summary section
 
 The primary action bar appears in the header and remains available near the top of the page. On smaller screens, the same actions may collapse into a sticky bottom action bar or an overflow menu, but the actions remain discoverable.
 
-Actions are additive. Showing one action never hides another valid action. In particular, **Remediate** does not replace **Edit task** or **Rerun** on failed tasks.
+Actions are additive. Showing one action never hides another valid action. In particular, **Remediate** does not replace **Edit task**, **Rerun**, or **Resume** on failed tasks.
 
 ### Failed task actions
 
 For a failed MoonMind task, the primary action bar contains all of the following actions when the corresponding capabilities are true:
 
 ```text
-[Remediate] [Edit task] [Rerun]
+[Remediate] [Edit task] [Rerun] [Resume]
 ```
 
 The desired failed-task action state is:
@@ -152,10 +153,11 @@ The desired failed-task action state is:
 capabilities.canRemediate === true
 capabilities.canEditForRerun === true
 capabilities.canRerun === true
+capabilities.canResumeFromFailedStep === true // only when checkpointed progress is restorable
 capabilities.canUpdateInputs === false
 ```
 
-Failed tasks are terminal executions. The user may inspect, remediate, edit for a new run, or rerun, but the original failed execution is not mutated in place.
+Failed tasks are terminal executions. The user may inspect, remediate, edit for a new run, rerun, or resume from the last failed step, but the original failed execution is not mutated in place.
 
 ### Remediate button
 
@@ -276,6 +278,52 @@ This will run the task again with the exact same steps, choices, and settings.
 
 After a successful rerun request, the user is taken to the new task execution details page or shown a success toast with a link to the new run.
 
+### Resume button
+
+The failed-task **Resume** button is present when:
+
+```ts
+capabilities.canResumeFromFailedStep === true
+```
+
+The button label is:
+
+```text
+Resume
+```
+
+The accessible name is:
+
+```text
+Resume from failed step
+```
+
+The failed-task **Resume** action is separate from the paused-task **Resume** lifecycle action. Failed-task **Resume** retries the last failed step with the completed work before that step restored from durable checkpoints.
+
+Resume behavior:
+
+- Does not open an editing form.
+- Uses the original task input snapshot unchanged.
+- Pins the source execution by both `workflowId` and `runId`.
+- Identifies the last failed step from backend progress data.
+- Restores completed prior steps from durable step output refs and workspace, branch, commit, or equivalent checkpoints.
+- Creates a linked follow-up execution.
+- Displays prior completed steps in the new execution as reused from the original run.
+- Starts new execution work at the failed step.
+- Leaves the original failed task unchanged.
+
+Optional confirmation copy:
+
+```text
+Resume from failed step?
+
+MoonMind will reuse the completed work before the failed step and retry the failed step. The original failed run will remain unchanged.
+
+[Cancel] [Resume]
+```
+
+After a successful Resume request, the user is taken to the resumed task execution details page or shown a success toast with a link to the resumed run.
+
 ### Cancel button
 
 The **Cancel** button is present when:
@@ -288,7 +336,7 @@ The button cancels a pending, scheduled, or running task according to task execu
 
 The original task page remains available after cancellation.
 
-### Pause and Resume buttons
+### Pause and lifecycle Resume buttons
 
 The **Pause** button is present when:
 
@@ -296,13 +344,13 @@ The **Pause** button is present when:
 capabilities.canPause === true
 ```
 
-The **Resume** button is present when:
+The lifecycle **Resume** button is present when:
 
 ```ts
 capabilities.canResume === true
 ```
 
-Only one of **Pause** or **Resume** is visible at a time.
+Only one of **Pause** or lifecycle **Resume** is visible at a time. This lifecycle action resumes a paused active task and is not the failed-task **Resume** action described above.
 
 ### More menu
 
@@ -327,17 +375,17 @@ Destructive actions are visually separated and require confirmation.
 
 The page follows this desired action matrix.
 
-| Task status | Remediate | Edit task | Rerun | Cancel | Pause | Resume |
-|---|---:|---:|---:|---:|---:|---:|
-| Pending | No | Yes, if inputs can be updated | No | Yes | No | No |
-| Scheduled | No | Yes, if inputs can be updated | No | Yes | No | No |
-| Running | No | Yes, if inputs can be updated | No | Yes | Yes, if supported | No |
-| Paused | No | Yes, if inputs can be updated | No | Yes | No | Yes |
-| Completed | No | Optional, as edit-for-rerun | Yes | No | No | No |
-| Failed | Yes | Yes, as edit-for-rerun | Yes | No | No | No |
-| Canceled | No | Optional, as edit-for-rerun | Yes | No | No | No |
-| Timed out | Optional, if failure can be remediated | Yes, as edit-for-rerun | Yes | No | No | No |
-| Terminated | Optional, if failure can be remediated | Yes, as edit-for-rerun | Yes | No | No | No |
+| Task status | Remediate | Edit task | Rerun | Resume failed step | Cancel | Pause | Lifecycle resume |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Pending | No | Yes, if inputs can be updated | No | No | Yes | No | No |
+| Scheduled | No | Yes, if inputs can be updated | No | No | Yes | No | No |
+| Running | No | Yes, if inputs can be updated | No | No | Yes | Yes, if supported | No |
+| Paused | No | Yes, if inputs can be updated | No | No | Yes | No | Yes |
+| Completed | No | Optional, as edit-for-rerun | Yes | No | No | No | No |
+| Failed | Yes | Yes, as edit-for-rerun | Yes | Yes, if checkpointed progress is restorable | No | No | No |
+| Canceled | No | Optional, as edit-for-rerun | Yes | No | No | No | No |
+| Timed out | Optional, if failure can be remediated | Yes, as edit-for-rerun | Yes | Optional, if a failed step and checkpoint are available | No | No | No |
+| Terminated | Optional, if failure can be remediated | Yes, as edit-for-rerun | Yes | Optional, if a failed step and checkpoint are available | No | No | No |
 
 The matrix is descriptive. The final source of truth is the capability object returned with the task detail data.
 
@@ -463,10 +511,24 @@ It contains:
 - Pending steps
 - Step-level timestamps
 - Step-level outputs or summaries, when available
+- Preserved steps reused from a source run, when viewing a resumed execution
 
 For running tasks, this section updates as new progress is received.
 
 For terminal tasks, this section displays the final execution path.
+
+For resumed executions, prior completed steps restored from the source run are displayed as preserved, for example:
+
+```text
+Step 1: Gather account context
+Status: Completed - reused from original run
+
+Step 2: Analyze renewal risk
+Status: Completed - reused from original run
+
+Step 3: Draft customer-facing summary
+Status: Running - resumed here
+```
 
 ## Failure section
 
@@ -486,6 +548,7 @@ It contains:
 - Relevant logs or trace snippets
 - Suggested next actions
 - Remediation status, when available
+- Resume availability or the disabled reason, when a failed step exists but checkpointed progress cannot be restored
 
 The failure section must not obscure the primary action bar. Users can always see or quickly access **Remediate**, **Edit task**, and **Rerun** on failed tasks.
 
@@ -505,6 +568,7 @@ Suggested actions
 - Remediate the failed task to diagnose and resolve the issue.
 - Edit the task to change inputs or choices and run it again.
 - Rerun the task exactly as originally configured.
+- Resume from the failed step to reuse completed prior work, if available.
 ```
 
 ## Remediation panel
@@ -625,6 +689,8 @@ Events may include:
 - Remediation completed
 - Task rerun requested
 - Edited rerun created
+- Failed-step resume requested
+- Resumed run created
 
 Each event includes:
 
@@ -642,6 +708,7 @@ It contains:
 - Original run, when viewing a rerun
 - Reruns created from the current task
 - Edited reruns created from the current task
+- Resumed runs created from the current task
 - Remediation-generated runs, when applicable
 
 Each related run displays:
@@ -658,9 +725,10 @@ Relationship labels:
 - Original run
 - Rerun
 - Edited rerun
+- Resumed from failed step
 - Remediation run
 
-For a failed task, once the user clicks **Rerun** or submits an edited task from **Edit task**, the new run appears in this section.
+For a failed task, once the user clicks **Rerun**, clicks **Resume**, or submits an edited task from **Edit task**, the new run appears in this section.
 
 ## Metadata section
 
@@ -751,6 +819,7 @@ Rerun task
 Cancel task
 Pause task
 Resume task
+Resume from failed step
 Copy task link
 ```
 
@@ -783,6 +852,7 @@ On mobile:
 Remediate
 Edit task
 Rerun
+Resume
 ```
 
 ### Failed task edit banner
@@ -818,6 +888,33 @@ Toast action:
 View new run
 ```
 
+### Resume confirmation
+
+```text
+Resume from failed step?
+
+MoonMind will reuse the completed work before the failed step and retry the failed step. The original failed run will remain unchanged.
+```
+
+Confirmation actions:
+
+```text
+Cancel
+Resume
+```
+
+### Resume success toast
+
+```text
+Task resumed from failed step.
+```
+
+Toast action:
+
+```text
+View resumed run
+```
+
 ### Edited rerun success toast
 
 ```text
@@ -848,6 +945,12 @@ This task cannot be edited because its original configuration is unavailable.
 This task cannot be rerun because its original configuration is unavailable.
 ```
 
+### Resume unavailable message
+
+```text
+This task cannot be resumed because the completed work before the failed step is not recoverable.
+```
+
 ## State-specific desired page examples
 
 ### Failed task
@@ -855,7 +958,7 @@ This task cannot be rerun because its original configuration is unavailable.
 A failed task page contains:
 
 - Header with task title and `Failed` status badge.
-- Primary action bar with **Remediate**, **Edit task**, and **Rerun**.
+- Primary action bar with **Remediate**, **Edit task**, **Rerun**, and **Resume** when backend capabilities allow them.
 - Status summary with failure timestamp and duration.
 - Failure section with failed step, error summary, and technical details.
 - Task configuration summary with original steps and choices.
@@ -873,6 +976,7 @@ Desired failed-task action model:
   canRemediate: true,
   canRerun: true,
   canEditForRerun: true,
+  canResumeFromFailedStep: true,
   canUpdateInputs: false,
   canCancel: false,
   canPause: false,
@@ -952,6 +1056,20 @@ When the user clicks **Rerun** on a failed task:
 5. The user receives a success toast or is routed to the new run.
 6. The new run is linked to the original execution as a rerun.
 
+### Clicking Resume on a failed task
+
+When the user clicks **Resume** on a failed task:
+
+1. The user confirms Resume, if confirmation is enabled.
+2. The backend creates a linked follow-up execution using the original task input snapshot unchanged.
+3. The backend pins the source by `workflowId` and `runId`.
+4. The backend restores completed prior work from durable step output refs and workspace, branch, commit, or equivalent checkpoints.
+5. The new execution marks prior completed steps as preserved from the source run.
+6. The new execution starts newly executed work at the last failed step.
+7. The original failed execution is not modified.
+8. The user receives a success toast or is routed to the resumed run.
+9. The new run is linked to the original execution as `Resumed from failed step`.
+
 ## Non-goals
 
 The Task Details page does not mutate terminal executions in place.
@@ -962,17 +1080,20 @@ The Task Details page does not reconstruct edit-form state from display-only lab
 
 The Task Details page does not allow destructive actions without confirmation.
 
+The Task Details page does not allow task input editing as part of failed-step **Resume**. Editing instructions, steps, attachments, runtime, publish mode, branch, presets, or dependencies belongs to **Edit task**.
+
 ## Acceptance criteria
 
 The page is considered correct when all of the following are true:
 
-1. A failed task displays **Remediate**, **Edit task**, and **Rerun** when the backend capabilities allow them.
+1. A failed task displays **Remediate**, **Edit task**, **Rerun**, and **Resume** when the backend capabilities allow them.
 2. **Remediate** opens the remediation flow.
 3. **Edit task** on a failed task opens `/tasks/new?rerunExecutionId=:taskExecutionId&mode=edit`.
 4. The edit-for-rerun create-task page loads every original step and selected choice exactly.
 5. Submitting an edited failed task creates a new run and does not mutate the failed execution.
 6. **Rerun** creates a new run using the exact original task configuration.
-7. The original failed task remains visible and unchanged after remediation, edit-for-rerun, or rerun.
-8. Remediation availability does not suppress edit or rerun availability.
-9. All actions are rendered from explicit capability fields.
-10. Users can inspect failure details, original configuration, outputs, artifacts, logs, related runs, and metadata from the page.
+7. **Resume** creates a linked follow-up execution that reuses completed prior work and starts at the last failed step.
+8. The original failed task remains visible and unchanged after remediation, edit-for-rerun, rerun, or Resume.
+9. Remediation availability does not suppress edit, rerun, or Resume availability.
+10. All actions are rendered from explicit capability fields.
+11. Users can inspect failure details, original configuration, outputs, artifacts, logs, related runs, and metadata from the page.

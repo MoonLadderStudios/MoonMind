@@ -15,6 +15,7 @@ from moonmind.integrations.jira.models import (
     CreateIssueLinkRequest,
     EditIssueRequest,
     GetTransitionsRequest,
+    JiraIssueInputValue,
     SearchIssuesRequest,
     TransitionIssueRequest,
     VerifyConnectionRequest,
@@ -89,6 +90,38 @@ def _build_settings(
         ),
         **overrides,
     )
+
+async def test_jira_issue_input_value_keeps_only_safe_context() -> None:
+    value = JiraIssueInputValue.model_validate(
+        {
+            "key": "mm-593",
+            "summary": "Implement schema-driven inputs",
+            "description": "A safe description",
+            "url": "https://jira.example/browse/MM-593",
+            "status": "In Progress",
+            "assignee": "Nate",
+            "authorization": "Bearer raw-token",
+            "token": "raw-token",
+        }
+    )
+
+    assert value.model_dump(by_alias=True, exclude_none=True) == {
+        "key": "MM-593",
+        "summary": "Implement schema-driven inputs",
+        "description": "A safe description",
+        "url": "https://jira.example/browse/MM-593",
+        "status": "In Progress",
+        "assignee": "Nate",
+    }
+
+async def test_jira_issue_input_value_rejects_secret_like_fields() -> None:
+    with pytest.raises(ValidationError):
+        JiraIssueInputValue.model_validate(
+            {
+                "key": "MM-593",
+                "summary": "token=raw-secret",
+            }
+        )
 
 async def test_create_issue_converts_multiline_description_and_sanitizes_result() -> None:
     service = _StubJiraToolService(
