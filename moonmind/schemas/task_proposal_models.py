@@ -65,6 +65,7 @@ class TaskProposalModel(BaseModel):
     task_snapshot_ref: Optional[str] = Field(None, alias="taskSnapshotRef")
     provider_metadata: dict[str, Any] = Field(default_factory=dict, alias="providerMetadata")
     resolved_policy: dict[str, Any] = Field(default_factory=dict, alias="resolvedPolicy")
+    review_delivery: dict[str, Any] = Field(default_factory=dict, alias="reviewDelivery")
     review_priority: TaskProposalReviewPriority = Field(
         TaskProposalReviewPriority.NORMAL, alias="reviewPriority"
     )

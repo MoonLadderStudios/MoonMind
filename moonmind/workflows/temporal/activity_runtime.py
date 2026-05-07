@@ -2978,6 +2978,8 @@ class TemporalProposalActivities:
         if self._proposal_service_factory is not None:
             try:
                 service_or_ctx = self._proposal_service_factory()
+                if inspect.isawaitable(service_or_ctx):
+                    service_or_ctx = await service_or_ctx
             except Exception as exc:
                 logger.warning(
                     "proposal.submit: failed to create proposal service: %s", exc
@@ -3104,7 +3106,7 @@ class TemporalProposalActivities:
                             "trigger_job_id": trigger_job_id,
                             "signal": {"severity": "normal", "type": "follow_up"},
                         }
-                        await service.create_proposal(
+                        proposal = await service.create_proposal(
                             title=title,
                             summary=summary,
                             category=candidate.get("category"),
@@ -3125,6 +3127,23 @@ class TemporalProposalActivities:
                                 "workflow_id": workflow_id,
                             },
                         )
+                        external_key = getattr(proposal, "external_key", None)
+                        external_url = getattr(proposal, "external_url", None)
+                        if external_key:
+                            decision["externalKey"] = external_key
+                        if external_url:
+                            decision["externalUrl"] = external_url
+                        delivery_metadata = getattr(
+                            proposal, "provider_metadata", {}
+                        )
+                        if isinstance(delivery_metadata, Mapping):
+                            delivery_node = delivery_metadata.get("delivery")
+                            if isinstance(delivery_node, Mapping):
+                                decision["deliveryStatus"] = delivery_node.get(
+                                    "status", "delivered"
+                                )
+                                if "created" in delivery_node:
+                                    decision["created"] = delivery_node["created"]
                         submitted_count += 1
                     else:
                         logger.info(

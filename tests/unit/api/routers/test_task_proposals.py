@@ -213,6 +213,42 @@ def test_list_proposals_serializes_delivery_record_fields(
     assert item["deliveredAt"] == "2026-05-07T12:30:00Z"
     assert item["lastSyncedAt"] == "2026-05-07T12:45:00Z"
 
+
+def test_list_proposals_serializes_review_delivery_state(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "github"
+    proposal.external_key = "42"
+    proposal.external_url = "https://github.example/Moon/Repo/issues/42"
+    proposal.delivered_at = datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
+    proposal.last_synced_at = datetime(2026, 5, 7, 12, 45, tzinfo=UTC)
+    proposal.task_snapshot_ref = "artifact://tasks/proposals/42.json"
+    proposal.provider_metadata = {
+        "delivery": {
+            "status": "delivered",
+            "storedSnapshotNotice": True,
+            "created": True,
+        }
+    }
+    proposal.resolved_policy = {"provider": "github", "target": "project"}
+    service.list_proposals.return_value = ([proposal], None)
+
+    response = test_client.get("/api/proposals")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["reviewDelivery"] == {
+        "provider": "github",
+        "status": "delivered",
+        "externalKey": "42",
+        "externalUrl": "https://github.example/Moon/Repo/issues/42",
+        "taskSnapshotRef": "artifact://tasks/proposals/42.json",
+        "storedSnapshotNotice": True,
+        "created": True,
+    }
+
 def test_promote_proposal_returns_proposal(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:

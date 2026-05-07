@@ -227,6 +227,8 @@ Key diagnostics:
 - Existing `task_step_template_versions.inputs_schema` JSON and task draft/submission payloads; no new persistent tables planned (308-schema-driven-capability-inputs)
 - Python 3.12; TypeScript/React for Mission Control task details + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Zod, existing Temporal artifact service/helpers (310-resume-from-last-failed-step)
 - Existing Temporal execution records, canonical execution parameters/memo/search attributes, Temporal artifact metadata/content store, and existing workflow history; no new persistent database table is planned unless reverse related-run queries cannot be implemented safely from existing execution records (310-resume-from-last-failed-step)
+- Python 3.12 + Pydantic v2, SQLAlchemy async ORM, FastAPI, Temporal Python SDK activity boundaries, `httpx`, existing Jira trusted tool service, existing GitHub service/auth helpers, pytest (312-proposal-review-delivery)
+- Existing `task_proposals` table and `311_proposal_delivery_records` migration fields; no new persistent table planned unless provider decision audit cannot reuse existing proposal metadata/decision fields (312-proposal-review-delivery)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
