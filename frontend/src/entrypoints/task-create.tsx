@@ -1378,12 +1378,8 @@ function isSelfManagedPublishSkill(skillId: string): boolean {
 
 function resolveEffectiveSkillId(
   primarySkillId: string,
-  appliedTemplates: AppliedTemplateState[],
+  _appliedTemplates: AppliedTemplateState[],
 ): string {
-  if (appliedTemplates.length > 0) {
-    const lastTemplate = appliedTemplates[appliedTemplates.length - 1];
-    return lastTemplate?.slug ?? primarySkillId;
-  }
   if (hasExplicitSkillSelection(primarySkillId)) {
     return primarySkillId;
   }

@@ -6228,7 +6228,12 @@ describe.skip("Task Create Entrypoint", () => {
     expect(payload.publishMode).toBe("pr");
     expect(task.publish).toMatchObject({ mode: "pr" });
     expect(payload.mergeAutomation).toEqual({ enabled: true });
-    expect(task.skills).toEqual({ include: [{ name: "jira-orchestrate" }] });
+    expect(task.tool).toMatchObject({ type: "skill", name: "jira-issue-updater" });
+    expect(task.skill).toMatchObject({ id: "jira-issue-updater" });
+    expect(task.skills).toEqual({ include: [{ name: "jira-issue-updater" }] });
+    expect(task.appliedStepTemplates).toEqual([
+      expect.objectContaining({ slug: "jira-orchestrate" }),
+    ]);
   });
 
   it("shows only PR publish choices for the Jira Breakdown and Orchestrate preset inputs", async () => {
