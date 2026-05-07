@@ -1424,7 +1424,7 @@ describe('Task Detail Entrypoint', () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      calls.push({ url, init });
+      calls.push(init === undefined ? { url } : { url, init });
       if (url.includes('/resume-from-failed-step')) {
         return Promise.resolve({
           ok: true,

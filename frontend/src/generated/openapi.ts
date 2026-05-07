@@ -1473,6 +1473,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/resume-from-failed-step": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume Execution From Failed Step */
+        post: operations["resume_execution_from_failed_step_api_executions__workflow_id__resume_from_failed_step_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/{integration_name}/callbacks/{callback_correlation_key}": {
         parameters: {
             query?: never;
@@ -3767,6 +3784,11 @@ export interface components {
              */
             canResume: boolean;
             /**
+             * Canresumefromfailedstep
+             * @default false
+             */
+            canResumeFromFailedStep: boolean;
+            /**
              * Cancancel
              * @default false
              */
@@ -4177,6 +4199,9 @@ export interface components {
             artifactRefs?: string[];
             reportProjection?: components["schemas"]["ExecutionReportProjectionModel"] | null;
             actions?: components["schemas"]["ExecutionActionCapabilityModel"];
+            resume?: components["schemas"]["ExecutionResumeSummaryModel"] | null;
+            /** Relatedruns */
+            relatedRuns?: components["schemas"]["ExecutionRelatedRunModel"][];
             debugFields?: components["schemas"]["ExecutionDebugFieldsModel"] | null;
             /** Redirectpath */
             redirectPath?: string | null;
@@ -4376,6 +4401,24 @@ export interface components {
             refreshedAt: string;
         };
         /**
+         * ExecutionRelatedRunModel
+         * @description Operator-visible relationship between source and resumed executions.
+         */
+        ExecutionRelatedRunModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId?: string | null;
+            /** Relationship */
+            relationship: string;
+            /** Status */
+            status?: string | null;
+            /** Createdat */
+            createdAt?: string | null;
+            /** Href */
+            href: string;
+        };
+        /**
          * ExecutionReportProjectionModel
          * @description Bounded report summary surfaced on execution detail responses.
          */
@@ -4396,6 +4439,25 @@ export interface components {
             severityCounts?: {
                 [key: string]: number;
             } | null;
+        };
+        /**
+         * ExecutionResumeSummaryModel
+         * @description Failed-step Resume availability and checkpoint summary.
+         */
+        ExecutionResumeSummaryModel: {
+            /**
+             * Available
+             * @default false
+             */
+            available: boolean;
+            /** Checkpointref */
+            checkpointRef?: string | null;
+            /** Failedstepid */
+            failedStepId?: string | null;
+            /** Sourcerunid */
+            sourceRunId?: string | null;
+            /** Disabledreason */
+            disabledReason?: string | null;
         };
         /**
          * ExecutionSkillLifecycleIntentModel
@@ -5258,6 +5320,18 @@ export interface components {
             completedWaitCycles: number;
         };
         /**
+         * PreservedStepProvenanceModel
+         * @description Source execution provenance for a preserved step row.
+         */
+        PreservedStepProvenanceModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /** Attempt */
+            attempt: number;
+        };
+        /**
          * PresignDownloadResponse
          * @description Presigned-download response payload.
          */
@@ -5840,6 +5914,43 @@ export interface components {
              */
             scheduledFor: string;
         };
+        /** ResumeExecutionRefModel */
+        ResumeExecutionRefModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /** Detailhref */
+            detailHref?: string | null;
+        };
+        /**
+         * ResumeFromFailedStepResponse
+         * @description Response from the failed-step Resume command.
+         */
+        ResumeFromFailedStepResponse: {
+            /**
+             * Accepted
+             * @default true
+             * @constant
+             */
+            accepted: true;
+            /**
+             * Applied
+             * @default created_resumed_execution
+             * @constant
+             */
+            applied: "created_resumed_execution";
+            source: components["schemas"]["ResumeExecutionRefModel"];
+            execution: components["schemas"]["ResumeExecutionRefModel"];
+            /**
+             * Relationship
+             * @default Resumed from failed step
+             * @constant
+             */
+            relationship: "Resumed from failed step";
+            /** Resumecheckpointref */
+            resumeCheckpointRef: string;
+        };
         /** RetrievalQuery */
         RetrievalQuery: {
             /** Query */
@@ -6165,6 +6276,7 @@ export interface components {
             checks?: components["schemas"]["StepLedgerCheckModel"][];
             refs?: components["schemas"]["StepLedgerRefsModel"];
             artifacts?: components["schemas"]["StepLedgerArtifactsModel"];
+            preservedFrom?: components["schemas"]["PreservedStepProvenanceModel"] | null;
             workload?: components["schemas"]["StepLedgerWorkloadModel"] | null;
             /** Lasterror */
             lastError?: string | null;
@@ -10508,6 +10620,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_execution_from_failed_step_api_executions__workflow_id__resume_from_failed_step_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResumeFromFailedStepResponse"];
                 };
             };
             /** @description Validation Error */
