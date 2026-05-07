@@ -177,6 +177,130 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, [])
 
+    async def test_proposal_generate_preserves_compact_selectors_and_provenance(self) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "wf-preserve-provenance",
+                "repo": "org/repo",
+                "parameters": {
+                    "task": {
+                        "instructions": "Investigate flaky tests",
+                        "skill": {"id": "auto", "args": {}},
+                        "tool": {"type": "skill", "name": "auto", "version": "1.0"},
+                        "skills": {"sets": ["runtime-quality"]},
+                        "authoredPresets": [
+                            {
+                                "presetId": "runtime-followup",
+                                "presetVersion": "2026-05-07",
+                                "includePath": ["root", "quality"],
+                            }
+                        ],
+                        "steps": [
+                            {
+                                "id": "step-1",
+                                "title": "Inspect diagnostics",
+                                "instructions": "Original diagnostic inspection",
+                                "type": "tool",
+                                "tool": {
+                                    "type": "skill",
+                                    "name": "fix-proposal",
+                                    "version": "1.0",
+                                },
+                                "skills": {"include": [{"name": "runtime-quality"}]},
+                                "source": {
+                                    "kind": "preset-derived",
+                                    "presetId": "runtime-followup",
+                                    "includePath": ["root", "quality"],
+                                    "originalStepId": "inspect-diagnostics",
+                                },
+                            },
+                            {
+                                "id": "step-2",
+                                "title": "Run selected remediation skill",
+                                "instructions": "Original skill remediation",
+                                "type": "skill",
+                                "skill": {"id": "fix-comments"},
+                            },
+                            {
+                                "id": "step-3",
+                                "title": "Run selected skill set",
+                                "instructions": "Original skill-set remediation",
+                                "type": "skill",
+                                "skills": {"sets": ["review-fixers"]},
+                                "source": {
+                                    "kind": "preset-derived",
+                                    "presetId": "runtime-followup",
+                                },
+                            },
+                        ],
+                    }
+                },
+                "proposalIdea": "Add regression coverage for proposal diagnostics",
+            }
+        )
+
+        task = result[0]["taskCreateRequest"]["payload"]["task"]
+        self.assertEqual(task["tool"]["type"], "skill")
+        self.assertEqual(task["skills"], {"sets": ["runtime-quality"]})
+        self.assertEqual(
+            task["authoredPresets"][0]["presetId"],
+            "runtime-followup",
+        )
+        self.assertNotIn("steps", task)
+        self.assertEqual(len(task["sourceSteps"]), 3)
+        self.assertEqual(
+            task["sourceSteps"][0]["source"]["originalStepId"],
+            "inspect-diagnostics",
+        )
+        self.assertEqual(
+            task["sourceSteps"][0]["skills"],
+            {"include": [{"name": "runtime-quality"}]},
+        )
+        self.assertEqual(task["sourceSteps"][1]["skill"], {"id": "fix-comments"})
+        self.assertEqual(task["sourceSteps"][2]["skills"], {"sets": ["review-fixers"]})
+        for source_step in task["sourceSteps"]:
+            self.assertNotIn("instructions", source_step)
+        self.assertNotIn("materializedSkills", task)
+
+    async def test_proposal_generate_does_not_fabricate_absent_provenance(self) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "wf-no-provenance",
+                "repo": "org/repo",
+                "parameters": {
+                    "task": {
+                        "instructions": "Investigate flaky tests",
+                    }
+                },
+                "proposalIdea": "Add regression coverage for proposal diagnostics",
+            }
+        )
+
+        task = result[0]["taskCreateRequest"]["payload"]["task"]
+        self.assertNotIn("authoredPresets", task)
+        self.assertNotIn("steps", task)
+        self.assertNotIn("sourceSteps", task)
+
+    async def test_proposal_generate_does_not_touch_submission_service(self) -> None:
+        factory = AsyncMock(side_effect=AssertionError("generation used service"))
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "wf-side-effect-free",
+                "repo": "org/repo",
+                "parameters": {"task": {"instructions": "Fix proposal routing"}},
+                "proposalIdea": "Add regression coverage",
+            }
+        )
+
+        self.assertEqual(len(result), 1)
+        factory.assert_not_called()
+
 class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
     async def test_empty_candidates_returns_zeroes(self) -> None:
         activities = TemporalProposalActivities()
@@ -206,6 +330,80 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["submitted_count"], 2)
         self.assertEqual(result["errors"], [])
 
+    async def test_valid_skill_tool_candidate_counted_after_contract_validation(self) -> None:
+        activities = TemporalProposalActivities()
+        candidates = [
+            {
+                "title": "Fix bug",
+                "summary": "There is a bug in module X",
+                "taskCreateRequest": {
+                    "type": "task",
+                    "payload": {
+                        "repository": "org/repo",
+                        "task": {
+                            "instructions": "Fix it",
+                            "steps": [
+                                {
+                                    "type": "tool",
+                                    "tool": {
+                                        "type": "skill",
+                                        "name": "fix-comments",
+                                        "version": "1.0",
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                },
+            }
+        ]
+
+        result = await activities.proposal_submit(
+            {"candidates": candidates, "policy": {}, "origin": {}}
+        )
+
+        self.assertEqual(result["generated_count"], 1)
+        self.assertEqual(result["submitted_count"], 1)
+        self.assertEqual(result["errors"], [])
+
+    async def test_agent_runtime_tool_candidate_rejected_before_delivery(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        candidates = [
+            {
+                "title": "Fix bug",
+                "summary": "There is a bug in module X",
+                "taskCreateRequest": {
+                    "type": "task",
+                    "payload": {
+                        "repository": "org/repo",
+                        "task": {
+                            "instructions": "Fix it",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "codex",
+                            },
+                        },
+                    },
+                },
+            }
+        ]
+
+        result = await activities.proposal_submit(
+            {"candidates": candidates, "policy": {}, "origin": {}}
+        )
+
+        self.assertEqual(result["generated_count"], 1)
+        self.assertEqual(result["submitted_count"], 0)
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertIn("invalid taskCreateRequest", result["errors"][0])
+        mock_service.create_proposal.assert_not_called()
+
     async def test_malformed_candidates_skipped(self) -> None:
         activities = TemporalProposalActivities()
         candidates: list[Any] = [
@@ -214,7 +412,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "title": "Valid",
                 "summary": "This one is valid",
-                "taskCreateRequest": {"payload": {}},
+                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
             },
         ]
         result = await activities.proposal_submit(
