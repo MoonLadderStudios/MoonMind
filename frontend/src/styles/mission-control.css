@@ -416,30 +416,44 @@ h1 {
 }
 
 .route-nav a {
+  position: relative;
   text-decoration: none;
   color: rgb(var(--mm-ink) / 0.82);
-  border: 1px solid rgb(var(--mm-border) / 0.7);
-  border-radius: 999px;
+  border: 0;
+  border-radius: 0.5rem;
   padding: 0.48rem 0.82rem;
   font-size: 0.9rem;
-  background: rgb(var(--mm-panel) / 0.65);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  transition: border-color 130ms ease, background 130ms ease, box-shadow 130ms ease, color 130ms ease;
+  background: transparent;
+  transition: background 130ms ease, color 130ms ease;
 }
 
-@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
-  .route-nav a {
-    background: rgb(var(--mm-panel) / 0.92);
-  }
+.route-nav a::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: transparent;
+  transition: background 130ms ease;
 }
 
-.route-nav a.active,
 .route-nav a:hover {
-  border-color: rgb(var(--mm-accent));
-  background: rgb(var(--mm-accent) / 0.14);
+  background: rgb(var(--mm-ink) / 0.06);
   color: rgb(var(--mm-ink));
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.35), 0 12px 30px -24px rgb(var(--mm-accent) / 0.85);
+}
+
+.route-nav a.active {
+  color: rgb(var(--mm-ink));
+  text-shadow: 0.5px 0 0 currentColor;
+}
+
+.route-nav a.active::after {
+  background: rgb(var(--mm-accent));
+}
+
+.route-nav a.active:hover {
+  background: rgb(var(--mm-ink) / 0.06);
 }
 
 .route-nav a:focus-visible {
@@ -4232,6 +4246,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     box-shadow:
       inset 3px 0 0 var(--mm-mobile-nav-active-edge),
       inset 0 1px 0 var(--mm-mobile-nav-edge);
+  }
+
+  .route-nav a::after,
+  .route-nav a.active::after {
+    content: none;
   }
 }
 
