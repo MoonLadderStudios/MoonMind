@@ -4496,19 +4496,21 @@ async def test_compose_step_instruction_keeps_skill_workspace_lines_under_worksp
     workspace_index = instruction.index("WORKSPACE:\n")
     runtime_index = instruction.index("\n\nRUNTIME ADAPTER: codex")
     skills_index = instruction.index(
-        "- Skills are available via .agents/skills and .gemini/skills links."
+        "- Selected skill content is available at the active skill path "
+        "provided by MoonMind turn preparation."
     )
     selected_index = instruction.index(
-        "- Selected skills are materialized under .agents/skills/<skill-id>/."
+        "- .agents/skills is a compatibility alias only when MoonMind can "
+        "create it without masking repo-authored skill source."
     )
 
     assert workspace_index < skills_index < selected_index < runtime_index
     assert (
-        "SKILL USAGE:\nUse the selected skill's files under .agents/skills/pr-resolver/ as the procedure for this step."
+        "SKILL USAGE:\nUse the selected skill's files under the active skill path as the procedure for this step."
         in instruction
     )
     assert "../skills_active" not in instruction
-    assert "Fail fast if that active skill projection is missing." in instruction
+    assert "Fail fast if the active skill path from the activation summary is missing." in instruction
 
 async def test_compose_step_instruction_injects_current_attachment_context_before_workspace(
     tmp_path: Path,

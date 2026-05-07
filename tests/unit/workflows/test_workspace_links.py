@@ -69,19 +69,30 @@ def test_validate_shared_skill_links_detects_target_drift(tmp_path):
     other_target = run_root / "other"
     other_target.mkdir(parents=True)
 
-    agents = run_root / ".agents" / "skills"
     gemini = run_root / ".gemini" / "skills"
-    agents.parent.mkdir(parents=True)
     gemini.parent.mkdir(parents=True)
-    agents.symlink_to(Path("../other"))
     gemini.symlink_to(Path("../skills_active"))
 
     links = ensure_shared_skill_links(
         run_root=run_root, skills_active_path=skills_active
     )
     # Force drift after creation.
+    agents = links.agents_skills_path
     agents.unlink()
     agents.symlink_to(Path("../other"))
 
     with pytest.raises(SkillWorkspaceError, match="does not resolve to skills_active"):
         validate_shared_skill_links(links)
+
+def test_ensure_shared_skill_links_rejects_unknown_symlink(tmp_path):
+    run_root = tmp_path / "runs" / "run-unknown-link"
+    skills_active = run_root / "skills_active"
+    external = tmp_path / "external"
+    skills_active.mkdir(parents=True)
+    external.mkdir()
+    agents = run_root / ".agents" / "skills"
+    agents.parent.mkdir(parents=True)
+    agents.symlink_to(external)
+
+    with pytest.raises(SkillWorkspaceError, match="existing symlink"):
+        ensure_shared_skill_links(run_root=run_root, skills_active_path=skills_active)
