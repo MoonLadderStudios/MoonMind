@@ -7,7 +7,7 @@
 
 **Organization**: Tasks cover exactly one story: `Keep Runtime Skill Projection From Masking Repo Skills`.
 
-**Source Traceability**: Preserves Jira issue `MM-608`, the original Jira preset brief in `spec.md`, FR-001 through FR-015, SCN-001 through SCN-006, SC-001 through SC-007, and DESIGN-REQ-001 through DESIGN-REQ-009.
+**Source Traceability**: Preserves Jira issue `MM-608`, the original Jira preset brief in `spec.md`, FR-001 through FR-015, SCN-001 through SCN-006, Edge-001 through Edge-007, SC-001 through SC-007, and DESIGN-REQ-001 through DESIGN-REQ-009.
 
 **Test Commands**:
 
@@ -38,7 +38,7 @@
 
 **CRITICAL**: No production implementation work can begin until this phase is complete.
 
-- [ ] T005 Build a requirement-to-test traceability checklist in specs/314-skill-projection-noninterference/tasks.md covering FR-001 through FR-015, SCN-001 through SCN-006, SC-001 through SC-007, and DESIGN-REQ-001 through DESIGN-REQ-009
+- [ ] T005 Build a requirement-to-test traceability checklist in specs/314-skill-projection-noninterference/tasks.md covering FR-001 through FR-015, SCN-001 through SCN-006, Edge-001 through Edge-007, SC-001 through SC-007, and DESIGN-REQ-001 through DESIGN-REQ-009
 - [ ] T006 [P] Add or update shared resolved skill snapshot and artifact-service fixtures in tests/unit/services/test_skill_materialization.py for active snapshot, repo-authored `.agents/skills`, known MoonMind symlink, stale MoonMind symlink, unknown symlink, file collision, and optional `.gemini/skills` cases covering FR-001 FR-006 FR-007 DESIGN-REQ-006
 - [ ] T007 [P] Add or update managed job workspace fixtures in tests/unit/workflows/temporal/test_agent_runtime_activities.py for `/work/agent_jobs/<job_id>/repo`, run-scoped `runtime/skills_active/<snapshot_id>`, and checked-in `.agents/skills` source files covering FR-003 FR-004 FR-014 DESIGN-REQ-001 DESIGN-REQ-003
 - [ ] T008 [P] Add or update loader projection fixtures in tests/unit/services/test_skill_resolution.py for current-working-directory projection, repo projection with manifest, runtime-root projection without manifest, and hidden local overlay covering FR-009 FR-010 DESIGN-REQ-008
@@ -54,7 +54,7 @@
 
 **Independent Test**: Prepare a managed selected-skill turn in a checkout with tracked `.agents/skills`, confirm the active skill bundle remains readable at the reported `visiblePath`, confirm repo-authored skill files remain readable and unchanged, and confirm verification/publish preflight does not treat real repo skill sources as generated projection state.
 
-**Traceability**: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-014, FR-015, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SCN-006, SC-001, SC-002, SC-003, SC-004, SC-005, SC-006, SC-007, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009
+**Traceability**: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-014, FR-015, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SCN-006, Edge-001, Edge-002, Edge-003, Edge-004, Edge-005, Edge-006, Edge-007, SC-001, SC-002, SC-003, SC-004, SC-005, SC-006, SC-007, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009
 
 **Test Plan**:
 
@@ -65,14 +65,14 @@
 
 > Write or update these tests FIRST. For missing or partial behavior, run them and confirm they FAIL for the expected reason before implementation. For implemented_unverified behavior, run them as verification tests and skip the corresponding fallback implementation task if they pass.
 
-- [ ] T010 [P] Add verification unit tests for repo-authored `.agents/skills` preservation, run-scoped backing path, alias unavailable metadata, and no checkout `skills_active` pollution in tests/unit/services/test_skill_materialization.py covering FR-001 FR-002 FR-003 FR-005 SC-001 SC-002 DESIGN-REQ-001 DESIGN-REQ-002 DESIGN-REQ-003
-- [ ] T011 [P] Add failing/verification unit tests for `.agents/skills` alias created, reused, stale MoonMind-owned replacement, repo-authored directory skip, file collision failure, and unknown symlink failure in tests/unit/workflows/test_workspace_links.py covering FR-006 FR-007 SC-003 DESIGN-REQ-006
-- [ ] T012 [P] Add verification unit tests for built-in CWD projection isolation, repo active projection rejection, local overlay hidden-by-projection rejection, and explicit diagnostics in tests/unit/services/test_skill_resolution.py covering FR-009 FR-010 SC-004 DESIGN-REQ-008
+- [ ] T010 [P] Add verification unit tests for repo-authored `.agents/skills` preservation, run-scoped backing path, alias unavailable metadata, and no checkout `skills_active` pollution in tests/unit/services/test_skill_materialization.py covering FR-001 FR-002 FR-003 FR-005 Edge-005 Edge-006 SC-001 SC-002 DESIGN-REQ-001 DESIGN-REQ-002 DESIGN-REQ-003
+- [ ] T011 [P] Add failing/verification unit tests for `.agents/skills` alias created, reused, stale MoonMind-owned replacement, repo-authored directory skip, file collision failure, and unknown symlink failure in tests/unit/workflows/test_workspace_links.py covering FR-006 FR-007 Edge-001 Edge-002 Edge-003 SC-003 DESIGN-REQ-006
+- [ ] T012 [P] Add verification unit tests for built-in CWD projection isolation, repo active projection rejection, local overlay hidden-by-projection rejection, and explicit diagnostics in tests/unit/services/test_skill_resolution.py covering FR-009 FR-010 Edge-004 SC-004 DESIGN-REQ-008
 - [ ] T013 [P] Add verification unit tests for managed activation summary `visiblePath`, selected skill `SKILL.md` path, repo-authored `.agents/skills` warning, and manifest snapshot validation in tests/unit/workflows/temporal/test_agent_runtime_activities.py covering FR-004 FR-014 SCN-002 DESIGN-REQ-004 DESIGN-REQ-007
 - [ ] T014 [P] Add failing/verification unit tests for full materialization metadata and structured alias diagnostic evidence in tests/unit/services/test_skill_materialization.py and tests/unit/workflows/temporal/test_agent_runtime_activities.py covering FR-005 FR-013 DESIGN-REQ-004 DESIGN-REQ-006
 - [ ] T015 [P] Add failing/verification unit tests proving dormant preserve-and-link helpers cannot move repo-authored `.agents/skills` during normal materialization in tests/unit/services/test_skill_materialization.py covering FR-008 SCN-001 DESIGN-REQ-005
 - [ ] T016 [P] Add verification unit tests for MoonSpec verification projection preflight text in tests/unit/agents/test_moonspec_verify_skill.py covering FR-011 SCN-005 SC-005 DESIGN-REQ-009
-- [ ] T017 [P] Add failing/verification unit tests proving publish filtering excludes MoonMind-owned projection symlinks but preserves real repo-authored `.agents/skills` directories in tests/unit/workflows/temporal/test_agent_runtime_activities.py covering FR-012 SCN-006 SC-006 DESIGN-REQ-009
+- [ ] T017 [P] Add failing/verification unit tests proving publish filtering excludes MoonMind-owned projection symlinks but preserves real repo-authored `.agents/skills` directories in tests/unit/workflows/temporal/test_agent_runtime_activities.py covering FR-012 Edge-007 SCN-006 SC-006 DESIGN-REQ-009
 - [ ] T018 [P] Add or update execution serialization unit tests for skill runtime `visiblePath`, `backingPath`, manifest refs, and absence of full skill bodies in tests/unit/api/routers/test_executions.py covering FR-005 FR-013 DESIGN-REQ-004
 - [ ] T019 Run `./tools/test_unit.sh tests/unit/services/test_skill_materialization.py tests/unit/services/test_skill_resolution.py tests/unit/workflows/test_workspace_links.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/agents/test_moonspec_verify_skill.py tests/unit/api/routers/test_executions.py` and record which verification tests pass and which fail for the expected missing/partial behavior before implementation
 
@@ -91,7 +91,7 @@
 - [ ] T027 Conditional fallback: if T011 fails for alias ownership outcomes, update moonmind/workflows/skills/workspace_links.py to create, reuse, replace only proven MoonMind-owned stale symlinks, skip optional repo-authored aliases, and block files or unknown symlinks before launch covering FR-006 FR-007 SC-003 DESIGN-REQ-006
 - [ ] T028 Resolve preserve-and-link fallback semantics in moonmind/services/skill_materialization.py by removing unused normal-path move/restore helpers or making any fallback explicit and lease-backed so normal managed runs cannot move repo-authored `.agents/skills` covering FR-008 DESIGN-REQ-005
 - [ ] T029 Conditional fallback: if T012 fails for loader guards, update moonmind/services/skill_resolution.py so BuiltInSkillLoader ignores current workspace projections and RepoSkillLoader/LocalSkillLoader fail with explicit contamination diagnostics for active projections covering FR-009 FR-010 DESIGN-REQ-008
-- [ ] T030 Complete MoonSpec verification preflight ownership in the appropriate runtime or skill boundary, updating tests/unit/agents/test_moonspec_verify_skill.py and any owning code or active skill source needed so contamination produces `ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION` instead of an indeterminate feature verdict covering FR-011 SC-005 DESIGN-REQ-009
+- [ ] T030 Complete MoonSpec verification preflight ownership in the appropriate runtime or verifier boundary, updating tests/unit/agents/test_moonspec_verify_skill.py and owning runtime code only when needed so contamination produces `ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION` instead of an indeterminate feature verdict covering FR-011 SC-005 DESIGN-REQ-009
 - [ ] T031 Conditional fallback: if T017 or T022 fails for publish filtering, update moonmind/workflows/temporal/activity_runtime.py so `_should_exclude_publish_path()` excludes only MoonMind-owned projection state and preserves real repo-authored `.agents/skills` covering FR-012 SC-006 DESIGN-REQ-009
 - [ ] T032 Conditional fallback: if non-Codex runtime command tests expose active skill path mismatch, update moonmind/agents/codex_worker/worker.py so runtime instructions and include directories do not assume repo `.agents/skills` over the activation-summary active path covering FR-004 FR-014 DESIGN-REQ-007
 - [ ] T033 Update AGENTS.md and GEMINI.md only if implementation changes alter active technologies or test commands, preserving the MM-608 active technology entries generated during planning covering FR-015 SC-007
@@ -188,5 +188,6 @@ Task: "T017 Add publish filter ownership tests in tests/unit/workflows/temporal/
 | FR-014 | T020, T021, T022, T034, T035 |
 | FR-015 | T001, T033, T036, T040 |
 | SCN-001 through SCN-006 | T020, T022, T034, T035 |
+| Edge-001 through Edge-007 | T010, T011, T012, T017, T020, T022, T034, T035 |
 | SC-001 through SC-007 | T034, T035, T036, T038, T040 |
 | DESIGN-REQ-001 through DESIGN-REQ-009 | T010 through T032, T034, T035, T040 |
