@@ -570,6 +570,46 @@ async def test_promote_proposal_preserves_preset_provenance() -> None:
         "originalStepId": "add-regression-test",
     }
 
+
+@pytest.mark.asyncio
+async def test_promote_proposal_preserves_canonical_proposal_intent() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        repository="Moon/Repo",
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        task_create_request={
+            "payload": {
+                "repository": "Moon/Repo",
+                "task": {
+                    "instructions": "Add regression coverage",
+                    "proposalPolicy": {
+                        "targets": ["project"],
+                    },
+                },
+            }
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    updated_proposal, final_request = await service.promote_proposal(
+        proposal_id=proposal.id,
+        promoted_by_user_id=uuid4(),
+    )
+
+    repo.commit.assert_awaited()
+    assert updated_proposal.status is TaskProposalStatus.PROMOTED
+    assert "proposeTasks" not in final_request["payload"]
+    task = final_request["payload"]["task"]
+    assert task["proposeTasks"] is False
+    assert task["proposalPolicy"] == {"targets": ["project"]}
+
+
 @pytest.mark.asyncio
 async def test_promote_proposal_rejects_preset_derived_steps_without_flat_type() -> None:
     repo = AsyncMock()

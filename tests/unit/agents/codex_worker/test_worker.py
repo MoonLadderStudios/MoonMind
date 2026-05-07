@@ -1212,6 +1212,29 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
         is False
     )
 
+    enabled_worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+            enable_task_proposals=True,
+        ),
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+        ),
+    )
+
+    assert (
+        enabled_worker._task_proposals_requested(
+            canonical_payload={"repository": "moon/org", "task": {}}
+        )
+        is False
+    )
+
 async def test_run_once_exception_still_records_terminal_failure_when_upload_fails(
     tmp_path: Path,
 ) -> None:
@@ -4476,7 +4499,7 @@ async def test_compose_step_instruction_keeps_skill_workspace_lines_under_worksp
         "- Skills are available via .agents/skills and .gemini/skills links."
     )
     selected_index = instruction.index(
-        "- Selected skills are always materialized under ../skills_active/<skill-id>/."
+        "- Selected skills are materialized under .agents/skills/<skill-id>/."
     )
 
     assert workspace_index < skills_index < selected_index < runtime_index
@@ -4484,6 +4507,8 @@ async def test_compose_step_instruction_keeps_skill_workspace_lines_under_worksp
         "SKILL USAGE:\nUse the selected skill's files under .agents/skills/pr-resolver/ as the procedure for this step."
         in instruction
     )
+    assert "../skills_active" not in instruction
+    assert "Fail fast if that active skill projection is missing." in instruction
 
 async def test_compose_step_instruction_injects_current_attachment_context_before_workspace(
     tmp_path: Path,

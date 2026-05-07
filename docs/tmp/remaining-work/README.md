@@ -1,3 +1,7 @@
-# Remaining Work
+# Remaining Work Trackers
 
-- [ManagedAgents-DockerOutOfDocker.md](./ManagedAgents-DockerOutOfDocker.md): backlog and rollout notes for the Docker-backed workload-container design.
+This directory holds temporary rollout trackers referenced by canonical docs.
+Keep desired-state architecture in `docs/`; keep phased implementation notes here
+or in feature-local `specs/<feature>/` artifacts.
+
+- [ManagedAgents-DockerOutOfDocker.md](./ManagedAgents-DockerOutOfDocker.md)

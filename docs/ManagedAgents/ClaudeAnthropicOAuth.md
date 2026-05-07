@@ -34,6 +34,11 @@ The OAuth path is the subject of this document. The API-key path is mentioned
 only to clarify that OAuth is not the only valid Claude Anthropic credential
 method.
 
+OAuth versus API-key authentication does not change managed-runtime
+rate-limit reporting requirements. Claude Code rate limits should flow through
+Provider Profiles and the shared managed-runtime retry/cooldown policy whenever
+the failure can be attributed to the selected profile.
+
 ## 2. OAuth Profile Shape
 
 The OAuth-backed `claude_anthropic` provider profile uses a volume-backed Claude
@@ -97,7 +102,7 @@ Settings Provider Profile row
   -> short-lived Claude auth-runner container
   -> MoonMind PTY/WebSocket bridge
   -> browser terminal
-  -> claude login
+  -> claude auth login
   -> claude_auth_volume mounted as CLAUDE_HOME
   -> volume verification
   -> provider profile registration/update
@@ -123,7 +128,7 @@ The Claude OAuth ceremony is:
    the in-browser terminal view.
 3. The terminal attaches to a short-lived auth-runner container with
    `claude_auth_volume` mounted as `CLAUDE_HOME`.
-4. MoonMind starts Claude's interactive login command in that PTY.
+4. MoonMind starts Claude's interactive auth login command in that PTY.
 5. Claude prints an authentication URL in the terminal.
 6. Operator opens the URL in a normal browser tab or window and signs in with
    Anthropic.
@@ -168,6 +173,7 @@ provider_id: anthropic
 provider_label: Anthropic
 bootstrap_command:
   - claude
+  - auth
   - login
 success_check: claude_config_exists
 ```

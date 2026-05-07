@@ -4,7 +4,7 @@
 
 **Status:** Draft 
 **Owner:** MoonMind Platform 
-**Last updated:** 2026-04-04 
+**Last updated:** 2026-05-06
 **Audience:** backend, dashboard, workflow authors, API owners
 
 ## 1. Purpose
@@ -14,6 +14,7 @@ This document fixes the v1 semantics for:
 - how MoonMind identifies a Temporal-managed execution across multiple runs
 - what the product and API mean by **run history**
 - how `RequestRerun` behaves for Temporal-backed executions
+- how failed-step **Resume** differs from full rerun
 - when MoonMind should use **Continue-As-New** versus starting a **fresh Workflow ID**
 - how current task-oriented UI and compatibility routes should reference Temporal runs during migration
 
@@ -37,6 +38,7 @@ This is a focused lifecycle document. It does **not** redefine the broader Tempo
 - Workflow ID vs run identity for Temporal-managed executions
 - detail-page anchoring for task-oriented UI during migration
 - `RequestRerun` semantics and lifecycle expectations
+- failed-step Resume identity, checkpoint, and provenance expectations
 - automatic Continue-As-New triggers for history control
 - current projection/API behavior for “latest run” versus historical runs
 
@@ -55,6 +57,7 @@ Current implementation characteristics:
 
 - `TemporalExecutionRecord` is keyed by `workflow_id` and stores the current `run_id`, workflow type, state, memo, search attributes, counters, and lifecycle timestamps.
 - `RequestRerun` currently performs **Continue-As-New** semantics by preserving `workflow_id`, generating a new `run_id`, incrementing the current local Continue-As-New counter (`rerun_count`), resetting run-local counters/flags, and moving the execution back into an active state.
+- failed-step Resume is not yet part of the generic `RequestRerun` contract; it requires separate checkpoint and provenance semantics.
 - other Continue-As-New paths also exist today for lifecycle rollover and major reconfiguration, and they currently increment that same local counter
 - `/api/executions/{workflow_id}` returns the **current/latest** run view for that logical execution.
 - the current projection keeps `started_at` as the logical execution start timestamp; it does not create a second primary row or a separate current-run start field on Continue-As-New
@@ -165,6 +168,8 @@ That future work should not change the v1 rule that the default user-facing deta
 
 This is a **clean rerun** of the same logical work item, not the creation of a separate sibling task.
 
+`RequestRerun` is not the failed-step **Resume** action. Resume means retrying the last failed step with prior completed work restored from durable checkpoints. That requires a distinct API/action surface because it imports execution progress rather than merely restarting the logical execution.
+
 ### 7.2 Required behavior
 
 For v1, `RequestRerun` should use **Continue-As-New** semantics.
@@ -220,6 +225,82 @@ Draft target rule:
 - if MoonMind wants “rerun closed execution” behavior for Temporal-backed tasks, it should implement that behavior **explicitly**, either by exempting `RequestRerun` from the generic terminal-state gate or by adding a distinct rerun/restart command surface
 - until that change is made, the safe assumption is: `RequestRerun` applies to non-terminal executions, while terminal executions require an explicit new-start or a future dedicated rerun path
 
+## 7A. Failed-step Resume semantics
+
+### 7A.1 Meaning of Resume
+
+Failed-step **Resume** means:
+
+> Start a linked follow-up execution that reuses the original task input and the completed work before the last failed step, then retries that failed step.
+
+Resume is a product recovery action, not a synonym for Continue-As-New and not a generic task rerun. It imports a bounded, durable progress checkpoint from a pinned source run.
+
+### 7A.2 Required behavior
+
+For v1, failed-step Resume should use a distinct command surface such as:
+
+```http
+POST /api/executions/{workflow_id}/resume-from-failed-step
+```
+
+Behavior:
+
+- require or resolve the source `workflowId`
+- require or resolve and then pin the source `runId`
+- require the source execution to be terminal failed, timed out, or otherwise explicitly resume-eligible
+- identify the last failed step from the source run's step ledger
+- require an authoritative source task input snapshot
+- require a source plan ref or digest when a plan exists
+- require a resume checkpoint that can restore completed prior work
+- create a linked follow-up execution with its own `workflowId` and `runId` unless a future in-place continuation model is explicitly introduced
+- leave the source execution unchanged
+- record a relation from the resumed execution to the source execution with relationship type `resume_from_failed_step`
+
+### 7A.3 Resume input changes
+
+Resume does not allow task input changes in v1.
+
+Rules:
+
+- the resumed execution uses the original task input snapshot unchanged
+- changing instructions, steps, attachments, runtime, publish mode, branch, presets, dependencies, or model settings requires edited full retry instead
+- the resume request may carry operator metadata and an idempotency key, but it must not carry an edited task payload
+- the resume request must pin the source `runId` so the restored progress cannot drift when the logical source execution later changes
+
+### 7A.4 Resume checkpoint requirements
+
+Resume must be backed by a durable checkpoint artifact or equivalent durable read model.
+
+At minimum, the checkpoint must identify:
+
+- source `workflowId`
+- source `runId`
+- source task input snapshot ref
+- source plan ref or digest, when available
+- failed logical step ID and attempt
+- completed prior steps and their source attempts
+- semantic output refs for completed prior steps
+- prepared input refs reused by the resumed execution
+- workspace, branch, commit, or equivalent state immediately before the failed step
+
+Rules:
+
+- a checkpoint is execution-state evidence, not authored task input
+- a missing checkpoint means Resume is unavailable
+- a corrupted, unauthorized, stale, or plan-mismatched checkpoint must fail before new step execution starts
+- Resume must not silently degrade into a full rerun
+
+### 7A.5 Detail routing and related runs
+
+The default task detail route remains anchored on `workflowId`. Because v1 Resume starts a linked follow-up execution, the source and resumed executions each have their own detail route.
+
+Rules:
+
+- source detail shows the resumed execution in Related runs
+- resumed detail shows the source execution as the original failed run
+- relationship labels should use `Resumed from failed step`
+- preserved prior steps in the resumed detail view should be displayed as reused from the source run, not as freshly executed by the resumed run
+
 ## 8. Continue-As-New outside manual rerun
 
 Manual rerun is not the only reason to Continue-As-New.
@@ -256,11 +337,13 @@ MoonMind should start a **fresh Workflow ID** instead when the user or system in
 - change ownership or access semantics in a way that should not inherit the old execution identity
 - intentionally separate retention, audit, or reporting lineage from the prior execution
 - keep the previous logical execution closed while a new one proceeds independently
+- resume a failed task from a failed step while keeping the original failed execution immutable
 
 Rule of thumb:
 
 - **same logical task** → `RequestRerun` / Continue-As-New / same `workflowId`
 - **new logical task** → new workflow start / new `workflowId`
+- **failed-step Resume** → linked follow-up execution with pinned source `workflowId` and `runId`, unless a future in-place continuation model is explicitly designed
 
 ## 10. UI and API contract
 
@@ -280,6 +363,7 @@ The main detail page should present:
 - current domain state and Temporal close status
 - current/latest run progress summary
 - current/latest run step ledger
+- preserved-step provenance when viewing a resumed execution
 - workflow type / entry label
 - artifact references and summaries
 - current/latest `runId` in an advanced metadata or operator section
@@ -318,6 +402,7 @@ For this document’s purposes:
 - `GET /api/executions/{workflow_id}` returns the latest/current materialized view of that execution
 - `POST /api/executions/{workflow_id}/update` with `updateName="RequestRerun"` should return `applied="continue_as_new"` when accepted
 - terminal executions currently return an update response indicating the workflow no longer accepts updates; callers should not assume rerun-from-terminal exists yet
+- failed-step Resume should use a dedicated command such as `POST /api/executions/{workflow_id}/resume-from-failed-step`, not `RequestRerun`
 - callers should treat a changed `runId` as a normal outcome of rerun or lifecycle rollover
 
 ## 11. Projection and audit implications
@@ -327,12 +412,13 @@ Because MoonMind currently projects Temporal execution state as one row per `wor
 - the application database is a **latest-run projection**, not a full run-history store
 - historical run inspection belongs to Temporal history and any future dedicated run-history surface
 - immutable input/reconfiguration evidence should be preserved through artifacts and summaries, not by assuming the projection row itself is a per-run ledger
+- resume checkpoint evidence should be preserved through artifacts or a dedicated durable read model keyed by source `workflowId`, source `runId`, logical step ID, and attempt
 
 If MoonMind later needs immutable per-run read models, that should be introduced as a separate projection keyed by `workflowId` plus `runId`, not inferred from the current table.
 
 ## 12. Acceptance criteria
 
-For Temporal-backed executions: **`workflowId`** is the canonical detail identity; **`taskId == workflowId`** where task-shaped IDs are used; **`RequestRerun`** is Continue-As-New for the same logical execution; detail views follow the **latest run**; manual vs automatic Continue-As-New is distinguished; v1 **does not** require a full per-run history product surface (that may come later).
+For Temporal-backed executions: **`workflowId`** is the canonical detail identity; **`taskId == workflowId`** where task-shaped IDs are used; **`RequestRerun`** is Continue-As-New for the same logical execution; failed-step **Resume** is a separate linked follow-up execution that pins source `workflowId` and `runId` and restores progress from durable checkpoints; detail views follow the **latest run** for a logical execution; manual vs automatic Continue-As-New is distinguished; v1 **does not** require a full per-run history product surface (that may come later).
 
 ## 13. Related documents and backlog
 
@@ -347,5 +433,6 @@ That means:
 - the logical handle is `workflowId`
 - the default detail experience follows the latest run for that workflow
 - `RequestRerun` uses Continue-As-New in v1
+- failed-step Resume is separate from `RequestRerun` and requires durable progress checkpoints
 - automatic Continue-As-New rollover preserves the same logical execution but should not be conflated with a user-visible rerun
 - full per-run history is a future explicit feature, not an implied v1 guarantee

@@ -165,6 +165,196 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_to_runtime(
     assert expanded["appliedTemplate"]["inputs"]["orchestration_mode"] == "runtime"
     assert "Selected mode: runtime." in expanded["steps"][0]["instructions"]
 
+async def test_template_serializes_normalized_capability_input_contract(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            created = await service.create_template(
+                slug="schema-capability",
+                title="Schema Capability",
+                description="Schema-driven preset",
+                scope="global",
+                scope_ref=None,
+                tags=["schema"],
+                inputs_schema=[
+                    {
+                        "name": "jira_issue",
+                        "label": "Jira issue",
+                        "type": "text",
+                        "required": True,
+                        "schema": {
+                            "type": "object",
+                            "required": ["key"],
+                            "properties": {
+                                "key": {"type": "string", "title": "Issue key"},
+                                "summary": {"type": "string"},
+                            },
+                        },
+                        "uiSchema": {
+                            "widget": "jira.issue-picker",
+                            "allowManualKeyEntry": True,
+                        },
+                    }
+                ],
+                steps=[{"title": "Use issue", "instructions": "{{ inputs.jira_issue.key }}"}],
+                annotations={},
+                required_capabilities=["jira"],
+                created_by=user_id,
+            )
+
+    assert created["inputSchema"]["type"] == "object"
+    assert created["inputSchema"]["required"] == ["jira_issue"]
+    assert created["inputSchema"]["properties"]["jira_issue"]["required"] == ["key"]
+    assert created["uiSchema"]["jira_issue"]["widget"] == "jira.issue-picker"
+    assert created["defaults"] == {}
+
+async def test_template_rejects_secret_like_schema_defaults(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            with pytest.raises(TaskTemplateValidationError, match="secret-like"):
+                await service.create_template(
+                    slug="unsafe-default",
+                    title="Unsafe Default",
+                    description="Schema-driven preset",
+                    scope="global",
+                    scope_ref=None,
+                    tags=["schema"],
+                    inputs_schema=[
+                        {
+                            "name": "jira_issue",
+                            "label": "Jira issue",
+                            "type": "text",
+                            "required": False,
+                            "default": "token=raw-secret",
+                        }
+                    ],
+                    steps=[{"title": "Use issue", "instructions": "Use issue"}],
+                    annotations={},
+                    required_capabilities=["jira"],
+                    created_by=user_id,
+                )
+
+async def test_expand_schema_capability_reports_field_addressable_errors(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="schema-required",
+                title="Schema Required",
+                description="Schema-driven preset",
+                scope="global",
+                scope_ref=None,
+                tags=["schema"],
+                inputs_schema=[
+                    {
+                        "name": "jira_issue",
+                        "label": "Jira issue",
+                        "type": "text",
+                        "required": True,
+                        "schema": {
+                            "type": "object",
+                            "required": ["key"],
+                            "properties": {"key": {"type": "string"}},
+                        },
+                    }
+                ],
+                steps=[{"title": "Use issue", "instructions": "{{ inputs.jira_issue.key }}"}],
+                annotations={},
+                required_capabilities=["jira"],
+                created_by=user_id,
+            )
+
+            with pytest.raises(TaskTemplateValidationError) as excinfo:
+                await service.expand_template(
+                    slug="schema-required",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={"jira_issue": {}},
+                    context={},
+                )
+
+    assert excinfo.value.errors == [
+        {
+            "path": "preset.inputs.jira_issue.key",
+            "message": "Jira issue key is required.",
+            "code": "required",
+            "recoverable": True,
+        }
+    ]
+
+async def test_expand_annotated_schema_capability_reports_field_addressable_errors(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="annotated-schema-required",
+                title="Annotated Schema Required",
+                description="Schema-driven preset",
+                scope="global",
+                scope_ref=None,
+                tags=["schema"],
+                inputs_schema=[],
+                steps=[{"title": "Use issue", "instructions": "{{ inputs.jira_issue.key }}"}],
+                annotations={
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["jira_issue"],
+                        "properties": {
+                            "jira_issue": {
+                                "type": "object",
+                                "title": "Jira issue",
+                                "required": ["key"],
+                                "properties": {"key": {"type": "string"}},
+                            }
+                        },
+                    },
+                    "uiSchema": {
+                        "jira_issue": {
+                            "widget": "jira.issue-picker",
+                            "allowManualKeyEntry": True,
+                        }
+                    },
+                    "defaults": {},
+                },
+                required_capabilities=["jira"],
+                created_by=user_id,
+            )
+
+            with pytest.raises(TaskTemplateValidationError) as excinfo:
+                await service.expand_template(
+                    slug="annotated-schema-required",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={"jira_issue": {}},
+                    context={},
+                )
+
+            expanded = await service.expand_template(
+                slug="annotated-schema-required",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={"jira_issue": {"key": "MM-593"}},
+                context={},
+            )
+
+    assert excinfo.value.errors == [
+        {
+            "path": "preset.inputs.jira_issue.key",
+            "message": "Jira issue key is required.",
+            "code": "required",
+            "recoverable": True,
+        }
+    ]
+    assert expanded["appliedTemplate"]["inputs"]["jira_issue"] == {"key": "MM-593"}
+
 async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path):
     user_id = uuid4()
     async with template_db(tmp_path) as session_maker:

@@ -3,31 +3,33 @@
 ## Preconditions
 
 - Use the active feature directory: `specs/301-column-filter-popovers`.
-- Preserve `MM-588` and the canonical Jira preset brief in downstream artifacts.
+- Preserve `MM-588`, `MM-594`, and their canonical Jira preset briefs in downstream artifacts.
 - Run frontend tests with local Node dependencies prepared by `./tools/test_unit.sh` or `npm ci --no-fund --no-audit` when needed.
 
-## Test-First Flow
+## Unit Test Strategy
 
-1. Add failing UI tests in `frontend/src/entrypoints/tasks-list.test.tsx` for staged Apply, Cancel, Escape/outside dismissal, include/exclude status, blank handling, Skill/date filters, chip remove, and canonical URL encoding.
-2. Add failing API route tests in `tests/unit/api/routers/test_executions.py` for canonical filter parameters remaining task-scoped.
-3. Implement the smallest Tasks List UI and API changes that satisfy those tests.
-4. Run focused UI tests:
+1. Use focused UI unit tests in `frontend/src/entrypoints/tasks-list.test.tsx` for staged Apply, Cancel, Escape/outside dismissal, include/exclude status, blank handling, Skill/date filters, chip remove, and canonical URL encoding.
+2. Run focused UI tests:
 
 ```bash
 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx
 ```
 
-5. Run focused API route tests:
+3. Run focused Python route-boundary unit tests:
 
 ```bash
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py
 ```
 
-6. Before finalizing, run the required full unit suite:
+4. Before finalizing, run the required full unit suite:
 
 ```bash
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
 ```
+
+## Integration Strategy
+
+No compose-backed `integration_ci` suite is required for this planning refresh because the mapped story changes only the Tasks List UI and task-scoped `/api/executions` query behavior. Integration coverage is the route-boundary test strategy above: focused API tests verify canonical filter parameters remain constrained to ordinary task scope without external credentials.
 
 ## End-to-End Story Check
 

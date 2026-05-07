@@ -8,7 +8,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
@@ -8223,7 +8223,7 @@ describe.skip("Task Create Entrypoint", () => {
       /\.queue-floating-bar--liquid-glass\s*\{[^}]*position:\s*fixed;[^}]*isolation:\s*isolate;[^}]*overflow:\s*hidden;/s,
     );
     expect(missionControlCss).toMatch(
-      /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-0\.7rem;[^}]*color-mix\(in srgb,\s*rgb\(var\(--mm-action-primary\)\)\s*42%,\s*white\)/s,
+      /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-1\.35rem;[^}]*border:\s*0;[^}]*filter:\s*blur\(8px\);/s,
     );
     expect(missionControlCss).toMatch(
       /\.queue-floating-bar::before\s*\{[^}]*background:\s*linear-gradient/s,
@@ -12469,10 +12469,37 @@ describe("Task Create submit arrow animation", () => {
     expect(css).toMatch(
       /\.queue-submit-primary-ripple\s*\{[^}]*animation:\s*queue-submit-primary-ripple\s+620ms\s+cubic-bezier\(0\.22,\s*0\.61,\s*0\.36,\s*1\)\s+forwards;/s,
     );
+    expect(css).toMatch(
+      /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-1\.35rem;[^}]*border:\s*0;[^}]*filter:\s*blur\(8px\);/s,
+    );
+    expect(css).toMatch(
+      /\.queue-submit-primary-ripple\s*\{[^}]*rgb\(var\(--mm-accent-2\) \/ 0\.3\)\s*22%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*88%/s,
+    );
+    expect(css).toMatch(
+      /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 32px 2px rgb\(var\(--mm-accent-2\) \/ 0\.36\)[^}]*0 0 62px -2px rgb\(var\(--mm-accent-2\) \/ 0\.24\)/s,
+    );
+    expect(css).not.toMatch(
+      /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 0 3px rgb\(var\(--mm-action-primary\) \/ 0\.6\)/s,
+    );
   });
 
-  it("clears the create arrow exit after its animation while submit is busy", async () => {
+  it("keeps the create arrow exited after submit until navigation", async () => {
     let resolveExecution: (response: Response) => void = () => {};
+    let scheduledArrowClear: (() => void) | null = null;
+    const originalSetTimeout = window.setTimeout.bind(window);
+    const setTimeoutSpy = vi
+      .spyOn(window, "setTimeout")
+      .mockImplementation((handler: TimerHandler, timeout?: number, ...args) => {
+        if (timeout === 230) {
+          scheduledArrowClear = () => {
+            if (typeof handler === "function") {
+              handler(...args);
+            }
+          };
+          return 1;
+        }
+        return originalSetTimeout(handler, timeout, ...args);
+      });
     const fetchSpy = vi
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL) => {
@@ -12539,12 +12566,15 @@ describe("Task Create submit arrow animation", () => {
         ).toBe(true);
       });
 
-      await waitFor(() => {
-        expect(
-          createButton.classList.contains("queue-submit-primary--arrow-exit"),
-        ).toBe(false);
+      expect(scheduledArrowClear).not.toBeNull();
+      act(() => {
+        scheduledArrowClear?.();
       });
-    } finally {
+
+      expect(
+        createButton.classList.contains("queue-submit-primary--arrow-exit"),
+      ).toBe(true);
+
       resolveExecution(
         new Response(
           JSON.stringify({
@@ -12561,6 +12591,92 @@ describe("Task Create submit arrow animation", () => {
           },
         ),
       );
+
+      await waitFor(() => {
+        expect(navigateTo).toHaveBeenCalledWith(
+          "/tasks/mm:workflow-123?source=temporal",
+        );
+        expect(
+          createButton.classList.contains("queue-submit-primary--arrow-exit"),
+        ).toBe(true);
+      });
+    } finally {
+      unmount();
+      fetchSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      vi.mocked(navigateTo).mockReset();
+    }
+  });
+
+  it("clears submit busy state when navigation throws after task creation", async () => {
+    const fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        switch (true) {
+          case url.startsWith("/api/tasks/skills"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
+            } as Response);
+          case url.startsWith("/api/task-step-templates"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ items: [] }),
+            } as Response);
+          case url.startsWith("/api/v1/provider-profiles"):
+            return Promise.resolve({
+              ok: true,
+              json: async () => [],
+            } as Response);
+          case url === "/api/executions":
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  workflowId: "mm:workflow-123",
+                  runId: "run-123",
+                  namespace: "moonmind",
+                  redirectPath: "/tasks/mm:workflow-123?source=temporal",
+                }),
+                {
+                  status: 201,
+                  headers: {
+                    "Content-Type": "application/json",
+                  },
+                },
+              ),
+            );
+          default:
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({}),
+            } as Response);
+        }
+      });
+    vi.mocked(navigateTo).mockImplementation(() => {
+      throw new Error("Navigation blocked.");
+    });
+    const { unmount } = renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    try {
+      fireEvent.change(await screen.findByLabelText("Instructions"), {
+        target: { value: "Run end-to-end regression flow." },
+      });
+
+      const createButton = screen.getByRole("button", { name: "Create" });
+      fireEvent.click(createButton);
+
+      await waitFor(() => {
+        expect(navigateTo).toHaveBeenCalledWith(
+          "/tasks/mm:workflow-123?source=temporal",
+        );
+        expect(createButton.getAttribute("aria-busy")).toBe("false");
+        expect(
+          createButton.classList.contains("queue-submit-primary--arrow-exit"),
+        ).toBe(false);
+      });
+      expect(screen.getByText("Navigation blocked.")).toBeTruthy();
+    } finally {
       unmount();
       fetchSpy.mockRestore();
       vi.mocked(navigateTo).mockReset();
@@ -13719,6 +13835,417 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
     ).toBe(false);
+  });
+});
+
+describe("Task Create schema-driven capability inputs", () => {
+  let fetchSpy: MockInstance;
+
+  function mockSchemaCapabilityFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const url = String(input);
+    if (url.startsWith("/api/tasks/skills")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: { worker: ["schema.skill"] },
+          legacyItems: [
+            {
+              id: "schema.skill",
+              inputSchema: {
+                type: "object",
+                required: ["repository"],
+                properties: {
+                  repository: { type: "string", title: "Repository name" },
+                  effort: { type: "number", title: "Effort" },
+                },
+              },
+              uiSchema: {},
+              defaults: {
+                repository: "MoonLadderStudios/MoonMind",
+                effort: 2,
+              },
+            },
+          ],
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/github/branches")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [{ value: "main", label: "main", source: "github" }],
+          defaultBranch: "main",
+          error: null,
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates?scope=personal")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              slug: "jira-schema-preset",
+              scope: "global",
+              title: "Jira Schema Preset",
+              description: "Schema-driven Jira preset.",
+              latestVersion: "1.0.0",
+              version: "1.0.0",
+            },
+            {
+              slug: "generic-schema-preset",
+              scope: "global",
+              title: "Generic Schema Preset",
+              description: "Schema-driven generic preset.",
+              latestVersion: "1.0.0",
+              version: "1.0.0",
+            },
+          ],
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates/jira-schema-preset?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          slug: "jira-schema-preset",
+          scope: "global",
+          title: "Jira Schema Preset",
+          description: "Schema-driven Jira preset.",
+          latestVersion: "1.0.0",
+          version: "1.0.0",
+          inputSchema: {
+            type: "object",
+            required: ["jira_issue"],
+            properties: {
+              jira_issue: {
+                type: "object",
+                title: "Jira issue",
+                required: ["key"],
+                properties: {
+                  key: { type: "string", title: "Issue key" },
+                  summary: { type: "string", title: "Summary" },
+                },
+              },
+            },
+          },
+          uiSchema: {
+            jira_issue: {
+              widget: "jira.issue-picker",
+              allowManualKeyEntry: true,
+              searchPlaceholder: "Search Jira issues",
+            },
+          },
+          defaults: {},
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates/generic-schema-preset?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          slug: "generic-schema-preset",
+          scope: "global",
+          title: "Generic Schema Preset",
+          description: "Schema-driven generic preset.",
+          latestVersion: "1.0.0",
+          version: "1.0.0",
+          inputSchema: {
+            type: "object",
+            required: ["summary", "urgent"],
+            properties: {
+              summary: { type: "string", title: "Summary" },
+              urgent: { type: "boolean", title: "Urgent" },
+              estimate: { type: "number", title: "Estimate" },
+              priority: {
+                type: "string",
+                title: "Priority",
+                enum: ["low", "high"],
+              },
+              labels: {
+                type: "array",
+                title: "Labels",
+                description: "JSON array of labels",
+              },
+              metadata: { type: "object", title: "Metadata" },
+              assignee_email: {
+                type: "string",
+                format: "email",
+                title: "Assignee email",
+              },
+              mode: {
+                title: "Mode",
+                oneOf: [
+                  { const: "draft", title: "Draft" },
+                  { const: "submit", title: "Submit" },
+                ],
+              },
+              unsupported_widget: {
+                type: "string",
+                title: "Unsupported widget",
+                "x-moonmind-widget": "external.lookup",
+              },
+              unsafe_default: {
+                type: "string",
+                title: "Unsafe default",
+              },
+            },
+          },
+          uiSchema: {},
+          defaults: {
+            summary: "Default summary",
+            urgent: false,
+            estimate: 3,
+            priority: "high",
+            labels: ["schema"],
+            metadata: { source: "fixture" },
+            assignee_email: "team@example.com",
+            mode: "draft",
+            unsafe_default: "token=raw-secret",
+          },
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/task-step-templates/jira-schema-preset:expand?scope=global")) {
+      const payload = JSON.parse(String(init?.body || "{}")) as {
+        inputs?: Record<string, unknown>;
+      };
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          steps: [
+            {
+              id: "tpl:jira-schema-preset:1.0.0:01",
+              title: "Use Jira issue",
+              instructions: `Use ${(payload.inputs?.jira_issue as { key?: string })?.key || ""}.`,
+              tool: {
+                type: "tool",
+                id: "jira.get_issue",
+                inputs: payload.inputs,
+              },
+            },
+          ],
+          appliedTemplate: {
+            slug: "jira-schema-preset",
+            version: "1.0.0",
+            inputs: payload.inputs,
+          },
+          capabilities: ["jira"],
+          warnings: [],
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/v1/provider-profiles")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => [
+          {
+            profile_id: "profile:codex-default",
+            account_label: "Codex Default",
+            is_default: true,
+          },
+        ],
+      } as Response);
+    }
+    if (url.startsWith("/api/executions?")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as Response);
+    }
+    if (url === "/api/executions") {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ workflowId: "mm:schema-create" }),
+      } as Response);
+    }
+    return Promise.resolve({
+      ok: false,
+      status: 404,
+      text: async () => `Unhandled fetch ${url}`,
+    } as Response);
+  }
+
+  beforeEach(() => {
+    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    vi.mocked(navigateTo).mockReset();
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation(mockSchemaCapabilityFetch);
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  function latestSchemaCreateRequest(): Record<string, unknown> {
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    expect(executionCall).toBeTruthy();
+    return JSON.parse(String(executionCall?.[1]?.body || "{}")) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it("renders jira.issue-picker from preset schema metadata and expands safe value", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-schema-preset" },
+    });
+
+    const issueKeyInput = await within(step).findByLabelText("Jira issue");
+    fireEvent.change(issueKeyInput, { target: { value: "MM-593" } });
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url, request]) => {
+          if (!String(url).startsWith("/api/task-step-templates/jira-schema-preset:expand")) {
+            return false;
+          }
+          const payload = JSON.parse(String(request?.body || "{}")) as {
+            inputs?: { jira_issue?: { key?: string } };
+          };
+          return payload.inputs?.jira_issue?.key === "MM-593";
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it("blocks dependent preset actions with field-addressable required errors", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-schema-preset" },
+    });
+    await within(step).findByLabelText("Jira issue");
+
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+
+    await waitFor(() => {
+      expect(within(step).getAllByText("A Jira issue is required.").length).toBeGreaterThan(0);
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url).startsWith("/api/task-step-templates/jira-schema-preset:expand"),
+      ),
+    ).toBe(false);
+  });
+
+  it("renders a new schema preset without capability-id-specific code", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::generic-schema-preset" },
+    });
+
+    expect(await within(step).findByLabelText("Summary")).toBeTruthy();
+    expect(within(step).getByLabelText("Urgent")).toBeTruthy();
+    expect((within(step).getByLabelText("Estimate") as HTMLInputElement).type).toBe("number");
+    expect(within(step).getByLabelText("Priority")).toBeTruthy();
+    expect(within(step).getByText("Labels")).toBeTruthy();
+    expect(within(step).getByText("JSON array of labels")).toBeTruthy();
+    expect(within(step).getByText("Metadata")).toBeTruthy();
+    expect((within(step).getByLabelText("Assignee email") as HTMLInputElement).type).toBe("email");
+    expect(within(step).getByLabelText("Mode")).toBeTruthy();
+    expect(within(step).getByText("Unsupported field widget.")).toBeTruthy();
+    expect((within(step).getByLabelText("Unsafe default") as HTMLInputElement).value).toBe("");
+    expect(within(step).queryByDisplayValue("token=raw-secret")).toBeNull();
+  });
+
+  it("renders direct skill inputs through the same schema behavior", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    expect(await within(step).findByLabelText("Repository name")).toBeTruthy();
+  });
+
+  it("submits direct skill schema inputs in the skill payload", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    const repositoryInput = await within(step).findByLabelText("Repository name");
+    fireEvent.change(repositoryInput, {
+      target: { value: "MoonLadderStudios/SchemaRepo" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: {
+        task: {
+          tool?: { inputs?: Record<string, unknown> };
+          skill?: { args?: Record<string, unknown> };
+        };
+      };
+    };
+    expect(request.payload.task.tool?.inputs).toMatchObject({
+      repository: "MoonLadderStudios/SchemaRepo",
+    });
+    expect(request.payload.task.skill?.args).toMatchObject({
+      repository: "MoonLadderStudios/SchemaRepo",
+    });
+  });
+
+  it("keeps cleared optional numeric schema inputs unset", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Skill");
+    fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
+      target: { value: "schema.skill" },
+    });
+
+    const effortInput = (await within(step).findByLabelText("Effort")) as HTMLInputElement;
+    expect(effortInput.value).toBe("2");
+    fireEvent.change(effortInput, { target: { value: "" } });
+    expect(effortInput.value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+      ).toBe(true);
+    });
+    const request = latestSchemaCreateRequest() as {
+      payload: { task: { tool?: { inputs?: Record<string, unknown> } } };
+    };
+    expect(request.payload.task.tool?.inputs?.effort).toBeUndefined();
   });
 });
 

@@ -716,6 +716,24 @@ describe('Mission Control shared entry', () => {
     const filterChipBlock = cssRuleBlock(missionControlCss, '.task-list-filter-chip {');
     expect(filterChipBlock).toContain('background: var(--mm-control-shell)');
     expect(filterChipBlock).toContain('border: 1px solid var(--mm-control-border)');
+    const popoverFilterBlock = cssRuleBlock(
+      missionControlCss,
+      '.task-list-header-filter-popover .task-list-header-filter-control',
+    );
+    expect(popoverFilterBlock).toContain('display: grid');
+    expect(popoverFilterBlock).toContain('gap: 0.75rem');
+    expect(popoverFilterBlock).toContain('border: 0');
+    expect(popoverFilterBlock).toContain('background: transparent');
+    expect(popoverFilterBlock).toContain('box-shadow: none');
+    expect(
+      cssRuleBlock(
+        missionControlCss,
+        '.task-list-header-filter-popover .task-list-header-filter-control label',
+      ),
+    ).toContain('gap: 0.55rem');
+    expect(cssRuleBlock(missionControlCss, '.task-list-filter-actions')).toContain(
+      'border-top: 1px solid rgb(var(--mm-border) / 0.7)',
+    );
     expect(cssRuleBlock(missionControlCss, '.queue-inline-filter:focus-within')).toContain(
       'box-shadow: var(--mm-control-focus-ring)',
     );
@@ -769,6 +787,17 @@ describe('Mission Control shared entry', () => {
     );
   });
 
+  it('keeps navigation positions stable across route selection changes', async () => {
+    const htmlBlock = cssRuleBlock(missionControlCss, 'html');
+    expect(htmlBlock).toContain('scrollbar-gutter: stable;');
+
+    const linkBlocks = cssRuleBlocks(missionControlCss, '.route-nav a');
+    expect(linkBlocks.join('\n')).not.toMatch(/transition:[^;]*\btransform\b/);
+
+    const activeBlocks = cssRuleBlocks(missionControlCss, '.route-nav a.active');
+    expect(activeBlocks.join('\n')).not.toMatch(/transform:[^;]*\bscale\b/);
+  });
+
   it('keeps the mobile navigation layer above route content panels', async () => {
     const mastheadBlock = cssRuleBlock(missionControlCss, '.masthead');
     expect(mastheadBlock).toContain('position: relative;');
@@ -778,9 +807,61 @@ describe('Mission Control shared entry', () => {
     const navBlocks = cssRuleBlocks(missionControlCss, '.route-nav');
     expect(
       navBlocks.some(
-        (block) => block.includes('position: absolute;') && block.includes('z-index: 30;'),
+        (block) =>
+          block.includes('position: fixed;') &&
+          block.includes('top: 7rem;') &&
+          block.includes('left: 0.875rem;') &&
+          block.includes('right: 0.875rem;') &&
+          block.includes('z-index: 50;'),
       ),
     ).toBe(true);
+  });
+
+  it('uses a mobile top-sheet navigation with row-style links', async () => {
+    const navBlocks = cssRuleBlocks(missionControlCss, '.route-nav');
+    expect(
+      navBlocks.some(
+        (block) =>
+          block.includes('border-radius: 1.5rem;') &&
+          block.includes('background: var(--mm-mobile-nav-fill);') &&
+          block.includes('max-height: min(28rem, calc(100dvh - 8rem));') &&
+          block.includes('overflow-y: auto;') &&
+          block.includes('backdrop-filter: blur(18px);'),
+      ),
+    ).toBe(true);
+
+    const linkBlocks = cssRuleBlocks(missionControlCss, '.route-nav a');
+    expect(
+      linkBlocks.some(
+        (block) =>
+          block.includes('min-height: 3.25rem;') &&
+          block.includes('border: 0;') &&
+          block.includes('border-radius: 1rem;') &&
+          block.includes('font-weight: 600;') &&
+          block.includes('background: transparent;'),
+      ),
+    ).toBe(true);
+
+    const activeBlocks = cssRuleBlocks(missionControlCss, '.route-nav a.active');
+    expect(
+      activeBlocks.some(
+        (block) =>
+          block.includes('background: linear-gradient(') &&
+          block.includes('var(--mm-mobile-nav-active-start)') &&
+          block.includes('inset 3px 0 0 var(--mm-mobile-nav-active-edge)'),
+      ),
+    ).toBe(true);
+  });
+
+  it('derives mobile navigation colors from theme tokens', async () => {
+    const rootBlock = cssRuleBlock(missionControlCss, ':root');
+    const darkBlock = cssRuleBlock(missionControlCss, '.dark');
+
+    expect(rootBlock).toContain('--mm-mobile-nav-fill: rgb(var(--mm-panel) / 0.92);');
+    expect(rootBlock).toContain('--mm-mobile-nav-border: rgb(var(--mm-accent) / 0.35);');
+    expect(rootBlock).toContain('--mm-mobile-nav-hover: rgb(var(--mm-accent) / 0.12);');
+    expect(rootBlock).toContain('--mm-mobile-nav-active-start: rgb(var(--mm-accent) / 0.30);');
+    expect(darkBlock).toContain('--mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.95);');
   });
 
   it('keeps the wider masthead breakpoint isolated from the shared mobile layout rules', async () => {

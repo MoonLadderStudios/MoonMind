@@ -697,24 +697,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     setListCursor(previousCursor === undefined || previousCursor === '' ? null : previousCursor);
   };
 
-  const pageSummary = [
-    `Page ${pageIndex + 1}`,
-    pageEnd > 0 ? `${pageStart}-${pageEnd}` : null,
-    countSummary || null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const pageRangeSummary = sortedItems.length > 0 ? `${pageStart} - ${pageEnd}` : '0 - 0';
+  const totalEntriesSummary = countSummary ? `${countSummary} total entries` : '';
   const resultsFooter = (
     <div className="queue-results-toolbar task-list-results-footer">
-      <div className="task-list-footer-summary">
-        <span className="small">{pageSummary}</span>
-        <span className="small">
-          {liveUpdates && listEnabled
-            ? `Polling every ${Math.round(listPollMs / 1000)}s`
-            : 'Updates paused to keep selections stable.'}
-        </span>
-      </div>
-      <div className="queue-pagination">
+      <div className="task-list-footer-live">
         <label className="queue-inline-toggle toolbar-live-toggle task-list-footer-live-toggle">
           <input
             type="checkbox"
@@ -724,6 +711,13 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           />
           Live updates
         </label>
+        <span className="small">
+          {liveUpdates && listEnabled
+            ? `Polling every ${Math.round(listPollMs / 1000)}s`
+            : 'Updates paused to keep selections stable.'}
+        </span>
+      </div>
+      <div className="queue-pagination task-list-footer-pagination">
         <PageSizeSelector
           pageSize={pageSize}
           disabled={!listEnabled}
@@ -732,6 +726,10 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             resetToFirstPage();
           }}
         />
+        <div className="task-list-footer-page-summary" aria-label="Pagination summary">
+          <span className="small">{pageRangeSummary}</span>
+          {totalEntriesSummary ? <span className="small">{totalEntriesSummary}</span> : null}
+        </div>
         <nav aria-label="Pagination" style={{ display: 'inline-flex', gap: '0.45rem' }}>
           <button
             type="button"
@@ -1241,13 +1239,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="stack">
-      <section className="task-list-control-deck" aria-labelledby="task-list-title">
-        <div className="toolbar">
-          <div>
-            <h2 className="page-title" id="task-list-title">Tasks List</h2>
-          </div>
-        </div>
-
+      <section className="task-list-control-deck" aria-label="Task list filters">
         {!listEnabled ? (
           <div className="notice error">Temporal task list is disabled in server configuration.</div>
         ) : null}
@@ -1311,25 +1303,32 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
         </div>
       </section>
 
-      {isLoading ? (
-        <p className="loading">Loading tasks...</p>
-      ) : isError ? (
-        <>
-          <div className="notice error">{(error as Error).message}</div>
-          {resultsFooter}
-        </>
-      ) : sortedItems.length === 0 && !hasPaginationContext ? (
-        <>
-          <p className="small">No tasks found for the current filters.</p>
-          {resultsFooter}
-        </>
-      ) : (
-        <section className="queue-layouts panel--data task-list-data-slab" aria-label="Task results">
-          {sortedItems.length === 0 ? (
-            <div className="card small">No tasks found for the current filters.</div>
-          ) : (
-            <>
-              <div className="queue-table-wrapper" data-layout="table">
+      <section
+        className="queue-layouts panel--data task-list-data-slab"
+        aria-labelledby="task-list-title"
+      >
+        <header className="task-list-results-header">
+          <h2 className="page-title" id="task-list-title">Tasks List</h2>
+        </header>
+        {isLoading ? (
+          <p className="loading task-list-empty-message">Loading tasks...</p>
+        ) : isError ? (
+          <>
+            <div className="notice error task-list-empty-message">{(error as Error).message}</div>
+            {resultsFooter}
+          </>
+        ) : sortedItems.length === 0 ? (
+          <>
+            {!hasPaginationContext ? (
+              <p className="small task-list-empty-message">No tasks found for the current filters.</p>
+            ) : (
+              <div className="card small task-list-empty-message">No tasks found for the current filters.</div>
+            )}
+            {resultsFooter}
+          </>
+        ) : (
+          <>
+            <div className="queue-table-wrapper" data-layout="table">
                 <table>
                   <colgroup>
                     <col className="queue-table-column-id" />
@@ -1348,7 +1347,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                         const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
                         const filterField = isFilterField(field) ? field : null;
                         return (
-                          <th key={field} aria-sort={ariaSort} className="task-list-compound-header-cell">
+                          <th
+                            key={field}
+                            aria-sort={ariaSort}
+                            className={`task-list-compound-header-cell${filterField && openFilter === filterField ? " is-filter-open" : ""}`}
+                          >
                             <div className="task-list-compound-header">
                               <button
                                 type="button"
@@ -1508,11 +1511,10 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       );
                     })}
               </ul>
+              {resultsFooter}
             </>
           )}
-          {resultsFooter}
         </section>
-      )}
     </div>
   );
 }

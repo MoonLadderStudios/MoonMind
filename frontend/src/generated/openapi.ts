@@ -6701,6 +6701,18 @@ export interface components {
             releaseStatus: string;
             /** Inputs */
             inputs?: components["schemas"]["TaskTemplateInputSchema"][];
+            /** Inputschema */
+            inputSchema?: {
+                [key: string]: unknown;
+            };
+            /** Uischema */
+            uiSchema?: {
+                [key: string]: unknown;
+            };
+            /** Defaults */
+            defaults?: {
+                [key: string]: unknown;
+            };
             /** Steps */
             steps?: components["schemas"]["TaskTemplateStepBlueprintSchema"][];
             /** Annotations */
@@ -8944,7 +8956,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OAuthSessionResponse"];
                 };
             };
             /** @description Validation Error */

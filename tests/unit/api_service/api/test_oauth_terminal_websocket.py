@@ -55,6 +55,14 @@ def test_provider_bootstrap_command_uses_registry_command() -> None:
     ]
     assert websockets._command_for_docker_exec("codex_cli") == "codex login --device-auth"
 
+def test_claude_provider_bootstrap_command_uses_auth_subcommand() -> None:
+    assert websockets._provider_bootstrap_command("claude_code") == [
+        "claude",
+        "auth",
+        "login",
+    ]
+    assert websockets._command_for_docker_exec("claude_code") == "claude auth login"
+
 def test_provider_bootstrap_command_rejects_unknown_runtime() -> None:
     with pytest.raises(ValueError, match="Unsupported OAuth runtime"):
         websockets._provider_bootstrap_command("unknown_runtime")

@@ -4191,10 +4191,16 @@ class TemporalAgentRuntimeActivities:
         workspace_path_raw = str(
             payload.get("workspace_path") or payload.get("workspacePath") or ""
         ).strip()
-        skill_snapshot_materialized = await self._materialize_selected_agent_skill_for_turn(
-            request=request,
-            workspace_path=workspace_path_raw,
+        skip_skill_materialization = bool(
+            payload.get("skipSkillMaterialization")
+            or payload.get("skip_skill_materialization")
         )
+        skill_snapshot_materialized = False
+        if not skip_skill_materialization:
+            skill_snapshot_materialized = await self._materialize_selected_agent_skill_for_turn(
+                request=request,
+                workspace_path=workspace_path_raw,
+            )
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
             if not workspace_path_raw:
@@ -4300,6 +4306,11 @@ class TemporalAgentRuntimeActivities:
                 runtime_id=str(request.agent_id or "managed-runtime"),
                 mode=RuntimeMaterializationMode.HYBRID,
             )
+            self._validate_selected_skill_projection(
+                workspace=workspace,
+                selected_skill=selected_skill,
+                resolved_skillset=resolved_skillset,
+            )
         except TemporalActivityRuntimeError:
             raise
         except (RuntimeError, OSError, ValueError, ValidationError) as exc:
@@ -4308,6 +4319,63 @@ class TemporalAgentRuntimeActivities:
             ) from exc
 
         return True
+
+    @staticmethod
+    def _validate_selected_skill_projection(
+        *,
+        workspace: Path,
+        selected_skill: str,
+        resolved_skillset: ResolvedSkillSet,
+    ) -> None:
+        """Fail before launch if the runtime-visible active skill projection is absent."""
+
+        visible_skills_dir = workspace / ".agents" / "skills"
+        if not visible_skills_dir.exists() or not visible_skills_dir.is_dir():
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f".agents/skills projection is missing at {visible_skills_dir}"
+            )
+
+        selected_skill_doc = visible_skills_dir / selected_skill / "SKILL.md"
+        if not selected_skill_doc.exists() or not selected_skill_doc.is_file():
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"selected skill '{selected_skill}' is missing {selected_skill_doc}"
+            )
+
+        manifest_path = visible_skills_dir / "_manifest.json"
+        if not manifest_path.exists() or not manifest_path.is_file():
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"active skill manifest is missing at {manifest_path}"
+            )
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(manifest, Mapping):
+                raise ValueError(f"manifest at {manifest_path} is not a mapping")
+        except (OSError, TypeError, ValueError) as exc:
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"active skill manifest is unreadable at {manifest_path}: {exc}"
+            ) from exc
+
+        snapshot_id = str(manifest.get("snapshot_id") or "").strip()
+        if snapshot_id != resolved_skillset.snapshot_id:
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                "active skill manifest snapshot_id does not match resolvedSkillsetRef "
+                f"({snapshot_id!r} != {resolved_skillset.snapshot_id!r})"
+            )
+        manifest_skills = {
+            str(entry.get("name") or "").strip()
+            for entry in manifest.get("skills", [])
+            if isinstance(entry, Mapping)
+        }
+        if selected_skill not in manifest_skills:
+            raise TemporalActivityRuntimeError(
+                "selected skill materialization failed before runtime launch: "
+                f"active skill manifest does not include selected skill '{selected_skill}'"
+            )
 
     async def _load_resolved_skillset(self, skillset_ref: str) -> ResolvedSkillSet:
         if self._artifact_service is None:
@@ -4365,7 +4433,30 @@ class TemporalAgentRuntimeActivities:
             parameters=parameters,
             skill_snapshot_materialized=skill_snapshot_materialized,
         )
+        prepared = cls._append_managed_step_boundary(prepared)
         return append_managed_codex_runtime_note(prepared)
+
+    @staticmethod
+    def _append_managed_step_boundary(instructions: str) -> str:
+        if "MoonMind managed step boundary:" in instructions:
+            return instructions
+        block = (
+            "MoonMind managed step boundary:\n"
+            "- Treat the text under `TASK INSTRUCTION`, or the inline instruction "
+            "when no `TASK INSTRUCTION` header is present, as the only work "
+            "authorized for this turn.\n"
+            "- Execute only this current plan step. Do not perform later workflow "
+            "steps such as specification, planning, task generation, "
+            "implementation, verification, publishing, pull request creation, or "
+            "Jira transitions unless this turn's instruction explicitly asks for "
+            "them.\n"
+            "- Repository `AGENTS.md` autonomy instructions apply only within this "
+            "current step boundary.\n"
+            "- Always finish with a brief assistant message describing this step's "
+            "outcome. If the step is already satisfied and no action is needed, "
+            "say that explicitly with the evidence.\n"
+        )
+        return instructions.rstrip() + "\n\n" + block
 
     @staticmethod
     def _prepend_selected_skill_activation(
@@ -5434,8 +5525,18 @@ class TemporalAgentRuntimeActivities:
         if workspace is not None and (
             normalized == ".agents/skills"
             or normalized.startswith(".agents/skills/")
+            or normalized == ".gemini/skills"
+            or normalized.startswith(".gemini/skills/")
+            or normalized == "skills_active"
+            or normalized.startswith("skills_active/")
         ):
-            projection = workspace.expanduser().resolve() / ".agents" / "skills"
+            root = normalized.split("/", 2)
+            if root[:2] == [".agents", "skills"]:
+                projection = workspace.expanduser().resolve() / ".agents" / "skills"
+            elif root[:2] == [".gemini", "skills"]:
+                projection = workspace.expanduser().resolve() / ".gemini" / "skills"
+            else:
+                projection = workspace.expanduser().resolve() / "skills_active"
             if projection.is_symlink():
                 return True
         return False
