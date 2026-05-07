@@ -1195,6 +1195,7 @@ class TaskProposalService:
         decisions: list[dict[str, Any]] = (
             list(decision_rows) if isinstance(decision_rows, list) else []
         )
+        result: ProviderDecisionResult | None = None
         for row in decisions:
             if not isinstance(row, dict):
                 continue
@@ -1216,7 +1217,7 @@ class TaskProposalService:
                 break
         provider_metadata["providerDecisions"] = decisions
         proposal.provider_metadata = self._scrub_json(provider_metadata)
-        if "result" in locals():
+        if result is not None:
             await self._sync_provider_decision_state_if_configured(
                 proposal=proposal,
                 result=result,

@@ -44,10 +44,12 @@ router = APIRouter(prefix="/api/proposals", tags=["task-proposals"])
 
 _PRESET_SOURCE_KINDS = frozenset({"preset-derived", "preset-include", "detached"})
 
+
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TaskProposalService:
     return get_task_proposal_service(session)
+
 
 def _build_task_preview(
     task_request: dict[str, object],
@@ -421,6 +423,35 @@ def _get_temporal_execution_service(
         ),
     )
 
+
+async def _create_promoted_execution(
+    *,
+    execution_service: TemporalExecutionService,
+    proposal: TaskProposal,
+    final_request: dict[str, object],
+    user: User,
+    idempotency_key: str,
+) -> str:
+    initial_parameters = dict(final_request.get("payload") or {})
+    execution_record = await execution_service.create_execution(
+        workflow_type="MoonMind.Run",
+        owner_id=getattr(user, "id"),
+        owner_type="user",
+        title=_promotion_title(proposal, initial_parameters),
+        input_artifact_ref=None,
+        plan_artifact_ref=None,
+        manifest_artifact_ref=None,
+        failure_policy=None,
+        initial_parameters=initial_parameters,
+        idempotency_key=idempotency_key,
+        repository=proposal.repository,
+        integration=None,
+        summary=proposal.summary,
+        start_delay=None,
+        scheduled_for=None,
+    )
+    return execution_record.workflow_id
+
 @router.post("/{proposal_id}/promote", response_model=TaskProposalPromoteResponse)
 async def promote_proposal(
     *,
@@ -456,25 +487,12 @@ async def promote_proposal(
             runtime_mode_override=runtime_mode_override,
         )
 
-        initial_parameters = dict(final_request.get("payload") or {})
-        title = _promotion_title(proposal, initial_parameters)
-
-        execution_record = await execution_service.create_execution(
-            workflow_type="MoonMind.Run",
-            owner_id=getattr(user, "id"),
-            owner_type="user",
-            title=title,
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref=None,
-            failure_policy=None,
-            initial_parameters=initial_parameters,
+        promoted_execution_id = await _create_promoted_execution(
+            execution_service=execution_service,
+            proposal=proposal,
+            final_request=final_request,
+            user=user,
             idempotency_key=f"proposal-promote-{proposal_id}",
-            repository=proposal.repository,
-            integration=None,
-            summary=proposal.summary,
-            start_delay=None,
-            scheduled_for=None,
         )
 
     except TaskProposalStatusError as exc:
@@ -495,7 +513,7 @@ async def promote_proposal(
         
     return TaskProposalPromoteResponse(
         proposal=_serialize_proposal(proposal),
-        promoted_execution_id=execution_record.workflow_id,
+        promoted_execution_id=promoted_execution_id,
     )
 
 
@@ -542,27 +560,15 @@ async def provider_decision(
                 note=result.note,
                 runtime_mode_override=result.runtime_mode,
             )
-            initial_parameters = dict(final_request.get("payload") or {})
-            execution_record = await execution_service.create_execution(
-                workflow_type="MoonMind.Run",
-                owner_id=getattr(user, "id"),
-                owner_type="user",
-                title=_promotion_title(proposal, initial_parameters),
-                input_artifact_ref=None,
-                plan_artifact_ref=None,
-                manifest_artifact_ref=None,
-                failure_policy=None,
-                initial_parameters=initial_parameters,
+            promoted_execution_id = await _create_promoted_execution(
+                execution_service=execution_service,
+                proposal=proposal,
+                final_request=final_request,
+                user=user,
                 idempotency_key=(
                     f"proposal-provider-{proposal_id}-{payload.provider_event_id}"
                 ),
-                repository=proposal.repository,
-                integration=None,
-                summary=proposal.summary,
-                start_delay=None,
-                scheduled_for=None,
             )
-            promoted_execution_id = execution_record.workflow_id
             proposal = await service.attach_provider_decision_execution(
                 proposal_id=proposal_id,
                 provider_event_id=payload.provider_event_id,
