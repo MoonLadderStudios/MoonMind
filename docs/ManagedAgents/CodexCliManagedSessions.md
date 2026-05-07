@@ -97,6 +97,31 @@ The rollout transcript remains a container-local runtime cache. MoonMind does no
 present the raw transcript as durable operator truth; it converts selected visible
 entries into artifact-backed output and observability events.
 
+### 3.2 Turn Instruction Preparation
+
+`MoonMind.AgentRun` prepares Codex managed-session turn instructions through
+`agent_runtime.prepare_turn_instructions` before `agent_runtime.send_turn`.
+Preparation is responsible for producing the final bounded prompt text, applying
+selected skill materialization, and attaching compact durable retrieval metadata
+needed by launch/session artifacts.
+
+The preferred command order for new histories is:
+
+1. perform a metadata-only preparation preflight when launch metadata may need
+   retrieval refs or skill context;
+2. launch or resume the task-scoped session;
+3. prepare the final turn instructions against the launched workspace/session
+   boundary;
+4. submit the turn through `agent_runtime.send_turn`.
+
+Workflow changes that move `prepare_turn_instructions` relative to session
+launch/resume or `send_turn` are replay-visible Temporal command-order changes.
+They must be protected by durable patch/version markers or Worker Versioning so
+in-flight `MoonMind.AgentRun` histories continue to replay the command order they
+already recorded. This is the automatic recovery boundary for old histories:
+existing runs replay their recorded preparation order, while new runs use the
+current preferred order.
+
 ## 4. Session Identity
 
 The canonical bounded session identity is:
