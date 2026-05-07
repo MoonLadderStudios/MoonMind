@@ -12937,6 +12937,121 @@ describe("Task Create MM-578 Preset expansion", () => {
     fetchSpy.mockRestore();
   });
 
+  it("submits Jira Orchestrate preset runs with the executable first-step skill", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "jira-orchestrate",
+                scope: "global",
+                title: "Jira Orchestrate",
+                description: "Run MoonSpec from a Jira issue.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/task-step-templates/jira-orchestrate?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "jira-orchestrate",
+            scope: "global",
+            title: "Jira Orchestrate",
+            description: "Run MoonSpec from a Jira issue.",
+            latestVersion: "1.0.0",
+            version: "1.0.0",
+            inputs: [
+              {
+                name: "jira_issue_key",
+                label: "Jira Issue Key",
+                type: "text",
+                required: true,
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/task-step-templates/jira-orchestrate:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:jira-orchestrate:1.0.0:01",
+                title: "Move Jira issue",
+                instructions: "Transition THOR-352 to In Progress.",
+                skill: { id: "jira-issue-updater", args: {} },
+              },
+            ],
+            appliedTemplate: {
+              slug: "jira-orchestrate",
+              version: "1.0.0",
+              inputs: { jira_issue_key: "THOR-352" },
+              stepIds: ["tpl:jira-orchestrate:1.0.0:01"],
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        Array.from(presetSelect.options).some(
+          (option) => option.text === "Jira Orchestrate (Global)",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-orchestrate" },
+    });
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    expect(
+      await screen.findByDisplayValue("Transition THOR-352 to In Progress."),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest();
+    const payload = request.payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(payload.publishMode).toBe("pr");
+    expect(task.publish).toEqual({ mode: "pr" });
+    expect(task.tool).toMatchObject({ type: "skill", name: "jira-issue-updater" });
+    expect(task.skill).toMatchObject({ id: "jira-issue-updater" });
+    expect(task.skills).toEqual({ include: [{ name: "jira-issue-updater" }] });
+    expect(task.appliedStepTemplates).toEqual([
+      expect.objectContaining({ slug: "jira-orchestrate" }),
+    ]);
+  });
+
   it("defaults parent publish mode to none when selecting Jira Breakdown and Orchestrate as a Preset step", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

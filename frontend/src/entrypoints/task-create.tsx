@@ -1376,10 +1376,16 @@ function isSelfManagedPublishSkill(skillId: string): boolean {
   return SELF_MANAGED_PUBLISH_SKILLS.has(skillId.trim().toLowerCase());
 }
 
-function resolveEffectiveSkillId(
+function resolveEffectivePublishSkillId(
   primarySkillId: string,
-  _appliedTemplates: AppliedTemplateState[],
+  appliedTemplates: AppliedTemplateState[],
 ): string {
+  for (const template of [...appliedTemplates].reverse()) {
+    const slug = String(template.slug || "").trim();
+    if (slug && isSelfManagedPublishSkill(slug)) {
+      return slug;
+    }
+  }
   if (hasExplicitSkillSelection(primarySkillId)) {
     return primarySkillId;
   }
@@ -4337,7 +4343,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     : "Choose a preset to delete";
   const effectiveSkillId = useMemo(
     () =>
-      resolveEffectiveSkillId(
+      resolveEffectivePublishSkillId(
         String(steps[0]?.skillId || "").trim() || "auto",
         activeAppliedTemplatesForSteps(appliedTemplates, steps),
       ),
@@ -6629,12 +6635,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       submissionSteps,
     );
     submissionAppliedTemplates = activeSubmissionAppliedTemplates;
-    const effectiveSubmissionSkillId = resolveEffectiveSkillId(
+    const effectiveSubmissionSkillId = primarySkillId;
+    const effectivePublishSkillId = resolveEffectivePublishSkillId(
       primarySkillId,
       activeSubmissionAppliedTemplates,
     );
     const effectivePublishMode =
-      isSelfManagedPublishSkill(effectiveSubmissionSkillId)
+      isSelfManagedPublishSkill(effectivePublishSkillId)
         ? "none"
         : normalizedPublishMode;
     const primarySkillArgsRaw = primaryStepIsSkill && showAdvancedStepOptions
@@ -7311,7 +7318,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const shouldSubmitMergeAutomation =
       isMergeAutomationPublishMode(publishMode) &&
       effectivePublishMode === "pr" &&
-      !isSelfManagedPublishSkill(effectiveSubmissionSkillId);
+      !isSelfManagedPublishSkill(effectivePublishSkillId);
 
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsForSubmit,
