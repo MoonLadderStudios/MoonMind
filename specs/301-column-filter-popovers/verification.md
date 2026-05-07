@@ -1,19 +1,21 @@
 # MoonSpec Verification Report
 
 **Feature**: 301-column-filter-popovers
-**Spec**: `/work/agent_jobs/mm:0b4c4f3c-79e1-43cd-bfef-fa744b477c67/repo/specs/301-column-filter-popovers/spec.md`
-**Original Request Source**: MM-588 canonical Jira preset brief preserved in `spec.md` `Input`
-**Verdict**: FULLY_IMPLEMENTED
+**Spec**: `/work/agent_jobs/mm:a8242983-5551-414b-9ae5-ee0129a404fc/repo/specs/301-column-filter-popovers/spec.md`
+**Original Request Source**: MM-588 and MM-594 canonical Jira preset briefs preserved in `spec.md` `Input`
+**Verification Refreshed**: 2026-05-07T06:28:49Z
+**Verdict**: IMPLEMENTED_WITH_FOCUSED_VERIFICATION_PASS_AND_FULL_SUITE_ENVIRONMENT_BLOCKER
 **Confidence**: HIGH
 
 ## Test Results
 
 | Suite | Command | Result | Notes |
 |-------|---------|--------|-------|
-| UI focused | `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/tasks-list.test.tsx` | PASS | 24 tests passed. |
-| API focused | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py` | PASS | 137 Python route tests passed; runner also completed 293 frontend tests. |
-| Full unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | PASS | 4331 Python tests passed, 1 xpassed, 16 subtests passed; 293 frontend tests passed. Existing warnings only. |
-| Whitespace | `git diff --check` | PASS | No whitespace errors. |
+| UI focused | `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/tasks-list.test.tsx` | PASS | 37 Tasks List tests passed. |
+| API focused | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py` | PASS | 151 Python route tests passed; runner also completed 323 frontend tests with 223 skipped. |
+| Managed runner UI command | `./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` | BLOCKED | The Python portion failed before the UI target because the managed session maps `.agents/skills` to an active skill snapshot that only contains this run's selected skill. Unrelated PR resolver and batch PR resolver tests expected checked-in files such as `.agents/skills/fix-comments/tools/get_pr_comments.py` and `.agents/skills/pr-resolver/bin/pr_resolve_snapshot.py`. |
+| Full unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | NOT RERUN | The same active skill projection blocker applies to the full runner; the targeted feature suites above pass. |
+| Whitespace | `git diff --check` | PASS | No whitespace errors after the MM-594 verification refresh. |
 
 ## Requirement Coverage
 
@@ -27,7 +29,7 @@
 | FR-014, FR-015 | Bounded option derivation and React text rendering in `tasks-list.tsx`; UI tests | VERIFIED | Values are rendered as text and option sets are bounded by constants/current task data. |
 | FR-016 through FR-020 | Active chip tests and pagination-reset assertions | VERIFIED | Chips open, remove individually, clear all filters, and drop stale cursors. |
 | FR-021 through FR-024 | Legacy URL mapping tests, canonical URL tests, API scope/query tests | VERIFIED | Legacy params load safely; new edits use canonical params; Temporal query remains task-scoped. |
-| FR-025 | `spec.md`, `tasks.md`, and this report | VERIFIED | MM-588 traceability is preserved. |
+| FR-025 | `spec.md`, `plan.md`, `tasks.md`, and this report | VERIFIED | MM-588 and MM-594 traceability is preserved, including both canonical Jira preset briefs. |
 
 ## Acceptance Scenario Coverage
 
@@ -38,7 +40,7 @@
 | SC-004, SC-005 | Runtime, skill, and repository tests | VERIFIED | Raw runtime, readable labels, skill values, and exact repository mapping are covered. |
 | SC-006 | `shows clickable active column filter chips...` | VERIFIED | Chip reopen, individual removal, and Clear filters are tested. |
 | SC-007 | API route tests for canonical filters and task scope | VERIFIED | Query construction preserves task scope and pagination reset is UI-covered. |
-| SC-008 | MoonSpec artifacts and this report | VERIFIED | MM-588 and DESIGN-REQ IDs are retained. |
+| SC-008 | MoonSpec artifacts and this report | VERIFIED | MM-588, MM-594, both canonical Jira preset briefs, and DESIGN-REQ IDs are retained. |
 
 ## Source Design Coverage
 
@@ -46,4 +48,4 @@ DESIGN-REQ-007, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015, 
 
 ## Residual Risk
 
-No blocking gaps found.
+No feature behavior gaps found in focused UI and route-boundary verification. Full-suite verification is currently blocked by the managed active skill projection replacing the checked-in `.agents/skills` tree expected by unrelated PR resolver tests; restoring or separately materializing those checked-in skill fixtures is the smallest next step for a clean full-unit rerun.
