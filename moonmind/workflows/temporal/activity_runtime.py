@@ -3468,6 +3468,147 @@ class TemporalAgentRuntimeActivities:
                     return value.strip()
             return ""
 
+        def _story_output_mapping() -> Mapping[str, Any]:
+            value = metadata.get("storyOutput") or metadata.get("story_output")
+            return value if isinstance(value, Mapping) else {}
+
+        story_output_metadata = _story_output_mapping()
+
+        def _story_metadata_text(*keys: str) -> str:
+            for key in keys:
+                value = metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+                value = story_output_metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return ""
+
+        def _workspace_story_path(workspace: Path, raw_path: str) -> Path | None:
+            if not raw_path:
+                return None
+            candidate = Path(raw_path)
+            if not candidate.is_absolute():
+                candidate = workspace / candidate
+            resolved = candidate.expanduser().resolve()
+            try:
+                resolved.relative_to(workspace)
+            except ValueError:
+                logger.warning(
+                    "Skipping story breakdown artifact publication outside "
+                    "workspace: %s",
+                    raw_path,
+                )
+                return None
+            return resolved
+
+        async def _publish_story_breakdown_file(
+            *,
+            workspace: Path,
+            raw_path: str,
+            link_type: str,
+            content_type: str,
+            metadata_name: str,
+            label: str,
+        ) -> str:
+            path = _workspace_story_path(workspace, raw_path)
+            if path is None:
+                return ""
+            if not path.is_file():
+                logger.warning(
+                    "Story breakdown handoff file was not found for publication: %s",
+                    raw_path,
+                )
+                return ""
+            payload = path.read_bytes()
+            artifact, _upload = await self._artifact_service.create(
+                principal="system:agent_runtime",
+                content_type=content_type,
+                size_bytes=len(payload),
+                link=_execution_ref(link_type),
+                metadata_json={
+                    "name": metadata_name,
+                    "path": raw_path,
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": ["agent_runtime", link_type, "story_breakdown"],
+                    **step_artifact_metadata,
+                },
+            )
+            completed = await self._artifact_service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="system:agent_runtime",
+                payload=payload,
+                content_type=content_type,
+            )
+            logger.info(
+                "Published %s story breakdown handoff artifact for %s",
+                label,
+                raw_path,
+            )
+            return completed.artifact_id
+
+        async def _publish_story_breakdown_handoff() -> dict[str, Any]:
+            json_path = _story_metadata_text(
+                "storyBreakdownPath",
+                "story_breakdown_path",
+            )
+            if not json_path:
+                return {}
+            task_run_id = _metadata_text("taskRunId", "task_run_id")
+            if not task_run_id or self._run_store is None:
+                return {}
+            record = self._run_store.load(task_run_id)
+            if record is None:
+                logger.warning(
+                    "Skipping story breakdown artifact publication: run record not "
+                    "found for %s",
+                    task_run_id,
+                )
+                return {}
+            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
+            if not workspace_path:
+                return {}
+            workspace = Path(workspace_path).expanduser().resolve()
+            published: dict[str, Any] = {}
+            json_ref = await _publish_story_breakdown_file(
+                workspace=workspace,
+                raw_path=json_path,
+                link_type="output.story_breakdown",
+                content_type="application/json",
+                metadata_name="stories.json",
+                label="JSON",
+            )
+            if json_ref:
+                published["storyBreakdownArtifactRef"] = json_ref
+            markdown_path = _story_metadata_text(
+                "storyBreakdownMarkdownPath",
+                "story_breakdown_markdown_path",
+            )
+            markdown_ref = await _publish_story_breakdown_file(
+                workspace=workspace,
+                raw_path=markdown_path,
+                link_type="output.story_breakdown_markdown",
+                content_type="text/markdown",
+                metadata_name="stories.md",
+                label="markdown",
+            )
+            if markdown_ref:
+                published["storyBreakdownMarkdownArtifactRef"] = markdown_ref
+            if not published:
+                return {}
+            story_output = (
+                dict(story_output_metadata)
+                if isinstance(story_output_metadata, Mapping)
+                else {}
+            )
+            story_output.update(published)
+            if json_path:
+                story_output.setdefault("storyBreakdownPath", json_path)
+            if markdown_path:
+                story_output.setdefault("storyBreakdownMarkdownPath", markdown_path)
+            published["storyOutput"] = story_output
+            return published
+
         result_summary = result_dict.get("summary") or result_dict.get("raw", "")
         operator_summary = self._sanitize_operator_summary(
             _metadata_text("operator_summary", "operatorSummary")
@@ -3563,6 +3704,27 @@ class TemporalAgentRuntimeActivities:
                     artifact_ref_value=resolved_skillset_ref,
                     field_name="resolvedSkillsetRef",
                 )
+            story_breakdown_refs = await _publish_story_breakdown_handoff()
+            if story_breakdown_refs:
+                published_refs.update(story_breakdown_refs)
+                enriched_metadata_for_result = (
+                    dict(result_dict.get("metadata") or {})
+                    if isinstance(result_dict.get("metadata"), Mapping)
+                    else {}
+                )
+                story_output_ref_payload = story_breakdown_refs.get("storyOutput")
+                enriched_metadata_for_result.update(
+                    {
+                        key: value
+                        for key, value in story_breakdown_refs.items()
+                        if key != "storyOutput"
+                    }
+                )
+                if isinstance(story_output_ref_payload, Mapping):
+                    enriched_metadata_for_result["storyOutput"] = dict(
+                        story_output_ref_payload
+                    )
+                result_dict["metadata"] = enriched_metadata_for_result
             summary_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",

@@ -279,6 +279,60 @@ async def test_create_jira_issues_reads_story_payload_from_previous_outputs():
     assert service.requests[0].summary == "Create previous-output Jira story"
 
 @pytest.mark.asyncio
+async def test_create_jira_issues_reads_story_artifact_ref_from_previous_outputs():
+    service = _FakeJiraService()
+    breakdown = {
+        "source": {"referencePath": "docs/Designs/RuntimeTypes.md"},
+        "stories": [
+            {
+                "id": "STORY-001",
+                "summary": "Create previous-output artifact Jira story",
+                "description": "As an operator, I can reuse a durable handoff.",
+                "sourceReference": {"path": "docs/Designs/RuntimeTypes.md"},
+            }
+        ],
+    }
+    fetch_calls: list[tuple[str, str, str]] = []
+    artifact_reads: list[str] = []
+
+    async def artifact_reader(ref: str) -> bytes:
+        artifact_reads.append(ref)
+        return json.dumps(breakdown).encode("utf-8")
+
+    async def fetcher(repo: str, ref: str, path: str) -> str:
+        fetch_calls.append((repo, ref, path))
+        raise AssertionError("repo fetch should not run when previous artifact exists")
+
+    result = await create_jira_issues_from_stories(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetBranch": "breakdown-branch",
+            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeName": "Story",
+                    "dependencyMode": "none",
+                },
+            },
+        },
+        {
+            "previousOutputs": {
+                "storyBreakdownArtifactRef": "art_previous_story_breakdown",
+            }
+        },
+        jira_service_factory=lambda: service,
+        story_fetcher=fetcher,
+        artifact_reader=artifact_reader,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    assert artifact_reads == ["art_previous_story_breakdown"]
+    assert fetch_calls == []
+    assert service.requests[0].summary == "Create previous-output artifact Jira story"
+
+@pytest.mark.asyncio
 async def test_create_jira_issues_explains_protected_branch_handoff_failure():
     async def fetcher(_repo: str, _ref: str, _path: str) -> str:
         raise RuntimeError("404 Not Found")
