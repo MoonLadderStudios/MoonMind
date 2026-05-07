@@ -190,6 +190,7 @@ NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
 NATIVE_PR_BRANCH_DEFAULTS_PATCH = "native-pr-branch-defaults-v1"
 NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
+RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
 RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
@@ -266,6 +267,7 @@ class MoonMindRunWorkflow:
         self._publish_status: Optional[str] = None
         self._publish_reason: Optional[str] = None
         self._publish_context: dict[str, Any] = {}
+        self._publish_repair_attempts: int = 0
         self._operator_summary: Optional[str] = None
         self._last_step_id: Optional[str] = None
         self._last_step_summary: Optional[str] = None
@@ -328,6 +330,8 @@ class MoonMindRunWorkflow:
         self._assigned_runtime_id: Optional[str] = None
         self._active_agent_child_workflow_id: Optional[str] = None
         self._active_agent_id: Optional[str] = None
+        self._last_publish_repair_request: AgentExecutionRequest | None = None
+        self._last_publish_repair_node_id: str | None = None
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
@@ -963,6 +967,147 @@ class MoonMindRunWorkflow:
                     )
                     break
         return merged_inputs
+
+    def _publish_repair_feedback_instruction(
+        self,
+        *,
+        failure_message: str,
+    ) -> str:
+        branch = self._coerce_text(self._publish_context.get("branch"), max_chars=120)
+        base_ref = self._coerce_text(
+            self._publish_context.get("baseRef"),
+            max_chars=120,
+        )
+        pull_request_url = self._coerce_text(
+            self._publish_context.get("pullRequestUrl"),
+            max_chars=200,
+        )
+        lines = [
+            "Publish postcondition repair required.",
+            "",
+            f"Observed failure: {failure_message.strip()}",
+        ]
+        if branch:
+            lines.append(f"Expected publish branch: `{branch}`.")
+        if base_ref:
+            lines.append(f"Expected comparison base: `{base_ref}`.")
+        if pull_request_url:
+            lines.append(f"Existing pull request URL: {pull_request_url}.")
+        lines.extend(
+            [
+                "",
+                (
+                    "Repair the repository state so MoonMind can complete "
+                    "`publishMode=pr`:"
+                ),
+                (
+                    "- Ensure the completed task changes are committed on the "
+                    "expected publish branch."
+                ),
+                (
+                    "- If the work was committed on another local branch, move "
+                    "or cherry-pick the task commits onto the expected publish "
+                    "branch."
+                ),
+                "- Do not transition Jira during this repair turn.",
+                (
+                    "- Do not push or create a pull request unless an explicit "
+                    "task step still requires it; managed publishing will push "
+                    "and create the PR after this turn."
+                ),
+                "- Finish with a concise summary of the branch and commit state.",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _publish_repair_is_available(self, *, parameters: Mapping[str, Any]) -> bool:
+        if self._publish_repair_attempts >= 1:
+            return False
+        if self._publish_mode(parameters) != "pr":
+            return False
+        if self._plan_blocked_message:
+            return False
+        request = self._last_publish_repair_request
+        return request is not None and request.agent_kind == "managed"
+
+    @staticmethod
+    def _is_jira_agent_skill_name(value: Any) -> bool:
+        candidate = str(value or "").strip().lower()
+        return bool(candidate and candidate in _PR_OPTIONAL_AGENT_SKILLS)
+
+    async def _attempt_publish_repair(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+        failure_message: str,
+    ) -> dict[str, Any] | None:
+        if not workflow.patched(RUN_PUBLISH_REPAIR_FEEDBACK_PATCH):
+            return None
+        if not self._publish_repair_is_available(parameters=parameters):
+            return None
+
+        base_request = self._last_publish_repair_request
+        if base_request is None:
+            return None
+
+        self._publish_repair_attempts += 1
+        repair_node_id = "publish-repair"
+        wf_info = workflow.info()
+        repair_parameters = dict(base_request.parameters or {})
+        repair_parameters["publishMode"] = "pr"
+        metadata_payload = (
+            dict(repair_parameters.get("metadata"))
+            if isinstance(repair_parameters.get("metadata"), Mapping)
+            else {}
+        )
+        moonmind_payload = (
+            dict(metadata_payload.get("moonmind"))
+            if isinstance(metadata_payload.get("moonmind"), Mapping)
+            else {}
+        )
+        moonmind_payload["publishRepair"] = {
+            "attempt": self._publish_repair_attempts,
+            "sourceNodeId": self._last_publish_repair_node_id,
+        }
+        metadata_payload["moonmind"] = moonmind_payload
+        repair_parameters["metadata"] = metadata_payload
+
+        repair_request = base_request.model_copy(
+            update={
+                "instruction_ref": self._publish_repair_feedback_instruction(
+                    failure_message=failure_message
+                ),
+                "idempotency_key": (
+                    f"{wf_info.workflow_id}:{repair_node_id}:"
+                    f"{self._publish_repair_attempts}:{wf_info.run_id}"
+                ),
+                "parameters": repair_parameters,
+            }
+        )
+        repair_request = await self._maybe_bind_task_scoped_session(repair_request)
+        child_workflow_id = (
+            f"{wf_info.workflow_id}:agent:{repair_node_id}:"
+            f"{self._publish_repair_attempts}"
+        )
+        self._active_agent_child_workflow_id = child_workflow_id
+        self._active_agent_id = repair_request.agent_id
+        self._summary = "Repairing PR publish postcondition."
+        self._update_memo()
+        try:
+            child_result = await workflow.execute_child_workflow(
+                "MoonMind.AgentRun",
+                repair_request,
+                id=child_workflow_id,
+                task_queue=WORKFLOW_TASK_QUEUE,
+            )
+        finally:
+            self._active_agent_child_workflow_id = None
+            self._active_agent_id = None
+
+        execution_result = self._map_agent_run_result(child_result)
+        if self._activity_result_status(execution_result) != "COMPLETED":
+            return None
+        return execution_result
 
     def _dependency_ids_from_parameters(self, parameters: Mapping[str, Any]) -> list[str]:
         task_payload = parameters.get("task")
@@ -1933,6 +2078,7 @@ class MoonMindRunWorkflow:
             }
 
         previous_step_outputs: Mapping[str, Any] = {}
+        execution_result: Any = None
         for index, node in enumerate(ordered_nodes, start=1):
             await self._wait_if_paused_at_safe_boundary()
             if self._cancel_requested:
@@ -1977,7 +2123,7 @@ class MoonMindRunWorkflow:
             previous_review_feedback: str | None = None
             previous_review_issues: tuple[Mapping[str, Any], ...] = ()
             result_status: str | None = None
-            execution_result: Any = None
+            execution_result = None
             accepted_execution = False
             current_review_attempt = 1
 
@@ -2046,6 +2192,17 @@ class MoonMindRunWorkflow:
                                     current_index=index,
                                 )
                             request = await self._maybe_bind_task_scoped_session(request)
+                            selected_skill_for_repair = node_inputs.get(
+                                "selectedSkill"
+                            )
+                            if (
+                                request.agent_kind == "managed"
+                                and not self._is_jira_agent_skill_name(
+                                    selected_skill_for_repair
+                                )
+                            ):
+                                self._last_publish_repair_request = request
+                                self._last_publish_repair_node_id = node_id
                             child_workflow_id = (
                                 f"{workflow.info().workflow_id}:agent:{node_id}"
                             )
@@ -2474,6 +2631,37 @@ class MoonMindRunWorkflow:
             return
 
         if require_pull_request_url and pull_request_url is None:
+            repair_candidate_outputs: Mapping[str, Any] = {}
+            if execution_result is not None:
+                maybe_outputs = self._get_from_result(execution_result, "outputs")
+                if isinstance(maybe_outputs, Mapping):
+                    repair_candidate_outputs = maybe_outputs
+            if (
+                str(repair_candidate_outputs.get("push_status") or "").strip()
+                == "no_commits"
+            ):
+                repair_failure_message = self._publish_reason or (
+                    self._compose_no_change_publish_reason(publish_mode="pr")
+                )
+                repair_result = await self._attempt_publish_repair(
+                    parameters=parameters,
+                    failure_message=repair_failure_message,
+                )
+                if repair_result is not None:
+                    execution_result = repair_result
+                    self._record_execution_context(
+                        node_id="publish-repair",
+                        execution_result=execution_result,
+                    )
+                    self._record_publish_result(
+                        parameters=parameters,
+                        execution_result=execution_result,
+                    )
+                    pull_request_url = self._extract_pull_request_url(
+                        execution_result
+                    )
+
+        if require_pull_request_url and pull_request_url is None:
             last_tool = (
                 str(
                     (ordered_nodes[-1].get("tool", {}) if ordered_nodes else {}).get(
@@ -2513,7 +2701,7 @@ class MoonMindRunWorkflow:
                 )
             else:
                 agent_outputs = {}
-                if "execution_result" in locals():
+                if execution_result is not None:
                     agent_outputs = (
                         self._get_from_result(execution_result, "outputs") or {}
                     )

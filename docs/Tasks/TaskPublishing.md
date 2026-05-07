@@ -162,6 +162,12 @@ Agents receive a commit-only instruction:
 
 > After completing the changes above, commit your work (`git add -A && git commit -m '<summary>'`). Do NOT push or create a pull request — that is handled automatically.
 
+Some higher-level presets may include an explicit pull-request handoff step
+because a later trusted side effect needs the PR URL before workflow finalization
+(for example, Jira Orchestrate moving an issue to Code Review). In those cases,
+the step-specific handoff instruction is the controlling instruction for that
+step, and the resulting PR URL must be recorded for the workflow to consume.
+
 ## Jules: Special Case
 
 Jules is an external agent provider with its own PR creation mechanism. Unlike managed CLI agents, Jules handles publishing through its API rather than git commands.

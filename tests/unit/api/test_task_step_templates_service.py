@@ -1732,6 +1732,12 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "parent workflow must use the pull request URL" in expanded["steps"][11][
                 "instructions"
             ]
+            assert "explicit PR-publication step" in expanded["steps"][11][
+                "instructions"
+            ]
+            assert "controlling instruction for this step only" in expanded["steps"][11][
+                "instructions"
+            ]
             assert "merge automation" in expanded["steps"][11]["instructions"]
             assert "non-draft pull request" in expanded["steps"][11]["instructions"]
             assert "isDraft value is false" in expanded["steps"][11]["instructions"]
