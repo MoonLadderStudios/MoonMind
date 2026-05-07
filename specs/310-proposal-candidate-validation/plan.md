@@ -1,47 +1,47 @@
 # Implementation Plan: Proposal Candidate Validation
 
 **Branch**: `310-proposal-candidate-validation` | **Date**: 2026-05-07 | **Spec**: [spec.md](spec.md)
-**Input**: Single-story feature specification from `/specs/310-proposal-candidate-validation/spec.md`
+**Input**: Single-story feature specification from `/work/agent_jobs/mm:178269a2-85d8-40b9-a55f-ae8a6ca25e2d/repo/specs/310-proposal-candidate-validation/spec.md`
 
 ## Summary
 
-Implement `MM-596` by tightening proposal candidate generation and submission validation so generated follow-up tasks are side-effect-free until the trusted submission boundary, validate against the canonical task contract, preserve explicit skill selector and reliable preset provenance metadata, reject `tool.type=agent_runtime`, and report redacted validation errors before any delivery side effect. Current code already separates `proposal.generate` and `proposal.submit`, stores proposal payloads through `TaskProposalService`, and has baseline proposal-stage tests, but validation is incomplete for candidate-level unsafe tool types, skill/provenance preservation, and no-service structural validation. The work will add red-first unit and workflow-boundary tests, then implement focused validation helpers in proposal activity/service boundaries.
+Implement `MM-596` by tightening proposal candidate generation and submission validation so generated follow-up tasks are side-effect-free until the trusted submission boundary, validate against the canonical task contract, preserve explicit skill selector and reliable preset provenance metadata, reject `tool.type=agent_runtime`, and report redacted validation errors before any delivery side effect. Current implementation evidence now shows the required behavior in `TemporalProposalActivities` and `TaskProposalService`, with focused activity/service unit tests and workflow-boundary unit tests covering the proposal activity sequence. No further implementation work is planned from the plan stage; downstream verification should keep the focused unit suite and hermetic integration strategy explicit.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | partial | `TemporalProposalActivities.proposal_generate()` builds candidates from workflow parameters; current tests cover idea extraction and empty input. | Add explicit no-side-effect boundary evidence and durable evidence/provenance input handling. | unit + workflow boundary |
-| FR-002 | partial | `TaskProposalService._prepare_task_create_request()` validates through `CanonicalTaskPayload` when service is wired; `proposal_submit()` counts candidates without service and skips malformed candidates shallowly. | Ensure `proposal_submit()` validates every submitted candidate shape before counting or service calls. | unit |
-| FR-003 | missing | `CanonicalTaskPayload` has no observed top-level `tool` rejection; step skill payload logic rejects non-skill tool payloads only for skill steps. | Reject candidate payloads with `tool.type=agent_runtime` and accept `tool.type=skill` executable selectors. | unit + API/service |
-| FR-004 | partial | Task skill selector models exist in `task_contract.py`; proposal preview exposes `taskSkills`; no proposal generation coverage preserves explicit task/step skills. | Preserve task/step skill selectors by selector/ref and ensure no skill body/materialization fields are embedded. | unit |
-| FR-005 | partial | `TaskProposalTaskPreview` exposes authored preset and step source metadata; existing service tests cover promotion rejection for unresolved preset steps. | Preserve reliable `authoredPresets` and `steps[].source` when supplied by trusted parent-run evidence. | unit |
-| FR-006 | missing | No test found proving proposal generation avoids fabricated authored preset or step source provenance when evidence is absent. | Add non-fabrication guards and tests. | unit |
-| FR-007 | implemented_unverified | `proposal_generate()` returns dictionaries only; side effects are currently in `proposal_submit()`, but no assertion guards service/repository/external side effects during generation. | Add explicit unit coverage proving generation has no proposal service dependency or submission call. | unit |
-| FR-008 | implemented_unverified | `run.py` schedules `proposal.generate` then `proposal.submit`; `activity_catalog.py` has separate activity definitions. | Add workflow-boundary assertions for distinct activity names and routes/capability queues. | workflow boundary unit |
-| FR-009 | partial | `proposal_submit()` collects redacted truncated errors from service exceptions and skips malformed candidates. | Ensure unsafe tool type, malformed skill selectors, and ambiguous payloads are rejected with redacted visible errors before side effects. | unit + service |
-| FR-010 | implemented_verified | `spec.md`, this plan, and handoff artifacts preserve `MM-596`. | Preserve through tasks, verification, commit, and PR metadata. | final verify |
-| SC-001 | implemented_unverified | Generation is pure in current code but lacks explicit side-effect tests. | Add no-side-effect tests. | unit |
-| SC-002 | partial | Service validation exists when service is wired. | Validate candidates before no-service counting and before service create calls. | unit |
-| SC-003 | missing | No focused test found for accepted `tool.type=skill` and rejected `tool.type=agent_runtime` in proposal candidates. | Add tests and validation. | unit |
-| SC-004 | partial | Skill selector schema exists; generation does not currently preserve explicit selectors from parent task/steps. | Add preservation tests and implementation. | unit |
-| SC-005 | partial | Preview/provenance surfaces exist; generation lacks explicit preserve/non-fabricate coverage. | Add provenance preservation/non-fabrication tests and implementation. | unit |
-| SC-006 | implemented_unverified | Workflow uses separate activity names. | Add route/boundary assertion coverage. | workflow boundary unit |
-| SC-007 | implemented_verified | `MM-596` and all design IDs are visible in `spec.md` and this plan. | Preserve in downstream artifacts. | final verify |
-| DESIGN-REQ-007 | partial | `proposal_generate()` avoids explicit writes but lacks artifact-ref and no-side-effect tests. | Add no-side-effect and unsafe input handling evidence. | unit |
-| DESIGN-REQ-008 | partial | `proposal_submit()` validates via service only when wired; shallow skip path exists. | Validate all submitted candidates and keep validation before create/delivery. | unit |
-| DESIGN-REQ-017 | partial | `TaskProposalService` normalizes task envelopes and payloads. | Reuse canonical validation for proposal candidate submission. | unit |
-| DESIGN-REQ-018 | missing | No current top-level candidate `tool.type` validation evidence. | Add executable tool type validation. | unit |
-| DESIGN-REQ-019 | partial | Skill selector models exist; proposal generation lacks preservation coverage. | Preserve explicit selector intent without embedding bodies/materialization. | unit |
-| DESIGN-REQ-032 | implemented_unverified | Separate Temporal activity definitions exist for `proposal.generate` and `proposal.submit`. | Add workflow-boundary proof and final verification. | workflow boundary unit |
+| FR-001 | implemented_verified | `TemporalProposalActivities.proposal_generate()` derives candidates from run parameters and evidence; `tests/unit/workflows/temporal/test_proposal_activities.py` covers proposal generation behavior. | No new implementation. | final unit verify |
+| FR-002 | implemented_verified | `proposal_submit()` validates stamped candidate task requests before service calls; `TaskProposalService._prepare_task_create_request()` validates canonical task payloads. | No new implementation. | final unit verify |
+| FR-003 | implemented_verified | `TaskProposalService._reject_agent_runtime_tool_selectors()` and activity validation reject `agent_runtime`; tests accept `tool.type=skill` and reject `tool.type=agent_runtime`. | No new implementation. | final unit verify |
+| FR-004 | implemented_verified | `proposal_generate()` preserves task and step skill selectors while stripping body/materialization-like fields; focused tests cover preservation and non-embedding. | No new implementation. | final unit verify |
+| FR-005 | implemented_verified | `proposal_generate()` preserves reliable `authoredPresets` and `steps[].source`; service tests cover preview/promotion provenance behavior. | No new implementation. | final unit verify |
+| FR-006 | implemented_verified | Generation tests cover absent provenance and assert no fabricated `authoredPresets` or step source data. | No new implementation. | final unit verify |
+| FR-007 | implemented_verified | `proposal_generate()` returns candidate dictionaries only; focused tests exercise generation without service/repository delivery calls. | No new implementation. | final unit verify |
+| FR-008 | implemented_verified | `moonmind/workflows/temporal/activity_runtime.py` maps `proposal.generate` and `proposal.submit` separately; workflow tests assert distinct scheduled activity types and order. | No new implementation. | workflow-boundary unit verify |
+| FR-009 | implemented_verified | `proposal_submit()` returns bounded errors for invalid candidates and skips service calls for rejected payloads; tests cover malformed skill selectors and unsafe tool types. | No new implementation. | final unit verify |
+| FR-010 | implemented_verified | `spec.md`, this plan, `research.md`, `quickstart.md`, `tasks.md`, and verification evidence preserve `MM-596`. | Preserve in PR metadata. | final traceability verify |
+| SC-001 | implemented_verified | Focused proposal generation tests demonstrate no repository, task-creation, proposal-delivery, or external-tracker calls during generation. | No new implementation. | final unit verify |
+| SC-002 | implemented_verified | Activity and service tests prove candidate validation runs before proposal service/repository calls. | No new implementation. | final unit verify |
+| SC-003 | implemented_verified | `tests/unit/workflows/temporal/test_proposal_activities.py` and `tests/unit/workflows/task_proposals/test_service.py` cover accepted `tool.type=skill` and rejected `tool.type=agent_runtime`. | No new implementation. | final unit verify |
+| SC-004 | implemented_verified | Skill selector preservation tests assert selectors remain compact and no skill bodies/runtime materialization state are embedded. | No new implementation. | final unit verify |
+| SC-005 | implemented_verified | Provenance tests cover both preservation from reliable evidence and non-fabrication when evidence is absent. | No new implementation. | final unit verify |
+| SC-006 | implemented_verified | `tests/unit/workflows/temporal/workflows/test_run_proposals.py` asserts distinct `proposal.generate` and `proposal.submit` workflow activity scheduling. | No new implementation. | workflow-boundary unit verify |
+| SC-007 | implemented_verified | `MM-596` and DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-017, DESIGN-REQ-018, DESIGN-REQ-019, and DESIGN-REQ-032 remain visible in MoonSpec artifacts and verification notes. | Preserve in PR metadata. | final traceability verify |
+| DESIGN-REQ-007 | implemented_verified | Generation uses bounded candidate payloads and keeps large/untrusted context behind existing run evidence; generation tests cover no side effects and skill-body exclusion. | No new implementation. | final unit verify |
+| DESIGN-REQ-008 | implemented_verified | Submission validates candidates, preserves explicit skill intent, rejects malformed skill fields, and calls trusted service only after validation. | No new implementation. | final unit verify |
+| DESIGN-REQ-017 | implemented_verified | Service validation normalizes candidate `taskCreateRequest` through the canonical task payload contract. | No new implementation. | final unit verify |
+| DESIGN-REQ-018 | implemented_verified | Activity and service validation reject `tool.type=agent_runtime` while accepting `tool.type=skill`. | No new implementation. | final unit verify |
+| DESIGN-REQ-019 | implemented_verified | Proposal generation preserves explicit task/step skill selectors without embedding skill bodies or materialization state. | No new implementation. | final unit verify |
+| DESIGN-REQ-032 | implemented_verified | Activity catalog/runtime mapping and workflow tests prove separate generation and trusted submission boundaries. | No new implementation. | workflow-boundary unit verify |
 
 ## Technical Context
 
 **Language/Version**: Python 3.12  
 **Primary Dependencies**: Pydantic v2, Temporal Python SDK, SQLAlchemy async ORM, FastAPI task/proposal routers, existing `CanonicalTaskPayload` and `TaskProposalService`  
 **Storage**: Existing `task_proposals` and proposal notification tables only; no new persistent storage  
-**Unit Testing**: pytest through `./tools/test_unit.sh`; focused iteration with targeted pytest paths  
-**Integration Testing**: pytest integration markers through `./tools/test_integration.sh` when Docker is available; workflow-boundary tests in unit suite for activity scheduling/route shape  
+**Unit Testing**: pytest through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`; focused iteration through `tests/unit/workflows/temporal/test_proposal_activities.py`, `tests/unit/workflows/task_proposals/test_service.py`, and `tests/unit/workflows/temporal/workflows/test_run_proposals.py`
+**Integration Testing**: hermetic integration tests through `./tools/test_integration.sh` when Docker is available; workflow-boundary proposal coverage remains in the unit suite for managed-agent environments without Docker
 **Target Platform**: MoonMind server and Temporal worker runtime  
 **Project Type**: Python service and Temporal workflow/activity implementation  
 **Performance Goals**: Candidate validation remains bounded per generated candidate and must not materially increase proposal-stage latency for normal proposal counts.  
@@ -62,7 +62,7 @@ Implement `MM-596` by tightening proposal candidate generation and submission va
 - **X. Facilitate Continuous Improvement**: PASS. Proposal candidates remain reviewable follow-up work, not silent new executions.
 - **XI. Spec-Driven Development**: PASS. This spec/plan/tasks set is the implementation source of truth.
 - **XII. Canonical Documentation Separation**: PASS. Runtime implementation notes remain in MoonSpec artifacts; canonical docs are used as source requirements, not migration logs.
-- **XIII. Pre-Release Compatibility Policy**: PASS. Internal contract changes will update all direct call/test sites without adding compatibility aliases, except existing workflow replay compatibility already present in current code.
+- **XIII. Pre-Release Compatibility Policy**: PASS. Internal contract changes update direct call/test sites without compatibility aliases.
 
 ## Project Structure
 
@@ -79,7 +79,8 @@ specs/310-proposal-candidate-validation/
 │   └── proposal-candidate-contract.md
 ├── checklists/
 │   └── requirements.md
-└── tasks.md
+├── tasks.md
+└── verification.md
 ```
 
 ### Source Code (repository root)
@@ -99,17 +100,14 @@ moonmind/
     └── task_proposal_models.py
 
 tests/
-├── unit/
-│   ├── workflows/
-│   │   ├── temporal/test_proposal_activities.py
-│   │   ├── temporal/workflows/test_run_proposals.py
-│   │   └── task_proposals/test_service.py
-│   └── api/routers/test_task_proposals.py
-└── integration/
-    └── workflows/temporal/workflows/test_run.py
+└── unit/
+    └── workflows/
+        ├── temporal/test_proposal_activities.py
+        ├── temporal/workflows/test_run_proposals.py
+        └── task_proposals/test_service.py
 ```
 
-**Structure Decision**: Use the existing proposal workflow/activity/service boundaries. Unit coverage will target the proposal activity and service validation helpers; workflow-boundary coverage will target `MoonMindRunWorkflow._run_proposals_stage()` activity scheduling shape. No new storage or UI structure is planned.
+**Structure Decision**: Use the existing proposal workflow/activity/service boundaries. Unit coverage targets the proposal activity and service validation helpers; workflow-boundary coverage targets `MoonMindRunWorkflow._run_proposals_stage()` activity scheduling shape. No new storage or UI structure is planned.
 
 ## Complexity Tracking
 
