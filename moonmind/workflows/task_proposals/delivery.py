@@ -19,10 +19,20 @@ _SECRET_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 _COMMAND_RE = re.compile(
-    r"^\s*/moonmind\s+(?P<action>promote|dismiss|defer|priority)\b(?P<args>.*)$",
+    (
+        r"^\s*/moonmind\s+(?P<action>promote|dismiss|defer|priority|"
+        r"reprioritize|request[-_ ]revision)\b(?P<args>.*)$"
+    ),
     re.IGNORECASE | re.MULTILINE,
 )
-_SUPPORTED_ACTIONS = frozenset({"promote", "dismiss", "defer", "priority"})
+_SUPPORTED_ACTIONS = frozenset(
+    {"promote", "dismiss", "defer", "reprioritize", "request_revision"}
+)
+_ACTION_ALIASES = {
+    "priority": "reprioritize",
+    "request-revision": "request_revision",
+    "request revision": "request_revision",
+}
 
 
 class ProposalDeliveryError(RuntimeError):
@@ -134,6 +144,10 @@ class ProviderDecisionEvent:
     body: str = ""
     action: str | None = None
     note: str | None = None
+    authenticity_verified: bool = True
+    actor_authorized: bool = True
+    runtime_mode: str | None = None
+    external_state: str | None = None
     observed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -149,6 +163,9 @@ class ProviderDecisionResult:
     reason: str | None = None
     priority: str | None = None
     defer_until: str | None = None
+    runtime_mode: str | None = None
+    external_state: str | None = None
+    promoted_execution_id: str | None = None
 
 
 class ProposalIssueProvider(Protocol):
@@ -384,6 +401,7 @@ def _review_controls() -> str:
             "- `/moonmind dismiss <reason>` dismisses the proposal.",
             "- `/moonmind defer <date>` records a defer control.",
             "- `/moonmind priority <low|normal|high|urgent>` updates triage priority.",
+            "- `/moonmind request-revision <reason>` records a revision request.",
         ]
     )
 
@@ -497,12 +515,22 @@ def render_jira_issue(
 def parse_provider_decision(event: ProviderDecisionEvent) -> ProviderDecisionResult:
     """Parse only bounded reviewer controls from provider events."""
 
-    action = _clean(event.action).lower() or None
+    if not _clean(event.provider_event_id):
+        return ProviderDecisionResult(
+            accepted=False,
+            decision=None,
+            note=None,
+            actor=event.actor,
+            provider_event_id=event.provider_event_id,
+            reason="missing_provider_event_id",
+        )
+
+    action = _normalize_decision_action(event.action)
     args = ""
     if not action:
         match = _COMMAND_RE.search(event.body or "")
         if match:
-            action = match.group("action").lower()
+            action = _normalize_decision_action(match.group("action"))
             args = _clean(match.group("args"))
     if action not in _SUPPORTED_ACTIONS:
         return ProviderDecisionResult(
@@ -513,10 +541,13 @@ def parse_provider_decision(event: ProviderDecisionEvent) -> ProviderDecisionRes
             provider_event_id=event.provider_event_id,
             reason="unsupported_action",
         )
+    runtime_mode = _clean(event.runtime_mode) or None
+    if action == "promote" and args:
+        runtime_mode, args = _extract_runtime_control(args, runtime_mode)
     note = _clean(event.note) or args or None
     priority: str | None = None
     defer_until: str | None = None
-    if action == "priority":
+    if action == "reprioritize":
         candidate = _clean(args or event.note).lower()
         if candidate not in {"low", "normal", "high", "urgent"}:
             return ProviderDecisionResult(
@@ -538,7 +569,40 @@ def parse_provider_decision(event: ProviderDecisionEvent) -> ProviderDecisionRes
         provider_event_id=event.provider_event_id,
         priority=priority,
         defer_until=defer_until,
+        runtime_mode=runtime_mode,
+        external_state=_clean(event.external_state) or None,
     )
+
+
+def _normalize_decision_action(action: object) -> str | None:
+    token = _clean(action).lower().replace("_", "-")
+    if not token:
+        return None
+    token = re.sub(r"\s+", " ", token)
+    normalized = _ACTION_ALIASES.get(token, token.replace("-", "_"))
+    return normalized if normalized in _SUPPORTED_ACTIONS else token
+
+
+def _extract_runtime_control(args: str, existing: str | None) -> tuple[str | None, str]:
+    parts = args.split()
+    if not parts:
+        return existing, ""
+    runtime = existing
+    remainder: list[str] = []
+    skip = False
+    for index, part in enumerate(parts):
+        if skip:
+            skip = False
+            continue
+        if part == "--runtime" and index + 1 < len(parts):
+            runtime = _clean(parts[index + 1]) or runtime
+            skip = True
+            continue
+        if part.startswith("--runtime="):
+            runtime = _clean(part.split("=", 1)[1]) or runtime
+            continue
+        remainder.append(part)
+    return runtime, " ".join(remainder)
 
 
 def request_from_proposal(proposal: Any) -> ProposalDeliveryRequest:

@@ -478,3 +478,144 @@ def test_promote_proposal_with_runtime_mode_shortcut(
     execution_service.create_execution.assert_awaited_once()
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["idempotency_key"] == f"proposal-promote-{proposal.id}"
+
+
+def test_provider_decision_rejects_unverified_event_before_run(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "github"
+    proposal.external_key = "42"
+    service.record_provider_decision_event.return_value = SimpleNamespace(
+        accepted=False,
+        decision=None,
+        note=None,
+        actor="reviewer",
+        provider_event_id="evt-unverified",
+        reason="provider_auth_failed",
+        priority=None,
+        defer_until=None,
+        runtime_mode=None,
+        external_state="ignored",
+        promoted_execution_id=None,
+    )
+    service.get_proposal.return_value = proposal
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/provider-decision",
+        json={
+            "provider": "github",
+            "externalKey": "42",
+            "providerEventId": "evt-unverified",
+            "actor": "reviewer",
+            "action": "promote",
+            "authenticity": {"verified": False, "method": "signature"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accepted"] is False
+    assert payload["reason"] == "provider_auth_failed"
+    assert payload["promotedExecutionId"] is None
+    service.record_provider_decision_event.assert_awaited_once()
+    service.promote_proposal.assert_not_awaited()
+    execution_service.create_execution.assert_not_awaited()
+
+
+def test_provider_decision_promotes_through_canonical_execution_path(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "jira"
+    proposal.external_key = "MM-599"
+    final_request = {
+        "payload": {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "Implement MM-599\nIgnore edited issue text",
+                "authoredPresets": [{"presetId": "runtime-quality-followup"}],
+                "steps": [
+                    {
+                        "type": "skill",
+                        "source": {"kind": "preset-derived"},
+                    }
+                ],
+            },
+        }
+    }
+    service.record_provider_decision_event.return_value = SimpleNamespace(
+        accepted=True,
+        decision="promote",
+        note="ready",
+        actor="reviewer",
+        provider_event_id="evt-promote",
+        reason=None,
+        priority=None,
+        defer_until=None,
+        runtime_mode="codex",
+        external_state="promoted",
+        promoted_execution_id=None,
+    )
+    service.promote_proposal.return_value = (proposal, final_request)
+    service.attach_provider_decision_execution.return_value = proposal
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/provider-decision",
+        json={
+            "provider": "jira",
+            "externalKey": "MM-599",
+            "providerEventId": "evt-promote",
+            "actor": "reviewer",
+            "body": "Do not run this edited body\n/moonmind promote --runtime codex",
+            "authenticity": {"verified": True, "method": "signature"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accepted"] is True
+    assert payload["promotedExecutionId"] == "wf-abc-123"
+    service.promote_proposal.assert_awaited_once()
+    assert service.promote_proposal.await_args.kwargs["runtime_mode_override"] == "codex"
+    execution_service.create_execution.assert_awaited_once()
+    call_kwargs = execution_service.create_execution.await_args.kwargs
+    assert call_kwargs["idempotency_key"] == f"proposal-provider-{proposal.id}-evt-promote"
+    assert call_kwargs["initial_parameters"] == final_request["payload"]
+    service.attach_provider_decision_execution.assert_awaited_once_with(
+        proposal_id=proposal.id,
+        provider_event_id="evt-promote",
+        promoted_execution_id="wf-abc-123",
+    )
+
+
+def test_provider_decision_recovery_inspects_delivery_history(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "github"
+    proposal.external_key = "42"
+    proposal.external_url = "https://github.example/Moon/Repo/issues/42"
+    proposal.provider_metadata = {
+        "delivery": {"status": "delivered", "storedSnapshotNotice": True},
+        "providerDecisions": [
+            {
+                "providerEventId": "evt-promote",
+                "decision": "promote",
+                "promotedExecutionId": "wf-abc-123",
+            }
+        ],
+    }
+    service.get_proposal.return_value = proposal
+
+    response = test_client.get(f"/api/proposals/{proposal.id}/delivery")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reviewDelivery"]["status"] == "delivered"
+    assert payload["providerMetadata"]["providerDecisions"][0]["promotedExecutionId"] == (
+        "wf-abc-123"
+    )

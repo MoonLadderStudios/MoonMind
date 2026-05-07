@@ -193,9 +193,40 @@ def test_provider_decision_parser_accepts_only_bounded_commands() -> None:
     )
 
     assert result.accepted is True
-    assert result.decision == "priority"
+    assert result.decision == "reprioritize"
     assert result.priority == "urgent"
     assert "rm -rf" not in (result.note or "")
+
+
+def test_provider_decision_parser_accepts_request_revision_command() -> None:
+    result = parse_provider_decision(
+        ProviderDecisionEvent(
+            provider="jira",
+            external_key="MM-1",
+            provider_event_id="evt-revision",
+            actor="reviewer",
+            body="/moonmind request-revision Need a smaller task split",
+        )
+    )
+
+    assert result.accepted is True
+    assert result.decision == "request_revision"
+    assert result.note == "Need a smaller task split"
+
+
+def test_provider_decision_parser_rejects_blank_provider_event_id() -> None:
+    result = parse_provider_decision(
+        ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id=" ",
+            actor="reviewer",
+            body="/moonmind promote",
+        )
+    )
+
+    assert result.accepted is False
+    assert result.reason == "missing_provider_event_id"
 
 
 def test_provider_decision_parser_rejects_unknown_commands() -> None:
@@ -221,15 +252,32 @@ def test_provider_decision_parser_accepts_structured_priority_note() -> None:
             provider_event_id="evt-3",
             actor="reviewer",
             body="",
-            action="priority",
+            action="reprioritize",
             note="urgent",
         )
     )
 
     assert result.accepted is True
-    assert result.decision == "priority"
+    assert result.decision == "reprioritize"
     assert result.priority == "urgent"
     assert result.note == "urgent"
+
+
+def test_provider_decision_parser_extracts_bounded_runtime_control() -> None:
+    result = parse_provider_decision(
+        ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id="evt-runtime",
+            actor="reviewer",
+            body="/moonmind promote --runtime codex Ready to run",
+        )
+    )
+
+    assert result.accepted is True
+    assert result.decision == "promote"
+    assert result.runtime_mode == "codex"
+    assert result.note == "Ready to run"
 
 
 @pytest.mark.asyncio
