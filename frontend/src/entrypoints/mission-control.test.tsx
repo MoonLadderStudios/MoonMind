@@ -801,8 +801,9 @@ describe('Mission Control shared entry', () => {
 
     const underlineBlocks = cssRuleBlocks(missionControlCss, '.route-nav a::after');
     expect(
-      underlineBlocks.some((block) => block.includes('bottom: -0.62rem;')),
+      underlineBlocks.some((block) => block.includes('bottom: -0.46rem;')),
     ).toBe(true);
+    expect(underlineBlocks.some((block) => block.includes('height: 3px;'))).toBe(true);
 
     const activeBlocks = cssRuleBlocks(missionControlCss, '.route-nav a.active');
     expect(activeBlocks.join('\n')).not.toMatch(/transform:[^;]*\bscale\b/);
