@@ -71,6 +71,7 @@ from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     build_progress_summary,
     build_step_ledger_snapshot,
+    materialize_preserved_steps,
     refresh_ready_steps,
     upsert_step_check,
     update_step_row,
@@ -293,6 +294,7 @@ class MoonMindRunWorkflow:
         self._plan_ref: Optional[str] = None
         self._logs_ref: Optional[str] = None
         self._summary_ref: Optional[str] = None
+        self._resume_source: dict[str, Any] | None = None
 
         # State tracking
         self._paused: bool = False
@@ -621,6 +623,22 @@ class MoonMindRunWorkflow:
             dependency_map=dependency_map,
             updated_at=updated_at,
         )
+        resume_source = self._resume_source or {}
+        preserved_steps = resume_source.get("preservedSteps")
+        if isinstance(preserved_steps, list):
+            source_workflow_id = str(resume_source.get("sourceWorkflowId") or "").strip()
+            source_run_id = str(resume_source.get("sourceRunId") or "").strip()
+            if source_workflow_id and source_run_id:
+                materialize_preserved_steps(
+                    self._step_ledger_rows,
+                    source_workflow_id=source_workflow_id,
+                    source_run_id=source_run_id,
+                    preserved_steps=[
+                        step for step in preserved_steps if isinstance(step, Mapping)
+                    ],
+                    updated_at=updated_at,
+                )
+                refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
         self._sync_progress_snapshot(updated_at=updated_at)
 
     def _mark_step_running(
@@ -1804,6 +1822,10 @@ class MoonMindRunWorkflow:
             input_payload,
             "initialParameters",
             "initial_parameters",
+        )
+        resume_source = self._mapping_value(parameters, "resumeSource", "resume_source")
+        self._resume_source = (
+            dict(resume_source) if isinstance(resume_source, Mapping) else None
         )
         self._target_runtime = self._runtime_visibility_from_parameters(parameters)
         self._target_skill = self._skill_visibility_from_parameters(parameters)

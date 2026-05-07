@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
 from sqlalchemy import Select, case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +49,8 @@ from moonmind.schemas.temporal_models import (
     TASK_RUN_ID_MEMO_KEYS,
     TASK_RUN_ID_PARAM_KEYS,
     TASK_RUN_ID_SEARCH_ATTR_KEYS,
+    ResumeCheckpointModel,
+    ResumeSourceModel,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.manifest_ingest import (
@@ -176,6 +179,11 @@ class TemporalExecutionNotFoundError(TemporalExecutionError):
 
 class TemporalExecutionValidationError(TemporalExecutionError):
     """Raised when lifecycle invariants are violated."""
+
+
+class TemporalExecutionResumeCheckpointError(TemporalExecutionValidationError):
+    """Raised when failed-step Resume checkpoint evidence is missing or invalid."""
+
 
 @dataclass(slots=True)
 class TemporalExecutionListResult:
@@ -2522,6 +2530,141 @@ class TemporalExecutionService:
             "workflow_id": created.workflow_id,
         }
 
+    async def create_failed_step_resume_execution(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        *,
+        resume_checkpoint_ref: str | None,
+        idempotency_key: str,
+        checkpoint_payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a linked follow-up execution for failed-step Resume."""
+
+        if record.workflow_type is not TemporalWorkflowType.RUN:
+            raise TemporalExecutionValidationError(
+                "Failed-step Resume is only available for MoonMind.Run executions."
+            )
+        if record.state is not MoonMindWorkflowState.FAILED:
+            raise TemporalExecutionValidationError(
+                "Failed-step Resume is only available for failed executions."
+            )
+        source_run_id = str(record.run_id or "").strip()
+        if not source_run_id:
+            raise TemporalExecutionValidationError("Resume source runId is required.")
+
+        memo = dict(record.memo or {})
+        canonical_checkpoint_ref = (
+            str(memo.get("resume_checkpoint_ref") or "").strip()
+            or str(memo.get("resumeCheckpointRef") or "").strip()
+        )
+        if not canonical_checkpoint_ref:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint ref is required."
+            )
+        requested_checkpoint_ref = str(resume_checkpoint_ref or "").strip()
+        if (
+            requested_checkpoint_ref
+            and requested_checkpoint_ref != canonical_checkpoint_ref
+        ):
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint ref does not match source execution."
+            )
+        checkpoint_ref = canonical_checkpoint_ref
+        source_snapshot_ref = str(
+            memo.get("task_input_snapshot_ref")
+            or memo.get("taskInputSnapshotRef")
+            or ""
+        ).strip()
+        if not source_snapshot_ref:
+            raise TemporalExecutionResumeCheckpointError(
+                "Original task input snapshot ref is required for failed-step Resume."
+            )
+
+        if checkpoint_payload is None:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint payload is required."
+            )
+        try:
+            checkpoint = ResumeCheckpointModel.model_validate(checkpoint_payload)
+        except ValidationError as exc:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint payload is invalid."
+            ) from exc
+        if checkpoint.source.workflow_id != record.workflow_id:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint workflowId does not match source execution."
+            )
+        if checkpoint.source.run_id != source_run_id:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint runId does not match source execution."
+            )
+        if checkpoint.task_input_snapshot_ref != source_snapshot_ref:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume checkpoint task input snapshot does not match source execution."
+            )
+        failed_step_id = checkpoint.failed_step.logical_step_id
+        failed_step_attempt = checkpoint.failed_step.attempt
+        if not failed_step_id:
+            raise TemporalExecutionResumeCheckpointError(
+                "Resume failed step id is required."
+            )
+
+        params = dict(record.parameters or {})
+        for key in TASK_RUN_ID_PARAM_KEYS:
+            params.pop(key, None)
+        params["resumeSource"] = ResumeSourceModel(
+            sourceWorkflowId=record.workflow_id,
+            sourceRunId=source_run_id,
+            sourceTaskInputSnapshotRef=source_snapshot_ref,
+            sourcePlanRef=record.plan_ref,
+            sourcePlanDigest=(checkpoint.plan_digest if checkpoint else None),
+            failedStepId=failed_step_id,
+            failedStepAttempt=failed_step_attempt,
+            resumeCheckpointRef=checkpoint_ref,
+            preservedSteps=(checkpoint.preserved_steps if checkpoint else []),
+        ).model_dump(by_alias=True, mode="json")
+
+        task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
+        title = (
+            str(task_params.get("title") or "").strip()
+            or str((record.memo or {}).get("title") or "").strip()
+            or None
+        )
+        repository = str(params.get("repository") or "").strip() or None
+        created = await self.create_execution(
+            workflow_type=record.workflow_type.value,
+            owner_id=record.owner_id,
+            owner_type=record.owner_type.value if record.owner_type else "user",
+            title=title,
+            input_artifact_ref=record.input_ref,
+            plan_artifact_ref=record.plan_ref,
+            manifest_artifact_ref=record.manifest_ref,
+            failure_policy=None,
+            initial_parameters=params,
+            idempotency_key=self._resume_create_idempotency_key(
+                record.workflow_id,
+                idempotency_key,
+            ),
+            repository=repository,
+            integration=None,
+            summary=f"Resumed from failed step of {record.workflow_id}.",
+        )
+        return {
+            "accepted": True,
+            "applied": "created_resumed_execution",
+            "source": {
+                "workflowId": record.workflow_id,
+                "runId": source_run_id,
+            },
+            "execution": {
+                "workflowId": created.workflow_id,
+                "runId": created.run_id,
+                "detailHref": f"/tasks/{created.workflow_id}",
+            },
+            "relationship": "Resumed from failed step",
+            "resumeCheckpointRef": checkpoint_ref,
+        }
+
     @staticmethod
     def _rerun_create_idempotency_key(
         workflow_id: str,
@@ -2534,6 +2677,17 @@ class TemporalExecutionService:
             return derived_key
         digest = hashlib.sha256(derived_key.encode("utf-8")).hexdigest()
         return f"rerun:{digest}"
+
+    @staticmethod
+    def _resume_create_idempotency_key(
+        workflow_id: str,
+        idempotency_key: str,
+    ) -> str:
+        derived_key = f"resume:{workflow_id}:{idempotency_key}"
+        if len(derived_key) <= CREATE_IDEMPOTENCY_KEY_MAX_LENGTH:
+            return derived_key
+        digest = hashlib.sha256(derived_key.encode("utf-8")).hexdigest()
+        return f"resume:{digest}"
 
     def _continue_as_new(
         self,
