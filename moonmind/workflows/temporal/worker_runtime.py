@@ -1154,7 +1154,7 @@ def _build_runtime_planner():
                 step_story_output = _coerce_mapping(
                     step_entry.get("storyOutput") or step_entry.get("story_output")
                 )
-                if base_story_output and step_story_output:
+                if base_story_output or step_story_output:
                     step_node_inputs["storyOutput"] = {
                         **base_story_output,
                         **step_story_output,

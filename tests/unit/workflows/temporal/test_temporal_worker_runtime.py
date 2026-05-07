@@ -549,6 +549,55 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
     assert jira["inputs"]["storyOutput"]["handoff"] == "artifact"
     assert jira["inputs"]["storyOutput"]["requiresStoryBreakdownArtifactRef"] is True
 
+
+def test_runtime_planner_preserves_step_story_output_without_task_story_output():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "Jira Breakdown",
+                "instructions": "Create Jira stories from a step-local config.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "id": "draft",
+                        "tool": {"type": "skill", "name": "moonspec-breakdown"},
+                        "instructions": "Draft the source breakdown.",
+                    },
+                    {
+                        "id": "jira",
+                        "tool": {"type": "skill", "name": "story.create_jira_issues"},
+                        "instructions": "Create Jira issues.",
+                        "storyOutput": {
+                            "mode": "jira",
+                            "jira": {
+                                "projectKey": "MM",
+                                "issueTypeName": "Story",
+                            },
+                        },
+                    }
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    jira = plan["nodes"][1]
+
+    assert jira["inputs"]["storyOutput"]["mode"] == "jira"
+    assert jira["inputs"]["storyOutput"]["jira"] == {
+        "projectKey": "MM",
+        "issueTypeName": "Story",
+    }
+
+
 def test_runtime_planner_jira_breakdown_treats_branch_as_base_branch():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

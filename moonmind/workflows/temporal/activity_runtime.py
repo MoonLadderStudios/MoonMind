@@ -3507,16 +3507,9 @@ class TemporalAgentRuntimeActivities:
             job_artifact_root = (workspace.parent / "artifacts").resolve()
             for path in candidates:
                 resolved = path.expanduser().resolve()
-                allowed = False
-                try:
-                    resolved.relative_to(workspace)
-                    allowed = True
-                except ValueError:
-                    try:
-                        resolved.relative_to(job_artifact_root)
-                        allowed = True
-                    except ValueError:
-                        allowed = False
+                allowed = resolved.is_relative_to(workspace) or resolved.is_relative_to(
+                    job_artifact_root
+                )
                 if not allowed:
                     logger.warning(
                         "Skipping story breakdown artifact publication outside "
