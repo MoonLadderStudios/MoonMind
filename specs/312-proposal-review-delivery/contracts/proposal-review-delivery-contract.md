@@ -1,5 +1,9 @@
 # Proposal Review Delivery Contract
 
+## Traceability
+
+This contract supports Jira issue `MM-598` and the external proposal delivery behavior mapped from DESIGN-REQ-001, DESIGN-REQ-014, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-027, and DESIGN-REQ-031.
+
 ## Delivery Input
 
 The proposal delivery boundary accepts a stored proposal delivery record or a validated proposal submission result with:

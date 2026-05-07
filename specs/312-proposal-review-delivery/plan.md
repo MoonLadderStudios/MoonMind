@@ -53,8 +53,8 @@ Deliver MM-598 by extending the existing task proposal delivery-record foundatio
 **Language/Version**: Python 3.12  
 **Primary Dependencies**: Pydantic v2, SQLAlchemy async ORM, FastAPI, Temporal Python SDK activity boundaries, `httpx`, existing Jira trusted tool service, existing GitHub service/auth helpers, pytest  
 **Storage**: Existing `task_proposals` table and `311_proposal_delivery_records` migration fields; no new persistent table planned unless provider decision audit cannot reuse existing proposal metadata/decision fields  
-**Unit Testing**: pytest through `./tools/test_unit.sh`; focused iteration with `python -m pytest tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/test_proposal_activities.py tests/unit/api/routers/test_task_proposals.py -q`  
-**Integration Testing**: pytest boundary/integration coverage for proposal submit-to-delivery behavior and persisted delivery records; run `./tools/test_integration.sh` if `integration_ci` tests are added  
+**Unit Testing**: pytest through `./tools/test_unit.sh`; focused iteration with `python -m pytest tests/unit/workflows/task_proposals/test_delivery.py tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/test_proposal_activities.py tests/unit/api/routers/test_task_proposals.py -q`
+**Integration Testing**: pytest boundary/integration coverage for proposal submit-to-delivery behavior and persisted delivery records; focused iteration with `python -m pytest tests/integration/temporal/test_proposal_review_delivery.py -q`; run `./tools/test_integration.sh` if `integration_ci` tests are added
 **Target Platform**: MoonMind backend control plane and Temporal worker runtime on Linux  
 **Project Type**: Python backend workflow/runtime service with trusted external provider integrations  
 **Performance Goals**: Dedup lookup and rendering remain bounded per proposal candidate; provider delivery performs local validation and duplicate checks before external calls  

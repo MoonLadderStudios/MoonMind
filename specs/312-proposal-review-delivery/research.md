@@ -1,5 +1,9 @@
 # Research: Proposal Review Delivery
 
+## Traceability
+
+This research artifact supports Jira issue `MM-598` and the single-story feature request "Deliver proposals to GitHub and Jira review surfaces". Source design coverage is preserved for DESIGN-REQ-001, DESIGN-REQ-014, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-027, and DESIGN-REQ-031.
+
 ## Setup Script
 
 Decision: Proceed with manual planning artifacts in the active feature directory.

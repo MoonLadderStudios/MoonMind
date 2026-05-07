@@ -1,5 +1,9 @@
 # Data Model: Proposal Review Delivery
 
+## Traceability
+
+This data model supports Jira issue `MM-598` and the stored proposal delivery requirements mapped from DESIGN-REQ-001, DESIGN-REQ-014, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-027, and DESIGN-REQ-031.
+
 ## Proposal Delivery Record
 
 Represents one MoonMind proposal delivered or intended for delivery to an external review tracker.

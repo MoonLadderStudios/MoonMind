@@ -16,6 +16,45 @@ This task plan implements exactly one story from MM-598. It preserves the Jira p
 - `DESIGN-REQ-027`: Stored-snapshot safety and no raw executable payload replacement from comments
 - `DESIGN-REQ-031`: Allowlisted providers, credential hygiene, and sanitized provider errors
 
+## Requirement Coverage
+
+| Requirement | Task Coverage |
+| --- | --- |
+| FR-001 | T007, T013, T021, T025, T032, T034 |
+| FR-002 | T002, T007, T010, T021, T025, T032, T034 |
+| FR-003 | T002, T007, T013, T021, T025, T034 |
+| FR-004 | T007, T010, T013, T021, T025, T034 |
+| FR-005 | T005, T013, T019, T022, T034 |
+| FR-006 | T006, T014, T020, T023, T034 |
+| FR-007 | T005, T006, T019, T020, T034 |
+| FR-008 | T008, T015, T024, T034 |
+| FR-009 | T005, T006, T008, T014, T015, T024, T034 |
+| FR-010 | T008, T015, T024, T025, T034 |
+| FR-011 | T009, T014, T021, T022, T023, T036 |
+| FR-012 | T009, T019, T020, T022, T023, T028, T036 |
+| FR-013 | T009, T014, T021, T022, T023, T028, T036 |
+| FR-014 | T005, T006, T019, T020, T034 |
+| FR-015 | T012, T027, T028, T032, T034 |
+| FR-016 | T040, T041 |
+| SC-001 | T007, T013, T032, T034 |
+| SC-002 | T005, T006, T013, T014, T034 |
+| SC-003 | T008, T015, T024, T034 |
+| SC-004 | T009, T014, T028, T036 |
+| SC-005 | T012, T027, T028, T034 |
+| SC-006 | T040, T041 |
+| SCN-001 | T005, T013, T019, T022, T034 |
+| SCN-002 | T006, T014, T020, T023, T034 |
+| SCN-003 | T007, T010, T013, T021, T025, T034 |
+| SCN-004 | T005, T006, T008, T015, T024, T034 |
+| SCN-005 | T008, T015, T024, T034 |
+| SCN-006 | T009, T014, T021, T028, T036 |
+| DESIGN-REQ-001 | T007, T010, T013, T021, T025, T027, T034 |
+| DESIGN-REQ-014 | T007, T010, T013, T021, T025, T034 |
+| DESIGN-REQ-015 | T005, T013, T019, T022, T034 |
+| DESIGN-REQ-016 | T006, T014, T020, T023, T034 |
+| DESIGN-REQ-027 | T005, T006, T008, T015, T019, T020, T024, T034 |
+| DESIGN-REQ-031 | T008, T009, T014, T021, T022, T023, T028, T036 |
+
 ## Test Commands
 
 - Focused unit red/green: `python -m pytest tests/unit/workflows/task_proposals/test_delivery.py tests/unit/workflows/task_proposals/test_service.py tests/unit/workflows/temporal/test_proposal_activities.py tests/unit/api/routers/test_task_proposals.py -q`
@@ -96,7 +135,7 @@ This task plan implements exactly one story from MM-598. It preserves the Jira p
 - [ ] T037 Run `./tools/test_unit.sh` and fix failures in the touched files
 - [ ] T038 Run `./tools/test_integration.sh` if `tests/integration/temporal/test_proposal_review_delivery.py` is marked `integration_ci`; otherwise run `python -m pytest tests/integration/temporal/test_proposal_review_delivery.py -q`
 - [ ] T039 Execute the manual quickstart validation in `specs/312-proposal-review-delivery/quickstart.md` against the implemented behavior
-- [ ] T040 Verify traceability for MM-598, all FR IDs, all scenario IDs, and all source-design coverage IDs in `specs/312-proposal-review-delivery/spec.md`, `specs/312-proposal-review-delivery/plan.md`, and `specs/312-proposal-review-delivery/tasks.md`
+- [ ] T040 Verify traceability for MM-598, all FR IDs, all scenario IDs, and all source-design coverage IDs across `specs/312-proposal-review-delivery/spec.md`, `specs/312-proposal-review-delivery/plan.md`, `specs/312-proposal-review-delivery/research.md`, `specs/312-proposal-review-delivery/data-model.md`, `specs/312-proposal-review-delivery/contracts/proposal-review-delivery-contract.md`, `specs/312-proposal-review-delivery/quickstart.md`, and `specs/312-proposal-review-delivery/tasks.md`
 - [ ] T041 Run `/moonspec-verify` for `specs/312-proposal-review-delivery` and address any FAIL or PARTIAL findings before publishing implementation results
 
 ## Dependencies
