@@ -16,6 +16,7 @@ from moonmind.workflows.task_proposals.service import (
     TaskProposalService,
     TaskProposalValidationError,
 )
+from moonmind.workflows.task_proposals.delivery import ProviderDecisionEvent
 
 
 class _FakeDeliveryService:
@@ -1134,3 +1135,97 @@ async def test_create_proposal_records_sanitized_delivery_failure() -> None:
     assert proposal.provider_metadata["delivery"]["error"]["sanitizedReason"] == (
         "provider rejected request"
     )
+
+
+@pytest.mark.asyncio
+async def test_record_provider_decision_event_persists_idempotent_metadata() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        provider="github",
+        external_key="42",
+        external_url="https://github.example/Moon/Repo/issues/42",
+        provider_metadata={"delivery": {"status": "delivered"}},
+        resolved_policy={"allowedActions": ["promote", "dismiss", "defer", "priority"]},
+        review_priority=TaskProposalReviewPriority.NORMAL,
+        decision_note=None,
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    result = await service.record_provider_decision_event(
+        proposal_id=proposal.id,
+        event=ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id="evt-1",
+            actor="reviewer",
+            body="/moonmind priority urgent",
+        ),
+    )
+
+    assert result.accepted is True
+    assert proposal.review_priority is TaskProposalReviewPriority.URGENT
+    decision_row = proposal.provider_metadata["providerDecisions"][0]
+    assert decision_row["provider"] == "github"
+    assert decision_row["externalKey"] == "42"
+    assert decision_row["providerEventId"] == "evt-1"
+    assert decision_row["actor"] == "reviewer"
+    assert decision_row["decision"] == "priority"
+    assert decision_row["accepted"] is True
+    assert decision_row["note"] == "urgent"
+    assert decision_row["priority"] == "urgent"
+    assert decision_row["deferUntil"] is None
+    assert decision_row["resultingExternalState"] == "priority"
+    assert decision_row["observedAt"]
+    repo.commit.assert_awaited_once()
+    repo.refresh.assert_awaited_once_with(proposal)
+
+    duplicate = await service.record_provider_decision_event(
+        proposal_id=proposal.id,
+        event=ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id="evt-1",
+            actor="reviewer",
+            body="/moonmind priority urgent",
+        ),
+    )
+
+    assert duplicate.accepted is True
+    assert len(proposal.provider_metadata["providerDecisions"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_provider_decision_event_rejects_disallowed_action() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        provider="github",
+        external_key="42",
+        external_url="https://github.example/Moon/Repo/issues/42",
+        provider_metadata={},
+        resolved_policy={"allowedActions": ["dismiss"]},
+        review_priority=TaskProposalReviewPriority.NORMAL,
+        decision_note=None,
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    result = await service.record_provider_decision_event(
+        proposal_id=proposal.id,
+        event=ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id="evt-2",
+            actor="reviewer",
+            body="/moonmind promote",
+        ),
+    )
+
+    assert result.accepted is False
+    assert result.reason == "action_not_allowed"
+    assert proposal.status is TaskProposalStatus.OPEN
+    assert proposal.provider_metadata["providerDecisions"][0]["accepted"] is False

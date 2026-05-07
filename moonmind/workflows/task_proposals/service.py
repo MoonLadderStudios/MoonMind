@@ -26,6 +26,9 @@ from moonmind.workflows.task_proposals.models import (
 )
 from moonmind.workflows.task_proposals.delivery import (
     ProposalDeliveryError,
+    ProviderDecisionEvent,
+    ProviderDecisionResult,
+    parse_provider_decision,
     request_from_proposal,
 )
 from moonmind.workflows.task_proposals.repositories import (
@@ -897,6 +900,102 @@ class TaskProposalService:
         if not proposal.dedup_hash:
             return []
         return await self._repository.list_similar(proposal=proposal, limit=limit)
+
+    async def record_provider_decision_event(
+        self,
+        *,
+        proposal_id: UUID,
+        event: ProviderDecisionEvent,
+    ) -> ProviderDecisionResult:
+        """Record a bounded provider reviewer decision without trusting issue text."""
+
+        proposal = await self._repository.get_proposal_for_update(proposal_id)
+        provider_metadata = (
+            dict(getattr(proposal, "provider_metadata", {}))
+            if isinstance(getattr(proposal, "provider_metadata", {}), Mapping)
+            else {}
+        )
+        decision_rows = provider_metadata.get("providerDecisions")
+        decisions: list[dict[str, Any]] = (
+            list(decision_rows) if isinstance(decision_rows, list) else []
+        )
+        for row in decisions:
+            if not isinstance(row, Mapping):
+                continue
+            if row.get("providerEventId") == event.provider_event_id:
+                return ProviderDecisionResult(
+                    accepted=bool(row.get("accepted")),
+                    decision=self._clean_str(row.get("decision")) or None,
+                    note=self._clean_str(row.get("note")) or None,
+                    actor=self._clean_str(row.get("actor")),
+                    provider_event_id=event.provider_event_id,
+                    reason="duplicate_event",
+                    priority=self._clean_str(row.get("priority")) or None,
+                    defer_until=self._clean_str(row.get("deferUntil")) or None,
+                )
+
+        result = parse_provider_decision(event)
+        policy = (
+            dict(getattr(proposal, "resolved_policy", {}))
+            if isinstance(getattr(proposal, "resolved_policy", {}), Mapping)
+            else {}
+        )
+        allowed_actions = self._normalize_policy_tokens(
+            policy.get("allowedActions")
+            if isinstance(policy.get("allowedActions"), Sequence)
+            and not isinstance(policy.get("allowedActions"), (str, bytes))
+            else None
+        )
+        if result.accepted and allowed_actions and result.decision not in allowed_actions:
+            result = ProviderDecisionResult(
+                accepted=False,
+                decision=result.decision,
+                note=None,
+                actor=result.actor,
+                provider_event_id=result.provider_event_id,
+                reason="action_not_allowed",
+            )
+
+        resulting_state = result.decision or result.reason or "ignored"
+        if result.accepted and result.decision == "dismiss":
+            proposal.status = TaskProposalStatus.DISMISSED
+            proposal.decision_note = self._scrub_text(self._clean_str(result.note)) or None
+            resulting_state = TaskProposalStatus.DISMISSED.value
+        elif result.accepted and result.decision == "promote":
+            proposal.status = TaskProposalStatus.ACCEPTED
+            proposal.decision_note = self._scrub_text(self._clean_str(result.note)) or None
+            resulting_state = TaskProposalStatus.ACCEPTED.value
+        elif result.accepted and result.decision == "priority" and result.priority:
+            proposal.review_priority = self._normalize_review_priority(result.priority)
+            proposal.decision_note = self._scrub_text(self._clean_str(result.note)) or None
+            resulting_state = "priority"
+        elif result.accepted and result.decision == "defer":
+            proposal.decision_note = self._scrub_text(self._clean_str(result.note)) or None
+            resulting_state = "deferred"
+
+        decisions.append(
+            self._scrub_json(
+                {
+                    "provider": event.provider,
+                    "externalKey": event.external_key,
+                    "providerEventId": event.provider_event_id,
+                    "actor": event.actor,
+                    "decision": result.decision,
+                    "accepted": result.accepted,
+                    "note": result.note,
+                    "priority": result.priority,
+                    "deferUntil": result.defer_until,
+                    "observedAt": event.observed_at.isoformat(),
+                    "resultingExternalState": resulting_state,
+                    "reason": result.reason,
+                }
+            )
+        )
+        provider_metadata["providerDecisions"] = decisions
+        proposal.provider_metadata = provider_metadata
+        await self._repository.commit()
+        await self._repository.refresh(proposal)
+        return result
 
     async def promote_proposal(
         self,
