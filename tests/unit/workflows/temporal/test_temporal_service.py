@@ -37,6 +37,7 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionValidationError,
     _get_managed_session_store_root,
 )
+from moonmind.schemas.temporal_models import ResumeCheckpointModel
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 
@@ -1996,6 +1997,145 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         assert "taskRunId" not in rerun.parameters
         assert "task_run_id" not in rerun.parameters
         assert service._client_adapter.update_workflow.await_count == 0
+
+def _valid_resume_checkpoint_payload(
+    *,
+    workflow_id: str,
+    run_id: str,
+    snapshot_ref: str,
+) -> dict[str, object]:
+    return {
+        "schemaVersion": "v1",
+        "source": {"workflowId": workflow_id, "runId": run_id},
+        "taskInputSnapshotRef": snapshot_ref,
+        "planDigest": "sha256:plan",
+        "failedStep": {
+            "logicalStepId": "implement",
+            "order": 2,
+            "attempt": 1,
+            "title": "Implement",
+        },
+        "preservedSteps": [
+            {
+                "logicalStepId": "plan",
+                "order": 1,
+                "status": "succeeded",
+                "sourceAttempt": 1,
+                "artifacts": {"outputSummary": "artifact://summary"},
+            }
+        ],
+        "preparedArtifactRefs": ["artifact://prepared"],
+        "resumeWorkspace": {"branch": "feature", "commit": "abc123"},
+    }
+
+def test_resume_checkpoint_model_requires_source_refs_and_workspace() -> None:
+    with pytest.raises(ValueError, match="preservedSteps"):
+        ResumeCheckpointModel.model_validate(
+            {
+                "schemaVersion": "v1",
+                "source": {"workflowId": "mm:source", "runId": "run-source"},
+                "taskInputSnapshotRef": "artifact://snapshot",
+                "failedStep": {
+                    "logicalStepId": "implement",
+                    "order": 2,
+                    "attempt": 1,
+                },
+                "preparedArtifactRefs": ["artifact://prepared"],
+                "resumeWorkspace": {"commit": "abc123"},
+            }
+        )
+
+@pytest.mark.asyncio
+async def test_failed_step_resume_creates_linked_execution_with_source_identity(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="resume source",
+            input_artifact_ref="artifact://input/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "taskRunId": "old-task-run",
+                "task": {"title": "Resume source", "instructions": "Original"},
+            },
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "resume_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+
+        result = await service.create_failed_step_resume_execution(
+            created,
+            resume_checkpoint_ref=None,
+            idempotency_key="resume-1",
+            checkpoint_payload=_valid_resume_checkpoint_payload(
+                workflow_id=created.workflow_id,
+                run_id=created.run_id,
+                snapshot_ref="artifact://snapshot/source",
+            ),
+        )
+
+        resumed = await service.describe_execution(result["execution"]["workflowId"])
+        assert result["applied"] == "created_resumed_execution"
+        assert result["source"] == {
+            "workflowId": created.workflow_id,
+            "runId": created.run_id,
+        }
+        assert resumed.parameters["resumeSource"]["sourceWorkflowId"] == created.workflow_id
+        assert resumed.parameters["resumeSource"]["sourceRunId"] == created.run_id
+        assert resumed.parameters["resumeSource"]["failedStepId"] == "implement"
+        assert "taskRunId" not in resumed.parameters
+
+@pytest.mark.asyncio
+async def test_failed_step_resume_rejects_checkpoint_run_mismatch(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="resume source",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "resume_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+
+        with pytest.raises(TemporalExecutionValidationError, match="runId"):
+            await service.create_failed_step_resume_execution(
+                created,
+                resume_checkpoint_ref=None,
+                idempotency_key="resume-1",
+                checkpoint_payload=_valid_resume_checkpoint_payload(
+                    workflow_id=created.workflow_id,
+                    run_id="stale-run-id",
+                    snapshot_ref="artifact://snapshot/source",
+                ),
+            )
 
 @pytest.mark.asyncio
 async def test_request_rerun_bounds_fresh_execution_idempotency_key(

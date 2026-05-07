@@ -5525,6 +5525,66 @@ def test_describe_execution_exposes_edit_for_rerun_for_failed_task(
     assert body["actions"]["canEditForRerun"] is True
     assert body["actions"]["canRerun"] is True
 
+def test_describe_execution_exposes_failed_step_resume_distinct_from_lifecycle_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.memo = {
+        **record.memo,
+        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "resume_failed_step_id": "implement",
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["actions"]["canResume"] is False
+    assert body["actions"]["canResumeFromFailedStep"] is True
+    assert body["resume"]["available"] is True
+    assert (
+        body["resume"]["checkpointRef"]
+        == "artifact://resume-checkpoints/source/checkpoint-v1"
+    )
+    assert body["resume"]["failedStepId"] == "implement"
+    assert body["resume"]["sourceRunId"] == "run-2"
+
+def test_failed_step_resume_request_rejects_edited_task_payload_fields() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED
+    )
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = _empty_session_override
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/resume-from-failed-step",
+            json={
+                "idempotencyKey": "resume-1",
+                "task": {"instructions": "change the task"},
+                "runtime": {"model": "gpt-5.4"},
+            },
+        )
+
+    assert response.status_code == 400
+    body = response.json()["detail"]
+    assert body["code"] == "resume_payload_not_allowed"
+    assert body["fields"] == ["runtime", "task"]
+
 def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

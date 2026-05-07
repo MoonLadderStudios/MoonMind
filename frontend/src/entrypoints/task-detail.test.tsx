@@ -1369,6 +1369,93 @@ describe('Task Detail Entrypoint', () => {
     );
   });
 
+  it('renders failed-step Resume separately from lifecycle Resume and submits the resume command', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Failed task',
+      summary: 'Execution summary',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canResume: false,
+        canResumeFromFailedStep: true,
+        canRerun: true,
+      },
+      resume: {
+        available: true,
+        checkpointRef: 'artifact://checkpoint/source',
+        failedStepId: 'implement',
+        sourceRunId: '01-run',
+      },
+      relatedRuns: [
+        {
+          workflowId: 'mm:source',
+          runId: 'run-source',
+          relationship: 'Resumed from failed step',
+          status: 'failed',
+          href: '/tasks/mm:source',
+        },
+      ],
+    };
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes('/resume-from-failed-step')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ accepted: true }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    const resumeButton = await screen.findByRole('button', { name: 'Resume from failed step' });
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Resumed from failed step' }).getAttribute('href')).toBe(
+      '/tasks/mm:source',
+    );
+    fireEvent.click(resumeButton);
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url.includes('/resume-from-failed-step'))).toBe(true);
+    });
+    const resumeCall = calls.find((call) => call.url.includes('/resume-from-failed-step'));
+    expect(JSON.parse(String(resumeCall?.init?.body || '{}')).resumeCheckpointRef).toBe(
+      'artifact://checkpoint/source',
+    );
+    confirmSpy.mockRestore();
+  });
+
   it('omits Temporal task editing entry points when the flag is off', async () => {
     const actionPayload: BootPayload = {
       ...mockPayload,

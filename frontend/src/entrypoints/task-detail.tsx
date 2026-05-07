@@ -337,6 +337,7 @@ const ExecutionDetailSchema = z
         canApprove: z.boolean().optional(),
         canPause: z.boolean().optional(),
         canResume: z.boolean().optional(),
+        canResumeFromFailedStep: z.boolean().optional(),
         canCancel: z.boolean().optional(),
         canReject: z.boolean().optional(),
         canSendMessage: z.boolean().optional(),
@@ -344,6 +345,31 @@ const ExecutionDetailSchema = z
         disabledReasons: z.record(z.string(), z.string()).optional(),
       })
       .passthrough()
+      .optional(),
+    resume: z
+      .object({
+        available: z.boolean().optional(),
+        checkpointRef: z.string().nullable().optional(),
+        failedStepId: z.string().nullable().optional(),
+        sourceRunId: z.string().nullable().optional(),
+        disabledReason: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+    relatedRuns: z
+      .array(
+        z
+          .object({
+            workflowId: z.string(),
+            runId: z.string().nullable().optional(),
+            relationship: z.string(),
+            status: z.string().nullable().optional(),
+            href: z.string(),
+          })
+          .passthrough(),
+      )
+      .default([])
       .optional(),
     interventionAudit: z
       .array(
@@ -700,6 +726,15 @@ const StepLedgerRowSchema = z
     checks: z.array(StepLedgerCheckSchema).default([]),
     refs: StepLedgerRefsSchema,
     artifacts: StepLedgerArtifactsSchema,
+    preservedFrom: z
+      .object({
+        workflowId: z.string(),
+        runId: z.string(),
+        attempt: z.number(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
     workload: StepLedgerWorkloadSchema.nullable().optional(),
     lastError: z.unknown().nullable().optional(),
   })
@@ -2259,6 +2294,12 @@ function StepLedgerRowCard({
               <h4>Summary</h4>
               <p className="small">{row.summary || 'No step summary yet.'}</p>
               {row.waitingReason ? <p className="small">Waiting reason: {row.waitingReason}</p> : null}
+              {row.preservedFrom ? (
+                <p className="small">
+                  Preserved from source run <code>{row.preservedFrom.workflowId}</code> run{' '}
+                  <code>{row.preservedFrom.runId}</code> attempt {row.preservedFrom.attempt}.
+                </p>
+              ) : null}
               {lastError ? <p className="small step-tl-error">Last error: {lastError}</p> : null}
             </section>
             {row.checks.length > 0 ? (
@@ -3733,6 +3774,35 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     onError: (error: Error) => setActionError(error.message),
   });
 
+  const failedStepResumeMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/resume-from-failed-step`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            idempotencyKey: `resume-${workflowId}-${latestRunId || runId || 'latest'}`,
+            ...(execution?.resume?.checkpointRef
+              ? { resumeCheckpointRef: execution.resume.checkpointRef }
+              : {}),
+            operatorMetadata: { requestedFrom: 'task-detail' },
+          }),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      setActionNotice('Resumed from failed step.');
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
   const createRemediationMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch(`${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediation`, {
@@ -3818,6 +3888,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     signalMutation.mutate({ signalName: 'Resume', payload: {} });
   };
 
+  const onResumeFromFailedStep = () => {
+    setActionError(null);
+    if (!window.confirm('Resume from the failed step using the original task input snapshot?')) return;
+    failedStepResumeMutation.mutate();
+  };
+
   const onApprove = () => {
     setActionError(null);
     signalMutation.mutate({ signalName: 'Approve', payload: {} });
@@ -3858,6 +3934,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     updateMutation.isPending ||
     signalMutation.isPending ||
     cancelMutation.isPending ||
+    failedStepResumeMutation.isPending ||
     createRemediationMutation.isPending ||
     remediationApprovalMutation.isPending;
   const editHref = workflowId
@@ -3883,7 +3960,8 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const isTerminalExecution = TERMINAL_STATES.has(execution?.rawState || execution?.state || '');
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
   const canShowEditTask = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
-  const hasTaskEditingActions = taskEditingOn && Boolean(canShowEditTask || actions?.canRerun);
+  const canFailedStepResume = Boolean(actions?.canResumeFromFailedStep);
+  const hasTaskEditingActions = taskEditingOn && Boolean(canShowEditTask || actions?.canRerun || canFailedStepResume);
   const hasTaskActions = Boolean(actions?.canSetTitle || hasTaskEditingActions || canCreateRemediation);
   const taskInstructions = execution?.taskInstructions?.trim() || '';
   const hasTaskInstructions = taskInstructions.length > 0;
@@ -4385,7 +4463,35 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     Rerun
                   </a>
                 ) : null}
+                {taskEditingOn && actions.canResumeFromFailedStep ? (
+                  <button
+                    type="button"
+                    className="queue-action"
+                    disabled={busy}
+                    onClick={onResumeFromFailedStep}
+                  >
+                    Resume from failed step
+                  </button>
+                ) : null}
               </div>
+              {actions.disabledReasons?.canResumeFromFailedStep ? (
+                <p className="small">
+                  Failed-step Resume unavailable: {formatStatusLabel(actions.disabledReasons.canResumeFromFailedStep)}
+                </p>
+              ) : null}
+              {execution?.relatedRuns && execution.relatedRuns.length > 0 ? (
+                <div>
+                  <h4>Related runs</h4>
+                  <ul className="step-detail-list">
+                    {execution.relatedRuns.map((item) => (
+                      <li key={`${item.relationship}-${item.workflowId}-${item.runId || ''}`}>
+                        <a href={item.href}>{item.relationship}</a>
+                        {item.status ? <span className="small"> {formatStatusLabel(item.status)}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </section>
           ) : null}
 

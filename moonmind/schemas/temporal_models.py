@@ -460,6 +460,166 @@ class UpdateExecutionRequest(BaseModel):
     node_ids: list[str] = Field(default_factory=list, alias="nodeIds")
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
+class ResumeFromFailedStepRequest(BaseModel):
+    """Request payload for creating a failed-step Resume follow-up execution."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1, max_length=128)
+    resume_checkpoint_ref: Optional[str] = Field(None, alias="resumeCheckpointRef")
+    operator_metadata: dict[str, Any] = Field(
+        default_factory=dict, alias="operatorMetadata"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_task_payload_edits(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        forbidden = {
+            "task",
+            "instructions",
+            "steps",
+            "attachments",
+            "inputAttachments",
+            "runtime",
+            "targetRuntime",
+            "publishMode",
+            "branch",
+            "startingBranch",
+            "targetBranch",
+            "presets",
+            "dependencies",
+            "model",
+            "requestedModel",
+            "effort",
+            "parametersPatch",
+            "inputArtifactRef",
+            "planArtifactRef",
+            "manifestArtifactRef",
+        }
+        present = sorted(key for key in value if key in forbidden)
+        if present:
+            raise ValueError(
+                "Resume does not accept edited task payload fields: "
+                + ", ".join(present)
+            )
+        return value
+
+class ResumeCheckpointSourceModel(BaseModel):
+    """Source identity embedded in failed-step Resume checkpoint evidence."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    run_id: str = Field(..., alias="runId", min_length=1)
+
+class ResumeCheckpointFailedStepModel(BaseModel):
+    """Failed logical step identity to retry."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    order: int = Field(..., alias="order", ge=1)
+    attempt: int = Field(..., alias="attempt", ge=1)
+    title: Optional[str] = Field(None, alias="title")
+
+class ResumeCheckpointPreservedStepModel(BaseModel):
+    """Completed source step that may be materialized as preserved."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    order: int = Field(..., alias="order", ge=1)
+    status: Literal["succeeded", "skipped"] = Field(..., alias="status")
+    source_attempt: int = Field(..., alias="sourceAttempt", ge=1)
+    artifacts: dict[str, Any] = Field(default_factory=dict, alias="artifacts")
+
+    @model_validator(mode="after")
+    def _require_output_refs(self) -> "ResumeCheckpointPreservedStepModel":
+        if not any(value for value in self.artifacts.values()):
+            raise ValueError("preserved step requires at least one artifact ref")
+        return self
+
+class ResumeCheckpointModel(BaseModel):
+    """Compact checkpoint evidence required before failed-step Resume execution."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
+    source: ResumeCheckpointSourceModel = Field(..., alias="source")
+    task_input_snapshot_ref: str = Field(..., alias="taskInputSnapshotRef", min_length=1)
+    plan_ref: Optional[str] = Field(None, alias="planRef")
+    plan_digest: Optional[str] = Field(None, alias="planDigest")
+    failed_step: ResumeCheckpointFailedStepModel = Field(..., alias="failedStep")
+    preserved_steps: list[ResumeCheckpointPreservedStepModel] = Field(
+        default_factory=list, alias="preservedSteps"
+    )
+    prepared_artifact_refs: list[str] = Field(
+        default_factory=list, alias="preparedArtifactRefs"
+    )
+    resume_workspace: dict[str, Any] = Field(default_factory=dict, alias="resumeWorkspace")
+
+    @field_validator("prepared_artifact_refs")
+    @classmethod
+    def _normalize_prepared_refs(cls, value: list[str]) -> list[str]:
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+    @model_validator(mode="after")
+    def _validate_checkpoint(self) -> "ResumeCheckpointModel":
+        if not self.preserved_steps:
+            raise ValueError("resume checkpoint requires preservedSteps")
+        if not self.prepared_artifact_refs:
+            raise ValueError("resume checkpoint requires preparedArtifactRefs")
+        if not self.resume_workspace:
+            raise ValueError("resume checkpoint requires resumeWorkspace")
+        return self
+
+class ResumeSourceModel(BaseModel):
+    """Compact source provenance carried by a resumed execution."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: Literal["resume_from_failed_step"] = Field(
+        "resume_from_failed_step", alias="kind"
+    )
+    source_workflow_id: str = Field(..., alias="sourceWorkflowId", min_length=1)
+    source_run_id: str = Field(..., alias="sourceRunId", min_length=1)
+    source_task_input_snapshot_ref: str = Field(
+        ..., alias="sourceTaskInputSnapshotRef", min_length=1
+    )
+    source_plan_ref: Optional[str] = Field(None, alias="sourcePlanRef")
+    source_plan_digest: Optional[str] = Field(None, alias="sourcePlanDigest")
+    failed_step_id: str = Field(..., alias="failedStepId", min_length=1)
+    failed_step_attempt: int = Field(..., alias="failedStepAttempt", ge=1)
+    resume_checkpoint_ref: str = Field(..., alias="resumeCheckpointRef", min_length=1)
+    preserved_steps: list[ResumeCheckpointPreservedStepModel] = Field(
+        default_factory=list, alias="preservedSteps"
+    )
+
+class ResumeExecutionRefModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    run_id: str = Field(..., alias="runId", min_length=1)
+    detail_href: Optional[str] = Field(None, alias="detailHref")
+
+class ResumeFromFailedStepResponse(BaseModel):
+    """Response from the failed-step Resume command."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    accepted: Literal[True] = Field(True, alias="accepted")
+    applied: Literal["created_resumed_execution"] = Field(
+        "created_resumed_execution", alias="applied"
+    )
+    source: ResumeExecutionRefModel = Field(..., alias="source")
+    execution: ResumeExecutionRefModel = Field(..., alias="execution")
+    relationship: Literal["Resumed from failed step"] = Field(
+        "Resumed from failed step", alias="relationship"
+    )
+    resume_checkpoint_ref: str = Field(..., alias="resumeCheckpointRef")
+
 class SignalExecutionRequest(BaseModel):
     """Request payload for asynchronous workflow signals."""
 
@@ -628,6 +788,9 @@ class ExecutionActionCapabilityModel(BaseModel):
     can_approve: bool = Field(False, alias="canApprove")
     can_pause: bool = Field(False, alias="canPause")
     can_resume: bool = Field(False, alias="canResume")
+    can_resume_from_failed_step: bool = Field(
+        False, alias="canResumeFromFailedStep"
+    )
     can_cancel: bool = Field(False, alias="canCancel")
     can_reject: bool = Field(False, alias="canReject")
     can_send_message: bool = Field(False, alias="canSendMessage")
@@ -926,6 +1089,15 @@ class StepLedgerWorkloadModel(BaseModel):
         alias="artifactPublication",
     )
 
+class PreservedStepProvenanceModel(BaseModel):
+    """Source execution provenance for a preserved step row."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    run_id: str = Field(..., alias="runId", min_length=1)
+    attempt: int = Field(..., alias="attempt", ge=1)
+
 class StepLedgerRowModel(BaseModel):
     """Current/latest attempt state for one logical step in the active run."""
 
@@ -957,6 +1129,9 @@ class StepLedgerRowModel(BaseModel):
     refs: StepLedgerRefsModel = Field(default_factory=StepLedgerRefsModel, alias="refs")
     artifacts: StepLedgerArtifactsModel = Field(
         default_factory=StepLedgerArtifactsModel, alias="artifacts"
+    )
+    preserved_from: PreservedStepProvenanceModel | None = Field(
+        None, alias="preservedFrom"
     )
     workload: StepLedgerWorkloadModel | None = Field(None, alias="workload")
     last_error: str | None = Field(None, alias="lastError")
@@ -992,6 +1167,29 @@ class ExecutionReportProjectionModel(BaseModel):
     def _serialize_without_nulls(self, handler):
         payload = handler(self)
         return {key: value for key, value in payload.items() if value is not None}
+
+class ExecutionResumeSummaryModel(BaseModel):
+    """Failed-step Resume availability and checkpoint summary."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    available: bool = Field(False, alias="available")
+    checkpoint_ref: Optional[str] = Field(None, alias="checkpointRef")
+    failed_step_id: Optional[str] = Field(None, alias="failedStepId")
+    source_run_id: Optional[str] = Field(None, alias="sourceRunId")
+    disabled_reason: Optional[str] = Field(None, alias="disabledReason")
+
+class ExecutionRelatedRunModel(BaseModel):
+    """Operator-visible relationship between source and resumed executions."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    run_id: Optional[str] = Field(None, alias="runId")
+    relationship: str = Field(..., alias="relationship", min_length=1)
+    status: Optional[str] = Field(None, alias="status")
+    created_at: Optional[datetime] = Field(None, alias="createdAt")
+    href: str = Field(..., alias="href", min_length=1)
 
 class ExecutionModel(BaseModel):
     """Materialized execution view returned by lifecycle APIs."""
@@ -1090,6 +1288,10 @@ class ExecutionModel(BaseModel):
     )
     actions: ExecutionActionCapabilityModel = Field(
         default_factory=ExecutionActionCapabilityModel, alias="actions"
+    )
+    resume: ExecutionResumeSummaryModel | None = Field(None, alias="resume")
+    related_runs: list[ExecutionRelatedRunModel] = Field(
+        default_factory=list, alias="relatedRuns"
     )
     debug_fields: Optional[ExecutionDebugFieldsModel] = Field(None, alias="debugFields")
     redirect_path: Optional[str] = Field(None, alias="redirectPath")

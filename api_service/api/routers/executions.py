@@ -66,10 +66,14 @@ from moonmind.schemas.temporal_models import (
     ExecutionProgressModel,
     ExecutionReportProjectionModel,
     ExecutionRefreshEnvelope,
+    ExecutionRelatedRunModel,
+    ExecutionResumeSummaryModel,
     ExecutionSkillLifecycleIntentModel,
     ExecutionSkillProvenanceModel,
     ExecutionSkillRuntimeModel,
     ExecutionSkillVersionSummaryModel,
+    ResumeFromFailedStepRequest,
+    ResumeFromFailedStepResponse,
     TaskInputSnapshotDescriptorModel,
     PollIntegrationRequest,
     RescheduleExecutionRequest,
@@ -1739,6 +1743,8 @@ def _serialize_execution(
         if workflow_type_value == "MoonMind.Run"
         else None
     )
+    resume_summary = _build_resume_summary(record, actions=actions)
+    related_runs = _build_resume_related_runs(record, params=params)
 
     started_at = getattr(record, "started_at", None)
     created_at = getattr(record, "created_at", None) or started_at or record.updated_at
@@ -1823,6 +1829,8 @@ def _serialize_execution(
         created_at=created_at,
         steps_href=steps_href,
         actions=actions,
+        resume=resume_summary,
+        related_runs=related_runs,
         debug_fields=debug_fields,
         redirect_path=f"/tasks/{record.workflow_id}?source=temporal",
         integration=(
@@ -1846,6 +1854,91 @@ def _serialize_execution(
         stale_state=False,
         refreshed_at=_compatibility_refreshed_at(record),
     )
+
+def _resume_checkpoint_ref_from_record(record) -> str | None:
+    memo = dict(getattr(record, "memo", None) or {})
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
+    params = dict(getattr(record, "parameters", None) or {})
+    resume_block = params.get("resumeSource")
+    if not isinstance(resume_block, Mapping):
+        resume_block = params.get("resume_source")
+    if not isinstance(resume_block, Mapping):
+        resume_block = {}
+    for value in (
+        memo.get("resume_checkpoint_ref"),
+        memo.get("resumeCheckpointRef"),
+        search_attributes.get("mm_resume_checkpoint_ref"),
+        resume_block.get("resumeCheckpointRef"),
+        resume_block.get("resume_checkpoint_ref"),
+    ):
+        candidate = str(value or "").strip()
+        if candidate:
+            return candidate
+    return None
+
+def _resume_failed_step_id_from_record(record) -> str | None:
+    memo = dict(getattr(record, "memo", None) or {})
+    params = dict(getattr(record, "parameters", None) or {})
+    resume_block = params.get("resumeSource")
+    if not isinstance(resume_block, Mapping):
+        resume_block = params.get("resume_source")
+    if not isinstance(resume_block, Mapping):
+        resume_block = {}
+    for value in (
+        memo.get("resume_failed_step_id"),
+        memo.get("resumeFailedStepId"),
+        resume_block.get("failedStepId"),
+        resume_block.get("failed_step_id"),
+    ):
+        candidate = str(value or "").strip()
+        if candidate:
+            return candidate
+    return None
+
+def _build_resume_summary(
+    record,
+    *,
+    actions: ExecutionActionCapabilityModel,
+) -> ExecutionResumeSummaryModel | None:
+    if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.Run":
+        return None
+    return ExecutionResumeSummaryModel(
+        available=actions.can_resume_from_failed_step,
+        checkpointRef=_resume_checkpoint_ref_from_record(record),
+        failedStepId=_resume_failed_step_id_from_record(record),
+        sourceRunId=str(getattr(record, "run_id", "") or "").strip() or None,
+        disabledReason=actions.disabled_reasons.get("canResumeFromFailedStep"),
+    )
+
+def _build_resume_related_runs(
+    record,
+    *,
+    params: Mapping[str, Any],
+) -> list[ExecutionRelatedRunModel]:
+    resume_source = params.get("resumeSource")
+    if not isinstance(resume_source, Mapping):
+        resume_source = params.get("resume_source")
+    if not isinstance(resume_source, Mapping):
+        return []
+    source_workflow_id = str(
+        resume_source.get("sourceWorkflowId")
+        or resume_source.get("source_workflow_id")
+        or ""
+    ).strip()
+    if not source_workflow_id:
+        return []
+    source_run_id = str(
+        resume_source.get("sourceRunId") or resume_source.get("source_run_id") or ""
+    ).strip() or None
+    return [
+        ExecutionRelatedRunModel(
+            workflowId=source_workflow_id,
+            runId=source_run_id,
+            relationship="Resumed from failed step",
+            status="failed",
+            href=f"/tasks/{source_workflow_id}",
+        )
+    ]
 
 async def _enrich_execution_dependencies(
     execution: ExecutionModel,
@@ -2374,6 +2467,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                     "approve",
                     "pause",
                     "resume",
+                    "canResumeFromFailedStep",
                     "cancel",
                     "reject",
                     "sendMessage",
@@ -2426,6 +2520,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     has_task_input_snapshot = bool(
         _task_input_snapshot_ref_from_memo(dict(getattr(record, "memo", None) or {}))
     )
+    has_resume_checkpoint = bool(_resume_checkpoint_ref_from_record(record))
     has_task_parameter_fallback = _has_reconstructable_task_parameters(record)
     if workflow_type_value != "MoonMind.Run" or not temporal_task_editing_enabled:
         enabled = enabled - {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}
@@ -2433,6 +2528,14 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         enabled = enabled - {"can_update_inputs"}
         if not has_task_parameter_fallback:
             enabled = enabled - {"can_edit_for_rerun", "can_rerun"}
+    if (
+        workflow_type_value == "MoonMind.Run"
+        and temporal_task_editing_enabled
+        and raw_state == "failed"
+        and has_task_input_snapshot
+        and has_resume_checkpoint
+    ):
+        enabled = enabled | {"can_resume_from_failed_step"}
     capability_values = {
         "can_set_title": "canSetTitle",
         "can_update_inputs": "canUpdateInputs",
@@ -2441,6 +2544,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_approve": "canApprove",
         "can_pause": "canPause",
         "can_resume": "canResume",
+        "can_resume_from_failed_step": "canResumeFromFailedStep",
         "can_cancel": "canCancel",
         "can_reject": "canReject",
         "can_send_message": "canSendMessage",
@@ -2450,13 +2554,28 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     for field_name, alias in capability_values.items():
         if field_name in enabled:
             continue
-        if field_name in {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}:
+        if field_name in {
+            "can_update_inputs",
+            "can_edit_for_rerun",
+            "can_rerun",
+            "can_resume_from_failed_step",
+        }:
             if workflow_type_value != "MoonMind.Run":
                 disabled_reasons[alias] = "unsupported_workflow_type"
                 continue
             if not temporal_task_editing_enabled:
                 disabled_reasons[alias] = "temporal_task_editing_disabled"
                 continue
+            if field_name == "can_resume_from_failed_step":
+                if raw_state != "failed":
+                    disabled_reasons[alias] = "state_not_eligible"
+                    continue
+                if not has_task_input_snapshot:
+                    disabled_reasons[alias] = "original_task_input_snapshot_missing"
+                    continue
+                if not has_resume_checkpoint:
+                    disabled_reasons[alias] = "resume_checkpoint_missing"
+                    continue
             if field_name == "can_update_inputs" and not has_task_input_snapshot:
                 disabled_reasons[alias] = "original_task_input_snapshot_missing"
                 continue
@@ -2473,6 +2592,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         can_approve="can_approve" in enabled,
         can_pause="can_pause" in enabled,
         can_resume="can_resume" in enabled,
+        can_resume_from_failed_step="can_resume_from_failed_step" in enabled,
         can_cancel="can_cancel" in enabled,
         can_reject="can_reject" in enabled,
         can_send_message="can_send_message" in enabled,
@@ -5821,5 +5941,100 @@ async def rerun_execution(
     if snapshot_ref:
         await session.commit()
     return execution
+
+@router.post(
+    "/{workflow_id}/resume-from-failed-step",
+    response_model=ResumeFromFailedStepResponse,
+    status_code=status.HTTP_201_CREATED,
+    response_model_exclude_none=True,
+)
+async def resume_execution_from_failed_step(
+    workflow_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
+) -> ResumeFromFailedStepResponse:
+    forbidden = sorted(
+        key
+        for key in payload
+        if key
+        in {
+            "task",
+            "instructions",
+            "steps",
+            "attachments",
+            "inputAttachments",
+            "runtime",
+            "targetRuntime",
+            "publishMode",
+            "branch",
+            "startingBranch",
+            "targetBranch",
+            "presets",
+            "dependencies",
+            "model",
+            "requestedModel",
+            "effort",
+            "parametersPatch",
+            "inputArtifactRef",
+            "planArtifactRef",
+            "manifestArtifactRef",
+        }
+    )
+    if forbidden:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "resume_payload_not_allowed",
+                "message": "Resume does not accept edited task payload fields. Use Edit task for changes.",
+                "fields": forbidden,
+            },
+        )
+    try:
+        request = ResumeFromFailedStepRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_resume_request",
+                "message": str(exc),
+            },
+        ) from exc
+
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+    if canonical is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "execution_not_found",
+                "message": "Source execution was not found or is not visible.",
+            },
+        )
+    try:
+        result = await service.create_failed_step_resume_execution(
+            canonical,
+            resume_checkpoint_ref=request.resume_checkpoint_ref,
+            idempotency_key=request.idempotency_key,
+        )
+    except TemporalExecutionValidationError as exc:
+        message = str(exc)
+        reason = (
+            "resume_checkpoint_missing"
+            if "checkpoint" in message.lower()
+            else "state_not_eligible"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Failed-step Resume is not available for this execution.",
+                "reason": reason,
+            },
+        ) from exc
+    await session.commit()
+    return ResumeFromFailedStepResponse.model_validate(result)
 
 __all__ = ["router"]

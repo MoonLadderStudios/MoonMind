@@ -93,6 +93,51 @@ def build_step_ledger_snapshot(
         "steps": deepcopy(rows),
     }
 
+def materialize_preserved_steps(
+    rows: list[dict[str, Any]],
+    *,
+    source_workflow_id: str,
+    source_run_id: str,
+    preserved_steps: list[Mapping[str, Any]],
+    updated_at: datetime,
+) -> None:
+    """Mark completed source steps as preserved in a resumed run ledger."""
+
+    preserved_by_id: dict[str, Mapping[str, Any]] = {}
+    for step in preserved_steps:
+        logical_step_id = str(
+            step.get("logicalStepId") or step.get("logical_step_id") or ""
+        ).strip()
+        if logical_step_id:
+            preserved_by_id[logical_step_id] = step
+
+    for row in rows:
+        logical_step_id = str(row.get("logicalStepId") or "").strip()
+        preserved = preserved_by_id.get(logical_step_id)
+        if preserved is None:
+            continue
+        artifacts = default_step_artifacts()
+        raw_artifacts = preserved.get("artifacts")
+        if isinstance(raw_artifacts, Mapping):
+            for key, value in raw_artifacts.items():
+                if key in artifacts:
+                    artifacts[key] = value
+        source_attempt = int(
+            preserved.get("sourceAttempt") or preserved.get("source_attempt") or 1
+        )
+        row["status"] = str(preserved.get("status") or "succeeded")
+        row["attempt"] = 0
+        row["summary"] = "Preserved from source run."
+        row["waitingReason"] = None
+        row["attentionRequired"] = False
+        row["artifacts"] = artifacts
+        row["preservedFrom"] = {
+            "workflowId": source_workflow_id,
+            "runId": source_run_id,
+            "attempt": source_attempt,
+        }
+        row["updatedAt"] = updated_at.isoformat()
+
 def build_progress_summary(
     rows: list[dict[str, Any]],
     *,
