@@ -465,6 +465,91 @@ async def test_start_prepares_turn_instructions_after_cold_session_launch(
     assert call_order == ["preflight", "launch", "prepare", "send"]
     assert send_turn_calls[0].instructions.startswith("prepared after launch")
 
+async def test_start_can_preserve_pre_launch_instruction_preparation_order(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    call_order: list[str] = []
+    send_turn_calls: list[Any] = []
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        call_order.append("load_snapshot")
+        return _snapshot(binding=binding)
+
+    async def _launch_session(_request: Any) -> CodexManagedSessionHandle:
+        call_order.append("launch")
+        workspace_path.mkdir(parents=True)
+        (workspace_path / ".launch-complete").write_text("ready\n", encoding="utf-8")
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _prepare_before_launch(payload: dict[str, Any]) -> str:
+        call_order.append("prepare")
+        assert payload.get("skipSkillMaterialization") is not True
+        assert not (workspace_path / ".launch-complete").exists()
+        return "prepared before launch\n\nManaged Codex CLI note:"
+
+    async def _send_turn(request: Any) -> CodexManagedSessionTurnResponse:
+        call_order.append("send")
+        send_turn_calls.append(request)
+        return _turn_response(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed_runs"),
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=AsyncMock(),
+        prepare_turn_instructions=_prepare_before_launch,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(
+            return_value=_summary(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        publish_remote_artifacts=AsyncMock(
+            return_value=_publication(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+        defer_turn_instructions_until_session_launch=False,
+    )
+
+    await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+
+    assert call_order == ["prepare", "load_snapshot", "launch", "send"]
+    assert send_turn_calls[0].instructions.startswith("prepared before launch")
+
 async def test_start_passes_managed_session_dood_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

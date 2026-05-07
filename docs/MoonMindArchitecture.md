@@ -435,6 +435,16 @@ For Codex task-scoped sessions:
 8. Session continuity artifacts, reset boundaries, stdout/stderr, diagnostics, control-event artifacts, and result artifacts are published.
 9. Clear/reset creates a new MoonMind session epoch and thread boundary inside the same task-scoped session policy. The epoch is MoonMind domain state and is independent of Temporal `RunId`.
 
+For Codex session-backed `AgentRun` steps, turn instruction preparation is a
+separate Agent Runtime activity (`agent_runtime.prepare_turn_instructions`) from
+turn submission (`agent_runtime.send_turn`). New histories should prepare final
+turn instructions after launch/resume so skill projection and retrieval metadata
+are evaluated against the active workspace/session boundary. Existing histories
+that recorded an earlier preparation order must remain replayable through
+Temporal patch/version markers; a workflow code change must not reorder
+`prepare_turn_instructions`, session launch/status, and `send_turn` for
+in-flight runs without such a marker.
+
 Current session-control vocabulary:
 
 | Canonical verb | Caller transport into workflow | Workflow action | Current activity / transport |
@@ -498,6 +508,14 @@ These workload containers do not own `session_id`, `session_epoch`, `thread_id`,
 All activity invocation should go through the canonical activity catalog. The route defines task queue, worker fleet, capability class, start-to-close timeout, schedule-to-close timeout, heartbeat timeout where required, retry policy, and non-retryable error types.
 
 Broad Workflow Retry Policies should not be the default for `MoonMind.Run`, `MoonMind.AgentRun`, or `MoonMind.AgentSession`, especially when a step may mutate a repository or external system. Retries should be explicit at the Activity or step-attempt level and must be workspace-safe and idempotent.
+
+Automatic recovery from activity timeout is different from recovery from
+workflow-task nondeterminism. Activity failures may be retried according to the
+activity catalog when the activity is idempotent or guarded by durable keys.
+Nondeterminism occurs during Temporal replay before workflow code can catch it;
+the recovery mechanism is replay-compatible workflow evolution, such as
+`workflow.patched(...)` markers, Worker Versioning, or an external reset/resume
+operation that starts from a safe workflow boundary.
 
 ### Idempotency keys
 
