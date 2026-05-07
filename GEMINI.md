@@ -212,6 +212,8 @@ Key diagnostics:
 - Existing artifact-backed retrieval outputs and runtime metadata only; no new persistent storage planned (257-retrieval-evidence-guardrails)
 - Python 3.12; TypeScript/React for Mission Control task details + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Zod, existing Temporal artifact service/helpers (310-resume-from-last-failed-step)
 - Existing Temporal execution records, canonical execution parameters/memo/search attributes, Temporal artifact metadata/content store, and existing workflow history; no new persistent database table is planned unless reverse related-run queries cannot be implemented safely from existing execution records (310-resume-from-last-failed-step)
+- Python 3.12 + FastAPI, Pydantic v2, SQLAlchemy async ORM, Temporal Python SDK, existing `TemporalExecutionService`, trusted Jira/GitHub integration services, pytest (313-process-tracker-decisions)
+- Existing `task_proposals` table and `provider_metadata`/delivery fields; no new persistent table planned unless provider decision audit or idempotency cannot safely reuse existing metadata (313-process-tracker-decisions)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

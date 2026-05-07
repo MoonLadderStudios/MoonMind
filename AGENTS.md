@@ -229,6 +229,8 @@ Key diagnostics:
 - Existing Temporal execution records, canonical execution parameters/memo/search attributes, Temporal artifact metadata/content store, and existing workflow history; no new persistent database table is planned unless reverse related-run queries cannot be implemented safely from existing execution records (310-resume-from-last-failed-step)
 - Python 3.12 + Pydantic v2, SQLAlchemy async ORM, FastAPI, Temporal Python SDK activity boundaries, `httpx`, existing Jira trusted tool service, existing GitHub service/auth helpers, pytest (312-proposal-review-delivery)
 - Existing `task_proposals` table and `311_proposal_delivery_records` migration fields; no new persistent table planned unless provider decision audit cannot reuse existing proposal metadata/decision fields (312-proposal-review-delivery)
+- Python 3.12 + FastAPI, Pydantic v2, SQLAlchemy async ORM, Temporal Python SDK, existing `TemporalExecutionService`, trusted Jira/GitHub integration services, pytest (313-process-tracker-decisions)
+- Existing `task_proposals` table and `provider_metadata`/delivery fields; no new persistent table planned unless provider decision audit or idempotency cannot safely reuse existing metadata (313-process-tracker-decisions)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
