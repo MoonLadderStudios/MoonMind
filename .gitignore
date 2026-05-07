@@ -45,6 +45,7 @@ agent_jobs/
 var/
 /artifacts/
 live_streams.spool
+.specify/feature.json
 
 # Local saved artifacts
 /Saved/
