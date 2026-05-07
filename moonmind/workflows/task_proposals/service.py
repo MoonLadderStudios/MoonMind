@@ -24,6 +24,10 @@ from moonmind.workflows.task_proposals.models import (
     TaskProposalReviewPriority,
     TaskProposalStatus,
 )
+from moonmind.workflows.task_proposals.delivery import (
+    ProposalDeliveryError,
+    request_from_proposal,
+)
 from moonmind.workflows.task_proposals.repositories import (
     TaskProposalNotFoundError,
     TaskProposalRepository,
@@ -74,8 +78,10 @@ class TaskProposalService:
         repository: TaskProposalRepository,
         *,
         redactor: SecretRedactor | None = None,
+        delivery_service: object | None = None,
     ) -> None:
         self._repository = repository
+        self._delivery_service = delivery_service
         self._redactor = redactor or SecretRedactor.from_environ(
             placeholder="[REDACTED]"
         )
@@ -619,6 +625,39 @@ class TaskProposalService:
                     "Notification audit insert failed for proposal %s", proposal.id
                 )
 
+    async def _deliver_proposal_if_configured(self, proposal: TaskProposal) -> None:
+        if self._delivery_service is None:
+            return
+        existing_metadata = (
+            dict(getattr(proposal, "provider_metadata", {}))
+            if isinstance(getattr(proposal, "provider_metadata", {}), Mapping)
+            else {}
+        )
+        try:
+            result = await self._delivery_service.deliver(request_from_proposal(proposal))
+        except ProposalDeliveryError as exc:
+            existing_metadata["delivery"] = {
+                "status": "failed",
+                "error": self._scrub_json(exc.to_output(record_id=str(proposal.id))),
+            }
+            proposal.provider_metadata = existing_metadata
+            await self._repository.commit()
+            return
+        proposal.external_key = result.external_key
+        proposal.external_url = result.external_url
+        proposal.delivered_at = result.delivered_at
+        proposal.last_synced_at = result.delivered_at
+        delivery_metadata = {
+            "status": "delivered",
+            "created": result.created,
+            "duplicateSource": result.duplicate_source,
+            "storedSnapshotNotice": True,
+            **dict(result.provider_metadata or {}),
+        }
+        existing_metadata["delivery"] = self._scrub_json(delivery_metadata)
+        proposal.provider_metadata = existing_metadata
+        await self._repository.commit()
+
     async def create_proposal(
         self,
         *,
@@ -770,6 +809,7 @@ class TaskProposalService:
                     or cleaned_origin_external_id
                 )
                 await self._repository.commit()
+                await self._deliver_proposal_if_configured(duplicate)
                 refresh = getattr(self._repository, "refresh", None)
                 if callable(refresh):
                     refreshed = await refresh(duplicate)
@@ -804,6 +844,7 @@ class TaskProposalService:
             resolved_policy=scrubbed_resolved_policy,
         )
         await self._repository.commit()
+        await self._deliver_proposal_if_configured(proposal)
         await self._emit_notification(proposal)
         logger.info(
             "Created task proposal %s (repository=%s category=%s)",

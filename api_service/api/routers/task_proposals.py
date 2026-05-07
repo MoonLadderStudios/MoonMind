@@ -160,6 +160,30 @@ def _serialize_similar(similar: list[TaskProposal] | None) -> list[dict[str, obj
         )
     return items
 
+def _serialize_review_delivery(proposal: TaskProposal) -> dict[str, object]:
+    provider_metadata = getattr(proposal, "provider_metadata", None)
+    delivery_node = (
+        provider_metadata.get("delivery")
+        if isinstance(provider_metadata, dict)
+        else None
+    )
+    delivery = dict(delivery_node) if isinstance(delivery_node, dict) else {}
+    status_value = str(delivery.get("status") or "").strip()
+    if not status_value:
+        status_value = "delivered" if getattr(proposal, "external_url", None) else "pending"
+    result: dict[str, object] = {
+        "provider": getattr(proposal, "provider", "github") or "github",
+        "status": status_value,
+        "externalKey": getattr(proposal, "external_key", None),
+        "externalUrl": getattr(proposal, "external_url", None),
+        "taskSnapshotRef": getattr(proposal, "task_snapshot_ref", None),
+        "storedSnapshotNotice": bool(delivery.get("storedSnapshotNotice")),
+    }
+    for key in ("created", "duplicateSource", "warnings"):
+        if key in delivery:
+            result[key] = delivery[key]
+    return result
+
 def _serialize_proposal(
     proposal: TaskProposal, *, similar: list[TaskProposal] | None = None
 ) -> TaskProposalModel:
@@ -190,6 +214,7 @@ def _serialize_proposal(
         "taskSnapshotRef": getattr(proposal, "task_snapshot_ref", None),
         "providerMetadata": getattr(proposal, "provider_metadata", None) or {},
         "resolvedPolicy": getattr(proposal, "resolved_policy", None) or {},
+        "reviewDelivery": _serialize_review_delivery(proposal),
         "reviewPriority": proposal.review_priority,
         "priorityOverrideReason": proposal.priority_override_reason,
         "proposedByWorkerId": proposal.proposed_by_worker_id,

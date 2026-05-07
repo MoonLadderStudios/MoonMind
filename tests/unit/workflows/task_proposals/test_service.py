@@ -17,6 +17,30 @@ from moonmind.workflows.task_proposals.service import (
     TaskProposalValidationError,
 )
 
+
+class _FakeDeliveryService:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def deliver(self, request):
+        self.requests.append(request)
+        return SimpleNamespace(
+            provider=request.provider,
+            external_key="42",
+            external_url="https://github.example/Moon/Repo/issues/42",
+            created=True,
+            duplicate_source=None,
+            delivered_at=datetime(2026, 5, 7, 12, 30, tzinfo=UTC),
+            warnings=(),
+            provider_metadata={"marker": "moonmind-proposal"},
+            to_decision=lambda: {
+                "provider": request.provider,
+                "externalKey": "42",
+                "externalUrl": "https://github.example/Moon/Repo/issues/42",
+                "created": True,
+            },
+        )
+
 @pytest.mark.asyncio
 async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None:
     repo = AsyncMock()
@@ -947,3 +971,166 @@ def test_delivery_record_migration_declares_canonical_columns() -> None:
         "resolved_policy",
     ):
         assert column_name in text
+
+
+@pytest.mark.asyncio
+async def test_create_proposal_invokes_delivery_and_persists_external_issue() -> None:
+    repo = AsyncMock()
+    record = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        title="Add tests",
+        summary="Add follow-up",
+        category="tests",
+        tags=["tests"],
+        repository="Moon/Repo",
+        dedup_key="moon/repo:add-tests",
+        dedup_hash="hash",
+        review_priority=TaskProposalReviewPriority.NORMAL,
+        priority_override_reason=None,
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        origin_source=TaskProposalOriginSource.WORKFLOW,
+        origin_id=None,
+        origin_metadata={"workflow_id": "wf-1"},
+        origin_external_id="wf-1",
+        provider="github",
+        external_key=None,
+        external_url=None,
+        delivered_at=None,
+        last_synced_at=None,
+        task_snapshot_ref="artifact://snapshot",
+        provider_metadata={},
+        resolved_policy={"provider": "github"},
+        task_create_request={"payload": {"repository": "Moon/Repo"}},
+    )
+    repo.find_open_duplicate.return_value = None
+    repo.create_proposal.return_value = record
+    delivery = _FakeDeliveryService()
+    service = TaskProposalService(
+        repo,
+        redactor=SecretRedactor([], "***"),
+        delivery_service=delivery,
+    )
+    service._emit_notification = AsyncMock()
+
+    proposal = await service.create_proposal(
+        title="Add Tests",
+        summary="Ensure coverage",
+        category="Tests",
+        tags=["tests"],
+        task_create_request={
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {"repository": "Moon/Repo"},
+        },
+        origin_source="workflow",
+        origin_id=None,
+        origin_external_id="wf-1",
+        origin_metadata={"workflow_id": "wf-1"},
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        provider="github",
+        resolved_policy={"provider": "github"},
+        task_snapshot_ref="artifact://snapshot",
+    )
+
+    assert proposal.external_key == "42"
+    assert proposal.external_url == "https://github.example/Moon/Repo/issues/42"
+    assert proposal.delivered_at == datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
+    assert proposal.last_synced_at == datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
+    assert proposal.provider_metadata["delivery"]["marker"] == "moonmind-proposal"
+    assert delivery.requests[0].task_snapshot_ref == "artifact://snapshot"
+    assert repo.commit.await_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_create_proposal_records_sanitized_delivery_failure() -> None:
+    class FailingDelivery:
+        async def deliver(self, request):
+            from moonmind.workflows.task_proposals.delivery import ProposalDeliveryError
+
+            raise ProposalDeliveryError(
+                "provider rejected request",
+                provider=request.provider,
+                destination=request.destination,
+                retryable=False,
+            )
+
+    repo = AsyncMock()
+    record = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        title="Add tests",
+        summary="Add follow-up",
+        category="tests",
+        tags=["tests"],
+        repository="Moon/Repo",
+        dedup_key="moon/repo:add-tests",
+        dedup_hash="hash",
+        review_priority=TaskProposalReviewPriority.NORMAL,
+        priority_override_reason=None,
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        origin_source=TaskProposalOriginSource.WORKFLOW,
+        origin_id=None,
+        origin_metadata={"workflow_id": "wf-1"},
+        origin_external_id="wf-1",
+        provider="github",
+        external_key=None,
+        external_url=None,
+        delivered_at=None,
+        last_synced_at=None,
+        task_snapshot_ref="artifact://snapshot",
+        provider_metadata={},
+        resolved_policy={"provider": "github"},
+        task_create_request={"payload": {"repository": "Moon/Repo"}},
+    )
+    repo.find_open_duplicate.return_value = None
+    repo.create_proposal.return_value = record
+    service = TaskProposalService(
+        repo,
+        redactor=SecretRedactor([], "***"),
+        delivery_service=FailingDelivery(),
+    )
+    service._emit_notification = AsyncMock()
+
+    proposal = await service.create_proposal(
+        title="Add Tests",
+        summary="Ensure coverage",
+        category="Tests",
+        tags=["tests"],
+        task_create_request={
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {"repository": "Moon/Repo"},
+        },
+        origin_source="workflow",
+        origin_id=None,
+        origin_external_id="wf-1",
+        origin_metadata={"workflow_id": "wf-1"},
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        provider="github",
+        resolved_policy={"provider": "github"},
+        task_snapshot_ref="artifact://snapshot",
+    )
+
+    assert proposal.provider_metadata["delivery"]["status"] == "failed"
+    assert proposal.provider_metadata["delivery"]["error"]["sanitizedReason"] == (
+        "provider rejected request"
+    )
