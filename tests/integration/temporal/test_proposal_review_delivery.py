@@ -139,6 +139,8 @@ async def test_proposal_submit_persists_external_delivery_result() -> None:
 async def test_provider_decision_event_records_snapshot_safe_action() -> None:
     repo = AsyncMock()
     record = _record()
+    record.external_key = "42"
+    record.external_url = "https://tracker.example/issues/42"
     record.provider_metadata = {"delivery": {"status": "delivered"}}
     record.resolved_policy = {
         "allowedActions": ["promote", "dismiss", "defer", "priority"]

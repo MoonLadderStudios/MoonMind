@@ -646,6 +646,34 @@ class TaskProposalService:
             proposal.provider_metadata = existing_metadata
             await self._repository.commit()
             return
+        except Exception as exc:
+            provider = self._clean_str(getattr(proposal, "provider", "")) or "unknown"
+            destination = self._clean_str(getattr(proposal, "repository", "")) or "unknown"
+            logger.warning(
+                "Proposal delivery adapter failed for %s via %s: %s",
+                proposal.id,
+                provider,
+                type(exc).__name__,
+            )
+            existing_metadata["delivery"] = self._scrub_json(
+                {
+                    "status": "failed",
+                    "error": {
+                        "provider": provider,
+                        "destination": destination,
+                        "sanitizedReason": "provider delivery failed",
+                        "recoverableNextAction": (
+                            "Review trusted provider adapter logs and configuration."
+                        ),
+                        "retryable": True,
+                        "deliveryRecordId": str(proposal.id),
+                        "errorType": type(exc).__name__,
+                    },
+                }
+            )
+            proposal.provider_metadata = existing_metadata
+            await self._repository.commit()
+            return
         proposal.external_key = result.external_key
         proposal.external_url = result.external_url
         proposal.delivered_at = result.delivered_at
@@ -934,7 +962,26 @@ class TaskProposalService:
                     defer_until=self._clean_str(row.get("deferUntil")) or None,
                 )
 
-        result = parse_provider_decision(event)
+        proposal_provider = self._clean_str(getattr(proposal, "provider", "")).lower()
+        event_provider = self._clean_str(event.provider).lower()
+        proposal_external_key = self._clean_str(getattr(proposal, "external_key", ""))
+        event_external_key = self._clean_str(event.external_key)
+        if (
+            not proposal_provider
+            or not proposal_external_key
+            or event_provider != proposal_provider
+            or event_external_key != proposal_external_key
+        ):
+            result = ProviderDecisionResult(
+                accepted=False,
+                decision=None,
+                note=None,
+                actor=event.actor,
+                provider_event_id=event.provider_event_id,
+                reason="provider_identity_mismatch",
+            )
+        else:
+            result = parse_provider_decision(event)
         policy = (
             dict(getattr(proposal, "resolved_policy", {}))
             if isinstance(getattr(proposal, "resolved_policy", {}), Mapping)

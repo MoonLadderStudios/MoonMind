@@ -155,14 +155,14 @@ class ProposalIssueProvider(Protocol):
     """Provider port used by proposal delivery orchestration."""
 
     async def search_issue(self, request: ProposalDeliveryRequest) -> dict[str, Any] | None:
-        ...
+        pass
 
     async def create_issue(
         self,
         request: ProposalDeliveryRequest,
         rendered: RenderedProposalIssue,
     ) -> dict[str, Any]:
-        ...
+        pass
 
     async def update_issue(
         self,
@@ -170,7 +170,7 @@ class ProposalIssueProvider(Protocol):
         rendered: RenderedProposalIssue,
         issue: Mapping[str, Any],
     ) -> dict[str, Any]:
-        ...
+        pass
 
 
 class GitHubProposalIssueProvider:
@@ -275,7 +275,7 @@ class JiraProposalIssueProvider:
         )
         return {
             "external_key": result.get("issueKey"),
-            "external_url": result.get("url") or result.get("self") or result.get("issueKey"),
+            "external_url": result.get("url") or result.get("self"),
         }
 
     async def update_issue(
@@ -300,7 +300,7 @@ class JiraProposalIssueProvider:
         )
         return {
             "external_key": issue_key,
-            "external_url": _clean(issue.get("url") or issue.get("self") or issue_key),
+            "external_url": _clean(issue.get("url") or issue.get("self")) or None,
         }
 
 
@@ -331,20 +331,21 @@ def _contains_secret_key(value: object) -> bool:
     return False
 
 
+def _safe_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return _safe_metadata(value)
+    if isinstance(value, list):
+        return [_safe_value(item) for item in value]
+    return value
+
+
 def _safe_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     safe: dict[str, Any] = {}
     for key, value in metadata.items():
         if _SECRET_KEY_RE.search(str(key)):
             safe[str(key)] = "[REDACTED]"
-        elif isinstance(value, Mapping):
-            safe[str(key)] = _safe_metadata(value)
-        elif isinstance(value, list):
-            safe[str(key)] = [
-                _safe_metadata(item) if isinstance(item, Mapping) else item
-                for item in value
-            ]
         else:
-            safe[str(key)] = value
+            safe[str(key)] = _safe_value(value)
     return safe
 
 
@@ -516,7 +517,7 @@ def parse_provider_decision(event: ProviderDecisionEvent) -> ProviderDecisionRes
     priority: str | None = None
     defer_until: str | None = None
     if action == "priority":
-        candidate = _clean(args).lower()
+        candidate = _clean(args or event.note).lower()
         if candidate not in {"low", "normal", "high", "urgent"}:
             return ProviderDecisionResult(
                 accepted=False,
@@ -528,7 +529,7 @@ def parse_provider_decision(event: ProviderDecisionEvent) -> ProviderDecisionRes
             )
         priority = candidate
     if action == "defer":
-        defer_until = _clean(args) or None
+        defer_until = _clean(args or event.note) or None
     return ProviderDecisionResult(
         accepted=True,
         decision=action,
@@ -609,7 +610,7 @@ class ProposalDeliveryService:
             )
         policy = request.resolved_policy
         allowed_actions = set(_iter_strings(policy.get("allowedActions")))
-        if allowed_actions and not _SUPPORTED_ACTIONS.issubset(allowed_actions):
+        if allowed_actions and not allowed_actions.issubset(_SUPPORTED_ACTIONS):
             raise ProposalDeliveryError(
                 "proposal reviewer actions are not allowed by policy",
                 provider=request.provider,

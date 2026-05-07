@@ -7,10 +7,12 @@ import pytest
 
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.task_proposals.delivery import (
+    JiraProposalIssueProvider,
     ProposalDeliveryError,
     ProposalDeliveryRequest,
     ProposalDeliveryService,
     ProviderDecisionEvent,
+    _safe_metadata,
     parse_provider_decision,
     render_github_issue,
     render_jira_issue,
@@ -211,6 +213,25 @@ def test_provider_decision_parser_rejects_unknown_commands() -> None:
     assert result.reason == "unsupported_action"
 
 
+def test_provider_decision_parser_accepts_structured_priority_note() -> None:
+    result = parse_provider_decision(
+        ProviderDecisionEvent(
+            provider="jira",
+            external_key="MM-1",
+            provider_event_id="evt-3",
+            actor="reviewer",
+            body="",
+            action="priority",
+            note="urgent",
+        )
+    )
+
+    assert result.accepted is True
+    assert result.decision == "priority"
+    assert result.priority == "urgent"
+    assert result.note == "urgent"
+
+
 @pytest.mark.asyncio
 async def test_delivery_blocks_disallowed_github_repository() -> None:
     service = ProposalDeliveryService(github=FakeProvider())
@@ -222,6 +243,29 @@ async def test_delivery_blocks_disallowed_github_repository() -> None:
 
     assert "not allowed" in str(exc.value)
     assert exc.value.to_output()["sanitizedReason"] == str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_delivery_policy_allows_restricted_supported_actions() -> None:
+    provider = FakeProvider()
+    service = ProposalDeliveryService(github=provider)
+
+    result = await service.deliver(_request(resolved_policy={"allowedActions": ["dismiss"]}))
+
+    assert result.created is True
+    assert len(provider.creates) == 1
+
+
+@pytest.mark.asyncio
+async def test_delivery_policy_rejects_unknown_allowed_action() -> None:
+    service = ProposalDeliveryService(github=FakeProvider())
+
+    with pytest.raises(ProposalDeliveryError) as exc:
+        await service.deliver(
+            _request(resolved_policy={"allowedActions": ["dismiss", "replace-task"]})
+        )
+
+    assert "reviewer actions are not allowed" in str(exc.value)
 
 
 @pytest.mark.asyncio
@@ -246,3 +290,44 @@ async def test_delivery_requires_provider_identity_from_adapter() -> None:
 
     assert exc.value.retryable is True
     assert "external issue identity" in str(exc.value)
+
+
+def test_safe_metadata_redacts_secret_keys_inside_nested_lists() -> None:
+    safe = _safe_metadata(
+        {
+            "items": [
+                ["plain", {"token": "ghp_secret"}],
+                {"nested": [{"private_key": "secret-value"}]},
+            ]
+        }
+    )
+
+    assert safe == {
+        "items": [
+            ["plain", {"token": "[REDACTED]"}],
+            {"nested": [{"private_key": "[REDACTED]"}]},
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_jira_provider_does_not_use_issue_key_as_external_url() -> None:
+    class FakeJira:
+        async def create_issue(self, request):
+            return {"issueKey": "MM-1"}
+
+        async def edit_issue(self, request):
+            return None
+
+    provider = JiraProposalIssueProvider(FakeJira())
+    rendered = render_jira_issue(_request(provider="jira", repository="MM"))
+
+    created = await provider.create_issue(_request(provider="jira", repository="MM"), rendered)
+    updated = await provider.update_issue(
+        _request(provider="jira", repository="MM"),
+        rendered,
+        {"key": "MM-1"},
+    )
+
+    assert created == {"external_key": "MM-1", "external_url": None}
+    assert updated == {"external_key": "MM-1", "external_url": None}

@@ -6505,6 +6505,10 @@ export interface components {
             resolvedPolicy?: {
                 [key: string]: unknown;
             };
+            /** Reviewdelivery */
+            reviewDelivery?: {
+                [key: string]: unknown;
+            };
             /** @default normal */
             reviewPriority: components["schemas"]["TaskProposalReviewPriority"];
             /** Priorityoverridereason */
