@@ -2078,6 +2078,7 @@ class MoonMindRunWorkflow:
             }
 
         previous_step_outputs: Mapping[str, Any] = {}
+        execution_result: Any = None
         for index, node in enumerate(ordered_nodes, start=1):
             await self._wait_if_paused_at_safe_boundary()
             if self._cancel_requested:
@@ -2122,7 +2123,7 @@ class MoonMindRunWorkflow:
             previous_review_feedback: str | None = None
             previous_review_issues: tuple[Mapping[str, Any], ...] = ()
             result_status: str | None = None
-            execution_result: Any = None
+            execution_result = None
             accepted_execution = False
             current_review_attempt = 1
 
@@ -2631,7 +2632,7 @@ class MoonMindRunWorkflow:
 
         if require_pull_request_url and pull_request_url is None:
             repair_candidate_outputs: Mapping[str, Any] = {}
-            if "execution_result" in locals():
+            if execution_result is not None:
                 maybe_outputs = self._get_from_result(execution_result, "outputs")
                 if isinstance(maybe_outputs, Mapping):
                     repair_candidate_outputs = maybe_outputs
@@ -2700,7 +2701,7 @@ class MoonMindRunWorkflow:
                 )
             else:
                 agent_outputs = {}
-                if "execution_result" in locals():
+                if execution_result is not None:
                     agent_outputs = (
                         self._get_from_result(execution_result, "outputs") or {}
                     )
