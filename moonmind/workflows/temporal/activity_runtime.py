@@ -3484,23 +3484,61 @@ class TemporalAgentRuntimeActivities:
                     return value.strip()
             return ""
 
-        def _workspace_story_path(workspace: Path, raw_path: str) -> Path | None:
+        def _workspace_story_path_candidates(
+            workspace: Path,
+            raw_path: str,
+        ) -> list[Path]:
             if not raw_path:
-                return None
+                return []
             candidate = Path(raw_path)
+            candidates: list[Path] = []
             if not candidate.is_absolute():
-                candidate = workspace / candidate
-            resolved = candidate.expanduser().resolve()
-            try:
-                resolved.relative_to(workspace)
-            except ValueError:
+                candidates.append(workspace / candidate)
+                # Managed agent workspaces have a checked-out repo plus a
+                # sibling job-level artifact root. If repo-local artifacts/ is
+                # not writable, agents may still correctly write to the
+                # per-job artifact directory.
+                if candidate.parts and candidate.parts[0] == "artifacts":
+                    candidates.append(workspace.parent / candidate)
+            else:
+                candidates.append(candidate)
+
+            resolved_candidates: list[Path] = []
+            job_artifact_root = (workspace.parent / "artifacts").resolve()
+            for path in candidates:
+                resolved = path.expanduser().resolve()
+                allowed = False
+                try:
+                    resolved.relative_to(workspace)
+                    allowed = True
+                except ValueError:
+                    try:
+                        resolved.relative_to(job_artifact_root)
+                        allowed = True
+                    except ValueError:
+                        allowed = False
+                if not allowed:
+                    logger.warning(
+                        "Skipping story breakdown artifact publication outside "
+                        "workspace or job artifact root: %s",
+                        raw_path,
+                    )
+                    continue
+                if resolved not in resolved_candidates:
+                    resolved_candidates.append(resolved)
+            return resolved_candidates
+
+        def _workspace_story_path(workspace: Path, raw_path: str) -> Path | None:
+            candidates = _workspace_story_path_candidates(workspace, raw_path)
+            for candidate in candidates:
+                if candidate.is_file():
+                    return candidate
+            if candidates:
                 logger.warning(
-                    "Skipping story breakdown artifact publication outside "
-                    "workspace: %s",
+                    "Story breakdown handoff file was not found for publication: %s",
                     raw_path,
                 )
-                return None
-            return resolved
+            return None
 
         async def _publish_story_breakdown_file(
             *,
@@ -3513,12 +3551,6 @@ class TemporalAgentRuntimeActivities:
         ) -> str:
             path = _workspace_story_path(workspace, raw_path)
             if path is None:
-                return ""
-            if not path.is_file():
-                logger.warning(
-                    "Story breakdown handoff file was not found for publication: %s",
-                    raw_path,
-                )
                 return ""
             payload = path.read_bytes()
             artifact, _upload = await self._artifact_service.create(

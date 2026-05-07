@@ -456,6 +456,11 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
     )
     assert breakdown["inputs"]["storyBreakdownPath"].endswith("/stories.json")
     assert "commit your work" in breakdown["inputs"]["instructions"]
+    assert breakdown["inputs"]["storyOutput"]["handoff"] == "artifact"
+    assert (
+        breakdown["inputs"]["storyOutput"]["requiresStoryBreakdownArtifactRef"]
+        is True
+    )
 
     assert jira["tool"] == {
         "type": "agent_runtime",
@@ -467,6 +472,8 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
     assert jira["inputs"]["instructions"].startswith("Use $jira-issue-creator.")
     assert "commit your work" not in jira["inputs"]["instructions"]
     assert jira["inputs"]["storyOutput"]["mode"] == "jira"
+    assert jira["inputs"]["storyOutput"]["handoff"] == "artifact"
+    assert jira["inputs"]["storyOutput"]["requiresStoryBreakdownArtifactRef"] is True
     assert (
         jira["inputs"]["storyBreakdownPath"]
         == breakdown["inputs"]["storyBreakdownPath"]
@@ -519,6 +526,11 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
         "artifacts/story-breakdowns/"
     )
     assert breakdown["inputs"]["storyOutput"]["mode"] == "jira"
+    assert breakdown["inputs"]["storyOutput"]["handoff"] == "artifact"
+    assert (
+        breakdown["inputs"]["storyOutput"]["requiresStoryBreakdownArtifactRef"]
+        is True
+    )
     assert breakdown["inputs"]["targetBranch"].startswith("jira-breakdown-")
     assert (
         jira["inputs"]["storyBreakdownPath"]
@@ -534,6 +546,8 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
     assert jira["inputs"]["storyOutput"]["jira"]["dependencyMode"] == (
         "linear_blocker_chain"
     )
+    assert jira["inputs"]["storyOutput"]["handoff"] == "artifact"
+    assert jira["inputs"]["storyOutput"]["requiresStoryBreakdownArtifactRef"] is True
 
 def test_runtime_planner_jira_breakdown_treats_branch_as_base_branch():
     planner = _build_runtime_planner()

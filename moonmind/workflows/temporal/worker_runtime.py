@@ -1108,6 +1108,12 @@ def _build_runtime_planner():
                 node_inputs["targetBranch"] = f"{prefix}-{str(uuid.uuid4())[:8]}"
             story_output_payload = dict(story_output_payload)
             story_output_payload.setdefault("mode", story_output_mode or "docs_tmp")
+            if story_output_mode == "jira" and creates_story_breakdown_artifact:
+                story_output_payload.setdefault("handoff", "artifact")
+                story_output_payload.setdefault(
+                    "requiresStoryBreakdownArtifactRef",
+                    True,
+                )
             story_output_payload.update(story_paths)
             node_inputs["storyOutput"] = story_output_payload
 
@@ -1144,6 +1150,15 @@ def _build_runtime_planner():
                     },
                     "instructions": step_instructions,
                 }
+                base_story_output = _coerce_mapping(node_inputs.get("storyOutput"))
+                step_story_output = _coerce_mapping(
+                    step_entry.get("storyOutput") or step_entry.get("story_output")
+                )
+                if base_story_output and step_story_output:
+                    step_node_inputs["storyOutput"] = {
+                        **base_story_output,
+                        **step_story_output,
+                    }
                 step_tool_inputs = _selected_step_tool_inputs(step_entry)
                 for key, value in step_tool_inputs.items():
                     step_node_inputs.setdefault(key, value)
