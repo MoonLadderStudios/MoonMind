@@ -19,6 +19,9 @@ moonmind_ci_repository = "MoonLadderStudios/MoonMind"
 max_items_project_default = 3
 max_items_moonmind_default = 2
 moonmind_severity_floor_default = "high"
+# Default non-secret proposal delivery provider. Explicit task policy can
+# override this with delivery.provider = "github" or "jira".
+proposal_delivery_provider_default = "github"
 
 [feature_flags]
 # Disable the Task Preset Catalog (UI + API) when required.

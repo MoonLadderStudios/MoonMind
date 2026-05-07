@@ -20,7 +20,7 @@ class TaskProposalOriginModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     source: TaskProposalOriginSource = Field(..., alias="source")
-    id: Optional[UUID] = Field(None, alias="id")
+    id: Optional[str] = Field(None, alias="id")
     metadata: dict[str, Any] | None = Field(None, alias="metadata")
 
 class TaskProposalTaskPreview(BaseModel):
@@ -57,6 +57,14 @@ class TaskProposalModel(BaseModel):
     repository: str = Field(..., alias="repository")
     dedup_key: str = Field(..., alias="dedupKey")
     dedup_hash: str = Field(..., alias="dedupHash")
+    provider: str = Field("github", alias="provider")
+    external_key: Optional[str] = Field(None, alias="externalKey")
+    external_url: Optional[str] = Field(None, alias="externalUrl")
+    delivered_at: Optional[datetime] = Field(None, alias="deliveredAt")
+    last_synced_at: Optional[datetime] = Field(None, alias="lastSyncedAt")
+    task_snapshot_ref: Optional[str] = Field(None, alias="taskSnapshotRef")
+    provider_metadata: dict[str, Any] = Field(default_factory=dict, alias="providerMetadata")
+    resolved_policy: dict[str, Any] = Field(default_factory=dict, alias="resolvedPolicy")
     review_priority: TaskProposalReviewPriority = Field(
         TaskProposalReviewPriority.NORMAL, alias="reviewPriority"
     )
@@ -101,6 +109,9 @@ class TaskProposalCreateRequest(BaseModel):
     origin: TaskProposalOriginModel = Field(..., alias="origin")
     task_create_request: dict[str, Any] = Field(..., alias="taskCreateRequest")
     review_priority: Optional[str] = Field(None, alias="reviewPriority")
+    provider: Optional[str] = Field(None, alias="provider")
+    provider_metadata: dict[str, Any] | None = Field(None, alias="providerMetadata")
+    resolved_policy: dict[str, Any] | None = Field(None, alias="resolvedPolicy")
 
 class TaskProposalListResponse(BaseModel):
     """Response payload for listing proposals."""

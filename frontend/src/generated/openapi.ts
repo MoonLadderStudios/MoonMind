@@ -6428,6 +6428,16 @@ export interface components {
             };
             /** Reviewpriority */
             reviewPriority?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Providermetadata */
+            providerMetadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Resolvedpolicy */
+            resolvedPolicy?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * TaskProposalDismissRequest
@@ -6472,6 +6482,29 @@ export interface components {
             dedupKey: string;
             /** Deduphash */
             dedupHash: string;
+            /**
+             * Provider
+             * @default github
+             */
+            provider: string;
+            /** Externalkey */
+            externalKey?: string | null;
+            /** Externalurl */
+            externalUrl?: string | null;
+            /** Deliveredat */
+            deliveredAt?: string | null;
+            /** Lastsyncedat */
+            lastSyncedAt?: string | null;
+            /** Tasksnapshotref */
+            taskSnapshotRef?: string | null;
+            /** Providermetadata */
+            providerMetadata?: {
+                [key: string]: unknown;
+            };
+            /** Resolvedpolicy */
+            resolvedPolicy?: {
+                [key: string]: unknown;
+            };
             /** @default normal */
             reviewPriority: components["schemas"]["TaskProposalReviewPriority"];
             /** Priorityoverridereason */

@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import Mock
 from uuid import UUID
 
 import httpx
@@ -130,6 +131,18 @@ class TaskProposalService:
         serialized = json.dumps(payload, ensure_ascii=False)
         scrubbed = self._redactor.scrub(serialized)
         return json.loads(scrubbed)
+
+    def _merge_json_objects(
+        self, existing: Mapping[str, Any], incoming: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        merged = dict(existing)
+        for key, value in incoming.items():
+            old_value = merged.get(key)
+            if isinstance(old_value, Mapping) and isinstance(value, Mapping):
+                merged[key] = self._merge_json_objects(old_value, value)
+            else:
+                merged[key] = value
+        return merged
 
     @staticmethod
     def _slugify_title(title: str) -> str:
@@ -617,9 +630,18 @@ class TaskProposalService:
         origin_source: object,
         origin_id: UUID | None,
         origin_metadata: dict[str, Any] | None,
+        origin_external_id: str | None = None,
         proposed_by_worker_id: str | None,
         proposed_by_user_id: UUID | None,
         review_priority: object | None = None,
+        provider: str | None = None,
+        external_key: str | None = None,
+        external_url: str | None = None,
+        delivered_at: datetime | None = None,
+        last_synced_at: datetime | None = None,
+        task_snapshot_ref: str | None = None,
+        provider_metadata: dict[str, Any] | None = None,
+        resolved_policy: dict[str, Any] | None = None,
     ) -> TaskProposal:
         if not proposed_by_worker_id and not proposed_by_user_id:
             raise TaskProposalValidationError(
@@ -641,6 +663,29 @@ class TaskProposalService:
         normalized_tags = self._normalize_tags(tags)
         origin = self._normalize_origin_source(origin_source)
         metadata = origin_metadata if isinstance(origin_metadata, dict) else {}
+        cleaned_origin_external_id = (
+            self._scrub_text(self._clean_str(origin_external_id)) or None
+        )
+        if (
+            origin is TaskProposalOriginSource.WORKFLOW
+            and cleaned_origin_external_id is None
+        ):
+            cleaned_origin_external_id = (
+                self._scrub_text(self._clean_str(metadata.get("workflow_id")))
+                or None
+            )
+        normalized_provider = (self._clean_str(provider).lower() or "github")
+        if normalized_provider not in {"github", "jira"}:
+            raise TaskProposalValidationError("provider must be github or jira")
+        scrubbed_provider_metadata = self._scrub_json(
+            dict(provider_metadata or {})
+        )
+        scrubbed_resolved_policy = self._scrub_json(dict(resolved_policy or {}))
+        cleaned_external_key = self._scrub_text(self._clean_str(external_key)) or None
+        cleaned_external_url = self._scrub_text(self._clean_str(external_url)) or None
+        cleaned_task_snapshot_ref = (
+            self._scrub_text(self._clean_str(task_snapshot_ref)) or None
+        )
         requested_priority = (
             self._normalize_review_priority(review_priority)
             if review_priority is not None
@@ -675,6 +720,63 @@ class TaskProposalService:
             repository=repository, title=cleaned_title
         )
 
+        duplicate_finder = getattr(self._repository, "find_open_duplicate", None)
+        if callable(duplicate_finder):
+            duplicate = await duplicate_finder(
+                provider=normalized_provider,
+                repository=repository,
+                dedup_hash=dedup_hash,
+            )
+            if duplicate is not None and not isinstance(duplicate, Mock):
+                logger.info(
+                    "Reusing open task proposal %s (provider=%s repository=%s)",
+                    getattr(duplicate, "id", "-"),
+                    normalized_provider,
+                    repository,
+                )
+                now = datetime.now(UTC)
+                duplicate.last_synced_at = last_synced_at or now
+                existing_provider_metadata = (
+                    dict(getattr(duplicate, "provider_metadata", {}))
+                    if isinstance(getattr(duplicate, "provider_metadata", {}), Mapping)
+                    else {}
+                )
+                existing_resolved_policy = (
+                    dict(getattr(duplicate, "resolved_policy", {}))
+                    if isinstance(getattr(duplicate, "resolved_policy", {}), Mapping)
+                    else {}
+                )
+                duplicate.provider_metadata = self._merge_json_objects(
+                    existing_provider_metadata, scrubbed_provider_metadata
+                )
+                duplicate.resolved_policy = self._merge_json_objects(
+                    existing_resolved_policy,
+                    {
+                        **scrubbed_resolved_policy,
+                        "duplicate": True,
+                        "duplicate_record_id": str(getattr(duplicate, "id", "")),
+                    },
+                )
+                if cleaned_external_key is not None:
+                    duplicate.external_key = cleaned_external_key
+                if cleaned_external_url is not None:
+                    duplicate.external_url = cleaned_external_url
+                if delivered_at is not None:
+                    duplicate.delivered_at = delivered_at
+                if cleaned_task_snapshot_ref is not None:
+                    duplicate.task_snapshot_ref = cleaned_task_snapshot_ref
+                duplicate.origin_external_id = (
+                    getattr(duplicate, "origin_external_id", None)
+                    or cleaned_origin_external_id
+                )
+                await self._repository.commit()
+                refresh = getattr(self._repository, "refresh", None)
+                if callable(refresh):
+                    refreshed = await refresh(duplicate)
+                    if refreshed is not None and not isinstance(refreshed, Mock):
+                        duplicate = refreshed
+                return duplicate
+
         proposal = await self._repository.create_proposal(
             title=cleaned_title,
             summary=cleaned_summary,
@@ -686,11 +788,20 @@ class TaskProposalService:
             proposed_by_user_id=proposed_by_user_id,
             origin_source=origin,
             origin_id=origin_id,
+            origin_external_id=cleaned_origin_external_id,
             origin_metadata=metadata,
             dedup_key=dedup_key,
             dedup_hash=dedup_hash,
             review_priority=requested_priority,
             priority_override_reason=priority_override_reason,
+            provider=normalized_provider,
+            external_key=cleaned_external_key,
+            external_url=cleaned_external_url,
+            delivered_at=delivered_at,
+            last_synced_at=last_synced_at,
+            task_snapshot_ref=cleaned_task_snapshot_ref,
+            provider_metadata=scrubbed_provider_metadata,
+            resolved_policy=scrubbed_resolved_policy,
         )
         await self._repository.commit()
         await self._emit_notification(proposal)
