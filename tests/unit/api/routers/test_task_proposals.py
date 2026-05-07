@@ -71,6 +71,7 @@ def _build_proposal() -> SimpleNamespace:
         updated_at=datetime.now(UTC),
         origin_source=TaskProposalOriginSource.QUEUE,
         origin_id=uuid4(),
+        origin_external_id=None,
         origin_metadata={},
         task_create_request={"payload": {"repository": "Moon/Repo"}},
         similar=[],
@@ -161,6 +162,26 @@ def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock, As
     assert kwargs["origin_id"] == origin_id
     payload = response.json()
     assert payload["items"]
+
+
+def test_list_proposals_serializes_workflow_origin_id_from_external_id(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.origin_source = TaskProposalOriginSource.WORKFLOW
+    proposal.origin_id = None
+    proposal.origin_external_id = "wf-123"
+    proposal.origin_metadata = {"workflow_id": "wf-123", "trigger_repo": "Moon/Repo"}
+    service.list_proposals.return_value = ([proposal], None)
+
+    response = test_client.get("/api/proposals")
+
+    assert response.status_code == 200
+    origin = response.json()["items"][0]["origin"]
+    assert origin["source"] == "workflow"
+    assert origin["id"] == "wf-123"
+    assert origin["metadata"]["workflow_id"] == "wf-123"
 
 def test_list_proposals_serializes_delivery_record_fields(
     client: tuple[TestClient, AsyncMock, AsyncMock],

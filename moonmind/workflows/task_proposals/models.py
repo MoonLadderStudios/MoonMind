@@ -141,6 +141,7 @@ class TaskProposal(Base):
         default=TaskProposalOriginSource.MANUAL,
     )
     origin_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    origin_external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     origin_metadata: Mapped[dict[str, object]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
     )

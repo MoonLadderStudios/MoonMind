@@ -3111,6 +3111,7 @@ class TemporalProposalActivities:
                             task_create_request=stamped_request,
                             origin_source=origin_source,
                             origin_id=None,
+                            origin_external_id=workflow_id,
                             origin_metadata=origin_metadata,
                             proposed_by_worker_id=f"temporal:{workflow_id}",
                             proposed_by_user_id=None,

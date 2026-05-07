@@ -163,9 +163,12 @@ def _serialize_similar(similar: list[TaskProposal] | None) -> list[dict[str, obj
 def _serialize_proposal(
     proposal: TaskProposal, *, similar: list[TaskProposal] | None = None
 ) -> TaskProposalModel:
+    origin_id_value = getattr(proposal, "origin_external_id", None)
+    if origin_id_value is None and proposal.origin_id is not None:
+        origin_id_value = str(proposal.origin_id)
     origin = TaskProposalOriginModel(
         source=proposal.origin_source,
-        id=proposal.origin_id,
+        id=origin_id_value,
         metadata=proposal.origin_metadata or {},
     )
     preview = _build_task_preview(proposal.task_create_request or {})
@@ -226,6 +229,15 @@ async def create_proposal(
 ) -> TaskProposalModel:
     proposed_by_user_id, proposed_by_worker_id = await _resolve_actor(user=user)
     try:
+        origin_id_uuid: UUID | None = None
+        origin_external_id: str | None = payload.origin.id
+        if payload.origin.id:
+            try:
+                origin_id_uuid = UUID(str(payload.origin.id))
+            except ValueError:
+                origin_id_uuid = None
+            else:
+                origin_external_id = str(payload.origin.id)
         proposal = await service.create_proposal(
             title=payload.title,
             summary=payload.summary,
@@ -233,7 +245,8 @@ async def create_proposal(
             tags=payload.tags,
             task_create_request=payload.task_create_request,
             origin_source=payload.origin.source,
-            origin_id=payload.origin.id,
+            origin_id=origin_id_uuid,
+            origin_external_id=origin_external_id,
             origin_metadata=payload.origin.metadata,
             proposed_by_worker_id=proposed_by_worker_id,
             proposed_by_user_id=proposed_by_user_id,

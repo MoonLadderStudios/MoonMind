@@ -924,6 +924,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["submitted_count"], 1)
         call_kwargs = mock_service.create_proposal.await_args.kwargs
         self.assertEqual(call_kwargs["provider"], "jira")
+        self.assertEqual(call_kwargs["origin_external_id"], "wf-1")
         self.assertEqual(
             call_kwargs["provider_metadata"],
             {

@@ -749,8 +749,12 @@ async def test_create_proposal_returns_existing_open_duplicate_before_create() -
     )
 
     assert proposal is existing
+    assert existing.origin_external_id == "wf-1"
+    assert existing.resolved_policy["duplicate"] is True
+    assert existing.provider_metadata == {"jira": {"projectKey": "MM"}}
     repo.find_open_duplicate.assert_awaited_once()
     repo.create_proposal.assert_not_awaited()
+    repo.commit.assert_awaited_once()
     service._emit_notification.assert_not_awaited()
 
 
@@ -845,6 +849,7 @@ def test_delivery_record_migration_declares_canonical_columns() -> None:
         "delivered_at",
         "last_synced_at",
         "task_snapshot_ref",
+        "origin_external_id",
         "provider_metadata",
         "resolved_policy",
     ):

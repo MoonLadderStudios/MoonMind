@@ -20,7 +20,7 @@ class TaskProposalOriginModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     source: TaskProposalOriginSource = Field(..., alias="source")
-    id: Optional[UUID] = Field(None, alias="id")
+    id: Optional[str] = Field(None, alias="id")
     metadata: dict[str, Any] | None = Field(None, alias="metadata")
 
 class TaskProposalTaskPreview(BaseModel):

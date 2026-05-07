@@ -31,6 +31,10 @@ def upgrade() -> None:
     op.add_column("task_proposals", sa.Column("external_url", sa.Text(), nullable=True))
     op.add_column(
         "task_proposals",
+        sa.Column("origin_external_id", sa.String(length=255), nullable=True),
+    )
+    op.add_column(
+        "task_proposals",
         sa.Column("delivered_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.add_column(
@@ -73,6 +77,7 @@ def downgrade() -> None:
     op.drop_column("task_proposals", "task_snapshot_ref")
     op.drop_column("task_proposals", "last_synced_at")
     op.drop_column("task_proposals", "delivered_at")
+    op.drop_column("task_proposals", "origin_external_id")
     op.drop_column("task_proposals", "external_url")
     op.drop_column("task_proposals", "external_key")
     op.drop_column("task_proposals", "provider")
