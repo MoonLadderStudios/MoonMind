@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. moonmind/summarization/summarization.py (score: 1.000, trust: canonical)\n    line 57: request_delay: int = 15,\n2. moonmind/indexers/google_drive_indexer.py (score: 1.000, trust: canonical)\n    line 26: # This parameter is noted from the request model but not directly used here\n3. moonmind/indexers/jira_indexer.py (score: 1.000, trust: canonical)\n    line 8: # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)\n4. moonmind/indexers/github_indexer.py (score: 1.000, trust: canonical)\n    line 96: concurrent_requests=5,\n5. moonmind/indexers/confluence_indexer.py (score: 1.000, trust: canonical)\n    line 76: # Titles with quotes might need specific handling if issues arise.\n6. moonmind/indexers/local_data_indexer.py (score: 1.000, trust: canonical)\n    line 118: # If issues arise, we can re-add explicit persistence.\n7. moonmind/planning/__init__.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"\n8. moonmind/factories/ollama_factory.py (score: 1.000, trust: canonical)\n    line 21: Send a chat completion request to Ollama.",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "moonmind/summarization/summarization.py",
+      "text": "line 57: request_delay: int = 15,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 57,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/google_drive_indexer.py",
+      "text": "line 26: # This parameter is noted from the request model but not directly used here",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 26,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/jira_indexer.py",
+      "text": "line 8: # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/github_indexer.py",
+      "text": "line 96: concurrent_requests=5,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 96,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/confluence_indexer.py",
+      "text": "line 76: # Titles with quotes might need specific handling if issues arise.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 76,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/local_data_indexer.py",
+      "text": "line 118: # If issues arise, we can re-add explicit persistence.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 118,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/__init__.py",
+      "text": "line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/factories/ollama_factory.py",
+      "text": "line 21: Send a chat completion request to Ollama.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 21,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-07T07:47:46Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

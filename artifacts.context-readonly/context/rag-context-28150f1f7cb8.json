@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. docs/UI/EffectBorderBeam.md (score: 1.000, trust: canonical)\n    line 1: # Masked Conic Border Beam — Declarative Design\n2. docs/UI/MissionControlDesignSystem.md (score: 1.000, trust: canonical)\n    line 1: # Mission Control Design System\n3. moonmind/planning/__init__.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"\n4. moonmind/planning/jira_story_planner.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"\n5. moonmind/indexers/local_data_indexer.py (score: 1.000, trust: canonical)\n    line 34: raise ValueError(\"Data directory is required to set up LocalDataIndexer\")\n6. moonmind/indexers/confluence_indexer.py (score: 1.000, trust: canonical)\n    line 21: raise ValueError(\"Confluence URL is required to set up Confluence\")\n7. moonmind/indexers/jira_indexer.py (score: 1.000, trust: canonical)\n    line 24: raise ValueError(\"Jira URL is required.\")\n8. moonmind/factories/vector_store_factory.py (score: 1.000, trust: canonical)\n    line 59: # This is a design choice. For now, we assume it should exist.",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "docs/UI/EffectBorderBeam.md",
+      "text": "line 1: # Masked Conic Border Beam — Declarative Design",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/UI/MissionControlDesignSystem.md",
+      "text": "line 1: # Mission Control Design System",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/__init__.py",
+      "text": "line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/jira_story_planner.py",
+      "text": "line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/local_data_indexer.py",
+      "text": "line 34: raise ValueError(\"Data directory is required to set up LocalDataIndexer\")",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 34,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/confluence_indexer.py",
+      "text": "line 21: raise ValueError(\"Confluence URL is required to set up Confluence\")",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 21,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/jira_indexer.py",
+      "text": "line 24: raise ValueError(\"Jira URL is required.\")",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 24,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/factories/vector_store_factory.py",
+      "text": "line 59: # This is a design choice. For now, we assume it should exist.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 59,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-07T07:05:08Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

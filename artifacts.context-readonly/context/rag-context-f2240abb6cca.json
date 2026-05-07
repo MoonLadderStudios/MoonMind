@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/main.py (score: 1.000, trust: canonical)\n    line 28: from api_service.api.routers import retrieval_gateway as retrieval_router\n2. moonmind/models_cache.py (score: 1.000, trust: canonical)\n    line 402: finally:\n3. moonmind/indexers/confluence_indexer.py (score: 1.000, trust: canonical)\n    line 126: # It's api_batch_size, unless max_pages_to_fetch imposes a smaller remaining number.\n4. api_service/migrations/versions/0b8e4befb8e5_initial_clean_migration.py (score: 1.000, trust: canonical)\n    line 239: sa.Column('state', sa.Enum('scheduled', 'initializing', 'waiting_on_dependencies', 'planning', 'awaiting_slot', 'executing', 'proposals', 'awaiting_external', 'finalizing', 'completed', 'failed', 'canceled', name='moonmindworkflowstate'), server_default='initializing', nullable=False),\n5. moonmind/indexers/local_data_indexer.py (score: 1.000, trust: canonical)\n    line 25: # Final fallback: dynamic loader utility\n6. moonmind/codex_cloud/settings.py (score: 1.000, trust: canonical)\n    line 19: class CodexCloudRuntimeGate:\n7. moonmind/workflow_docker_mode.py (score: 1.000, trust: canonical)\n    line 5: from typing import Final, Literal\n8. moonmind/planning/jira_story_planner.py (score: 1.000, trust: canonical)\n    line 514: except Exception as final_error:",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/main.py",
+      "text": "line 28: from api_service.api.routers import retrieval_gateway as retrieval_router",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 28,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/models_cache.py",
+      "text": "line 402: finally:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 402,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/confluence_indexer.py",
+      "text": "line 126: # It's api_batch_size, unless max_pages_to_fetch imposes a smaller remaining number.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 126,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/migrations/versions/0b8e4befb8e5_initial_clean_migration.py",
+      "text": "line 239: sa.Column('state', sa.Enum('scheduled', 'initializing', 'waiting_on_dependencies', 'planning', 'awaiting_slot', 'executing', 'proposals', 'awaiting_external', 'finalizing', 'completed', 'failed', 'canceled', name='moonmindworkflowstate'), server_default='initializing', nullable=False),",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 239,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/local_data_indexer.py",
+      "text": "line 25: # Final fallback: dynamic loader utility",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 25,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/codex_cloud/settings.py",
+      "text": "line 19: class CodexCloudRuntimeGate:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 19,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/workflow_docker_mode.py",
+      "text": "line 5: from typing import Final, Literal",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/jira_story_planner.py",
+      "text": "line 514: except Exception as final_error:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 514,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-07T07:34:21Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
