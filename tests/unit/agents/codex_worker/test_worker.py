@@ -1212,6 +1212,29 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
         is False
     )
 
+    enabled_worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+            enable_task_proposals=True,
+        ),
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+        ),
+    )
+
+    assert (
+        enabled_worker._task_proposals_requested(
+            canonical_payload={"repository": "moon/org", "task": {}}
+        )
+        is False
+    )
+
 async def test_run_once_exception_still_records_terminal_failure_when_upload_fails(
     tmp_path: Path,
 ) -> None:

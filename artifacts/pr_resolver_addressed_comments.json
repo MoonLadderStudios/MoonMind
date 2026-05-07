@@ -1,12 +1,22 @@
 [
   {
-    "id": 3196972476,
+    "id": 3198158185,
     "disposition": "addressed",
-    "rationale": "Updated docs/Temporal/ManagedAndExternalAgentExecutionModel.md to use schema-valid failure_class = \"integration_error\" for exhausted provider rate limits while preserving rate-limit specificity in provider_error_code and metadata."
+    "rationale": "Updated recurring target normalization to migrate root proposeTasks and proposalPolicy into task payload when nested fields are absent while preserving nested precedence."
   },
   {
-    "id": 4238924098,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary body with no separate actionable request."
+    "id": 4240313646,
+    "disposition": "addressed",
+    "rationale": "Resolved both summarized review findings: recurring schedule root fallback handling and Temporal workflow compatibility fallback handling."
+  },
+  {
+    "id": 3198158195,
+    "disposition": "addressed",
+    "rationale": "Updated _proposal_generation_requested to fall back to root proposeTasks when a task object lacks the nested flag, while keeping nested values authoritative on conflict."
+  },
+  {
+    "id": 3198161248,
+    "disposition": "addressed",
+    "rationale": "Replaced the inline lambda dependency override with a named helper callable that FastAPI can inspect safely."
   }
 ]
