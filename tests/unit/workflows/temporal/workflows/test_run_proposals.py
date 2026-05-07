@@ -93,6 +93,89 @@ async def test_run_proposals_stage_propagates_policy(
     assert mock_run_workflow._proposals_generated == 1
     assert mock_run_workflow._proposals_submitted == 1
 
+
+@pytest.mark.asyncio
+async def test_run_proposals_stage_records_operator_visible_outcomes(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "proposal.generate":
+            return [{"title": "Generated proposal 1"}, {"title": "Generated proposal 2"}]
+        if activity_type == "proposal.submit":
+            return {
+                "submitted_count": 2,
+                "deliveredCount": 1,
+                "validationErrors": [
+                    {
+                        "code": "proposal_missing_task",
+                        "message": "proposal skipped: [REDACTED]",
+                    }
+                ],
+                "deliveryFailures": [
+                    {
+                        "provider": "jira",
+                        "code": "delivery_failed",
+                        "message": "delivery failed: [REDACTED]",
+                    }
+                ],
+                "externalLinks": [
+                    {
+                        "provider": "jira",
+                        "externalKey": "MM-901",
+                        "externalUrl": "https://jira.example/browse/MM-901",
+                    }
+                ],
+                "dedupUpdates": [
+                    {
+                        "provider": "github",
+                        "externalKey": "42",
+                        "created": False,
+                        "duplicateSource": "existing-open-issue",
+                    }
+                ],
+            }
+        return {}
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+
+    await mock_run_workflow._run_proposals_stage(
+        parameters={"repo": "org/repo", "task": {"proposeTasks": True}}
+    )
+
+    assert mock_run_workflow._proposals_generated == 2
+    assert mock_run_workflow._proposals_submitted == 2
+    assert mock_run_workflow._proposals_delivered == 1
+    assert mock_run_workflow._proposal_validation_errors == [
+        {"code": "proposal_missing_task", "message": "proposal skipped: [REDACTED]"}
+    ]
+    assert mock_run_workflow._proposal_delivery_failures == [
+        {
+            "provider": "jira",
+            "code": "delivery_failed",
+            "message": "delivery failed: [REDACTED]",
+        }
+    ]
+    assert mock_run_workflow._proposal_external_links == [
+        {
+            "provider": "jira",
+            "externalKey": "MM-901",
+            "externalUrl": "https://jira.example/browse/MM-901",
+        }
+    ]
+    assert mock_run_workflow._proposal_dedup_updates == [
+        {
+            "provider": "github",
+            "externalKey": "42",
+            "created": False,
+            "duplicateSource": "existing-open-issue",
+        }
+    ]
+
 @pytest.mark.asyncio
 async def test_run_proposals_stage_ignores_flattened_legacy_policy_fields(
     mock_run_workflow: MoonMindRunWorkflow,

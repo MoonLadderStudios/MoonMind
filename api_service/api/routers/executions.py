@@ -1746,6 +1746,8 @@ def _serialize_execution(
     )
     resume_summary = _build_resume_summary(record, actions=actions)
     related_runs = _build_resume_related_runs(record, params=params)
+    proposal_summary = _proposal_summary_from_memo(memo)
+    proposal_outcomes = _proposal_outcomes_from_summary(proposal_summary)
 
     started_at = getattr(record, "started_at", None)
     created_at = getattr(record, "created_at", None) or started_at or record.updated_at
@@ -1832,6 +1834,8 @@ def _serialize_execution(
         actions=actions,
         resume=resume_summary,
         related_runs=related_runs,
+        proposal_summary=proposal_summary,
+        proposal_outcomes=proposal_outcomes,
         debug_fields=debug_fields,
         redirect_path=f"/tasks/{record.workflow_id}?source=temporal",
         integration=(
@@ -1855,6 +1859,63 @@ def _serialize_execution(
         stale_state=False,
         refreshed_at=_compatibility_refreshed_at(record),
     )
+
+
+def _proposal_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:
+    direct = memo.get("proposals")
+    if isinstance(direct, Mapping):
+        return dict(direct)
+    finish_summary = memo.get("finishSummary") or memo.get("finish_summary")
+    if isinstance(finish_summary, Mapping):
+        proposals = finish_summary.get("proposals")
+        if isinstance(proposals, Mapping):
+            return dict(proposals)
+    return None
+
+
+def _proposal_outcomes_from_summary(
+    proposal_summary: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not proposal_summary:
+        return []
+    outcomes: list[dict[str, Any]] = []
+    outcome_index: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def merge_outcome(item: Mapping[str, Any], *, default_status: str) -> None:
+        outcome = dict(item)
+        outcome.setdefault("deliveryStatus", default_status)
+        external_url = str(outcome.get("externalUrl") or "").strip()
+        external_key = str(outcome.get("externalKey") or "").strip()
+        keys: list[tuple[str, str]] = []
+        if external_url:
+            keys.append(("url", external_url))
+        if external_key:
+            keys.append(("key", external_key))
+        if not keys:
+            outcomes.append(outcome)
+            return
+        existing = next(
+            (outcome_index[key] for key in keys if key in outcome_index), None
+        )
+        if existing is None:
+            for key in keys:
+                outcome_index[key] = outcome
+            outcomes.append(outcome)
+            return
+        existing.update({k: v for k, v in outcome.items() if v is not None})
+        for key in keys:
+            outcome_index[key] = existing
+
+    for item in proposal_summary.get("externalLinks") or []:
+        if not isinstance(item, Mapping):
+            continue
+        merge_outcome(item, default_status="delivered")
+    for item in proposal_summary.get("dedupUpdates") or []:
+        if not isinstance(item, Mapping):
+            continue
+        merge_outcome(item, default_status="updated")
+    return outcomes
+
 
 def _resume_checkpoint_ref_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})

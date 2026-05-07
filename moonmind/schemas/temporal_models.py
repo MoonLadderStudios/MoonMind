@@ -1283,6 +1283,10 @@ class ExecutionModel(BaseModel):
     related_runs: list[ExecutionRelatedRunModel] = Field(
         default_factory=list, alias="relatedRuns"
     )
+    proposal_summary: dict[str, Any] | None = Field(None, alias="proposalSummary")
+    proposal_outcomes: list[dict[str, Any]] = Field(
+        default_factory=list, alias="proposalOutcomes"
+    )
     debug_fields: Optional[ExecutionDebugFieldsModel] = Field(None, alias="debugFields")
     redirect_path: Optional[str] = Field(None, alias="redirectPath")
     manifest_artifact_ref: Optional[str] = Field(None, alias="manifestArtifactRef")
