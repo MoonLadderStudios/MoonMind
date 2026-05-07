@@ -50,7 +50,7 @@ Add or update integration/contract coverage for the API and workflow boundary. R
 ./tools/test_integration.sh
 ```
 
-If a targeted integration file is added for the resume command, run it directly during iteration, then finish with the full integration runner.
+During iteration, run the targeted failed-step Resume integration file planned in `tasks.md` when it exists: `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py`. Finish with the full integration runner.
 
 ## End-to-End Story Validation
 

@@ -96,7 +96,7 @@ specs/310-resume-from-last-failed-step/
 │   └── resume-from-failed-step-api.md
 ├── checklists/
 │   └── requirements.md
-└── tasks.md             # Created later by /speckit.tasks, not this step
+└── tasks.md             # Generated implementation task breakdown for MM-602
 ```
 
 ### Source Code (repository root)
