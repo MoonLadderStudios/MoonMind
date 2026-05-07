@@ -3565,15 +3565,23 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-radius: inherit;
   pointer-events: none;
   border: 0;
-  background: radial-gradient(
-    circle at center,
-    rgb(255 255 255 / 0.22) 0%,
-    rgb(var(--mm-action-primary) / 0.08) 28%,
-    rgb(var(--mm-action-primary) / 0.5) 41%,
-    rgb(var(--mm-action-primary) / 0.28) 54%,
-    rgb(var(--mm-action-primary) / 0.16) 68%,
-    rgb(var(--mm-action-primary) / 0) 100%
-  );
+  background:
+    radial-gradient(
+      circle at center,
+      rgb(var(--mm-action-primary) / 0) 64%,
+      rgb(var(--mm-action-primary) / 0.58) 70%,
+      rgb(var(--mm-action-primary) / 0.34) 73%,
+      rgb(var(--mm-action-primary) / 0) 79%
+    ),
+    radial-gradient(
+      circle at center,
+      rgb(255 255 255 / 0.22) 0%,
+      rgb(var(--mm-action-primary) / 0.08) 28%,
+      rgb(var(--mm-action-primary) / 0.5) 41%,
+      rgb(var(--mm-action-primary) / 0.28) 54%,
+      rgb(var(--mm-action-primary) / 0.16) 68%,
+      rgb(var(--mm-action-primary) / 0) 100%
+    );
   box-shadow:
     0 0 0 1px rgb(var(--mm-action-primary) / 0.54),
     0 0 22px 3px rgb(var(--mm-action-primary) / 0.42),
