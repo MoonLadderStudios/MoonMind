@@ -106,13 +106,7 @@ class AgentSkillMaterializer:
                 "resolved_at": resolved_skillset.resolved_at.isoformat(),
                 "runtime_id": runtime_id,
                 "skills": [
-                    {
-                        "content_digest": entry.content_digest,
-                        "content_ref": entry.content_ref,
-                        "name": entry.skill_name,
-                        "source_kind": entry.provenance.source_kind.value,
-                        "version": entry.version,
-                    }
+                    self._manifest_skill_entry(entry)
                     for entry in resolved_skillset.skills
                 ],
                 "snapshot_id": resolved_skillset.snapshot_id,
@@ -170,6 +164,21 @@ class AgentSkillMaterializer:
             result.prompt_index_ref = f"index_{resolved_skillset.snapshot_id}"
             
         return result
+
+    @staticmethod
+    def _manifest_skill_entry(entry: Any) -> dict[str, Any]:
+        payload = {
+            "content_digest": entry.content_digest,
+            "content_ref": entry.content_ref,
+            "name": entry.skill_name,
+            "source_kind": entry.provenance.source_kind.value,
+            "version": entry.version,
+        }
+        if entry.required_by:
+            payload["required_by"] = entry.required_by
+        if entry.selection_reason:
+            payload["selection_reason"] = entry.selection_reason
+        return payload
 
     def _should_preserve_visible_source_dir(self, visible_dir: Path) -> bool:
         if self.source_preservation_root is None:

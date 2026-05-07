@@ -584,6 +584,26 @@ A Skill step may select:
 
 The selected primary Skill describes agent behavior. The resolved snapshot describes the exact instruction bundles and supporting content made active for the runtime.
 
+### 9.2.1 Required Supporting Skills
+
+A Skill may declare other top-level Skills that must be active when it is
+selected. This is expressed with the Agent Skills-compatible `metadata` field:
+
+```yaml
+metadata:
+  required-skills: "fix-comments fix-ci fix-merge-conflicts"
+```
+
+Rules:
+
+1. `metadata.required-skills` is a whitespace-delimited string.
+2. Values must be valid Agent Skills names.
+3. Resolution expands these requirements transitively before runtime launch.
+4. Required Skills remain independently callable top-level Skills.
+5. If a required Skill is missing, forbidden by policy, or explicitly excluded,
+   resolution fails before runtime launch.
+6. Runtime adapters must not rediscover or broaden required Skills after launch.
+
 ### 9.3 Task-Level Skill Intent
 
 A task may define baseline Skill intent inherited by Skill steps.

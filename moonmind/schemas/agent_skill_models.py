@@ -63,6 +63,9 @@ class ResolvedSkillEntry(BaseModel):
     content_ref: str | None = None
     content_digest: str | None = None
     provenance: AgentSkillProvenance
+    required_skills: list[str] = Field(default_factory=list)
+    selection_reason: str | None = None
+    required_by: list[str] = Field(default_factory=list)
     
     model_config = ConfigDict(extra="forbid")
 

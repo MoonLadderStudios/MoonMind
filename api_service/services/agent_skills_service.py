@@ -16,6 +16,9 @@ from api_service.db.models import (
     AgentSkillVersion,
     SkillSet,
 )
+from moonmind.services.skill_resolution import (
+    extract_required_skill_names_from_skill_markdown,
+)
 from moonmind.workflows.temporal import TemporalArtifactService
 
 class AgentSkillDuplicateError(ValueError):
@@ -101,6 +104,11 @@ class AgentSkillsService:
 
         payload_bytes = content.encode("utf-8")
         content_digest = "sha256:" + hashlib.sha256(payload_bytes).hexdigest()
+        required_skills = extract_required_skill_names_from_skill_markdown(
+            content,
+            skill_name=skill_slug,
+            source_label=f"deployment skill '{skill_slug}' version '{version_string}'",
+        )
 
         # Check for duplicate version early if possible
         stmt = select(AgentSkillVersion).where(
@@ -128,6 +136,7 @@ class AgentSkillsService:
                 "skill_slug": skill_slug,
                 "version_string": version_string,
                 "format": format_str,
+                "required_skills": list(required_skills),
             },
         )
         artifact = await self._artifact_service.write_complete(
