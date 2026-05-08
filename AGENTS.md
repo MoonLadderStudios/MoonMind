@@ -252,6 +252,8 @@ Key diagnostics:
 - Existing artifact store plus workspace-local prepared files/manifest refs; no new persistent database tables planned (325-prepare-target-aware-inputs)
 - Python 3.12; TypeScript/React for Mission Control UI + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Vitest, pytest (326-expose-distinct-full-retry-recovery-actions)
 - Existing Temporal execution records, canonical execution parameters/memo/search attributes, Temporal artifact metadata/content store, and existing original task input snapshot artifacts; no new persistent tables planned (326-expose-distinct-full-retry-recovery-actions)
+- Python 3.12; TypeScript/React for Mission Control UI where availability display is affected + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, Zod, Vitest, pytest (327-gate-resume-checkpoint-evidence)
+- Existing Temporal execution records, memo/search attributes, Temporal artifact metadata/content store, task input snapshot artifacts, step ledger/checkpoint artifacts; no new persistent database table planned (327-gate-resume-checkpoint-evidence)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
