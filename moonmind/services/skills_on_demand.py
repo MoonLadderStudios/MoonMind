@@ -7,7 +7,11 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillEntry,
     ResolvedSkillSet,
     RuntimeSkillMaterialization,
+    SkillsOnDemandAuditEvent,
+    SkillsOnDemandDeniedCode,
+    SkillsOnDemandFailureDiagnostic,
     SkillsOnDemandMaterializationSummary,
+    SkillsOnDemandRequestAuditResult,
     SkillCatalogSearchResult,
     SkillsOnDemandQueryRequest,
     SkillsOnDemandQueryResult,
@@ -15,16 +19,18 @@ from moonmind.schemas.agent_skill_models import (
     SkillsOnDemandRequestResult,
 )
 
-SKILLS_ON_DEMAND_DISABLED_CODE = "feature_disabled"
+SKILLS_ON_DEMAND_DISABLED_CODE: SkillsOnDemandDeniedCode = "feature_disabled"
 SKILLS_ON_DEMAND_DISABLED_MESSAGE = (
     "Skills On Demand is disabled for this deployment."
 )
-SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_CODE = "enabled_mode_not_implemented"
+SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_CODE: SkillsOnDemandDeniedCode = (
+    "enabled_mode_not_implemented"
+)
 SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_MESSAGE = (
     "Skills On Demand enabled mode is not implemented for this deployment."
 )
-SKILLS_ON_DEMAND_INVALID_REQUEST_CODE = "invalid_request"
-SKILLS_ON_DEMAND_ALREADY_ACTIVE_CODE = "already_active"
+SKILLS_ON_DEMAND_INVALID_REQUEST_CODE: SkillsOnDemandDeniedCode = "invalid_request"
+SKILLS_ON_DEMAND_ALREADY_ACTIVE_CODE: SkillsOnDemandDeniedCode = "already_active"
 SKILLS_ON_DEMAND_DISABLED_INSTRUCTION = (
     "- Skills On Demand is disabled for this run. Use only the active Skills "
     "already available under the active skill path provided by MoonMind."
@@ -53,11 +59,12 @@ class SkillsOnDemandService:
     ) -> SkillsOnDemandQueryResult:
         if not self._enabled:
             code, message = self._disabled_contract()
-            return self._denied_result(code=code, message=message)
+            return self._denied_result(request, code=code, message=message)
 
         validation_error = self._validate_query_request(request)
         if validation_error is not None:
             return self._denied_result(
+                request,
                 code=SKILLS_ON_DEMAND_INVALID_REQUEST_CODE,
                 message=validation_error,
             )
@@ -99,6 +106,13 @@ class SkillsOnDemandService:
                 "denied": False,
                 "query_hash": self._query_hash(request.query),
             },
+            audit_events=[
+                self._query_audit_event(
+                    request,
+                    result_count=len(results),
+                    denied=False,
+                )
+            ],
         )
 
     async def request(
@@ -146,6 +160,15 @@ class SkillsOnDemandService:
                     "activated_skills": [],
                     "denied": False,
                 },
+                audit_events=[
+                    self._request_audit_event(
+                        request,
+                        result="no_change",
+                        result_code=SKILLS_ON_DEMAND_ALREADY_ACTIVE_CODE,
+                        parent_snapshot_id=active_snapshot.snapshot_id,
+                        manifest_ref=active_snapshot.manifest_ref,
+                    )
+                ],
             )
 
         if resolved_skillset is None:
@@ -162,7 +185,7 @@ class SkillsOnDemandService:
         self,
         request: SkillsOnDemandRequest,
         *,
-        code: str,
+        code: SkillsOnDemandDeniedCode,
         message: str,
     ) -> SkillsOnDemandRequestResult:
         active_snapshot = request.active_snapshot
@@ -187,6 +210,23 @@ class SkillsOnDemandService:
                 "denied": True,
                 "denial_code": code,
             },
+            diagnostics_ref=self._diagnostics_ref_for(code, active_snapshot_id),
+            failure_diagnostic=SkillsOnDemandFailureDiagnostic(
+                code=code,
+                message=message,
+                current_snapshot_ref=active_snapshot_id,
+                diagnostics_ref=self._diagnostics_ref_for(code, active_snapshot_id),
+            ),
+            audit_events=[
+                self._request_audit_event(
+                    request,
+                    result="denied",
+                    result_code=code,
+                    parent_snapshot_id=request.current_snapshot_ref
+                    or active_snapshot_id,
+                    diagnostics_ref=self._diagnostics_ref_for(code, active_snapshot_id),
+                )
+            ],
         )
 
     def activated_request_result(
@@ -245,6 +285,16 @@ class SkillsOnDemandService:
             activation_summary=activation_summary,
             materialization=materialization_summary,
             metadata=metadata,
+            audit_events=[
+                self._request_audit_event(
+                    request,
+                    result="activated",
+                    parent_snapshot_id=request.current_snapshot_ref
+                    or active_snapshot_id,
+                    derived_snapshot_id=resolved_skillset.snapshot_id,
+                    manifest_ref=resolved_skillset.manifest_ref,
+                )
+            ],
         )
 
     def normalized_requested_skills(
@@ -299,10 +349,15 @@ class SkillsOnDemandService:
 
     def _denied_result(
         self,
+        request: SkillsOnDemandQueryRequest,
         *,
-        code: str,
+        code: SkillsOnDemandDeniedCode,
         message: str,
     ) -> SkillsOnDemandQueryResult:
+        current_snapshot_id = request.current_snapshot_ref
+        if current_snapshot_id is None and request.active_snapshot is not None:
+            current_snapshot_id = request.active_snapshot.snapshot_id
+        diagnostics_ref = self._diagnostics_ref_for(code, current_snapshot_id)
         return SkillsOnDemandQueryResult(
             status="denied",
             code=code,
@@ -313,6 +368,22 @@ class SkillsOnDemandService:
                 "denied": True,
                 "denial_code": code,
             },
+            diagnostics_ref=diagnostics_ref,
+            failure_diagnostic=SkillsOnDemandFailureDiagnostic(
+                code=code,
+                message=message,
+                current_snapshot_ref=current_snapshot_id,
+                diagnostics_ref=diagnostics_ref,
+            ),
+            audit_events=[
+                self._query_audit_event(
+                    request,
+                    result_count=0,
+                    denied=True,
+                    denial_code=code,
+                    diagnostics_ref=diagnostics_ref,
+                )
+            ],
         )
 
     def _validate_query_request(
@@ -373,6 +444,74 @@ class SkillsOnDemandService:
 
     def _query_hash(self, query: str) -> str:
         return hashlib.sha256(query.strip().lower().encode("utf-8")).hexdigest()
+
+    def _query_audit_event(
+        self,
+        request: SkillsOnDemandQueryRequest,
+        *,
+        result_count: int,
+        denied: bool,
+        denial_code: SkillsOnDemandDeniedCode | None = None,
+        diagnostics_ref: str | None = None,
+    ) -> SkillsOnDemandAuditEvent:
+        current_snapshot_id = request.current_snapshot_ref
+        if current_snapshot_id is None and request.active_snapshot is not None:
+            current_snapshot_id = request.active_snapshot.snapshot_id
+        return SkillsOnDemandAuditEvent(
+            event_type="skills_on_demand.query",
+            runtime_id=request.runtime_id.strip()
+            if request.runtime_id and request.runtime_id.strip()
+            else None,
+            current_snapshot_id=current_snapshot_id,
+            query_hash=self._query_hash(request.query),
+            result_count=result_count,
+            denied=denied,
+            denial_code=denial_code,
+            diagnostics_ref=diagnostics_ref,
+        )
+
+    def _request_audit_event(
+        self,
+        request: SkillsOnDemandRequest,
+        *,
+        result: SkillsOnDemandRequestAuditResult,
+        result_code: SkillsOnDemandDeniedCode | None = None,
+        parent_snapshot_id: str | None = None,
+        derived_snapshot_id: str | None = None,
+        manifest_ref: str | None = None,
+        diagnostics_ref: str | None = None,
+    ) -> SkillsOnDemandAuditEvent:
+        return SkillsOnDemandAuditEvent(
+            event_type="skills_on_demand.request",
+            step_id=request.step_id.strip()
+            if request.step_id and request.step_id.strip()
+            else None,
+            runtime_id=request.runtime_id.strip()
+            if request.runtime_id and request.runtime_id.strip()
+            else None,
+            parent_snapshot_id=parent_snapshot_id,
+            requested_skills=[
+                name for name, _version in self.normalized_requested_skills(request)
+            ],
+            result=result,
+            result_code=result_code,
+            derived_snapshot_id=derived_snapshot_id,
+            manifest_ref=manifest_ref,
+            diagnostics_ref=diagnostics_ref,
+        )
+
+    def _diagnostics_ref_for(
+        self, code: SkillsOnDemandDeniedCode, snapshot_ref: str | None
+    ) -> str | None:
+        if code not in {
+            "artifact_unavailable",
+            "checksum_mismatch",
+            "materialization_failed",
+            "runtime_refresh_failed",
+        }:
+            return None
+        snapshot = snapshot_ref or "unknown_snapshot"
+        return f"diagnostics://skills-on-demand/{code}/{snapshot}"
 
     def _activation_summary(self, activated_names: list[str]) -> str:
         if not activated_names:

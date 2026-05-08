@@ -97,7 +97,15 @@ class RuntimeSkillMaterialization(BaseModel):
 
 
 SkillsOnDemandQueryStatus = Literal["ok", "denied"]
-SkillsOnDemandRequestStatus = Literal["activated", "denied", "no_change"]
+SkillsOnDemandRequestStatus = Literal[
+    "activated", "denied", "requires_approval", "no_change"
+]
+SkillsOnDemandAuditEventType = Literal[
+    "skills_on_demand.query", "skills_on_demand.request"
+]
+SkillsOnDemandRequestAuditResult = Literal[
+    "activated", "denied", "requires_approval", "no_change"
+]
 SkillsOnDemandDeniedCode = Literal[
     "already_active",
     "feature_disabled",
@@ -114,6 +122,54 @@ SkillsOnDemandDeniedCode = Literal[
     "materialization_failed",
     "runtime_refresh_failed",
 ]
+
+
+class SkillsOnDemandFailureDiagnostic(BaseModel):
+    """Safe structured failure evidence for on-demand Skill operations."""
+
+    status: Literal["denied"] = "denied"
+    code: SkillsOnDemandDeniedCode
+    message: str
+    current_snapshot_ref: str | None = None
+    diagnostics_ref: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SkillsOnDemandAuditEvent(BaseModel):
+    """Bounded audit evidence for one Skills On Demand query or request."""
+
+    event_type: SkillsOnDemandAuditEventType
+    workflow_id: str | None = None
+    run_id: str | None = None
+    step_id: str | None = None
+    runtime_id: str | None = None
+    current_snapshot_id: str | None = None
+    parent_snapshot_id: str | None = None
+    requested_skills: list[str] = Field(default_factory=list)
+    query_hash: str | None = None
+    result_count: int | None = None
+    result: SkillsOnDemandRequestAuditResult | None = None
+    result_code: SkillsOnDemandDeniedCode | None = None
+    denied: bool | None = None
+    denial_code: SkillsOnDemandDeniedCode | None = None
+    derived_snapshot_id: str | None = None
+    manifest_ref: str | None = None
+    diagnostics_ref: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SkillsOnDemandDiagnosticArtifact(BaseModel):
+    """Controlled pointer metadata for larger Skills On Demand diagnostics."""
+
+    diagnostics_ref: str
+    failure_code: SkillsOnDemandDeniedCode
+    summary: str
+    context: dict[str, Any] = Field(default_factory=dict)
+    redaction_status: str = "redacted"
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class SkillCatalogSearchResult(BaseModel):
@@ -152,6 +208,9 @@ class SkillsOnDemandQueryResult(BaseModel):
     message: str
     results: list[SkillCatalogSearchResult] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    audit_events: list[SkillsOnDemandAuditEvent] = Field(default_factory=list)
+    diagnostics_ref: str | None = None
+    failure_diagnostic: SkillsOnDemandFailureDiagnostic | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -201,6 +260,9 @@ class SkillsOnDemandRequestResult(BaseModel):
     activation_summary: str | None = None
     materialization: SkillsOnDemandMaterializationSummary | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    audit_events: list[SkillsOnDemandAuditEvent] = Field(default_factory=list)
+    diagnostics_ref: str | None = None
+    failure_diagnostic: SkillsOnDemandFailureDiagnostic | None = None
 
     model_config = ConfigDict(extra="forbid")
 
