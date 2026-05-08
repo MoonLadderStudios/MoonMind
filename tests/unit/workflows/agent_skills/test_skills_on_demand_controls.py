@@ -328,6 +328,8 @@ async def test_enabled_request_builds_activated_result_with_compact_lineage() ->
         metadata={
             "visiblePath": "/workspace/.agents/skills",
             "manifestPath": "/workspace/runtime/skills_active/skillset-derived/_manifest.json",
+            "activationTiming": "atomic",
+            "materializationVerified": True,
         },
     )
 
@@ -356,6 +358,8 @@ async def test_enabled_request_builds_activated_result_with_compact_lineage() ->
     assert result.materialization.mode == RuntimeMaterializationMode.WORKSPACE_MOUNTED
     assert result.metadata["requested_skills"] == ["jira-issue-updater"]
     assert result.metadata["activated_skills"] == ["jira-issue-updater"]
+    assert result.metadata["activation_timing"] == "atomic"
+    assert result.metadata["materialization_verified"] is True
     serialized = result.model_dump(mode="json")
     assert "requested-body-ref" not in str(serialized)
     assert "active-body-ref" not in str(serialized)
@@ -380,6 +384,82 @@ async def test_enabled_request_denial_preserves_active_snapshot() -> None:
 
     assert result.status == "denied"
     assert result.code == "skill_not_found"
+    assert result.active_snapshot_id == "skillset-active"
+    assert result.parent_snapshot_ref == "skillset-active"
+    assert result.snapshot_id is None
+    assert result.resolved_skillset_ref is None
+
+
+async def test_runtime_failure_code_classifies_checksum_as_materialization_failure() -> None:
+    activities = AgentSkillsActivities()
+
+    assert (
+        activities._skills_on_demand_runtime_code("checksum mismatch for active")
+        == "materialization_failed"
+    )
+    assert (
+        activities._skills_on_demand_runtime_code("runtime refresh update failed")
+        == "runtime_refresh_failed"
+    )
+
+
+async def test_enabled_activity_request_reports_runtime_refresh_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        "moonmind.workflows.agent_skills.agent_skills_activities.settings.workflow.skills_on_demand_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.agent_skills.agent_skills_activities.settings.workflow.repo_root",
+        str(tmp_path),
+    )
+    active_snapshot = ResolvedSkillSet(
+        snapshot_id="skillset-active",
+        resolved_at=datetime.now(UTC),
+        skills=[],
+    )
+    resolved_additions = ResolvedSkillSet(
+        snapshot_id="resolver-snapshot",
+        resolved_at=datetime.now(UTC),
+        skills=[_entry("jira-issue-updater", content_ref="requested-body-ref")],
+    )
+    materialization = RuntimeSkillMaterialization(
+        runtime_id="codex",
+        materialization_mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+        workspace_paths=[str(tmp_path / ".agents" / "skills")],
+        metadata={
+            "runtimeRefreshFailed": True,
+            "runtimeRefreshMessage": "runtime refresh update failed",
+        },
+    )
+    activities = AgentSkillsActivities()
+    env = ActivityEnvironment()
+
+    with (
+        patch(
+            "moonmind.workflows.agent_skills.agent_skills_activities.AgentSkillResolver.resolve",
+            new=AsyncMock(return_value=resolved_additions),
+        ),
+        patch(
+            "moonmind.workflows.agent_skills.agent_skills_activities.AgentSkillMaterializer.materialize",
+            new=AsyncMock(return_value=materialization),
+        ),
+    ):
+        result = await env.run(
+            activities.request_on_demand,
+            SkillsOnDemandRequest(
+                current_snapshot_ref="skillset-active",
+                requested_skills=[
+                    SkillsOnDemandRequestedSkill(name="jira-issue-updater")
+                ],
+                active_snapshot=active_snapshot,
+            ),
+        )
+
+    assert result.status == "denied"
+    assert result.code == "runtime_refresh_failed"
     assert result.active_snapshot_id == "skillset-active"
     assert result.parent_snapshot_ref == "skillset-active"
     assert result.snapshot_id is None

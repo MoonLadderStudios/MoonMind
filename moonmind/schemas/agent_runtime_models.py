@@ -820,6 +820,14 @@ class ProviderCapabilityDescriptor(BaseModel):
         alias="supportsResultFetch",
         description="Whether terminal results can be fetched after completion.",
     )
+    supports_skills_on_demand_activation: bool = Field(
+        False,
+        alias="supportsSkillsOnDemandActivation",
+        description=(
+            "Whether the provider can receive live Skills On Demand activation "
+            "refreshes during a run."
+        ),
+    )
     default_poll_hint_seconds: int = Field(
         15,
         alias="defaultPollHintSeconds",

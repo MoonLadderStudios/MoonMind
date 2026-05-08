@@ -1,5 +1,6 @@
 import json
 import io
+import hashlib
 import tarfile
 from datetime import datetime, UTC
 from pathlib import Path
@@ -18,9 +19,8 @@ from moonmind.services.skill_materialization import AgentSkillMaterializer
 
 @pytest.mark.asyncio
 async def test_materializer_projects_selected_skill_to_agents_skills(tmp_path: Path):
-    artifact_service = _StaticArtifactService(
-        {"artifact-my-skill": b"---\nname: my_skill\ndescription: test\n---\n"}
-    )
+    payload = b"---\nname: my_skill\ndescription: test\n---\n"
+    artifact_service = _StaticArtifactService({"artifact-my-skill": payload})
     materializer = AgentSkillMaterializer(
         str(tmp_path), artifact_service=artifact_service
     )
@@ -33,7 +33,7 @@ async def test_materializer_projects_selected_skill_to_agents_skills(tmp_path: P
                 skill_name="my_skill",
                 version="1.0.0",
                 content_ref="artifact-my-skill",
-                content_digest="sha256:abc123",
+                content_digest=_digest(payload),
                 provenance=AgentSkillProvenance(
                     source_kind=AgentSkillSourceKind.DEPLOYMENT
                 ),
@@ -69,7 +69,7 @@ async def test_materializer_projects_selected_skill_to_agents_skills(tmp_path: P
         "runtime_id": "test_runtime",
         "skills": [
             {
-                "content_digest": "sha256:abc123",
+                "content_digest": _digest(payload),
                 "content_ref": "artifact-my-skill",
                 "name": "my_skill",
                 "source_kind": "deployment",
@@ -86,6 +86,8 @@ async def test_materializer_projects_selected_skill_to_agents_skills(tmp_path: P
     assert result.metadata["canonicalAliasSkippedReason"] is None
     assert result.metadata["manifestPath"] == str(manifest_path)
     assert result.metadata["activeSkills"] == ["my_skill"]
+    assert result.metadata["materializationVerified"] is True
+    assert result.metadata["activationTiming"] == "atomic"
 
 @pytest.mark.asyncio
 async def test_materializer_projects_only_selected_skills(tmp_path: Path):
@@ -278,6 +280,96 @@ def test_materializer_does_not_expose_preserve_and_link_helper_surface() -> None
 
 
 @pytest.mark.asyncio
+async def test_materializer_rejects_checksum_mismatch_before_projection_switch(
+    tmp_path: Path,
+):
+    active_dir = tmp_path / "runtime" / "skills_active" / "active_snap"
+    old_skill = active_dir / "old-skill" / "SKILL.md"
+    old_skill.parent.mkdir(parents=True)
+    old_skill.write_text("old active skill\n", encoding="utf-8")
+    alias = tmp_path / ".agents" / "skills"
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(active_dir)
+    payload = b"---\nname: active\ndescription: new\n---\n"
+    materializer = AgentSkillMaterializer(
+        str(tmp_path),
+        artifact_service=_StaticArtifactService({"artifact-active": payload}),
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="active_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="active",
+                version="1.0.0",
+                content_ref="artifact-active",
+                content_digest="sha256:does-not-match",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        await materializer.materialize(
+            resolved_skillset=skillset,
+            runtime_id="test_runtime",
+            mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+        )
+
+    assert old_skill.read_text(encoding="utf-8") == "old active skill\n"
+    assert alias.is_symlink()
+    assert alias.resolve() == active_dir.resolve()
+    assert not (active_dir / "active").exists()
+
+
+@pytest.mark.asyncio
+async def test_materializer_preserves_previous_projection_on_bundle_failure(
+    tmp_path: Path,
+):
+    active_dir = tmp_path / "runtime" / "skills_active" / "active_snap"
+    old_skill = active_dir / "old-skill" / "SKILL.md"
+    old_skill.parent.mkdir(parents=True)
+    old_skill.write_text("old active skill\n", encoding="utf-8")
+    alias = tmp_path / ".agents" / "skills"
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(active_dir)
+    payload = _skill_bundle_payload({"../evil": b"nope"})
+    materializer = AgentSkillMaterializer(
+        str(tmp_path),
+        artifact_service=_StaticArtifactService({"artifact-bundle": payload}),
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="active_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="active",
+                version="1.0.0",
+                format=AgentSkillFormat.BUNDLE,
+                content_ref="artifact-bundle",
+                content_digest=_digest(payload),
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="unsafe path"):
+        await materializer.materialize(
+            resolved_skillset=skillset,
+            runtime_id="test_runtime",
+            mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+        )
+
+    assert old_skill.read_text(encoding="utf-8") == "old active skill\n"
+    assert alias.is_symlink()
+    assert alias.resolve() == active_dir.resolve()
+
+
+@pytest.mark.asyncio
 async def test_materializer_refuses_unknown_agents_skills_symlink(tmp_path: Path):
     source_dir = tmp_path / ".agents" / "skills"
     external_target = tmp_path / "external-skills"
@@ -444,6 +536,9 @@ def _skill(name: str, content_ref: str) -> ResolvedSkillEntry:
         content_ref=content_ref,
         provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.DEPLOYMENT),
     )
+
+def _digest(payload: bytes) -> str:
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 def _skill_bundle_payload(files: dict[str, bytes]) -> bytes:
     buffer = io.BytesIO()

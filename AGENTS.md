@@ -236,6 +236,8 @@ Key diagnostics:
 - Python 3.12 + Pydantic v2, Pydantic Settings, Temporal Python SDK activity boundaries, existing MoonMind agent-skill resolver/materializer services, pytest (315-disabled-skills-on-demand-controls)
 - No new persistent storage; disabled on-demand results and activation metadata are deterministic runtime outputs only (315-disabled-skills-on-demand-controls)
 - Existing SQLAlchemy/Alembic database with `execution_remediation_links` and existing Temporal execution source records (317-canonical-remediation-submissions)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind skill resolver/materializer services (318-refresh-managed-runtimes-after-derived-skill-activation)
+- Existing artifact-backed Skill content, resolved skillset manifests, runtime workspace/cache filesystem paths; no new persistent tables planned (318-refresh-managed-runtimes-after-derived-skill-activation)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

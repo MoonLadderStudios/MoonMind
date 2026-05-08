@@ -8,6 +8,7 @@ agent_runtime_publish_artifacts return typed Pydantic contracts
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -2651,6 +2652,7 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
     job_root = managed_root / "job-1"
     workspace = job_root / "repo"
     workspace.mkdir(parents=True)
+    skill_body = b"---\nname: pr-resolver\ndescription: active\n---\nactive resolver body\n"
     resolved_skillset = ResolvedSkillSet(
         snapshot_id="skillset-pr-resolver",
         resolved_at=datetime.now(UTC),
@@ -2659,7 +2661,7 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
                 skill_name="pr-resolver",
                 version="1.0.0",
                 content_ref="art-pr-resolver-body",
-                content_digest="sha256:test",
+                content_digest="sha256:" + hashlib.sha256(skill_body).hexdigest(),
                 provenance=AgentSkillProvenance(
                     source_kind=AgentSkillSourceKind.BUILT_IN
                 ),
@@ -2671,7 +2673,7 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
             "art-pr-resolver-snapshot": resolved_skillset.model_dump_json().encode(
                 "utf-8"
             ),
-            "art-pr-resolver-body": b"---\nname: pr-resolver\ndescription: active\n---\nactive resolver body\n",
+            "art-pr-resolver-body": skill_body,
         }
     )
 
@@ -2934,6 +2936,7 @@ async def test_agent_runtime_prepare_turn_instructions_preserves_checked_in_skil
         "checked-in source input\n",
         encoding="utf-8",
     )
+    skill_body = b"resolved active body\n"
     resolved_skillset = ResolvedSkillSet(
         snapshot_id="skillset-pr-resolver",
         resolved_at=datetime.now(UTC),
@@ -2942,7 +2945,7 @@ async def test_agent_runtime_prepare_turn_instructions_preserves_checked_in_skil
                 skill_name="pr-resolver",
                 version="1.0.0",
                 content_ref="art-pr-resolver-body",
-                content_digest="sha256:test",
+                content_digest="sha256:" + hashlib.sha256(skill_body).hexdigest(),
                 provenance=AgentSkillProvenance(
                     source_kind=AgentSkillSourceKind.BUILT_IN
                 ),
@@ -2954,7 +2957,7 @@ async def test_agent_runtime_prepare_turn_instructions_preserves_checked_in_skil
             "art-pr-resolver-snapshot": resolved_skillset.model_dump_json().encode(
                 "utf-8"
             ),
-            "art-pr-resolver-body": b"resolved active body\n",
+            "art-pr-resolver-body": skill_body,
         }
     )
     activities = TemporalAgentRuntimeActivities(artifact_service=artifact_service)

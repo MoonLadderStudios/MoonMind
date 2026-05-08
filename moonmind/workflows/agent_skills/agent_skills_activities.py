@@ -295,6 +295,16 @@ class AgentSkillsActivities:
                 request.runtime_id or "managed-runtime",
                 RuntimeMaterializationMode.WORKSPACE_MOUNTED,
             )
+            if materialization.metadata.get("runtimeRefreshFailed"):
+                message = (
+                    materialization.metadata.get("runtimeRefreshMessage")
+                    or "Skills On Demand runtime refresh failed."
+                )
+                return service.denied_request_result(
+                    request,
+                    code="runtime_refresh_failed",
+                    message=self._safe_skills_on_demand_message(str(message)),
+                )
             if self._artifact_service:
                 derived_set = await self._persist_resolved_skillset_manifest(
                     resolved_set=derived_set,
@@ -404,7 +414,7 @@ class AgentSkillsActivities:
     def _skills_on_demand_runtime_code(self, message: str) -> str:
         lowered = message.lower()
         if "checksum" in lowered:
-            return "checksum_mismatch"
+            return "materialization_failed"
         if "artifact" in lowered or "content_ref" in lowered:
             return "artifact_unavailable"
         if "materializ" in lowered:
