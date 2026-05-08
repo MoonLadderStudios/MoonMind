@@ -4747,6 +4747,12 @@ class MoonMindRunWorkflow:
             "stepCount",
             "maxAttempts",
             "steps",
+            "storyOutput",
+            "story_output",
+            "storyBreakdownPath",
+            "story_breakdown_path",
+            "storyBreakdownMarkdownPath",
+            "story_breakdown_markdown_path",
         ):
             param_val = runtime_block.get(param_key) or node_inputs.get(param_key)
             if param_val is not None:
