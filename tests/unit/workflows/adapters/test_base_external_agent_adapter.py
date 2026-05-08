@@ -254,6 +254,14 @@ async def test_provider_capability_returns_descriptor():
     assert isinstance(cap, ProviderCapabilityDescriptor)
     assert cap.provider_name == "stub"
     assert cap.supports_cancel is True
+    assert cap.supports_skills_on_demand_activation is False
+
+async def test_provider_capability_serializes_skills_on_demand_exclusion():
+    adapter = _StubAdapter()
+
+    serialized = adapter.provider_capability.model_dump(mode="json", by_alias=True)
+
+    assert serialized["supportsSkillsOnDemandActivation"] is False
 
 # ---------------------------------------------------------------------------
 # Capability-aware poll_hint_seconds auto-population (DOC-REQ-010, FR-008)
@@ -340,4 +348,3 @@ async def test_cancel_returns_fallback_on_do_cancel_exception():
     assert result.metadata.get("cancelAccepted") is False
     assert result.metadata.get("error") is True
     assert adapter.do_cancel_calls == ["run-boom"]
-

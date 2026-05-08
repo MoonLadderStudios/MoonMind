@@ -1,5 +1,6 @@
 import io
 import json
+import hashlib
 import shutil
 import tarfile
 from pathlib import Path
@@ -15,6 +16,7 @@ from moonmind.schemas.agent_skill_models import (
 from moonmind.workflows.skills.workspace_links import (
     SkillWorkspaceError,
     ensure_shared_skill_links,
+    is_moonmind_owned_projection,
 )
 
 _CANONICAL_ALIAS = ".agents/skills"
@@ -59,43 +61,10 @@ class AgentSkillMaterializer:
         ):
             active_dir = self._active_backing_dir(resolved_skillset.snapshot_id)
             alias_dir = self.workspace_root / ".agents" / "skills"
+            staging_dir = active_dir.parent / f".{active_dir.name}.staging"
             manifest_path = active_dir / "_manifest.json"
             alias_available = False
             alias_skipped_reason = None
-
-            try:
-                active_dir.mkdir(parents=True, exist_ok=True)
-                self._clear_directory(active_dir)
-            except (OSError, RuntimeError) as ex:
-                raise RuntimeError(f"Failed to prepare skills_active directory: {ex}") from ex
-
-            for skill in resolved_skillset.skills:
-                if not skill.content_ref:
-                    raise RuntimeError(
-                        "resolved skill snapshot cannot be materialized: "
-                        f"skill '{skill.skill_name}' has no content_ref"
-                    )
-                if not self._artifact_service:
-                    raise RuntimeError(
-                        "resolved skill snapshot cannot be materialized: "
-                        "artifact service is required for skill content refs"
-                    )
-                try:
-                    _artifact, payload = await self._artifact_service.read(
-                        artifact_id=skill.content_ref,
-                        principal="system",
-                        allow_restricted_raw=True,
-                    )
-                    skill_dir = active_dir / skill.skill_name
-                    skill_dir.mkdir(parents=True, exist_ok=True)
-                    if skill.format == AgentSkillFormat.BUNDLE:
-                        self._extract_skill_bundle(payload, skill_dir)
-                    else:
-                        (skill_dir / "SKILL.md").write_bytes(payload)
-                except Exception as ex:
-                    raise RuntimeError(
-                        f"Failed to materialize content for skill {skill.skill_name}: {ex}"
-                    ) from ex
 
             manifest_content = {
                 "backing_path": str(active_dir),
@@ -111,13 +80,65 @@ class AgentSkillMaterializer:
             }
 
             try:
-                manifest_path.write_text(
+                self._preflight_projection(alias_dir, active_dir=active_dir)
+                active_dir.parent.mkdir(parents=True, exist_ok=True)
+                if active_dir.is_symlink():
+                    raise RuntimeError(f"refusing to clear symlinked directory: {active_dir}")
+                if staging_dir.exists() or staging_dir.is_symlink():
+                    self._remove_directory_path(staging_dir)
+                staging_dir.mkdir(parents=True)
+            except (OSError, RuntimeError) as ex:
+                if "existing symlink does not resolve" in str(ex):
+                    raise RuntimeError(
+                        self._projection_error_message(alias_dir, cause=str(ex))
+                    ) from ex
+                raise RuntimeError(f"Failed to prepare skills_active directory: {ex}") from ex
+
+            try:
+                for skill in resolved_skillset.skills:
+                    if not skill.content_ref:
+                        raise RuntimeError(
+                            "resolved skill snapshot cannot be materialized: "
+                            f"skill '{skill.skill_name}' has no content_ref"
+                        )
+                    if not self._artifact_service:
+                        raise RuntimeError(
+                            "resolved skill snapshot cannot be materialized: "
+                            "artifact service is required for skill content refs"
+                        )
+                    _artifact, payload = await self._artifact_service.read(
+                        artifact_id=skill.content_ref,
+                        principal="system",
+                        allow_restricted_raw=True,
+                    )
+                    self._verify_payload_digest(skill, payload)
+                    skill_dir = staging_dir / skill.skill_name
+                    skill_dir.mkdir(parents=True, exist_ok=True)
+                    if skill.format == AgentSkillFormat.BUNDLE:
+                        self._extract_skill_bundle(payload, skill_dir)
+                    else:
+                        (skill_dir / "SKILL.md").write_bytes(payload)
+
+                (staging_dir / "_manifest.json").write_text(
                     json.dumps(manifest_content, indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
                 )
-            except OSError as ex:
+            except Exception as ex:
+                if staging_dir.exists() or staging_dir.is_symlink():
+                    self._remove_directory_path(staging_dir)
                 raise RuntimeError(
-                    f"AgentSkillMaterializer failed to write _manifest.json: {ex}"
+                    f"Failed to materialize content for skill snapshot {resolved_skillset.snapshot_id}: {ex}"
+                ) from ex
+
+            try:
+                if active_dir.exists() or active_dir.is_symlink():
+                    self._remove_directory_path(active_dir)
+                staging_dir.replace(active_dir)
+            except (OSError, RuntimeError) as ex:
+                if staging_dir.exists() or staging_dir.is_symlink():
+                    self._remove_directory_path(staging_dir)
+                raise RuntimeError(
+                    f"Failed to activate prepared skills_active directory: {ex}"
                 ) from ex
 
             try:
@@ -186,6 +207,9 @@ class AgentSkillMaterializer:
             ]
             result.metadata.update(
                 {
+                    "activationTiming": (
+                        "atomic" if alias_available else "next_turn"
+                    ),
                     "activeSkills": [
                         skill.skill_name for skill in resolved_skillset.skills
                     ],
@@ -195,6 +219,7 @@ class AgentSkillMaterializer:
                     "canonicalAliasSkippedReason": alias_skipped_reason,
                     "compatibilityPaths": compatibility_paths,
                     "manifestPath": str(manifest_path),
+                    "materializationVerified": True,
                     "projectionDiagnostics": projection_diagnostics,
                     "repoSkillSourcePreserved": self._repo_skill_source_preserved(alias_dir),
                     "visiblePath": str(visible_path),
@@ -240,6 +265,33 @@ class AgentSkillMaterializer:
         if visible_dir.is_symlink():
             return False
         return not visible_dir.exists() or visible_dir.is_dir()
+
+    @staticmethod
+    def _verify_payload_digest(entry: Any, payload: bytes) -> None:
+        expected = entry.content_digest
+        if not expected:
+            return
+        actual = "sha256:" + hashlib.sha256(payload).hexdigest()
+        if actual != expected:
+            raise RuntimeError(
+                f"checksum mismatch for skill {entry.skill_name}: expected {expected}, got {actual}"
+            )
+
+    @staticmethod
+    def _preflight_projection(alias_dir: Path, *, active_dir: Path) -> None:
+        if not alias_dir.exists() and not alias_dir.is_symlink():
+            return
+        if alias_dir.is_symlink() and is_moonmind_owned_projection(
+            alias_dir,
+            target=active_dir,
+            owned_roots=(active_dir.parent, active_dir),
+        ):
+            return
+        if alias_dir.is_dir() and not alias_dir.is_symlink():
+            return
+        raise RuntimeError(
+            "existing symlink does not resolve under a MoonMind-owned active skill root"
+        )
 
     def _alias_projection_diagnostic(
         self,

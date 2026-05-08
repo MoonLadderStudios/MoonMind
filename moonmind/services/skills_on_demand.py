@@ -214,6 +214,25 @@ class SkillsOnDemandService:
         active_snapshot_id = (
             request.active_snapshot.snapshot_id if request.active_snapshot else None
         )
+        metadata = {
+            "requested_skills": requested_names,
+            "activated_skills": activated_names,
+            "created_by": "skills_on_demand",
+            "denied": False,
+        }
+        if materialization is not None:
+            activation_timing = materialization.metadata.get(
+                "activationTiming",
+                materialization.metadata.get("activation_timing"),
+            )
+            if activation_timing is not None:
+                metadata["activation_timing"] = activation_timing
+            materialization_verified = materialization.metadata.get(
+                "materializationVerified",
+                materialization.metadata.get("materialization_verified"),
+            )
+            if materialization_verified is not None:
+                metadata["materialization_verified"] = materialization_verified
         return SkillsOnDemandRequestResult(
             status="activated",
             code=None,
@@ -225,12 +244,7 @@ class SkillsOnDemandService:
             or resolved_skillset.snapshot_id,
             activation_summary=activation_summary,
             materialization=materialization_summary,
-            metadata={
-                "requested_skills": requested_names,
-                "activated_skills": activated_names,
-                "created_by": "skills_on_demand",
-                "denied": False,
-            },
+            metadata=metadata,
         )
 
     def normalized_requested_skills(
