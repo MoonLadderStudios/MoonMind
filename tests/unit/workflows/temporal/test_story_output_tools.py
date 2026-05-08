@@ -1456,11 +1456,11 @@ async def test_discover_documents_finds_matching_files(tmp_path):
     assert result.status == "COMPLETED"
     assert result.outputs["documentCount"] == 4
     paths = result.outputs["documentPaths"]
-    assert str(tmp_path / "readme.md") in paths
-    assert str(tmp_path / "notes.txt") in paths
-    assert str(tmp_path / "paper.tex") in paths
-    assert str(sub / "deep.md") in paths
-    assert str(tmp_path / "script.py") not in paths
+    assert "readme.md" in paths
+    assert "notes.txt" in paths
+    assert "paper.tex" in paths
+    assert "sub/deep.md" in paths
+    assert "script.py" not in paths
 
 
 @pytest.mark.asyncio
@@ -1475,7 +1475,24 @@ async def test_discover_documents_respects_custom_extensions(tmp_path):
 
     assert result.status == "COMPLETED"
     assert result.outputs["documentCount"] == 1
-    assert result.outputs["documentPaths"] == [str(tmp_path / "b.rst")]
+    assert result.outputs["documentPaths"] == ["b.rst"]
+
+
+@pytest.mark.asyncio
+async def test_discover_documents_returns_workspace_relative_paths(tmp_path, monkeypatch):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "guide.md").write_text("# guide")
+    nested = docs / "nested"
+    nested.mkdir()
+    (nested / "notes.txt").write_text("notes")
+
+    monkeypatch.chdir(tmp_path)
+
+    result = await discover_documents({"directory": str(docs)})
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["documentPaths"] == ["docs/guide.md", "docs/nested/notes.txt"]
 
 
 @pytest.mark.asyncio

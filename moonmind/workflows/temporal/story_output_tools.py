@@ -6,7 +6,6 @@ import base64
 import hashlib
 import inspect
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
@@ -1638,11 +1637,13 @@ async def discover_documents(
         extensions = frozenset({".md", ".txt", ".tex"})
 
     document_paths: list[str] = []
+    workspace_root = Path.cwd().resolve()
+    output_base = workspace_root if root.is_relative_to(workspace_root) else root
     for ext in extensions:
         pattern = f"*{ext}"
         for path in root.rglob(pattern):
             if path.is_file():
-                document_paths.append(str(path))
+                document_paths.append(path.relative_to(output_base).as_posix())
 
     document_paths = sorted(document_paths)
 
