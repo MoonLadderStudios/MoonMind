@@ -1618,6 +1618,12 @@ async def discover_documents(
         )
 
     root = Path(directory).expanduser().resolve()
+    if (not root.exists() or not root.is_dir()) and "\\" in directory:
+        normalized_directory = directory.replace("\\", "/")
+        normalized_root = Path(normalized_directory).expanduser().resolve()
+        if normalized_root.exists() and normalized_root.is_dir():
+            root = normalized_root
+
     if not root.exists() or not root.is_dir():
         return ToolResult(
             status="FAILED",
