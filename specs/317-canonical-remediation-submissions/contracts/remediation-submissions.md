@@ -1,5 +1,7 @@
 # Contract: Canonical Remediation Submissions
 
+**Traceability**: Jira issue `MM-617`; feature path `specs/317-canonical-remediation-submissions`.
+
 ## Create Task With Remediation Metadata
 
 Intent: submit a normal task-shaped execution that carries canonical remediation metadata.

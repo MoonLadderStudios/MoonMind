@@ -1,5 +1,7 @@
 # Data Model: Canonical Remediation Submissions
 
+**Traceability**: Jira issue `MM-617`; feature path `specs/317-canonical-remediation-submissions`.
+
 ## Remediation Run
 
 Represents the normal MoonMind run created to investigate or repair another execution.
