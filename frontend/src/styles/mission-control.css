@@ -3564,14 +3564,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   inset: -1.35rem;
   border-radius: inherit;
   pointer-events: none;
-  border: 2px solid rgb(var(--mm-action-primary) / 0.82);
+  border: 2px solid rgb(var(--mm-action-primary) / 0.92);
   background:
     radial-gradient(
       circle at center,
       rgb(var(--mm-action-primary) / 0) 62%,
-      rgb(var(--mm-action-primary) / 0.3) 62%,
-      rgb(var(--mm-action-primary) / 0.58) 72%,
-      rgb(var(--mm-action-primary) / 0.82) 77%,
+      rgb(var(--mm-action-primary) / 0.44) 62%,
+      rgb(var(--mm-action-primary) / 0.76) 72%,
+      rgb(var(--mm-action-primary) / 0.92) 77%,
       rgb(var(--mm-action-primary) / 0) 77%
     ),
     radial-gradient(
@@ -3584,9 +3584,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
       rgb(var(--mm-action-primary) / 0) 100%
     );
   box-shadow:
-    0 0 0 1px rgb(var(--mm-action-primary) / 0.54),
-    0 0 22px 3px rgb(var(--mm-action-primary) / 0.42),
-    0 0 38px 8px rgb(var(--mm-action-primary) / 0.18);
+    0 0 0 1px rgb(var(--mm-action-primary) / 0.64),
+    0 0 22px 3px rgb(var(--mm-action-primary) / 0.52),
+    0 0 38px 8px rgb(var(--mm-action-primary) / 0.28);
   filter: none;
   transform-origin: center;
   animation: queue-submit-primary-ripple 620ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
@@ -3594,11 +3594,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 @keyframes queue-submit-primary-ripple {
   0% {
-    opacity: 0.82;
+    opacity: 0.92;
     transform: scale(0.72);
   }
   60% {
-    opacity: 0.34;
+    opacity: 0.42;
   }
   100% {
     opacity: 0;
