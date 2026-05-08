@@ -5,13 +5,16 @@ from __future__ import annotations
 import os
 import re
 import time
+import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any, Mapping
 from urllib.parse import urlparse
+from uuid import UUID
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.config.settings import WorkflowSettings, settings
 from moonmind.utils.build_info import resolve_moonmind_build_id
@@ -21,6 +24,8 @@ from moonmind.workflows.tasks.runtime_defaults import (
     resolve_default_task_runtime,
     resolve_runtime_defaults,
 )
+
+logger = logging.getLogger(__name__)
 
 _POLL_INTERVALS_MS = {
     "list": 5000,
@@ -526,15 +531,34 @@ def _build_jira_runtime_config() -> dict[str, Any] | None:
         },
     }
 
-def build_runtime_config(initial_path: str) -> dict[str, Any]:
-    """Build runtime config consumed by dashboard JavaScript."""
+def build_runtime_config(
+    initial_path: str,
+    *,
+    default_task_runtime_override: str | None = None,
+    default_provider_profile_ref: str | None = None,
+) -> dict[str, Any]:
+    """Build runtime config consumed by dashboard JavaScript.
+
+    ``default_task_runtime_override`` and ``default_provider_profile_ref`` come
+    from the per-request effective settings (user/workspace overrides resolved
+    by ``SettingsCatalogService``). When omitted, behavior matches the legacy
+    env+settings-only resolution.
+    """
 
     supported_task_runtimes = _build_supported_task_runtimes()
     temporal_dashboard = settings.temporal_dashboard
+    runtime_override = (
+        normalize_runtime_id(default_task_runtime_override)
+        if isinstance(default_task_runtime_override, str)
+        and default_task_runtime_override.strip()
+        else ""
+    )
     configured_runtime = normalize_runtime_id(
         str(os.environ.get("MOONMIND_WORKER_RUNTIME", "")).strip().lower() or None
     ) if os.environ.get("MOONMIND_WORKER_RUNTIME", "").strip() else ""
-    if configured_runtime in supported_task_runtimes:
+    if runtime_override in supported_task_runtimes:
+        default_task_runtime = runtime_override
+    elif configured_runtime in supported_task_runtimes:
         default_task_runtime = configured_runtime
     else:
         configured_default = resolve_default_task_runtime(settings.workflow)
@@ -680,6 +704,12 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "detail": "/api/v1/provider-profiles/{profileId}",
                 "update": "/api/v1/provider-profiles/{profileId}",
                 "delete": "/api/v1/provider-profiles/{profileId}",
+                **(
+                    {"defaultProfileRef": default_provider_profile_ref}
+                    if isinstance(default_provider_profile_ref, str)
+                    and default_provider_profile_ref.strip()
+                    else {}
+                ),
             },
             "attachmentPolicy": {
                 "enabled": bool(settings.workflow.agent_job_attachment_enabled),
@@ -696,10 +726,100 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         },
     }
 
+_PROVIDER_PROFILE_INVALID_DIAGNOSTIC_CODES = frozenset(
+    {"provider_profile_not_found", "provider_profile_disabled"}
+)
+
+
+def _coerce_uuid(value: Any) -> UUID | None:
+    if isinstance(value, UUID):
+        return value
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+async def resolve_dashboard_runtime_config(
+    initial_path: str,
+    *,
+    session: AsyncSession | None,
+    user: Any = None,
+) -> dict[str, Any]:
+    """Resolve runtime config with user/workspace setting overrides applied.
+
+    Falls back to the legacy ``build_runtime_config`` behavior when the session
+    is unavailable or the settings catalog cannot be reached. Settings consumed:
+
+    - ``workflow.default_task_runtime`` (workspace scope)
+    - ``workflow.default_provider_profile_ref`` (user scope, falls back to
+      workspace and env). Refs are dropped when their diagnostics indicate the
+      profile is missing or disabled, so the frontend can fall back to its
+      ``is_default`` lookup instead of selecting a stale ID.
+    """
+
+    if session is None:
+        return build_runtime_config(initial_path)
+
+    # Local imports keep the view-model importable without DB models loaded
+    # for tests that exercise build_runtime_config directly.
+    from api_service.services.settings_catalog import SettingsCatalogService
+
+    workspace_id = _coerce_uuid(getattr(user, "workspace_id", None))
+    user_id = _coerce_uuid(getattr(user, "id", None))
+
+    runtime_override: str | None = None
+    profile_ref: str | None = None
+
+    try:
+        service = SettingsCatalogService(
+            session=session,
+            workspace_id=workspace_id,
+            user_id=user_id,
+        )
+        runtime_eff = await service.effective_value_async(
+            "workflow.default_task_runtime", scope="workspace"
+        )
+        if isinstance(runtime_eff.value, str) and runtime_eff.value.strip():
+            runtime_override = runtime_eff.value.strip()
+
+        profile_scope = "user" if user_id is not None else "workspace"
+        profile_eff = await service.effective_value_async(
+            "workflow.default_provider_profile_ref", scope=profile_scope
+        )
+        if isinstance(profile_eff.value, str) and profile_eff.value.strip():
+            invalid = any(
+                diag.code in _PROVIDER_PROFILE_INVALID_DIAGNOSTIC_CODES
+                for diag in profile_eff.diagnostics
+            )
+            if not invalid:
+                profile_ref = profile_eff.value.strip()
+    except Exception:
+        # Settings overrides are best-effort. If the DB is unreachable or the
+        # catalog service raises, fall back to the env/settings-only defaults
+        # so the dashboard still renders. The route still has the boot payload
+        # to send back; we just don't get user/workspace personalization.
+        logger.debug(
+            "resolve_dashboard_runtime_config: falling back to defaults",
+            exc_info=True,
+        )
+        runtime_override = None
+        profile_ref = None
+
+    return build_runtime_config(
+        initial_path,
+        default_task_runtime_override=runtime_override,
+        default_provider_profile_ref=profile_ref,
+    )
+
+
 __all__ = [
     "build_live_logs_feature_config",
     "build_repository_branch_options",
     "build_runtime_config",
+    "resolve_dashboard_runtime_config",
     "normalize_status",
     "BranchOption",
     "RepositoryOption",
