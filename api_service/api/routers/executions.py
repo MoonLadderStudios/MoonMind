@@ -2903,13 +2903,24 @@ async def _validate_and_collect_task_input_attachments(
     for ref in attachment_index:
         artifact_id = ref["artifactId"]
         existing = unique.get(artifact_id)
-        if existing is not None and (
-            existing["contentType"] != ref["contentType"]
-            or existing["sizeBytes"] != ref["sizeBytes"]
-        ):
-            raise _invalid_task_request(
-                f"input attachment {artifact_id} has conflicting declarations."
+        if existing is not None:
+            same_target = (
+                existing.get("targetKind") == ref.get("targetKind")
+                and existing.get("stepOrdinal") == ref.get("stepOrdinal")
+                and existing.get("stepRef") == ref.get("stepRef")
             )
+            if not same_target:
+                raise _invalid_task_request(
+                    f"input attachment {artifact_id} is declared for multiple "
+                    "input targets."
+                )
+            if (
+                existing["contentType"] != ref["contentType"]
+                or existing["sizeBytes"] != ref["sizeBytes"]
+            ):
+                raise _invalid_task_request(
+                    f"input attachment {artifact_id} has conflicting declarations."
+                )
         unique.setdefault(artifact_id, ref)
 
     if len(unique) > settings.workflow.agent_job_attachment_max_count:
@@ -4075,7 +4086,12 @@ async def _create_execution_from_task_request(
             if index < len(normalized_steps):
                 normalized_steps[index]["inputAttachments"] = refs
 
-    repository = str(payload.get("repository") or "").strip() or None
+    raw_repository = payload.get("repository")
+    if raw_repository is not None and not isinstance(raw_repository, str):
+        raise _invalid_task_request("payload.repository must be a string.")
+    repository = raw_repository.strip() if isinstance(raw_repository, str) else None
+    if repository == "":
+        repository = None
     integration = (
         str(
             payload.get("integration")
@@ -4189,18 +4205,37 @@ async def _create_execution_from_task_request(
     git_payload = (
         task_payload.get("git") if isinstance(task_payload.get("git"), dict) else {}
     )
+    if isinstance(task_payload.get("git"), Mapping) and isinstance(
+        task_payload["git"].get("targetBranch"), str
+    ) and task_payload["git"]["targetBranch"].strip():
+        raise _invalid_task_request(
+            "payload.task.git.targetBranch is not supported; use "
+            "payload.task.git.branch."
+        )
+    if isinstance(task_payload.get("targetBranch"), str) and task_payload[
+        "targetBranch"
+    ].strip():
+        raise _invalid_task_request(
+            "payload.task.targetBranch is not supported; use payload.task.git.branch."
+        )
     if git_payload:
         normalized_git_payload: dict[str, str] = {}
-        for git_key in ("startingBranch", "targetBranch", "branch"):
+        for git_key in ("startingBranch", "branch"):
             git_value = git_payload.get(git_key)
             if isinstance(git_value, str) and git_value.strip():
                 normalized_git_payload[git_key] = git_value.strip()
         if normalized_git_payload:
             normalized_task_for_planner["git"] = normalized_git_payload
-    for key in ("repoRef", "startingBranch", "targetBranch", "branch"):
+    for key in ("repoRef", "startingBranch", "branch"):
         value = task_payload.get(key)
         if isinstance(value, str) and value.strip():
             normalized_task_for_planner[key] = value.strip()
+    for key in ("authoredPresets", "appliedStepTemplates"):
+        value = task_payload.get(key)
+        if isinstance(value, list):
+            normalized_task_for_planner[key] = [
+                dict(item) if isinstance(item, Mapping) else item for item in value
+            ]
 
     _validate_task_runtime_requirements(
         task_payload=task_payload,
