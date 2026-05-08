@@ -96,11 +96,23 @@ class RuntimeSkillMaterialization(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-SkillsOnDemandStatus = Literal["ok", "denied"]
+SkillsOnDemandQueryStatus = Literal["ok", "denied"]
+SkillsOnDemandRequestStatus = Literal["activated", "denied", "no_change"]
 SkillsOnDemandDeniedCode = Literal[
+    "already_active",
     "feature_disabled",
     "enabled_mode_not_implemented",
     "invalid_request",
+    "snapshot_not_found",
+    "skill_not_found",
+    "version_not_found",
+    "policy_denied",
+    "runtime_incompatible",
+    "tool_policy_denied",
+    "artifact_unavailable",
+    "checksum_mismatch",
+    "materialization_failed",
+    "runtime_refresh_failed",
 ]
 
 
@@ -135,7 +147,7 @@ class SkillsOnDemandQueryRequest(BaseModel):
 class SkillsOnDemandQueryResult(BaseModel):
     """Deterministic on-demand Skill catalog query result."""
 
-    status: SkillsOnDemandStatus
+    status: SkillsOnDemandQueryStatus
     code: SkillsOnDemandDeniedCode | None = None
     message: str
     results: list[SkillCatalogSearchResult] = Field(default_factory=list)
@@ -166,15 +178,29 @@ class SkillsOnDemandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SkillsOnDemandMaterializationSummary(BaseModel):
+    """Compact materialization metadata for an activated on-demand Skill snapshot."""
+
+    mode: RuntimeMaterializationMode
+    visible_path: str | None = None
+    manifest_ref: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class SkillsOnDemandRequestResult(BaseModel):
     """Deterministic on-demand Skill activation result."""
 
-    status: SkillsOnDemandStatus
-    code: SkillsOnDemandDeniedCode
+    status: SkillsOnDemandRequestStatus
+    code: SkillsOnDemandDeniedCode | None = None
     message: str
     active_snapshot_id: str | None = None
+    parent_snapshot_ref: str | None = None
     snapshot_id: str | None = None
     resolved_skillset_ref: str | None = None
+    activation_summary: str | None = None
+    materialization: SkillsOnDemandMaterializationSummary | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(extra="forbid")
 

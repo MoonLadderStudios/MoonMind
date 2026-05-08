@@ -448,12 +448,18 @@ class AgentSkillResolver:
         ]
 
     async def resolve(
-        self, selector: SkillSelector, context: SkillResolutionContext
+        self,
+        selector: SkillSelector,
+        context: SkillResolutionContext,
+        *,
+        base_entries: list[ResolvedSkillEntry] | None = None,
     ) -> ResolvedSkillSet:
         """Resolve the selector against all sources and return a frozen snapshot."""
 
         # 1. Gather all candidates
         candidates_by_source = await self._load_candidates(selector, context)
+        if base_entries:
+            self._merge_base_entries(candidates_by_source, base_entries)
 
         # 2. Merge respecting precedence
         resolved_map = self._merge_candidates(candidates_by_source)
@@ -642,6 +648,21 @@ class AgentSkillResolver:
                     merge_entry(entry)
 
         return resolved_map
+
+    def _merge_base_entries(
+        self,
+        candidates_by_source: dict[AgentSkillSourceKind, list[ResolvedSkillEntry]],
+        base_entries: list[ResolvedSkillEntry],
+    ) -> None:
+        for entry in base_entries:
+            source_kind = entry.provenance.source_kind
+            bucket = candidates_by_source.setdefault(source_kind, [])
+            for index, existing in enumerate(bucket):
+                if existing.skill_name == entry.skill_name:
+                    bucket[index] = entry
+                    break
+            else:
+                bucket.append(entry)
 
     def _get_source_kind(self, loader: SkillLoader) -> AgentSkillSourceKind:
         if isinstance(loader, BuiltInSkillLoader):
