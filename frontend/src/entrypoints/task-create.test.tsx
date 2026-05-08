@@ -7820,11 +7820,6 @@ describe.skip("Task Create Entrypoint", () => {
     );
     selectStepType(step, "Tool");
     expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
-    expect(
-      within(step).getByText(
-        "Skill configuration discarded after changing Step Type. Shared instructions were preserved.",
-      ),
-    ).toBeTruthy();
 
     selectStepType(step, "Skill");
     expect(

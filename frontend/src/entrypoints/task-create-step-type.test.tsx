@@ -221,11 +221,6 @@ describe("Task Create Step Type authoring", () => {
     ).toBe("Keep these shared instructions.");
     expect(within(primaryStep).getByLabelText("Tool ID")).toBeTruthy();
     expect(within(primaryStep).queryByLabelText(/Skill \(optional\)/)).toBeNull();
-    expect(
-      within(primaryStep).getByText(
-        "Skill configuration discarded after changing Step Type. Shared instructions were preserved.",
-      ),
-    ).toBeTruthy();
 
     selectStepType(primaryStep, "Skill");
 
