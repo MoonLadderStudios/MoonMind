@@ -12475,13 +12475,16 @@ describe("Task Create submit arrow animation", () => {
       /\.queue-submit-primary-ripple\s*\{[^}]*animation:\s*queue-submit-primary-ripple\s+620ms\s+cubic-bezier\(0\.22,\s*0\.61,\s*0\.36,\s*1\)\s+forwards;/s,
     );
     expect(css).toMatch(
-      /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-1\.35rem;[^}]*border:\s*0;[^}]*box-shadow:[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.54\)[^}]*filter:\s*blur\(2px\);/s,
+      /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-1\.35rem;[^}]*border:\s*2px solid rgb\(var\(--mm-action-primary\) \/ 0\.82\);[^}]*box-shadow:[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.54\)[^}]*filter:\s*none;/s,
     );
     expect(css).toMatch(
       /\.queue-submit-primary-ripple\s*\{[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.5\)\s*41%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.16\)\s*68%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*100%/s,
     );
     expect(css).toMatch(
-      /\.queue-submit-primary-ripple\s*\{[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*64%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.58\)\s*70%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.34\)\s*73%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*79%/s,
+      /\.queue-submit-primary-ripple\s*\{[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*62%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.3\)\s*62%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.82\)\s*77%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*77%/s,
+    );
+    expect(css).not.toMatch(
+      /\.queue-submit-primary-ripple\s*\{[^}]*filter:\s*blur/s,
     );
     expect(css).toMatch(
       /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 32px 2px rgb\(var\(--mm-accent-2\) \/ 0\.36\)[^}]*0 0 62px -2px rgb\(var\(--mm-accent-2\) \/ 0\.24\)/s,
