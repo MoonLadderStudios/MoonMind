@@ -51,7 +51,7 @@ Current Jira status at orchestration input fetch time: In Progress
 Canonical source note: synthesized from trusted jira.get_issue response fields because the response did not expose recommendedImports.presetInstructions, normalizedPresetBrief, presetBrief, presetInstructions, recommendedPresetInstructions, or acceptanceCriteriaText.
 """
 
-<!-- Moon Spec specs contain exactly one independently testable user story. Use /speckit.breakdown for technical designs that contain multiple stories. -->
+<!-- Moon Spec specs contain exactly one independently testable user story. Use /moonspec-breakdown for technical designs that contain multiple stories. -->
 
 ## User Story - Preserve Authored Task Submission Shape
 

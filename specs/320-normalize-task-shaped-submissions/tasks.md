@@ -67,7 +67,7 @@
 - [ ] T010 [P] Add failing backend unit tests in `tests/unit/api/routers/test_executions.py` proving canonical task-shaped create requests preserve objective attachments, step attachments, step IDs/order, runtime, publish, dependencies, Jira provenance, authored presets, applied templates, and branch intent (FR-001, FR-003, FR-005, FR-007, FR-008, SC-001, SC-002, DESIGN-REQ-001, DESIGN-REQ-008, DESIGN-REQ-011).
 - [ ] T011 [P] Add failing backend unit tests in `tests/unit/api/routers/test_executions.py` proving new task-shaped normalization rejects or removes legacy `targetBranch` and top-level branch aliases from execution-visible task output while preserving `task.git.branch` (FR-006, SC-003, DESIGN-REQ-011, DESIGN-REQ-025).
 - [ ] T012 [P] Add failing backend unit tests in `tests/unit/api/routers/test_executions.py` proving invalid repository, runtime, publish, dependency, attachment policy, missing target, unknown target, conflicting attachment declaration, and ambiguous target-binding inputs fail explicitly (FR-004, FR-010, SC-004, DESIGN-REQ-006, DESIGN-REQ-025).
-- [ ] T013 [P] Add failing backend unit tests in `tests/unit/api/routers/test_executions.py` proving binary inputs remain structured attachment refs and are not embedded in task instruction text after normalization (FR-011, DESIGN-REQ-025).
+- [ ] T013 [P] Confirm existing binary-ref unit evidence in `frontend/src/entrypoints/task-create.test.tsx` and `tests/unit/api/routers/test_executions.py` still proves binary inputs remain structured attachment refs and are not embedded in task instruction text after normalization (FR-011, DESIGN-REQ-025).
 
 ### Integration Tests (write first)
 
@@ -79,7 +79,7 @@
 ### Red-First Confirmation
 
 - [ ] T018 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and confirm T007-T009 fail for the intended MM-627 reasons before editing `frontend/src/entrypoints/task-create.tsx`.
-- [ ] T019 Run `./tools/test_unit.sh tests/unit/api/routers/test_executions.py` and confirm T010-T013 fail for the intended MM-627 reasons before editing `api_service/api/routers/executions.py`.
+- [ ] T019 Run `./tools/test_unit.sh tests/unit/api/routers/test_executions.py` and confirm T010-T012 fail for the intended MM-627 reasons before editing `api_service/api/routers/executions.py`; record T013 as existing verified evidence.
 - [ ] T020 Run the focused integration target through `./tools/test_integration.sh` and confirm T014-T017 fail for the intended MM-627 reasons before editing execution-boundary production code in `api_service/api/routers/executions.py`.
 
 ### Conditional Fallback for Implemented-Unverified Rows
@@ -92,7 +92,7 @@
 - [ ] T023 Update backend task normalization in `api_service/api/routers/executions.py` to preserve `authoredPresets`, `appliedStepTemplates`, step source/provenance, Jira provenance, dependencies, runtime, publish mode, objective attachments, step attachments, and canonical branch intent in `initial_parameters["task"]` (FR-003, FR-005, FR-007, FR-008, DESIGN-REQ-008, DESIGN-REQ-011).
 - [ ] T024 Update backend branch normalization in `api_service/api/routers/executions.py` to remove superseded `targetBranch` output from new task-shaped submissions and fail explicitly for unsupported branch alias shapes when canonical `task.git.branch` is required (FR-006, SC-003, DESIGN-REQ-011, DESIGN-REQ-025).
 - [ ] T025 Update backend validation in `api_service/api/routers/executions.py` to fail explicitly for invalid repository, runtime, publish, dependency, attachment policy, missing target, unknown target, conflicting attachment declaration, and ambiguous target-binding input (FR-004, FR-010, SC-004, DESIGN-REQ-006, DESIGN-REQ-025).
-- [ ] T026 Update backend attachment target normalization in `api_service/api/routers/executions.py` so step reordering, text changes, preset aliases, and migration-era input cannot silently retarget objective or step attachments (FR-002, FR-003, FR-009, SC-001, SC-005, DESIGN-REQ-003, DESIGN-REQ-025).
+- [ ] T026 Update backend attachment target normalization in `api_service/api/routers/executions.py` so step reordering, text changes, preset aliases, and migration-era input cannot silently retarget objective or step attachments (FR-003, FR-009, SC-001, SC-005, DESIGN-REQ-003, DESIGN-REQ-025).
 - [ ] T027 Update execution-visible schema handling in `moonmind/schemas/temporal_models.py` only if T010-T017 reveal normalized task fields are dropped or hidden from task detail, edit, rerun, or verification surfaces (FR-003, FR-005, FR-007, FR-008, DESIGN-REQ-008, DESIGN-REQ-011).
 - [ ] T028 Update or add integration wiring in `api_service/api/routers/executions.py` so artifact-backed original task input snapshots preserve objective and step attachment refs, preset provenance, Jira provenance, and canonical branch semantics for create, edit, and rerun paths (FR-003, FR-005, FR-006, FR-007, FR-008, FR-009, SC-001, SC-002, SC-003, SC-005).
 
