@@ -6284,7 +6284,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     workflowId: string;
     updateName: "UpdateInputs" | "RequestRerun";
     inputArtifactRef: string | null;
-    parametersPatch: Record<string, unknown>;
+    parametersPatch?: Record<string, unknown> | null;
   }): Promise<void> {
     const updatePayload = buildTemporalArtifactEditUpdatePayload({
       updateName,
@@ -7475,6 +7475,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             })
           : null;
       const artifactPayload = editParametersPatch ?? submittedPayload;
+      const isExactRerun =
+        pageMode.mode === "rerun" && pageMode.intent === "rerun";
       const taskInputArtifactBody = JSON.stringify({
         repository: artifactPayload.repository ?? normalizedRepository,
         task: artifactPayload.task ?? taskPayload,
@@ -7484,8 +7486,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         temporalDraftQuery.data?.execution.inputArtifactRef || "",
       ).trim();
       const shouldCreateInputArtifact =
-        taskInputArtifactBytes > INLINE_TASK_INPUT_LIMIT_BYTES ||
-        (pageMode.mode !== "create" && Boolean(existingInputArtifactRef));
+        !isExactRerun &&
+        (taskInputArtifactBytes > INLINE_TASK_INPUT_LIMIT_BYTES ||
+          (pageMode.mode !== "create" && Boolean(existingInputArtifactRef)));
       if (shouldCreateInputArtifact) {
         const sourceWorkflowId =
           pageMode.mode === "rerun" ? String(pageMode.executionId || "").trim() : null;
@@ -7513,8 +7516,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           workflowId,
           updateName:
             pageMode.mode === "rerun" ? "RequestRerun" : "UpdateInputs",
-          inputArtifactRef,
-          parametersPatch: artifactPayload,
+          inputArtifactRef: isExactRerun ? null : inputArtifactRef,
+          parametersPatch: isExactRerun ? null : artifactPayload,
         });
         return;
       }

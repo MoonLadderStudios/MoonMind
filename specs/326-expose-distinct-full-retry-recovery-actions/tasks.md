@@ -27,10 +27,10 @@
 
 **Purpose**: Confirm active MoonSpec artifacts and relevant code surfaces before authoring tests.
 
-- [ ] T001 Confirm `specs/326-expose-distinct-full-retry-recovery-actions/spec.md`, `specs/326-expose-distinct-full-retry-recovery-actions/plan.md`, `specs/326-expose-distinct-full-retry-recovery-actions/research.md`, `specs/326-expose-distinct-full-retry-recovery-actions/data-model.md`, `specs/326-expose-distinct-full-retry-recovery-actions/contracts/recovery-actions.md`, and `specs/326-expose-distinct-full-retry-recovery-actions/quickstart.md` are present and still describe exactly one story for MM-632.
-- [ ] T002 [P] Review current action capability serialization and rerun/resume routes in `api_service/api/routers/executions.py` for FR-001, FR-004, FR-008, FR-010, FR-012, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-004, and DESIGN-REQ-007.
-- [ ] T003 [P] Review current Temporal rerun service behavior in `moonmind/workflows/temporal/service.py` for FR-004, FR-005, FR-006, FR-011, FR-012, DESIGN-REQ-004, and DESIGN-REQ-007.
-- [ ] T004 [P] Review current Task Detail and Create page recovery flows in `frontend/src/entrypoints/task-detail.tsx`, `frontend/src/entrypoints/task-create.tsx`, and `frontend/src/lib/temporalTaskEditing.ts` for FR-001, FR-002, FR-003, FR-004, FR-008, and SCN-001 through SCN-004.
+- [X] T001 Confirm `specs/326-expose-distinct-full-retry-recovery-actions/spec.md`, `specs/326-expose-distinct-full-retry-recovery-actions/plan.md`, `specs/326-expose-distinct-full-retry-recovery-actions/research.md`, `specs/326-expose-distinct-full-retry-recovery-actions/data-model.md`, `specs/326-expose-distinct-full-retry-recovery-actions/contracts/recovery-actions.md`, and `specs/326-expose-distinct-full-retry-recovery-actions/quickstart.md` are present and still describe exactly one story for MM-632.
+- [X] T002 [P] Review current action capability serialization and rerun/resume routes in `api_service/api/routers/executions.py` for FR-001, FR-004, FR-008, FR-010, FR-012, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-004, and DESIGN-REQ-007.
+- [X] T003 [P] Review current Temporal rerun service behavior in `moonmind/workflows/temporal/service.py` for FR-004, FR-005, FR-006, FR-011, FR-012, DESIGN-REQ-004, and DESIGN-REQ-007.
+- [X] T004 [P] Review current Task Detail and Create page recovery flows in `frontend/src/entrypoints/task-detail.tsx`, `frontend/src/entrypoints/task-create.tsx`, and `frontend/src/lib/temporalTaskEditing.ts` for FR-001, FR-002, FR-003, FR-004, FR-008, and SCN-001 through SCN-004.
 
 ---
 
@@ -42,8 +42,8 @@
 
 - [ ] T005 Add shared failed-execution fixture helpers for action capability, original snapshot, and resume checkpoint permutations in `tests/unit/api/routers/test_executions.py` covering FR-001, FR-008, FR-010, SCN-001, SCN-006, DESIGN-REQ-001, and DESIGN-REQ-002.
 - [ ] T006 [P] Add or refine Task Detail recovery action fixture builders in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-001, FR-008, SCN-001, and SC-001.
-- [ ] T007 [P] Add or refine Create page rerun/edit-for-rerun fixture builders in `frontend/src/entrypoints/task-create.test.tsx` covering FR-002, FR-003, FR-004, SCN-002, SCN-004, and DESIGN-REQ-003.
-- [ ] T008 [P] Create hermetic integration test scaffolding for failed task recovery in `tests/integration/temporal/test_full_retry_recovery_actions.py` covering SCN-001 through SCN-007, DESIGN-REQ-001 through DESIGN-REQ-007, and `contracts/recovery-actions.md`.
+- [X] T007 [P] Add or refine Create page rerun/edit-for-rerun fixture builders in `frontend/src/entrypoints/task-create.test.tsx` covering FR-002, FR-003, FR-004, SCN-002, SCN-004, and DESIGN-REQ-003.
+- [X] T008 [P] Create hermetic integration test scaffolding for failed task recovery in `tests/integration/temporal/test_full_retry_recovery_actions.py` covering SCN-001 through SCN-007, DESIGN-REQ-001 through DESIGN-REQ-007, and `contracts/recovery-actions.md`.
 
 **Checkpoint**: Fixture and integration scaffolding are ready; story tests can now be written.
 
@@ -73,16 +73,16 @@
 - [ ] T009 [P] Add failing API unit tests for the full recovery action capability matrix and disabled reasons in `tests/unit/api/routers/test_executions.py` covering FR-001, FR-008, SCN-001, SC-001, DESIGN-REQ-001, and DESIGN-REQ-002.
 - [ ] T010 [P] Add failing API unit tests requiring exact Rerun to reject or omit task/input mutation fields in `tests/unit/api/routers/test_executions.py` covering FR-004, FR-006, FR-012, SCN-004, SC-003, SC-004, DESIGN-REQ-004, and DESIGN-REQ-007.
 - [ ] T011 [P] Add failing API unit tests for Resume unavailable reasons across missing, stale, unauthorized, and inconsistent checkpoint evidence in `tests/unit/api/routers/test_executions.py` covering FR-010, SCN-006, SC-005, and DESIGN-REQ-002.
-- [ ] T012 [P] Add failing Temporal service unit tests proving exact Rerun preserves original task input unchanged and imports no `resumeSource`, `resumeCheckpointRef`, preserved steps, or completed progress in `tests/unit/workflows/temporal/test_temporal_service.py` covering FR-004, FR-005, FR-006, SCN-004, SCN-005, SC-003, SC-004, DESIGN-REQ-004, and DESIGN-REQ-007.
+- [X] T012 [P] Add failing Temporal service unit tests proving exact Rerun preserves original task input unchanged and imports no `resumeSource`, `resumeCheckpointRef`, preserved steps, or completed progress in `tests/unit/workflows/temporal/test_temporal_service.py` covering FR-004, FR-005, FR-006, SCN-004, SCN-005, SC-003, SC-004, DESIGN-REQ-004, and DESIGN-REQ-007.
 - [ ] T013 [P] Add failing Temporal service unit tests proving edited full retry creates a distinct authoritative snapshot and preserves failed source state in `tests/unit/workflows/temporal/test_temporal_service.py` covering FR-002, FR-003, FR-007, FR-011, SCN-002, SCN-003, SCN-007, SC-002, SC-006, DESIGN-REQ-003, and DESIGN-REQ-006.
 - [ ] T014 [P] Add failing Task Detail UI tests for independent Edit task, Rerun, and Resume visibility plus disabled reason rendering in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-001, FR-008, FR-010, SCN-001, SCN-006, SC-001, SC-005, DESIGN-REQ-001, and DESIGN-REQ-002.
-- [ ] T015 [P] Add failing Create page UI tests proving edit-for-rerun permits authoring edits while exact Rerun cannot submit edited task/input mutation fields in `frontend/src/entrypoints/task-create.test.tsx` covering FR-002, FR-003, FR-004, FR-006, FR-012, SCN-002, SCN-004, SC-002, SC-003, SC-004, DESIGN-REQ-003, DESIGN-REQ-004, and DESIGN-REQ-007.
+- [X] T015 [P] Add failing Create page UI tests proving edit-for-rerun permits authoring edits while exact Rerun cannot submit edited task/input mutation fields in `frontend/src/entrypoints/task-create.test.tsx` covering FR-002, FR-003, FR-004, FR-006, FR-012, SCN-002, SCN-004, SC-002, SC-003, SC-004, DESIGN-REQ-003, DESIGN-REQ-004, and DESIGN-REQ-007.
 
 ### Integration Tests (write first)
 
 - [ ] T016 Add failing hermetic integration test for failed execution detail action capabilities in `tests/integration/temporal/test_full_retry_recovery_actions.py` covering FR-001, FR-008, SCN-001, SC-001, DESIGN-REQ-001, and `contracts/recovery-actions.md`.
 - [ ] T017 Add failing hermetic integration test for edited full retry creating a new from-beginning execution with a new snapshot and no imported progress in `tests/integration/temporal/test_full_retry_recovery_actions.py` covering FR-002, FR-003, FR-006, FR-007, FR-011, SCN-002, SCN-003, SCN-005, SCN-007, SC-002, SC-004, SC-006, DESIGN-REQ-003, DESIGN-REQ-006, and DESIGN-REQ-007.
-- [ ] T018 Add failing hermetic integration test for exact Rerun preserving original input unchanged and omitting Resume progress fields in `tests/integration/temporal/test_full_retry_recovery_actions.py` covering FR-004, FR-005, FR-006, FR-012, SCN-004, SCN-005, SC-003, SC-004, DESIGN-REQ-004, and DESIGN-REQ-007.
+- [X] T018 Add failing hermetic integration test for exact Rerun preserving original input unchanged and omitting Resume progress fields in `tests/integration/temporal/test_full_retry_recovery_actions.py` covering FR-004, FR-005, FR-006, FR-012, SCN-004, SCN-005, SC-003, SC-004, DESIGN-REQ-004, and DESIGN-REQ-007.
 - [ ] T019 Add failing hermetic integration test for invalid Resume evidence returning operator-readable unavailable reasons without disabling full retry choices in `tests/integration/temporal/test_full_retry_recovery_actions.py` covering FR-001, FR-010, FR-012, SCN-006, SC-005, DESIGN-REQ-002, and DESIGN-REQ-005.
 
 ### Red-First Confirmation
@@ -103,9 +103,9 @@
 ### Implementation
 
 - [ ] T029 Update exact Rerun request validation in `api_service/api/routers/executions.py` so exact Rerun rejects or omits task/input mutation fields, artifact overrides, and Resume checkpoint fields for FR-004, FR-006, FR-012, SCN-004, SCN-005, SC-003, SC-004, DESIGN-REQ-004, DESIGN-REQ-007, and `contracts/recovery-actions.md`.
-- [ ] T030 Update manual rerun behavior in `moonmind/workflows/temporal/service.py` so exact Rerun reuses original task input unchanged and does not carry `resumeSource`, `resumeCheckpointRef`, preserved steps, completed prior progress, or edited parameter patches for FR-004, FR-005, FR-006, FR-012, DESIGN-REQ-004, and DESIGN-REQ-007.
+- [X] T030 Update manual rerun behavior in `moonmind/workflows/temporal/service.py` so exact Rerun reuses original task input unchanged and does not carry `resumeSource`, `resumeCheckpointRef`, preserved steps, completed prior progress, or edited parameter patches for FR-004, FR-005, FR-006, FR-012, DESIGN-REQ-004, and DESIGN-REQ-007.
 - [ ] T031 Update Temporal request or response models in `moonmind/schemas/temporal_models.py` only if T029 or T030 requires a stricter exact Rerun contract shape, preserving in-flight compatibility for existing worker-bound payloads for FR-004, FR-012, and DESIGN-REQ-004.
-- [ ] T032 Update exact Rerun UI submission behavior in `frontend/src/entrypoints/task-create.tsx` and `frontend/src/lib/temporalTaskEditing.ts` so exact Rerun cannot submit edited task/input mutation fields and Edit task remains the explicit mutation path for FR-002, FR-003, FR-004, FR-006, FR-012, SCN-002, SCN-004, DESIGN-REQ-003, DESIGN-REQ-004, and DESIGN-REQ-007.
+- [X] T032 Update exact Rerun UI submission behavior in `frontend/src/entrypoints/task-create.tsx` and `frontend/src/lib/temporalTaskEditing.ts` so exact Rerun cannot submit edited task/input mutation fields and Edit task remains the explicit mutation path for FR-002, FR-003, FR-004, FR-006, FR-012, SCN-002, SCN-004, DESIGN-REQ-003, DESIGN-REQ-004, and DESIGN-REQ-007.
 - [ ] T033 Update Task Detail disabled-reason and action rendering in `frontend/src/entrypoints/task-detail.tsx` if T014 shows missing independent visibility or unreadable unavailable reasons for FR-001, FR-008, FR-010, SCN-001, SCN-006, SC-001, SC-005, DESIGN-REQ-001, and DESIGN-REQ-002.
 - [ ] T034 Update Resume checkpoint validation and unavailable reason mapping in `api_service/api/routers/executions.py` and `moonmind/workflows/temporal/service.py` for stale, unauthorized, or inconsistent checkpoint evidence for FR-010, FR-012, SCN-006, SC-005, DESIGN-REQ-002, and DESIGN-REQ-005.
 - [ ] T035 Update source immutability safeguards in `moonmind/workflows/temporal/service.py` and `api_service/api/routers/executions.py` so Edit task, exact Rerun, and Resume attempts preserve failed source state, snapshot, step ledger refs, artifact refs, and checkpoint refs for FR-011, SCN-007, SC-006, DESIGN-REQ-003, and DESIGN-REQ-007.

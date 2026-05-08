@@ -2433,6 +2433,18 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
+  it("builds the exact Temporal RequestRerun payload without mutation fields", () => {
+    expect(
+      buildTemporalArtifactEditUpdatePayload({
+        updateName: "RequestRerun",
+        inputArtifactRef: null,
+        parametersPatch: null,
+      }),
+    ).toEqual({
+      updateName: "RequestRerun",
+    });
+  });
+
   it("does not load an execution detail draft in create mode", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
@@ -3482,7 +3494,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(screen.getByRole("button", { name: "Rerun Task" })).toBeTruthy();
   });
 
-  it("submits terminal rerun mode through RequestRerun and opens the created rerun detail view", async () => {
+  it("submits exact terminal rerun without task or input mutation fields", async () => {
     window.history.pushState(
       {},
       "Task Rerun",
@@ -3515,36 +3527,10 @@ describe.skip("Task Create Entrypoint", () => {
     const artifactCreateCall = fetchSpy.mock.calls.find(
       ([url, init]) => String(url) === "/api/artifacts" && init?.method === "POST",
     );
-    const artifactCreateRequest = JSON.parse(
-      String(artifactCreateCall?.[1]?.body),
-    );
-    expect(artifactCreateRequest).toMatchObject({
-      metadata: {
-        sourceWorkflowId: "mm:rerun-123",
-      },
-    });
-    expect(request).toMatchObject({
+    expect(artifactCreateCall).toBeUndefined();
+    expect(request).toEqual({
       updateName: "RequestRerun",
-      inputArtifactRef: "art-001",
-      parametersPatch: {
-        inputArtifactRef: "art-001",
-        repository: "MoonLadderStudios/MoonMind",
-        targetRuntime: "codex_cli",
-        task: {
-          instructions: "Rerun with reviewed Temporal inputs.",
-          runtime: {
-            mode: "codex_cli",
-            model: "gpt-5.4",
-            effort: "medium",
-            profileId: "profile:codex-secondary",
-          },
-          publish: {
-            mode: "pr",
-          },
-        },
-      },
     });
-    expect(request.inputArtifactRef).not.toBe("historical-input");
     expect(
       fetchSpy.mock.calls.some(
         ([url, init]) => String(url) === "/api/executions" && init?.method === "POST",
