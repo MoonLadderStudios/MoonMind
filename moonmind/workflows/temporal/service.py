@@ -2626,6 +2626,12 @@ class TemporalExecutionService:
             raise TemporalExecutionResumeCheckpointError(
                 "Resume checkpoint task input snapshot does not match source execution."
             )
+        source_plan_ref = str(record.plan_ref or "").strip() or None
+        if checkpoint.plan_ref is not None and source_plan_ref is not None:
+            if checkpoint.plan_ref != source_plan_ref:
+                raise TemporalExecutionResumeCheckpointError(
+                    "Resume checkpoint plan identity does not match source execution."
+                )
         failed_step_id = checkpoint.failed_step.logical_step_id
         failed_step_attempt = checkpoint.failed_step.attempt
         if not failed_step_id:
@@ -2640,8 +2646,8 @@ class TemporalExecutionService:
             sourceWorkflowId=record.workflow_id,
             sourceRunId=source_run_id,
             sourceTaskInputSnapshotRef=source_snapshot_ref,
-            sourcePlanRef=record.plan_ref,
-            sourcePlanDigest=(checkpoint.plan_digest if checkpoint else None),
+            sourcePlanRef=checkpoint.plan_ref or source_plan_ref,
+            sourcePlanDigest=checkpoint.plan_digest,
             failedStepId=failed_step_id,
             failedStepAttempt=failed_step_attempt,
             resumeCheckpointRef=checkpoint_ref,
