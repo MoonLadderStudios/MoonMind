@@ -114,6 +114,149 @@ def test_task_shaped_submission_boundary_exposes_canonical_task_parameters(
     ]
     assert task["steps"][0]["jiraOrchestration"] == {"issueKey": "MM-627"}
 
+def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    test_client, service = _client()
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        []
+    )
+    authored_presets = [
+        {
+            "presetSlug": "parent-flow",
+            "presetVersion": "1.0.0",
+            "scope": "global",
+            "includePath": ["parent-flow@1.0.0"],
+        },
+        {
+            "presetSlug": "child-checks",
+            "presetVersion": "1.0.0",
+            "alias": "quality",
+            "scope": "global",
+            "includePath": [
+                "parent-flow@1.0.0",
+                "quality:child-checks@1.0.0",
+            ],
+            "inputMapping": {"target": "preset composition"},
+        },
+    ]
+    composition = {
+        "slug": "parent-flow",
+        "version": "1.0.0",
+        "scope": "global",
+        "path": ["parent-flow@1.0.0"],
+        "stepIds": ["tpl:parent-flow:1.0.0:01"],
+        "includes": [
+            {
+                "slug": "child-checks",
+                "version": "1.0.0",
+                "scope": "global",
+                "alias": "quality",
+                "path": [
+                    "parent-flow@1.0.0",
+                    "quality:child-checks@1.0.0",
+                ],
+                "inputMapping": {"target": "preset composition"},
+                "stepIds": ["tpl:parent-flow:1.0.0:01"],
+                "includes": [],
+            }
+        ],
+    }
+
+    with test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex",
+                    "task": {
+                        "instructions": "Compile recursive presets.",
+                        "runtime": {"mode": "codex"},
+                        "publish": {"mode": "none"},
+                        "steps": [
+                            {
+                                "id": "tpl:parent-flow:1.0.0:01",
+                                "type": "skill",
+                                "instructions": "Run child check.",
+                                "skill": {"id": "auto"},
+                                "source": {
+                                    "kind": "preset-derived",
+                                    "presetSlug": "child-checks",
+                                    "presetVersion": "1.0.0",
+                                    "includePath": [
+                                        "parent-flow@1.0.0",
+                                        "quality:child-checks@1.0.0",
+                                    ],
+                                },
+                            }
+                        ],
+                        "authoredPresets": authored_presets,
+                        "appliedStepTemplates": [
+                            {
+                                "slug": "parent-flow",
+                                "version": "1.0.0",
+                                "stepIds": ["tpl:parent-flow:1.0.0:01"],
+                                "composition": composition,
+                                "authoredPresets": authored_presets,
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    assert task["authoredPresets"] == authored_presets
+    assert task["appliedStepTemplates"][0]["composition"] == composition
+    assert task["appliedStepTemplates"][0]["authoredPresets"] == authored_presets
+    assert task["steps"][0]["source"]["includePath"] == [
+        "parent-flow@1.0.0",
+        "quality:child-checks@1.0.0",
+    ]
+    assert all(step.get("type") != "preset" for step in task["steps"])
+
+def test_task_shaped_submission_boundary_does_not_fabricate_preset_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    test_client, service = _client()
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        []
+    )
+
+    with test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex",
+                    "task": {
+                        "instructions": "Manual only.",
+                        "steps": [
+                            {
+                                "id": "manual-1",
+                                "type": "skill",
+                                "instructions": "Run manual step.",
+                                "skill": {"id": "auto"},
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    assert "authoredPresets" not in task
+    assert "appliedStepTemplates" not in task
+    assert "source" not in task["steps"][0]
+
 
 def test_task_shaped_submission_boundary_rejects_invalid_alias_and_target_binding(
     monkeypatch: pytest.MonkeyPatch,

@@ -1149,6 +1149,13 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
     assert task["steps"][12]["title"] == "Move Jira issue to Code Review"
     assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
     assert len(task["appliedStepTemplates"][0]["stepIds"]) == 13
+    assert task["authoredPresets"][0]["presetSlug"] == "jira-orchestrate"
+    assert task["authoredPresets"][0]["presetVersion"] == "1.0.0"
+    assert task["appliedStepTemplates"][0]["authoredPresets"] == task[
+        "authoredPresets"
+    ]
+    assert task["appliedStepTemplates"][0]["composition"]["slug"] == "jira-orchestrate"
+    assert all(step["type"] != "preset" for step in task["steps"])
 
 
 @pytest.mark.asyncio

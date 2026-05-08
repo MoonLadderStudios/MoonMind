@@ -428,6 +428,34 @@ def _composition_capabilities(node: dict[str, Any]) -> list[str]:
             capabilities.extend(_composition_capabilities(child))
     return _normalize_capabilities(capabilities)
 
+def _authored_presets_from_composition(node: dict[str, Any]) -> list[dict[str, Any]]:
+    presets: list[dict[str, Any]] = []
+
+    def visit(candidate: dict[str, Any]) -> None:
+        entry: dict[str, Any] = {
+            "presetSlug": str(candidate.get("slug") or "").strip(),
+            "presetVersion": str(candidate.get("version") or "").strip(),
+            "scope": str(candidate.get("scope") or "").strip(),
+            "includePath": [
+                str(item).strip()
+                for item in candidate.get("path") or []
+                if str(item).strip()
+            ],
+        }
+        alias = str(candidate.get("alias") or "").strip()
+        if alias:
+            entry["alias"] = alias
+        input_mapping = candidate.get("inputMapping")
+        if isinstance(input_mapping, Mapping) and input_mapping:
+            entry["inputMapping"] = dict(input_mapping)
+        presets.append({key: value for key, value in entry.items() if value})
+        for child in candidate.get("includes") or []:
+            if isinstance(child, dict):
+                visit(child)
+
+    visit(node)
+    return presets
+
 def _render_value(
     env: SandboxedEnvironment,
     value: Any,
@@ -1363,6 +1391,7 @@ class TaskTemplateCatalogService:
         visited: set[tuple[str, str, str]],
         resolved_steps: list[dict[str, Any]],
         alias: str | None = None,
+        input_mapping: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         node: dict[str, Any] = {
             "slug": template.slug,
@@ -1378,6 +1407,8 @@ class TaskTemplateCatalogService:
         }
         if alias:
             node["alias"] = alias
+        if input_mapping:
+            node["inputMapping"] = dict(input_mapping)
 
         for source_index, source_step in enumerate(version_model.steps or [], start=1):
             rendered = _render_value(
@@ -1487,6 +1518,7 @@ class TaskTemplateCatalogService:
                     visited={*visited, target_key},
                     resolved_steps=resolved_steps,
                     alias=include_alias,
+                    input_mapping=child_inputs,
                 )
                 node["includes"].append(child_node)
                 node["stepIds"].extend(child_node["stepIds"])
@@ -1540,6 +1572,12 @@ class TaskTemplateCatalogService:
                         "stepIndex": source_index,
                     },
                     "path": list(path),
+                },
+                "source": {
+                    "kind": "preset-derived",
+                    "presetSlug": template.slug,
+                    "presetVersion": version_model.version,
+                    "includePath": list(path),
                 },
             }
             if alias:
@@ -1688,6 +1726,7 @@ class TaskTemplateCatalogService:
             visited={(normalized_scope.value, template.slug, selected_version.version)},
             resolved_steps=resolved_steps,
         )
+        authored_presets = _authored_presets_from_composition(composition)
 
         template_caps = _normalize_capabilities(
             list(template.required_capabilities or [])
@@ -1722,12 +1761,15 @@ class TaskTemplateCatalogService:
         return {
             "steps": resolved_steps,
             "composition": composition,
+            "authoredPresets": authored_presets,
             "appliedTemplate": {
                 "slug": template.slug,
                 "version": selected_version.version,
                 "inputs": validated_inputs,
                 "stepIds": [step["id"] for step in resolved_steps],
                 "appliedAt": applied_at,
+                "composition": composition,
+                "authoredPresets": authored_presets,
             },
             "capabilities": template_caps,
             "warnings": warnings,

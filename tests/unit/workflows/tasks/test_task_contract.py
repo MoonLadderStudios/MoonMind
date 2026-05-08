@@ -219,6 +219,80 @@ def test_task_steps_validate_without_resolving_source_provenance(
     else:
         assert dumped["source"] == source
 
+def test_task_authored_presets_accept_recursive_bindings() -> None:
+    payload = CanonicalTaskPayload.model_validate(
+        {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "Run recursive preset.",
+                "authoredPresets": [
+                    {
+                        "presetSlug": "parent-flow",
+                        "presetVersion": "1.0.0",
+                        "scope": "global",
+                        "includePath": ["parent-flow@1.0.0"],
+                    },
+                    {
+                        "presetSlug": "child-checks",
+                        "presetVersion": "1.0.0",
+                        "alias": "quality",
+                        "scope": "global",
+                        "includePath": [
+                            "parent-flow@1.0.0",
+                            "quality:child-checks@1.0.0",
+                        ],
+                        "inputMapping": {"target": "preset composition"},
+                    },
+                ],
+                "steps": [
+                    {
+                        "type": "skill",
+                        "instructions": "Run child check.",
+                        "skill": {"id": "auto"},
+                        "source": {
+                            "kind": "preset-derived",
+                            "presetSlug": "child-checks",
+                            "presetVersion": "1.0.0",
+                            "includePath": [
+                                "parent-flow@1.0.0",
+                                "quality:child-checks@1.0.0",
+                            ],
+                        },
+                    }
+                ],
+            },
+        }
+    )
+
+    task = payload.model_dump(by_alias=True, exclude_none=True)["task"]
+    assert task["authoredPresets"][1] == {
+        "presetSlug": "child-checks",
+        "presetVersion": "1.0.0",
+        "alias": "quality",
+        "includePath": [
+            "parent-flow@1.0.0",
+            "quality:child-checks@1.0.0",
+        ],
+        "inputMapping": {"target": "preset composition"},
+        "scope": "global",
+    }
+
+def test_task_steps_reject_unresolved_preset_include_work() -> None:
+    with pytest.raises(ValidationError, match="unresolved preset include"):
+        TaskExecutionSpec.model_validate(
+            {
+                "instructions": "Invalid worker payload.",
+                "steps": [
+                    {
+                        "kind": "include",
+                        "slug": "child-checks",
+                        "version": "1.0.0",
+                        "alias": "quality",
+                    }
+                ],
+            }
+        )
+
 @pytest.mark.parametrize("step_type", ["preset", "activity", "Activity"])
 def test_task_steps_reject_non_executable_step_types(step_type: str) -> None:
     with pytest.raises(ValidationError, match="task\\.steps\\[\\]\\.type"):

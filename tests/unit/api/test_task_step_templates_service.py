@@ -456,6 +456,199 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
     assert expanded["composition"]["includes"][0]["stepIds"] == [
         step["id"] for step in expanded["steps"]
     ]
+    assert expanded["authoredPresets"] == [
+        {
+            "presetSlug": "parent-flow",
+            "presetVersion": "1.0.0",
+            "scope": "global",
+            "includePath": ["parent-flow@1.0.0"],
+        },
+        {
+            "presetSlug": "child-checks",
+            "presetVersion": "1.0.0",
+            "alias": "quality",
+            "scope": "global",
+            "includePath": [
+                "parent-flow@1.0.0",
+                "quality:child-checks@1.0.0",
+            ],
+            "inputMapping": {"target": "preset composition"},
+        },
+    ]
+    assert expanded["appliedTemplate"]["composition"] == expanded["composition"]
+    assert expanded["appliedTemplate"]["authoredPresets"] == expanded[
+        "authoredPresets"
+    ]
+    assert expanded["steps"][0]["source"] == {
+        "kind": "preset-derived",
+        "presetSlug": "child-checks",
+        "presetVersion": "1.0.0",
+        "includePath": [
+            "parent-flow@1.0.0",
+            "quality:child-checks@1.0.0",
+        ],
+    }
+
+async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="stable-child",
+                title="Stable Child",
+                description="Reusable child",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {"title": "First child", "instructions": "First child"},
+                    {"title": "Second child", "instructions": "Second child"},
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+            await service.create_template(
+                slug="stable-parent",
+                title="Stable Parent",
+                description="Composed parent",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {"title": "Manual before", "instructions": "Manual before"},
+                    {
+                        "kind": "include",
+                        "slug": "stable-child",
+                        "version": "1.0.0",
+                        "alias": "child",
+                        "scope": "global",
+                    },
+                    {"title": "Manual after", "instructions": "Manual after"},
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+
+            first = await service.expand_template(
+                slug="stable-parent",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={},
+                context={},
+            )
+            second = await service.expand_template(
+                slug="stable-parent",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={},
+                context={},
+            )
+
+    assert [step["title"] for step in first["steps"]] == [
+        "Manual before",
+        "First child",
+        "Second child",
+        "Manual after",
+    ]
+    assert [step["id"] for step in first["steps"]] == [
+        step["id"] for step in second["steps"]
+    ]
+    assert first["composition"]["stepIds"] == [
+        step["id"] for step in first["steps"]
+    ]
+
+async def test_expand_template_rejects_duplicate_include_aliases(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="duplicate-child",
+                title="Duplicate Child",
+                description="Reusable child",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[{"instructions": "child"}],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+
+            with pytest.raises(
+                TaskTemplateValidationError,
+                match="include alias 'same' is duplicated",
+            ):
+                await service.create_template(
+                    slug="duplicate-parent",
+                    title="Duplicate Parent",
+                    description="Invalid includes",
+                    scope="global",
+                    scope_ref=None,
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "kind": "include",
+                            "slug": "duplicate-child",
+                            "version": "1.0.0",
+                            "alias": "same",
+                        },
+                        {
+                            "kind": "include",
+                            "slug": "duplicate-child",
+                            "version": "1.0.0",
+                            "alias": "same",
+                        },
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=None,
+                )
+
+async def test_expand_template_rejects_missing_include_target(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="missing-target-parent",
+                title="Missing Target Parent",
+                description="Invalid include target",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "missing-child",
+                        "version": "1.0.0",
+                        "alias": "missing",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+
+            with pytest.raises(
+                TaskTemplateValidationError,
+                match="missing:missing-child@1.0.0",
+            ):
+                await service.expand_template(
+                    slug="missing-target-parent",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={},
+                    context={},
+                )
 
 async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
     tmp_path,

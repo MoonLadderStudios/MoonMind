@@ -12848,6 +12848,27 @@ describe("Task Create MM-578 Preset expansion", () => {
           appliedTemplate: {
             slug: "mm-578-preset",
             version: "1.0.0",
+            stepIds: [
+              "tpl:mm-578-preset:1.0.0:01",
+              "tpl:mm-578-preset:1.0.0:02",
+            ],
+            composition: {
+              slug: "mm-578-preset",
+              version: "1.0.0",
+              path: ["mm-578-preset@1.0.0"],
+              stepIds: [
+                "tpl:mm-578-preset:1.0.0:01",
+                "tpl:mm-578-preset:1.0.0:02",
+              ],
+              includes: [],
+            },
+            authoredPresets: [
+              {
+                presetSlug: "mm-578-preset",
+                presetVersion: "1.0.0",
+                includePath: ["mm-578-preset@1.0.0"],
+              },
+            ],
           },
           capabilities: ["jira"],
           warnings: ["Generated steps should be reviewed before apply."],
@@ -13460,7 +13481,13 @@ describe("Task Create MM-578 Preset expansion", () => {
       );
     });
     const request = latestCreateRequest() as {
-      payload: { task: { steps: Array<Record<string, unknown>> } };
+      payload: {
+        task: {
+          steps: Array<Record<string, unknown>>;
+          authoredPresets?: Array<Record<string, unknown>>;
+          appliedStepTemplates?: Array<Record<string, unknown>>;
+        };
+      };
     };
     expect(request.payload.task.steps[0]).toEqual({
       id: "tpl:mm-578-preset:1.0.0:01",
@@ -13499,6 +13526,29 @@ describe("Task Create MM-578 Preset expansion", () => {
       },
     });
     expect(request.payload.task.steps[1]?.["tool"]).toBeUndefined();
+    expect(request.payload.task.authoredPresets).toEqual([
+      {
+        presetSlug: "mm-578-preset",
+        presetVersion: "1.0.0",
+        includePath: ["mm-578-preset@1.0.0"],
+      },
+    ]);
+    expect(request.payload.task.appliedStepTemplates?.[0]).toMatchObject({
+      slug: "mm-578-preset",
+      composition: {
+        slug: "mm-578-preset",
+        stepIds: [
+          "tpl:mm-578-preset:1.0.0:01",
+          "tpl:mm-578-preset:1.0.0:02",
+        ],
+      },
+      authoredPresets: [
+        {
+          presetSlug: "mm-578-preset",
+          presetVersion: "1.0.0",
+        },
+      ],
+    });
   });
 
   it("auto-expands an unresolved Preset during Create submit without mutating the visible draft", async () => {
@@ -13531,6 +13581,19 @@ describe("Task Create MM-578 Preset expansion", () => {
       includePath: ["root", "fetch"],
       originalStepId: "fetch-jira-issue",
     });
+    expect(
+      (
+        latestCreateRequest() as {
+          payload?: { task?: { authoredPresets?: Array<Record<string, unknown>> } };
+        }
+      ).payload?.task?.authoredPresets,
+    ).toEqual([
+      {
+        presetSlug: "mm-578-preset",
+        presetVersion: "1.0.0",
+        includePath: ["mm-578-preset@1.0.0"],
+      },
+    ]);
     expect(
       screen.getByDisplayValue("Keep unresolved MM-578 preset placeholder."),
     ).toBeTruthy();
