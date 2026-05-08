@@ -51,7 +51,7 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete.
 
-- [ ] T006 Define the compact target diagnostics response contract in `moonmind/schemas/temporal_models.py` for Task Target, Target Attachment Metadata, Target Diagnostic Reference, Attachment Failure Diagnostic, and Recovery Provenance (FR-001 through FR-012, SC-001 through SC-005)
+- [ ] T006 Define the compact target diagnostics fixture shape in `tests/unit/api/routers/test_executions.py` from `contracts/task-detail-target-diagnostics.md` without editing production schemas yet (FR-001 through FR-012, SC-001 through SC-005)
 - [ ] T007 Add reusable backend fixture builders for objective targets, step targets, manifest refs, generated context refs, attachment failure phases, and recovery provenance in `tests/unit/api/routers/test_executions.py` (FR-001 through FR-012, DESIGN-REQ-023, DESIGN-REQ-024)
 - [ ] T008 Add reusable frontend fixture payloads for populated targets, empty targets, degraded target diagnostics, Resume provenance, preserved steps, and failed Resume phases in `frontend/src/entrypoints/task-detail.test.tsx` (FR-001 through FR-012, SC-001 through SC-005)
 - [ ] T009 [P] Add contract fixture examples matching `contracts/task-detail-target-diagnostics.md` in `tests/contract/test_temporal_execution_api.py` or the nearest existing execution API contract test file (FR-001 through FR-012, DESIGN-REQ-023, DESIGN-REQ-024)
