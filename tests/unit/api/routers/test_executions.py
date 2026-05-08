@@ -1939,6 +1939,13 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
                 "latestActionSummary": "Proposed session interrupt",
                 "resolution": None,
                 "contextArtifactRef": "art_context",
+                "selectedSteps": None,
+                "currentTargetState": None,
+                "allowedActions": None,
+                "evidenceDegraded": None,
+                "unavailableEvidenceClasses": None,
+                "liveObservation": None,
+                "lockOutcome": None,
                 "approvalState": {
                     "requestId": "mm:remediation-1:approval",
                     "actionKind": None,
@@ -2006,11 +2013,118 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
         "latestActionSummary": None,
         "resolution": "resolved",
         "contextArtifactRef": None,
+        "selectedSteps": None,
+        "currentTargetState": None,
+        "allowedActions": None,
+        "evidenceDegraded": None,
+        "unavailableEvidenceClasses": None,
+        "liveObservation": None,
+        "lockOutcome": None,
         "approvalState": None,
         "createdAt": now.isoformat().replace("+00:00", "Z"),
         "updatedAt": now.isoformat().replace("+00:00", "Z"),
     }
     service.list_remediation_targets.assert_awaited_once_with("mm:remediation-1")
+    service.list_remediations_for_target.assert_not_called()
+
+def test_list_remediations_for_remediation_returns_rich_operator_metadata(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    now = datetime.now(UTC)
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+    service.list_remediation_targets.return_value = [
+        SimpleNamespace(
+            remediation_workflow_id="mm:remediation-rich",
+            remediation_run_id="run-remediation-rich",
+            target_workflow_id="mm:target-rich",
+            target_run_id="run-target-rich",
+            mode="snapshot_then_follow",
+            authority_mode="approval_gated",
+            status="awaiting_approval",
+            active_lock_scope="target_execution",
+            active_lock_holder="mm:remediation-rich",
+            latest_action_summary="Proposed session interrupt",
+            outcome="precondition_failed",
+            context_artifact_ref="art_context_rich",
+            selected_steps=["collect-context", "repair-runtime"],
+            current_target_state="awaiting_external",
+            allowed_actions=["inspect_context", "request_approval"],
+            evidence_degraded=True,
+            unavailable_evidence_classes=["runtime_stderr", "provider_snapshot"],
+            live_observation={
+                "status": "active",
+                "label": "Live observation active",
+                "sequenceCursor": "stdout:42",
+                "reconnectState": "reconnected",
+                "epoch": "run-target-rich:2",
+                "fallbackReason": "Durable context remains authoritative.",
+                "rawPath": "/var/lib/moonmind/raw-context.json",
+            },
+            lock_outcome={
+                "state": "conflict",
+                "holder": "mm:remediation-rich",
+                "releasedAt": None,
+            },
+            approval_state={
+                "requestId": "approval-rich",
+                "actionKind": "session_interrupt",
+                "riskTier": "high",
+                "preconditions": "Target run is still awaiting an external session.",
+                "blastRadius": "One managed runtime session.",
+                "decision": "pending",
+                "canDecide": True,
+                "auditRef": "audit-rich",
+            },
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+
+    response = test_client.get(
+        "/api/executions/mm:remediation-rich/remediations",
+        params={"direction": "outbound"},
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["selectedSteps"] == ["collect-context", "repair-runtime"]
+    assert item["currentTargetState"] == "awaiting_external"
+    assert item["allowedActions"] == ["inspect_context", "request_approval"]
+    assert item["evidenceDegraded"] is True
+    assert item["unavailableEvidenceClasses"] == [
+        "runtime_stderr",
+        "provider_snapshot",
+    ]
+    assert item["liveObservation"] == {
+        "status": "active",
+        "label": "Live observation active",
+        "sequenceCursor": "stdout:42",
+        "reconnectState": "reconnected",
+        "epoch": "run-target-rich:2",
+        "fallbackReason": "Durable context remains authoritative.",
+    }
+    assert item["lockOutcome"] == {
+        "state": "conflict",
+        "holder": "mm:remediation-rich",
+        "releasedAt": None,
+    }
+    assert item["approvalState"] == {
+        "requestId": "approval-rich",
+        "actionKind": "session_interrupt",
+        "riskTier": "high",
+        "preconditions": "Target run is still awaiting an external session.",
+        "blastRadius": "One managed runtime session.",
+        "decision": "pending",
+        "decisionActor": None,
+        "decisionAt": None,
+        "canDecide": True,
+        "auditRef": "audit-rich",
+    }
+    assert "/var/lib/moonmind/raw-context.json" not in json.dumps(item)
+    service.list_remediation_targets.assert_awaited_once_with("mm:remediation-rich")
     service.list_remediations_for_target.assert_not_called()
 
 def test_list_remediations_rejects_unknown_direction(
