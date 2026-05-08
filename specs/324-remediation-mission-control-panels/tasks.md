@@ -91,7 +91,7 @@
 
 - [ ] T022 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx` and confirm T009-T016 fail for expected missing UI behavior, not syntax or fixture errors
 - [ ] T023 Run `./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_service.py tests/unit/workflows/temporal/test_remediation_context.py` and confirm T017-T018 fail for expected missing backend contract/evidence behavior
-- [ ] T024 Run the narrow command for `tests/integration/temporal/test_remediation_mission_control_panels.py` through the repo integration harness if supported, or run `./tools/test_integration.sh`, and confirm T019-T021 fail for expected missing route/contract behavior
+- [ ] T024 Run `./tools/test_integration.sh` and confirm T019-T021 fail for expected missing route/contract behavior rather than integration harness setup failure
 
 ### Conditional Fallback Implementation For Implemented-Unverified Rows
 

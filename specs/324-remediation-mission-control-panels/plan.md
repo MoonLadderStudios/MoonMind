@@ -87,7 +87,7 @@ specs/324-remediation-mission-control-panels/
 ├── quickstart.md
 ├── contracts/
 │   └── remediation-mission-control-contract.md
-└── tasks.md                  # Created by moonspec-tasks, not this step
+└── tasks.md                  # TDD-first task breakdown from moonspec-tasks
 ```
 
 ### Source Code (repository root)
