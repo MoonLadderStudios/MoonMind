@@ -46,6 +46,23 @@ LOCAL_ONLY_EXECUTION_FIELDS = (
     "last_update_response",
 )
 
+# Lifecycle states where the workflow has not yet begun real work. When a
+# workflow is in one of these states and has not stamped mm_started_at, the
+# projection must not synthesize a started_at from Temporal's workflow
+# start_time / execution_time — those fire as soon as the workflow is
+# scheduled, even while it is awaiting capacity. ``mm_started_at`` is the
+# canonical source for "real work began"; see
+# moonmind.workflows.temporal.workflows.run.MoonMindRunWorkflow._mark_real_work_started.
+PRE_WORK_STATES = frozenset(
+    {
+        MoonMindWorkflowState.SCHEDULED,
+        MoonMindWorkflowState.INITIALIZING,
+        MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,
+        MoonMindWorkflowState.PLANNING,
+        MoonMindWorkflowState.AWAITING_SLOT,
+    }
+)
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -252,12 +269,23 @@ async def map_temporal_state_to_projection(
     scheduled_for = _parse_temporal_datetime(
         search_attributes.get("mm_scheduled_for")
     )
-    started_at = desc.execution_time or desc.start_time
-    if scheduled_for is not None:
-        if state_value == MoonMindWorkflowState.SCHEDULED:
-            started_at = None
-        elif started_at is not None and started_at < scheduled_for:
-            started_at = scheduled_for
+    semantic_started_at = _parse_temporal_datetime(
+        search_attributes.get("mm_started_at")
+    )
+    # Pre-work lifecycle states must not surface a started_at, even on the
+    # legacy fallback path. Once the workflow is running real work, the
+    # workflow stamps mm_started_at; that value wins for all current
+    # workflows. Older in-flight workflows that pre-date the search attribute
+    # fall back to the legacy Temporal lifecycle timestamps.
+    if semantic_started_at is not None:
+        started_at = semantic_started_at
+    elif state_value in PRE_WORK_STATES:
+        started_at = None
+    else:
+        started_at = desc.execution_time or desc.start_time
+        if scheduled_for is not None:
+            if started_at is not None and started_at < scheduled_for:
+                started_at = scheduled_for
     sanitized_memo = _sanitize_for_json(dict(memo))
     return {
         "workflow_id": desc.id,

@@ -40,6 +40,7 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         "upsert_search_attributes",
         search_updates.append,
     )
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
     return memo_updates
 
 def _ordered_nodes() -> list[dict]:
@@ -165,6 +166,67 @@ def test_run_progress_query_exposes_current_run_id(
 
     assert progress["runId"] == "run-1"
     assert progress["total"] == 2
+
+def test_first_step_running_stamps_mm_started_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_mark_step_running`` is the closest existing semantic boundary for
+    "real work began" — when a logical step first transitions to running, the
+    workflow must stamp ``mm_started_at``. Subsequent step transitions and
+    retries must not move the timestamp."""
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    upserts: list[object] = []
+    monkeypatch.setattr(
+        run_module.workflow, "upsert_search_attributes", upserts.append
+    )
+    workflow = MoonMindRunWorkflow()
+    first_now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    later = datetime(2026, 4, 7, 12, 1, tzinfo=UTC)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=first_now,
+    )
+    upserts.clear()
+
+    workflow._mark_step_running(
+        "prepare", updated_at=first_now, summary="Preparing"
+    )
+    assert workflow._started_at == first_now
+
+    # Find the mm_started_at upsert. _set_state-driven upserts do not include
+    # the semantic timestamp; the dedicated upsert from _mark_real_work_started
+    # contains exactly one pair carrying the value.
+    started_at_upserts = [
+        pairs
+        for pairs in upserts
+        if any(
+            getattr(p.key, "name", None) == run_module.MM_STARTED_AT_SEARCH_ATTRIBUTE
+            for p in (pairs if isinstance(pairs, list) else [])
+        )
+    ]
+    assert len(started_at_upserts) == 1
+
+    workflow._mark_step_terminal(
+        "prepare", status="succeeded", updated_at=first_now, summary="Done"
+    )
+    workflow._refresh_step_readiness(updated_at=later)
+    workflow._mark_step_running(
+        "run-tests", updated_at=later, summary="Running tests"
+    )
+    # mm_started_at is set exactly once; later step transitions never overwrite it.
+    assert workflow._started_at == first_now
+    started_at_upserts = [
+        pairs
+        for pairs in upserts
+        if any(
+            getattr(p.key, "name", None) == run_module.MM_STARTED_AT_SEARCH_ATTRIBUTE
+            for p in (pairs if isinstance(pairs, list) else [])
+        )
+    ]
+    assert len(started_at_upserts) == 1
 
 def test_run_tracks_status_transitions_and_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure_workflow_runtime(monkeypatch)

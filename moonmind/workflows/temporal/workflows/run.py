@@ -201,6 +201,9 @@ RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
 RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
 RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
+# Replay-stable patch id for stamping mm_started_at when real work begins.
+RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
+MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
@@ -323,6 +326,13 @@ class MoonMindRunWorkflow:
 
         self._scheduled_for: Optional[str] = None
         self._reschedule_requested = False
+
+        # Semantic "real work began" timestamp. Stamped exactly once when the
+        # workflow first crosses from waiting/queue states into actual work
+        # (first running step, or child run launching/running). Distinct from
+        # Temporal's workflow start_time / execution_time, which fire as soon
+        # as Temporal schedules the workflow even if it is awaiting a slot.
+        self._started_at: datetime | None = None
 
         # Proposal tracking
         self._proposals_generated = 0
@@ -669,6 +679,11 @@ class MoonMindRunWorkflow:
             set_started_at=True,
         ):
             return
+        # First time a logical step crosses into "running" is the closest
+        # existing semantic boundary for "real work began". Stamp the
+        # execution-level mm_started_at exactly once here.
+        if workflow.patched(RUN_REAL_STARTED_AT_PATCH):
+            self._mark_real_work_started(now=updated_at)
         self._sync_progress_snapshot(updated_at=updated_at)
 
     def _mark_step_waiting(
@@ -6010,6 +6025,36 @@ class MoonMindRunWorkflow:
             metadata["dependency_failure"] = dict(self._dependency_failure)
         return metadata
 
+    def _mark_real_work_started(self, *, now: datetime | None = None) -> None:
+        """Stamp ``mm_started_at`` once, when the workflow first does real work.
+
+        This is the MoonMind semantic "started" timestamp; do not use Temporal's
+        workflow ``start_time`` / ``execution_time`` for this — they fire when
+        the workflow is scheduled, even while it is still awaiting a provider
+        slot. Idempotent across replay and across cooldown/requeue cycles: once
+        set, it is never overwritten.
+        """
+        if self._started_at is not None:
+            return
+        started_at = now or workflow.now()
+        self._started_at = started_at
+        try:
+            workflow.upsert_search_attributes(
+                [
+                    SearchAttributePair(
+                        SearchAttributeKey.for_datetime(
+                            MM_STARTED_AT_SEARCH_ATTRIBUTE
+                        ),
+                        started_at,
+                    )
+                ]
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to upsert mm_started_at search attribute",
+                extra={"error": str(exc)},
+            )
+
     def _update_search_attributes(self) -> None:
         memo: dict[str, Any] = {
             "waiting_reason": self._waiting_reason,
@@ -6139,10 +6184,14 @@ class MoonMindRunWorkflow:
         elif new_state == "launching":
             self._waiting_reason = None
             self._attention_required = False
+            if workflow.patched(RUN_REAL_STARTED_AT_PATCH):
+                self._mark_real_work_started()
             self._set_state(STATE_EXECUTING, summary="Launching agent...")
         elif new_state == "running":
             self._waiting_reason = None
             self._attention_required = False
+            if workflow.patched(RUN_REAL_STARTED_AT_PATCH):
+                self._mark_real_work_started()
             self._set_state(STATE_EXECUTING, summary="Agent is running.")
         elif new_state in ("completed", "failed", "canceled", "timed_out"):
             # Child has reached a terminal state. If we have an assigned profile

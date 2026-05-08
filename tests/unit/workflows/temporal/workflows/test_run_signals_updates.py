@@ -492,6 +492,7 @@ def test_child_state_changed_sets_provider_profile_waiting_reason(monkeypatch):
     workflow_instance = MoonMindRunWorkflow()
     monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
     monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: False)
 
     workflow_instance.child_state_changed(
         "awaiting_slot",
@@ -514,6 +515,64 @@ def test_child_state_changed_sets_provider_profile_waiting_reason(monkeypatch):
 
     assert workflow_instance._waiting_reason is None
     assert workflow_instance._attention_required is False
+
+def test_mm_started_at_stamped_on_launch_and_immutable_across_requeue(monkeypatch):
+    """``mm_started_at`` is set exactly once when the child reports it has
+    crossed from awaiting_slot into launching/running. A subsequent return to
+    ``awaiting_slot`` (cooldown/requeue) and re-launch must not overwrite it.
+    """
+    workflow_instance = MoonMindRunWorkflow()
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    upserts: list = []
+    monkeypatch.setattr(
+        workflow,
+        "upsert_search_attributes",
+        lambda pairs: upserts.append(pairs),
+    )
+
+    launch_now = datetime(2026, 5, 1, 12, 5, tzinfo=timezone.utc)
+    monkeypatch.setattr(workflow, "now", lambda: launch_now)
+
+    workflow_instance.child_state_changed(
+        "awaiting_slot", "Managed provider capacity exhausted."
+    )
+    assert workflow_instance._started_at is None
+
+    workflow_instance.child_state_changed("launching", "Slot acquired.")
+    first_started = workflow_instance._started_at
+    assert first_started == launch_now
+    assert len(upserts) == 1
+
+    # Cooldown returns the run to awaiting_slot, then it relaunches. The
+    # semantic started_at must persist.
+    workflow_instance.child_state_changed("awaiting_slot", "Cooldown.")
+    workflow_instance.child_state_changed("running", "Agent restarted.")
+    assert workflow_instance._started_at == first_started
+    assert len(upserts) == 1
+
+def test_mm_started_at_not_stamped_for_awaiting_slot(monkeypatch):
+    """Awaiting a provider slot must not stamp mm_started_at — that is
+    exactly the case the legacy behavior got wrong."""
+    workflow_instance = MoonMindRunWorkflow()
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    upserts: list = []
+    monkeypatch.setattr(
+        workflow,
+        "upsert_search_attributes",
+        lambda pairs: upserts.append(pairs),
+    )
+    monkeypatch.setattr(
+        workflow, "now", lambda: datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    )
+
+    workflow_instance.child_state_changed("awaiting_slot", "No slot.")
+
+    assert workflow_instance._started_at is None
+    assert upserts == []
 
 @pytest.mark.asyncio
 async def test_wait_for_dependencies_raises_dependency_specific_failure(monkeypatch):
