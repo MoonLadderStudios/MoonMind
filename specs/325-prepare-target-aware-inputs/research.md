@@ -70,4 +70,4 @@ Decision: Preserve `MM-631`, the original preset brief, and source design mappin
 Evidence: `spec.md` preserves MM-631 and the original preset brief; this research and plan preserve MM-631.
 Rationale: Final verification compares the implementation and artifacts against the original Jira brief.
 Alternatives considered: Keeping only the issue key was rejected because the final verifier needs the full source brief.
-Test implications: Final `/speckit.verify` must include traceability review.
+Test implications: Final `/moonspec-verify` (`/speckit.verify` equivalent) must include traceability review.

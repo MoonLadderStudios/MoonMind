@@ -48,7 +48,7 @@
 - [ ] T006 Create placeholder workflow unit test module `tests/unit/workflows/temporal/workflows/test_run_target_aware_inputs.py` for `MoonMind.Run` prepared-context state and child request coverage. (FR-004, FR-005, FR-008, FR-009, FR-010, SCN-003, SCN-004, SC-001, SC-003, DESIGN-REQ-002, DESIGN-REQ-005, DESIGN-REQ-007)
 - [ ] T007 Create placeholder integration test module `tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py` for hermetic workflow boundary scenarios. (SCN-001, SCN-003, SCN-004, SCN-006, SC-001, SC-002, SC-003, SC-004)
 - [ ] T008 [P] Create placeholder adapter unit test module `tests/unit/workflows/adapters/test_target_aware_prepared_context.py` for adapter-visible prepared context contract checks. (FR-011, SCN-005, DESIGN-REQ-006)
-- [ ] T009 [P] Create placeholder implementation module `moonmind/workflows/tasks/prepared_context.py` for compact prepared input contracts and pure filtering helpers. (FR-004, FR-005, FR-007, FR-008, FR-010, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004)
+- [ ] T009 [P] Confirm planned implementation path `moonmind/workflows/tasks/prepared_context.py` is reserved for compact prepared input contracts and pure filtering helpers without adding behavior before red tests. (FR-004, FR-005, FR-007, FR-008, FR-010, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004)
 
 **Checkpoint**: Test and contract locations exist; story test authoring can begin.
 
@@ -85,7 +85,7 @@
 
 ### Integration Tests (write first)
 
-- [ ] T016 [P] Add failing workflow unit test proving `MoonMind.Run` records a prepared manifest ref before the first affected step dispatch in `tests/unit/workflows/temporal/workflows/test_run_target_aware_inputs.py`. (FR-004, FR-005, FR-007, FR-010, SCN-001, SC-002, SC-002, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-007)
+- [ ] T016 [P] Add failing workflow unit test proving `MoonMind.Run` records a prepared manifest ref before the first affected step dispatch in `tests/unit/workflows/temporal/workflows/test_run_target_aware_inputs.py`. (FR-004, FR-005, FR-007, FR-010, SCN-001, SC-002, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-007)
 - [ ] T017 [P] Add failing workflow unit test proving step dispatch receives objective plus current-step prepared context and omits later-step context in `tests/unit/workflows/temporal/workflows/test_run_target_aware_inputs.py`. (FR-008, SCN-003, SC-001, DESIGN-REQ-004)
 - [ ] T018 [P] Add failing workflow unit test proving delegated child `AgentRun` request `inputRefs` or metadata contains only represented-step prepared context in `tests/unit/workflows/temporal/workflows/test_run_target_aware_inputs.py`. (FR-009, SCN-004, SC-003, DESIGN-REQ-005, DESIGN-REQ-007)
 - [ ] T019 [P] Add failing workflow unit test proving prepare failure prevents affected step dispatch and records bounded diagnostics in `tests/unit/workflows/temporal/workflows/test_run_target_aware_inputs.py`. (FR-006, FR-012, SCN-006, SC-004, DESIGN-REQ-003)
@@ -106,7 +106,7 @@
 - [ ] T025 Implement compact prepared input models, validation, target derivation, step filtering, and failure payload helpers in `moonmind/workflows/tasks/prepared_context.py`. (FR-004, FR-005, FR-007, FR-008, FR-010, FR-012, SCN-001, SCN-002, SCN-003, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004)
 - [ ] T026 Export prepared context helpers from `moonmind/workflows/tasks/__init__.py` for workflow and adapter use. (FR-004, FR-005, FR-008, FR-010)
 - [ ] T027 Implement or extend runtime prepare activity/service behavior in `moonmind/workflows/temporal/activity_runtime.py` to produce compact manifest/context refs and explicit prepare failures. (FR-004, FR-006, FR-007, FR-012, SCN-001, SCN-002, SCN-006, SC-002, SC-004, DESIGN-REQ-003)
-- [ ] T028 Wire `MoonMind.Run` prepare orchestration and bounded prepared-context state in `moonmind/workflows/temporal/workflows/run.py`. (FR-004, FR-005, FR-010, SCN-001, SCN-002, SC-002, DESIGN-REQ-002, DESIGN-REQ-007)
+- [ ] T028 Wire `MoonMind.Run` prepare orchestration and bounded prepared-context state in `moonmind/workflows/temporal/workflows/run.py`. (FR-004, FR-005, FR-010, SCN-001, SCN-002, DESIGN-REQ-002, DESIGN-REQ-007)
 - [ ] T029 Wire per-step prepared context filtering in `moonmind/workflows/temporal/workflows/run.py` before planner, step runtime, or child dispatch. (FR-008, SCN-003, SC-001, DESIGN-REQ-004)
 - [ ] T030 Wire child `AgentRun` request `inputRefs` or bounded metadata in `moonmind/workflows/temporal/workflows/run.py` so represented child steps receive only relevant objective and current-step context. (FR-009, SCN-004, SC-003, DESIGN-REQ-005, DESIGN-REQ-007)
 - [ ] T031 Update `moonmind/workflows/temporal/workflows/agent_run.py` only if child request validation or metadata propagation requires accepting the prepared-context contract. (FR-009, FR-011, DESIGN-REQ-005, DESIGN-REQ-006)

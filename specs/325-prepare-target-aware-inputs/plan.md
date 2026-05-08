@@ -91,6 +91,7 @@ specs/325-prepare-target-aware-inputs/
 ├── quickstart.md
 ├── contracts/
 │   └── target-aware-prepared-context.md
+├── tasks.md
 └── checklists/
     └── requirements.md
 ```
