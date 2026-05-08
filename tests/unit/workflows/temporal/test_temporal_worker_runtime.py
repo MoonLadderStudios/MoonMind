@@ -289,6 +289,71 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
         "originalStepId": "fetch-jira-issue",
     }
 
+def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={},
+        parameters={
+            "failurePolicy": "fail_fast",
+            "task": {
+                "title": "Update deployment stack moonmind",
+                "instructions": (
+                    "Run the policy-gated deployment update operation for stack "
+                    "'moonmind' using the typed deployment.update_compose_stack "
+                    "tool contract."
+                ),
+                "plan": [
+                    {
+                        "id": "update-moonmind-deployment",
+                        "tool": {
+                            "type": "skill",
+                            "name": "deployment.update_compose_stack",
+                            "version": "1.0.0",
+                        },
+                        "inputs": {
+                            "stack": "moonmind",
+                            "image": {
+                                "repository": (
+                                    "ghcr.io/moonladderstudios/moonmind"
+                                ),
+                                "reference": "v20260507.2470",
+                            },
+                            "mode": "changed_services",
+                        },
+                    }
+                ],
+            },
+        },
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"] == [
+        {
+            "id": "update-moonmind-deployment",
+            "tool": {
+                "type": "skill",
+                "name": "deployment.update_compose_stack",
+                "version": "1.0.0",
+            },
+            "inputs": {
+                "stack": "moonmind",
+                "image": {
+                    "repository": "ghcr.io/moonladderstudios/moonmind",
+                    "reference": "v20260507.2470",
+                },
+                "mode": "changed_services",
+            },
+        }
+    ]
+    assert plan["policy"]["failure_mode"] == "FAIL_FAST"
+    registry_snapshot = plan["metadata"]["registry_snapshot"]
+    assert registry_snapshot["artifact_ref"] == "art_registry_123"
+
 @pytest.mark.parametrize(
     "source",
     [

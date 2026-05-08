@@ -21,7 +21,7 @@ services:
     restart: unless-stopped
 
   api:
-    image: ghcr.io/moonladderstudios/moonmind:latest
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     ports:
       - "8000:8000"
     environment:
@@ -257,7 +257,7 @@ services:
     restart: unless-stopped
 
   temporal-worker-workflow:
-    image: ghcr.io/moonladderstudios/moonmind:latest
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -311,7 +311,7 @@ services:
     restart: unless-stopped
 
   temporal-worker-artifacts:
-    image: ghcr.io/moonladderstudios/moonmind:latest
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -365,7 +365,7 @@ services:
     restart: unless-stopped
 
   temporal-worker-llm:
-    image: ghcr.io/moonladderstudios/moonmind:latest
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -421,7 +421,7 @@ services:
     restart: unless-stopped
 
   temporal-worker-sandbox:
-    image: ghcr.io/moonladderstudios/moonmind:latest
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -505,7 +505,7 @@ services:
     restart: unless-stopped
 
   temporal-worker-agent-runtime:
-    image: ghcr.io/moonladderstudios/moonmind:latest
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -597,7 +597,7 @@ services:
     restart: unless-stopped
 
   temporal-worker-integrations:
-    image: ghcr.io/moonladderstudios/moonmind:latest
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -662,7 +662,7 @@ services:
       - local-network
 
   init-db:
-    image: ghcr.io/moonladderstudios/moonmind:latest
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@${POSTGRES_HOST:-moonmind-api-db}:5432/${POSTGRES_DB:-moonmind}
       - PYTHONPATH=/app

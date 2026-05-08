@@ -84,6 +84,36 @@ def test_api_service_mounts_agent_runtime_workspace_volume():
     ), "api service must mount agent_workspaces at /work/agent_jobs so observability APIs can read managed-run records"
 
 
+def test_moonmind_application_services_use_deployment_image_variable():
+    """Deployment updates must be able to change the app image without YAML edits."""
+    compose_path = Path("docker-compose.yaml")
+    assert (
+        compose_path.exists()
+    ), "docker-compose.yaml must exist at the repository root"
+
+    compose_data = yaml.safe_load(compose_path.read_text())
+    services = compose_data.get("services", {})
+    application_services = [
+        "api",
+        "init-db",
+        "temporal-worker-workflow",
+        "temporal-worker-artifacts",
+        "temporal-worker-llm",
+        "temporal-worker-sandbox",
+        "temporal-worker-agent-runtime",
+        "temporal-worker-integrations",
+    ]
+
+    for service_name in application_services:
+        service_config = services.get(service_name)
+        assert isinstance(service_config, dict), (
+            f"{service_name} service is missing from docker-compose.yaml"
+        )
+        assert service_config.get("image") == (
+            "${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}"
+        ), f"{service_name} must use MOONMIND_IMAGE for deployment updates"
+
+
 def test_agent_runtime_worker_mounts_agent_skill_catalog():
     """Selected managed-session skills resolve from the deployment skill catalog."""
     compose_path = Path("docker-compose.yaml")
