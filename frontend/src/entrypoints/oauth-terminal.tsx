@@ -231,7 +231,6 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const [session, setSession] = useState<OAuthSessionResponse | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState<string | null>(null);
-  const [finalizeSuccess, setFinalizeSuccess] = useState(false);
   const [pastedInput, setPastedInput] = useState('');
   const [contextMenu, setContextMenu] = useState<TerminalContextMenuState | null>(null);
   const terminalElementRef = useRef<HTMLDivElement | null>(null);
@@ -314,9 +313,6 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           return;
         }
         refreshSessionFromResponse(payload);
-        if (action === 'finalize' && payload.status === 'succeeded') {
-          setFinalizeSuccess(true);
-        }
       } else if (action === 'cancel') {
         setSession((current) =>
           current ? { ...current, status: 'cancelled' } : current,
@@ -704,7 +700,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
               </button>
             ) : null}
           </div>
-          {finalizeSuccess ? (
+          {session.status === 'succeeded' ? (
             <p role="status" className="oauth-terminal-finalize-result oauth-terminal-finalize-result--success">
               Provider profile registered successfully.
             </p>

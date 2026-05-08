@@ -3726,9 +3726,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .oauth-terminal-finalize-result--error {
-  background: rgb(var(--mm-warn) / 0.12);
-  border: 1px solid rgb(var(--mm-warn) / 0.5);
-  color: rgb(var(--mm-warn));
+  background: rgb(var(--mm-danger) / 0.12);
+  border: 1px solid rgb(var(--mm-danger) / 0.5);
+  color: rgb(var(--mm-danger));
 }
 
 .oauth-terminal-paste-box {
