@@ -2904,23 +2904,9 @@ async def _validate_and_collect_task_input_attachments(
         artifact_id = ref["artifactId"]
         existing = unique.get(artifact_id)
         if existing is not None:
-            same_target = (
-                existing.get("targetKind") == ref.get("targetKind")
-                and existing.get("stepOrdinal") == ref.get("stepOrdinal")
-                and existing.get("stepRef") == ref.get("stepRef")
+            raise _invalid_task_request(
+                f"input attachment {artifact_id} is declared more than once."
             )
-            if not same_target:
-                raise _invalid_task_request(
-                    f"input attachment {artifact_id} is declared for multiple "
-                    "input targets."
-                )
-            if (
-                existing["contentType"] != ref["contentType"]
-                or existing["sizeBytes"] != ref["sizeBytes"]
-            ):
-                raise _invalid_task_request(
-                    f"input attachment {artifact_id} has conflicting declarations."
-                )
         unique.setdefault(artifact_id, ref)
 
     if len(unique) > settings.workflow.agent_job_attachment_max_count:

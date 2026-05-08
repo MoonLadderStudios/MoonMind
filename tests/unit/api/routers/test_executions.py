@@ -3133,8 +3133,53 @@ def test_create_task_shaped_execution_rejects_attachment_declared_for_multiple_t
     )
 
     assert response.status_code == 422
-    assert "multiple input targets" in response.json()["detail"]["message"]
+    assert "declared more than once" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_duplicate_attachment_declaration_for_same_target(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id="art_01MM627DUPLICATE00000001",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=10,
+            )
+        ]
+    )
+
+    attachment = {
+        "artifactId": "art_01MM627DUPLICATE00000001",
+        "filename": "same.png",
+        "contentType": "image/png",
+        "sizeBytes": 10,
+    }
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Run task.",
+                    "inputAttachments": [attachment, attachment],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "declared more than once" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
 
 def test_create_task_shaped_execution_rejects_embedded_attachment_data(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],

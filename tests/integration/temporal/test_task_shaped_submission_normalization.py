@@ -30,7 +30,7 @@ def _client() -> tuple[TestClient, AsyncMock]:
     service = AsyncMock()
     service.create_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: service
-    app.dependency_overrides[get_temporal_client] = lambda: AsyncMock()
+    app.dependency_overrides[get_temporal_client] = AsyncMock
     _override_user_dependencies(app, is_superuser=False)
     return TestClient(app), service
 
@@ -152,7 +152,7 @@ def test_task_shaped_submission_boundary_rejects_invalid_alias_and_target_bindin
                 },
             },
         )
-        duplicate_response = test_client.post(
+        duplicate_target_response = test_client.post(
             "/api/executions",
             json={
                 "type": "task",
@@ -173,7 +173,22 @@ def test_task_shaped_submission_boundary_rejects_invalid_alias_and_target_bindin
                 },
             },
         )
+        duplicate_same_target_response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex",
+                    "task": {
+                        "instructions": "Run task.",
+                        "inputAttachments": [attachment, attachment],
+                    },
+                },
+            },
+        )
 
     assert target_branch_response.status_code == 422
-    assert duplicate_response.status_code == 422
+    assert duplicate_target_response.status_code == 422
+    assert duplicate_same_target_response.status_code == 422
     service.create_execution.assert_not_awaited()
