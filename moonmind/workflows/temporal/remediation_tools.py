@@ -21,6 +21,8 @@ from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 from moonmind.workflows.temporal.remediation_context import (
     REMEDIATION_CONTEXT_LINK_TYPE,
     RemediationLifecyclePublisher,
+    build_remediation_decision_log,
+    build_remediation_final_summary,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
@@ -506,6 +508,66 @@ class RemediationEvidenceToolService:
                 "actionResult": result_artifact.artifact_id,
                 "verification": verification_artifact.artifact_id,
             },
+        }
+
+    async def publish_lifecycle_summary(
+        self,
+        *,
+        remediation_workflow_id: str,
+        summary: Mapping[str, Any],
+        repair: Mapping[str, Any],
+        prevention: Mapping[str, Any],
+        decision_log_entries: Sequence[Mapping[str, Any]],
+        lock_release: str,
+        final_audit_ref: str | None = None,
+        principal: str = "service:remediation-tools",
+    ) -> dict[str, Any]:
+        """Publish the v1 remediation decision log and final lifecycle summary."""
+
+        link = await self._load_link(remediation_workflow_id)
+        decision_log = build_remediation_decision_log(entries=decision_log_entries)
+        decision_artifact = await self._lifecycle_publisher.publish_json_artifact(
+            remediation_workflow_id=link.remediation_workflow_id,
+            artifact_type="remediation.decision_log",
+            name="logs/remediation_decision_log.json",
+            payload=decision_log,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            principal=principal,
+        )
+        final_summary = build_remediation_final_summary(
+            summary=summary,
+            repair=repair,
+            prevention=prevention,
+            decision_log_ref=decision_artifact.artifact_id,
+            final_audit_ref=final_audit_ref,
+            lock_release=lock_release,
+        )
+        summary_artifact = await self._lifecycle_publisher.publish_json_artifact(
+            remediation_workflow_id=link.remediation_workflow_id,
+            artifact_type="remediation.summary",
+            name="reports/remediation_summary.json",
+            payload=final_summary,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            principal=principal,
+        )
+
+        link.outcome = str(final_summary.get("resolution") or link.outcome or "")
+        await self._session.commit()
+        return {
+            "schemaVersion": "v1",
+            "artifactRefs": {
+                "decisionLog": decision_artifact.artifact_id,
+                "summary": summary_artifact.artifact_id,
+            },
+            "repairOutcome": final_summary.get("repair", {}).get("repairOutcome")
+            if isinstance(final_summary.get("repair"), Mapping)
+            else None,
+            "preventionStatus": final_summary.get("prevention", {}).get("status")
+            if isinstance(final_summary.get("prevention"), Mapping)
+            else None,
+            "lockRelease": final_summary.get("lockRelease"),
         }
 
     async def _load_link(

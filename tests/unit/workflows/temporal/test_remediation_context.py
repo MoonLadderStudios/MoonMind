@@ -32,8 +32,13 @@ from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
     RemediationContextError,
     RemediationLifecyclePublisher,
+    build_corrected_instruction_retry_provenance,
+    build_remediation_decision_log,
     build_remediation_audit_event,
     build_remediation_continue_as_new_state,
+    build_remediation_final_summary,
+    build_remediation_prevention_outcome,
+    build_remediation_repair_decision,
     build_remediation_summary_block,
     build_target_remediation_linkage_summary,
     normalize_remediation_phase,
@@ -1044,6 +1049,216 @@ def test_remediation_summary_allows_hierarchical_target_identifiers():
 
     assert summary["targetWorkflowId"] == "/tenant/workflows/target"
     assert summary["targetRunId"] == "/runs/target-run"
+
+def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
+    repair = build_remediation_repair_decision(
+        target_workflow_id="target-workflow",
+        pinned_run_id="target-run",
+        current_run_id="target-run-2",
+        candidate_action_kind="provider_profile.evict_stale_lease",
+        candidate_reason="lease_stale",
+        decision="attempted",
+        decision_reason="fresh_target_health_and_policy_allowed",
+        repair_outcome="repaired",
+        fresh_target_health_ref="art_health",
+        authority_decision_ref="art_authority",
+        guard_decision_ref="art_guard",
+        action_request_ref="art_request",
+        action_result_ref="art_result",
+        verification_ref="art_verification",
+        metadata={
+            "safe": "value",
+            "token": "raw-secret",
+            "path": "/tmp/raw/path",
+        },
+    )
+
+    assert repair == {
+        "schemaVersion": "v1",
+        "target": {
+            "workflowId": "target-workflow",
+            "pinnedRunId": "target-run",
+            "currentRunId": "target-run-2",
+            "targetRunChanged": True,
+        },
+        "candidate": {
+            "actionKind": "provider_profile.evict_stale_lease",
+            "reason": "lease_stale",
+        },
+        "decision": "attempted",
+        "decisionReason": "fresh_target_health_and_policy_allowed",
+        "artifactRefs": {
+            "freshTargetHealth": "art_health",
+            "authorityDecision": "art_authority",
+            "guardDecision": "art_guard",
+            "actionRequest": "art_request",
+            "actionResult": "art_result",
+            "verification": "art_verification",
+        },
+        "repairOutcome": "repaired",
+        "metadata": {"safe": "value"},
+    }
+
+    prevention = build_remediation_prevention_outcome(
+        status="findings_reported",
+        root_cause_category="provider_profile_lease_recovery_gap",
+        summary="Investigated recurrence without creating a PR.",
+        findings_ref="art_findings",
+        metadata={"authorization": "Bearer raw-secret", "safe": "value"},
+    )
+    assert prevention == {
+        "schemaVersion": "v1",
+        "status": "findings_reported",
+        "rootCauseCategory": "provider_profile_lease_recovery_gap",
+        "summary": "Investigated recurrence without creating a PR.",
+        "findingsRef": "art_findings",
+        "metadata": {"safe": "value"},
+    }
+
+    decision_log = build_remediation_decision_log(
+        entries=(
+            {
+                "timestamp": "2026-05-08T00:00:00Z",
+                "phase": "diagnosing",
+                "decisionType": "repair_candidate",
+                "decision": "attempted",
+                "reason": "fresh_target_health_and_policy_allowed",
+                "actor": "service:remediation",
+                "actionKind": "provider_profile.evict_stale_lease",
+                "targetWorkflowId": "target-workflow",
+                "targetRunId": "target-run",
+                "artifactRefs": {
+                    "actionRequest": "art_request",
+                    "verification": "art_verification",
+                },
+                "metadata": {"password": "raw-secret", "safe": "value"},
+            },
+        )
+    )
+    assert decision_log == {
+        "schemaVersion": "v1",
+        "entries": [
+            {
+                "timestamp": "2026-05-08T00:00:00Z",
+                "phase": "diagnosing",
+                "decisionType": "repair_candidate",
+                "decision": "attempted",
+                "reason": "fresh_target_health_and_policy_allowed",
+                "actor": "service:remediation",
+                "actionKind": "provider_profile.evict_stale_lease",
+                "targetWorkflowId": "target-workflow",
+                "targetRunId": "target-run",
+                "artifactRefs": {
+                    "actionRequest": "art_request",
+                    "verification": "art_verification",
+                },
+                "metadata": {"safe": "value"},
+            }
+        ],
+    }
+
+    base_summary = build_remediation_summary_block(
+        target_workflow_id="target-workflow",
+        target_run_id="target-run",
+        phase="resolved",
+        mode="snapshot_then_follow",
+        authority_mode="admin_auto",
+        resolution="resolved_after_action",
+        resulting_target_run_id="target-run-2",
+    )
+    final_summary = build_remediation_final_summary(
+        summary=base_summary,
+        repair=repair,
+        prevention=prevention,
+        decision_log_ref="art_decision_log",
+        final_audit_ref="art_audit",
+        lock_release="released",
+        metadata={"token": "raw-secret", "safe": "value"},
+    )
+    assert final_summary["repair"]["repairOutcome"] == "repaired"
+    assert final_summary["prevention"]["status"] == "findings_reported"
+    assert final_summary["decisionLogRef"] == "art_decision_log"
+    assert final_summary["finalAuditRef"] == "art_audit"
+    assert final_summary["lockRelease"] == "released"
+    serialized = json.dumps(final_summary, sort_keys=True)
+    assert "raw-secret" not in serialized
+    assert "/tmp/raw/path" not in serialized
+
+def test_remediation_lifecycle_contract_rejects_invalid_or_incomplete_values():
+    with pytest.raises(ValueError, match="repair_outcome"):
+        build_remediation_repair_decision(
+            target_workflow_id="target-workflow",
+            pinned_run_id="target-run",
+            decision="attempted",
+            decision_reason="fresh",
+            repair_outcome="applied",
+            action_request_ref="art_request",
+            action_result_ref="art_result",
+            verification_ref="art_verification",
+        )
+
+    with pytest.raises(ValueError, match="attempted repair requires"):
+        build_remediation_repair_decision(
+            target_workflow_id="target-workflow",
+            pinned_run_id="target-run",
+            decision="attempted",
+            decision_reason="fresh",
+            repair_outcome="repaired",
+            action_request_ref="art_request",
+            action_result_ref="art_result",
+        )
+
+    with pytest.raises(ValueError, match="pullRequestUrl"):
+        build_remediation_prevention_outcome(
+            status="reviewable_change_created",
+            root_cause_category="provider_profile_lease_recovery_gap",
+            summary="Created a change.",
+        )
+
+    with pytest.raises(ValueError, match="lock_release"):
+        build_remediation_final_summary(
+            summary=build_remediation_summary_block(
+                target_workflow_id="target-workflow",
+                target_run_id="target-run",
+                phase="failed",
+                mode="snapshot_then_follow",
+                authority_mode="admin_auto",
+            ),
+            repair=build_remediation_repair_decision(
+                target_workflow_id="target-workflow",
+                pinned_run_id="target-run",
+                decision="skipped",
+                decision_reason="target_already_healthy",
+                repair_outcome="not_attempted",
+            ),
+            prevention=build_remediation_prevention_outcome(
+                status="no_reviewable_fix",
+                root_cause_category="none",
+                summary="No recurring defect.",
+            ),
+            lock_release="unknown",
+        )
+
+def test_corrected_instruction_retry_provenance_is_explicit_and_redacted():
+    provenance = build_corrected_instruction_retry_provenance(
+        original_input_ref="art_original_input",
+        remediation_context_ref="art_context",
+        corrected_instructions_ref="art_corrected",
+        retry_action_kind="execution.retry_failed_step_with_remediation_context",
+        reason="publish instructions clarified; token=raw-secret",
+        metadata={"password": "raw-secret", "safe": "value"},
+    )
+
+    assert provenance == {
+        "schemaVersion": "v1",
+        "retryActionKind": "execution.retry_failed_step_with_remediation_context",
+        "originalInputRef": "art_original_input",
+        "remediationContextRef": "art_context",
+        "correctedInstructionsRef": "art_corrected",
+        "reason": "publish instructions clarified; token=[REDACTED]",
+        "metadata": {"safe": "value"},
+        "originalInputMutation": False,
+    }
 
 def test_remediation_audit_normalizes_string_timestamps():
     audit = build_remediation_audit_event(

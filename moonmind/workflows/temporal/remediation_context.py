@@ -19,6 +19,7 @@ from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     TemporalArtifactService,
 )
+from moonmind.utils.logging import redact_sensitive_text
 
 REMEDIATION_CONTEXT_LINK_TYPE = "remediation.context"
 REMEDIATION_CONTEXT_ARTIFACT_NAME = "reports/remediation_context.json"
@@ -58,6 +59,37 @@ REMEDIATION_RESOLUTIONS = frozenset(
         "evidence_unavailable",
         "failed",
     }
+)
+REMEDIATION_REPAIR_DECISIONS = frozenset(
+    {
+        "attempted",
+        "skipped",
+        "denied",
+        "unsafe",
+        "approval_required",
+        "escalated",
+    }
+)
+REMEDIATION_REPAIR_OUTCOMES = frozenset(
+    {
+        "repaired",
+        "still_failed",
+        "not_attempted",
+        "unsafe",
+        "approval_required",
+        "escalated",
+    }
+)
+REMEDIATION_PREVENTION_STATUSES = frozenset(
+    {
+        "reviewable_change_created",
+        "findings_reported",
+        "no_reviewable_fix",
+        "policy_blocked",
+    }
+)
+REMEDIATION_LOCK_RELEASE_STATUSES = frozenset(
+    {"attempted", "released", "not_held", "failed"}
 )
 MAX_REMEDIATION_CONTEXT_TAIL_LINES = 2000
 MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS = 20
@@ -784,6 +816,237 @@ def build_remediation_continue_as_new_state(
         "liveFollowCursor": _safe_policy_mapping(live_follow_cursor) or {},
     }
 
+def build_remediation_repair_decision(
+    *,
+    target_workflow_id: str,
+    pinned_run_id: str,
+    decision: str,
+    decision_reason: str,
+    repair_outcome: str,
+    current_run_id: str | None = None,
+    candidate_action_kind: str | None = None,
+    candidate_reason: str | None = None,
+    fresh_target_health_ref: str | None = None,
+    authority_decision_ref: str | None = None,
+    guard_decision_ref: str | None = None,
+    action_request_ref: str | None = None,
+    action_result_ref: str | None = None,
+    verification_ref: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a bounded target-level immediate repair decision."""
+
+    normalized_decision = _validated_choice(
+        decision, REMEDIATION_REPAIR_DECISIONS, "decision"
+    )
+    normalized_outcome = _validated_choice(
+        repair_outcome, REMEDIATION_REPAIR_OUTCOMES, "repair_outcome"
+    )
+    if normalized_decision == "attempted" and not (
+        action_request_ref and action_result_ref and verification_ref
+    ):
+        raise ValueError(
+            "attempted repair requires action_request_ref, action_result_ref, "
+            "and verification_ref"
+        )
+    if normalized_decision != "attempted" and normalized_outcome == "repaired":
+        raise ValueError("repair_outcome repaired requires an attempted repair")
+
+    pinned = _required_lifecycle_string(pinned_run_id, "pinned_run_id")
+    current = _safe_identifier_string(current_run_id) or pinned
+    payload: dict[str, Any] = {
+        "schemaVersion": "v1",
+        "target": {
+            "workflowId": _required_lifecycle_string(
+                target_workflow_id, "target_workflow_id"
+            ),
+            "pinnedRunId": pinned,
+            "currentRunId": current,
+            "targetRunChanged": current != pinned,
+        },
+        "decision": normalized_decision,
+        "decisionReason": _required_redacted_text(
+            decision_reason, "decision_reason"
+        ),
+        "artifactRefs": _repair_artifact_refs(
+            fresh_target_health_ref=fresh_target_health_ref,
+            authority_decision_ref=authority_decision_ref,
+            guard_decision_ref=guard_decision_ref,
+            action_request_ref=action_request_ref,
+            action_result_ref=action_result_ref,
+            verification_ref=verification_ref,
+        ),
+        "repairOutcome": normalized_outcome,
+    }
+    candidate = _repair_candidate_payload(
+        action_kind=candidate_action_kind,
+        reason=candidate_reason,
+    )
+    if candidate:
+        payload["candidate"] = candidate
+    if safe_metadata := _safe_policy_mapping(metadata):
+        payload["metadata"] = safe_metadata
+    return payload
+
+def build_remediation_prevention_outcome(
+    *,
+    status: str,
+    root_cause_category: str,
+    summary: str,
+    branch: str | None = None,
+    commit: str | None = None,
+    pull_request_url: str | None = None,
+    findings_ref: str | None = None,
+    blocked_reason: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a bounded recurrence-prevention outcome."""
+
+    normalized_status = _validated_choice(
+        status, REMEDIATION_PREVENTION_STATUSES, "status"
+    )
+    safe_pr_url = _safe_public_url(pull_request_url)
+    safe_findings_ref = _artifact_ref_string(findings_ref, "findings_ref")
+    safe_blocked_reason = _redacted_optional_text(blocked_reason)
+    if normalized_status == "reviewable_change_created" and not safe_pr_url:
+        raise ValueError("pullRequestUrl is required for reviewable_change_created")
+    if normalized_status == "findings_reported" and not (
+        safe_findings_ref or _redacted_optional_text(summary)
+    ):
+        raise ValueError("findings_reported requires findingsRef or summary")
+    if normalized_status == "no_reviewable_fix" and not _redacted_optional_text(
+        summary
+    ):
+        raise ValueError("no_reviewable_fix requires a summary reason")
+    if normalized_status == "policy_blocked" and not safe_blocked_reason:
+        raise ValueError("blockedReason is required for policy_blocked")
+
+    payload: dict[str, Any] = {
+        "schemaVersion": "v1",
+        "status": normalized_status,
+        "rootCauseCategory": _required_redacted_text(
+            root_cause_category, "root_cause_category"
+        ),
+        "summary": _required_redacted_text(summary, "summary"),
+    }
+    if safe_branch := _redacted_optional_text(branch):
+        payload["branch"] = safe_branch
+    if safe_commit := _redacted_optional_text(commit):
+        payload["commit"] = safe_commit
+    if safe_pr_url:
+        payload["pullRequestUrl"] = safe_pr_url
+    if safe_findings_ref:
+        payload["findingsRef"] = safe_findings_ref
+    if safe_blocked_reason:
+        payload["blockedReason"] = safe_blocked_reason
+    if safe_metadata := _safe_policy_mapping(metadata):
+        payload["metadata"] = safe_metadata
+    return payload
+
+def build_remediation_decision_log(
+    *,
+    entries: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build a bounded remediation decision log artifact payload."""
+
+    safe_entries: list[dict[str, Any]] = []
+    for raw_entry in entries[:100]:
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry: dict[str, Any] = {
+            "timestamp": _timestamp_string(raw_entry.get("timestamp")),
+            "phase": normalize_remediation_phase(raw_entry.get("phase")),
+            "decisionType": _required_redacted_text(
+                raw_entry.get("decisionType"), "decisionType"
+            ),
+            "decision": _required_redacted_text(
+                raw_entry.get("decision"), "decision"
+            ),
+            "reason": _required_redacted_text(raw_entry.get("reason"), "reason"),
+            "actor": _redacted_optional_text(raw_entry.get("actor")),
+            "actionKind": _redacted_optional_text(raw_entry.get("actionKind")),
+            "targetWorkflowId": _required_lifecycle_string(
+                raw_entry.get("targetWorkflowId"), "targetWorkflowId"
+            ),
+            "targetRunId": _required_lifecycle_string(
+                raw_entry.get("targetRunId"), "targetRunId"
+            ),
+            "artifactRefs": _artifact_refs_mapping(raw_entry.get("artifactRefs")),
+            "metadata": _safe_policy_mapping(raw_entry.get("metadata")) or {},
+        }
+        safe_entries.append(
+            {
+                key: value
+                for key, value in entry.items()
+                if value not in (None, {}, [])
+            }
+        )
+    if not safe_entries:
+        raise ValueError("entries must include at least one decision log entry")
+    return {"schemaVersion": "v1", "entries": safe_entries}
+
+def build_remediation_final_summary(
+    *,
+    summary: Mapping[str, Any],
+    repair: Mapping[str, Any],
+    prevention: Mapping[str, Any],
+    decision_log_ref: str | None = None,
+    final_audit_ref: str | None = None,
+    lock_release: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach repair/prevention lifecycle output to a remediation summary."""
+
+    if not isinstance(summary, Mapping):
+        raise ValueError("summary must be an object")
+    _validate_repair_payload(repair)
+    _validate_prevention_payload(prevention)
+    normalized_lock_release = _validated_choice(
+        lock_release, REMEDIATION_LOCK_RELEASE_STATUSES, "lock_release"
+    )
+    payload = _safe_lifecycle_payload(summary)
+    payload["repair"] = _safe_lifecycle_payload(repair)
+    payload["prevention"] = _safe_lifecycle_payload(prevention)
+    if ref := _artifact_ref_string(decision_log_ref, "decision_log_ref"):
+        payload["decisionLogRef"] = ref
+    if ref := _artifact_ref_string(final_audit_ref, "final_audit_ref"):
+        payload["finalAuditRef"] = ref
+    payload["lockRelease"] = normalized_lock_release
+    if safe_metadata := _safe_policy_mapping(metadata):
+        payload["metadata"] = safe_metadata
+    return payload
+
+def build_corrected_instruction_retry_provenance(
+    *,
+    original_input_ref: str,
+    remediation_context_ref: str,
+    corrected_instructions_ref: str,
+    retry_action_kind: str,
+    reason: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Record corrected-instruction retry provenance without mutating input."""
+
+    payload = {
+        "schemaVersion": "v1",
+        "retryActionKind": _required_redacted_text(
+            retry_action_kind, "retry_action_kind"
+        ),
+        "originalInputRef": _required_artifact_ref_string(
+            original_input_ref, "original_input_ref"
+        ),
+        "remediationContextRef": _required_artifact_ref_string(
+            remediation_context_ref, "remediation_context_ref"
+        ),
+        "correctedInstructionsRef": _required_artifact_ref_string(
+            corrected_instructions_ref, "corrected_instructions_ref"
+        ),
+        "reason": _required_redacted_text(reason, "reason"),
+        "metadata": _safe_policy_mapping(metadata) or {},
+        "originalInputMutation": False,
+    }
+    return {key: value for key, value in payload.items() if value not in ({}, None)}
+
 def build_target_remediation_linkage_summary(
     *,
     target_workflow_id: str,
@@ -830,6 +1093,145 @@ def _artifact_ref_payload(raw_ref: Any, *, kind: str | None) -> dict[str, str] |
     if source_kind:
         payload["kind"] = source_kind
     return payload
+
+def _artifact_ref_string(value: Any, field_name: str) -> str | None:
+    text = _string_or_none(value)
+    if text is None:
+        return None
+    if not text.startswith("art_"):
+        raise ValueError(f"{field_name} must be an artifact ref")
+    return text
+
+def _required_artifact_ref_string(value: Any, field_name: str) -> str:
+    text = _artifact_ref_string(value, field_name)
+    if text is None:
+        raise ValueError(f"{field_name} is required")
+    return text
+
+def _artifact_refs_mapping(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        return {}
+    refs: dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        key = _string_or_none(raw_key)
+        if not key or _is_secret_like_key(key):
+            continue
+        ref = _artifact_ref_string(raw_value, key)
+        if ref:
+            refs[key] = ref
+    return refs
+
+def _repair_artifact_refs(
+    *,
+    fresh_target_health_ref: str | None,
+    authority_decision_ref: str | None,
+    guard_decision_ref: str | None,
+    action_request_ref: str | None,
+    action_result_ref: str | None,
+    verification_ref: str | None,
+) -> dict[str, str]:
+    candidates = {
+        "freshTargetHealth": fresh_target_health_ref,
+        "authorityDecision": authority_decision_ref,
+        "guardDecision": guard_decision_ref,
+        "actionRequest": action_request_ref,
+        "actionResult": action_result_ref,
+        "verification": verification_ref,
+    }
+    return {
+        key: ref
+        for key, value in candidates.items()
+        if (ref := _artifact_ref_string(value, key)) is not None
+    }
+
+def _repair_candidate_payload(
+    *,
+    action_kind: str | None,
+    reason: str | None,
+) -> dict[str, str]:
+    payload: dict[str, str] = {}
+    if safe_action := _redacted_optional_text(action_kind):
+        payload["actionKind"] = safe_action
+    if safe_reason := _redacted_optional_text(reason):
+        payload["reason"] = safe_reason
+    return payload
+
+def _validated_choice(value: Any, allowed: frozenset[str], field_name: str) -> str:
+    normalized = _string_or_none(value)
+    if normalized not in allowed:
+        raise ValueError(f"{field_name} must be one of {sorted(allowed)}")
+    return normalized
+
+def _required_lifecycle_string(value: Any, field_name: str) -> str:
+    normalized = _string_or_none(value)
+    if not normalized:
+        raise ValueError(f"{field_name} is required")
+    if not _is_identifier_field(field_name) and _is_unsafe_context_string(normalized):
+        raise ValueError(f"{field_name} is unsafe")
+    return normalized
+
+def _safe_identifier_string(value: Any) -> str | None:
+    normalized = _string_or_none(value)
+    if not normalized:
+        return None
+    if _is_unsafe_context_string(normalized):
+        return None
+    return normalized
+
+def _required_redacted_text(value: Any, field_name: str) -> str:
+    normalized = _redacted_optional_text(value)
+    if not normalized:
+        raise ValueError(f"{field_name} is required")
+    return normalized
+
+def _redacted_optional_text(value: Any) -> str | None:
+    normalized = _string_or_none(value)
+    if not normalized:
+        return None
+    redacted = redact_sensitive_text(normalized)
+    if redacted is None:
+        return None
+    redacted = redacted.strip()
+    if not redacted or _is_unsafe_context_string(redacted):
+        return None
+    return redacted
+
+def _safe_public_url(value: Any) -> str | None:
+    normalized = _string_or_none(value)
+    if not normalized:
+        return None
+    redacted = redact_sensitive_text(normalized)
+    if redacted is None:
+        return None
+    redacted = redacted.strip()
+    lowered = redacted.lower()
+    if not lowered.startswith(("http://", "https://")):
+        return None
+    if any(
+        part in lowered
+        for part in ("token=", "signature=", "credential=", "password=")
+    ):
+        return None
+    return redacted
+
+def _validate_repair_payload(value: Mapping[str, Any]) -> None:
+    if not isinstance(value, Mapping):
+        raise ValueError("repair must be an object")
+    _validated_choice(
+        value.get("decision"), REMEDIATION_REPAIR_DECISIONS, "repair.decision"
+    )
+    _validated_choice(
+        value.get("repairOutcome"),
+        REMEDIATION_REPAIR_OUTCOMES,
+        "repair.repairOutcome",
+    )
+
+def _validate_prevention_payload(value: Mapping[str, Any]) -> None:
+    if not isinstance(value, Mapping):
+        raise ValueError("prevention must be an object")
+    _validated_choice(
+        value.get("status"), REMEDIATION_PREVENTION_STATUSES, "prevention.status"
+    )
 
 def _artifact_ref_list(value: Any) -> list[dict[str, str]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
@@ -1031,8 +1433,8 @@ def _is_unsafe_context_string(value: str) -> bool:
         or normalized.startswith("https://")
         or "presigned" in normalized
         or "storage_key" in normalized
-        or "token=" in normalized
-        or "password=" in normalized
+        or ("token=" in normalized and "[redacted]" not in normalized)
+        or ("password=" in normalized and "[redacted]" not in normalized)
     )
 
 def _string_or_none(value: Any) -> str | None:
