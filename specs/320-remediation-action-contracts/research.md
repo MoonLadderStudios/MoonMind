@@ -90,11 +90,11 @@ Test implications: unit tests first for every partial or unverified item.
 
 ## Integration Test Strategy
 
-Decision: Add hermetic integration coverage only for the real service/artifact boundary if implementation changes touch workflow/activity or artifact publication behavior.
-Evidence: Existing integration taxonomy requires `integration` + `integration_ci` for compose-backed hermetic checks; `RemediationEvidenceToolService.execute_action()` publishes real Temporal artifacts and updates remediation links.
-Rationale: Unit tests cover most logic, but durable artifact publication is an integration boundary that final evidence should exercise without external credentials.
-Alternatives considered: Provider verification was rejected because this story does not require live external providers.
-Test implications: use `./tools/test_integration.sh` for any new `integration_ci` boundary tests; otherwise document why focused unit coverage is sufficient.
+Decision: Add hermetic integration coverage for the real remediation action service/artifact boundary.
+Evidence: Existing integration taxonomy requires `integration` + `integration_ci` for compose-backed hermetic checks; `RemediationEvidenceToolService.execute_action()` publishes real Temporal artifacts and updates remediation links; `tasks.md` includes T011 through T013 and T023 for this boundary.
+Rationale: Unit tests cover most logic, but durable action request/result/verification artifact publication is an integration boundary required by DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
+Alternatives considered: Provider verification was rejected because this story does not require live external providers. Unit-only coverage was rejected because final evidence must prove the durable artifact boundary.
+Test implications: add `integration` + `integration_ci` tests under `tests/integration/temporal/test_remediation_action_contracts.py` and run `./tools/test_integration.sh`.
 
 ## Storage And Migration Decision
 

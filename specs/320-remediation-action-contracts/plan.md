@@ -44,7 +44,7 @@ MM-620 requires the remediation runtime to expose only typed, policy-compatible 
 **Primary Dependencies**: Pydantic v2, SQLAlchemy async ORM, FastAPI service models where exposed, Temporal Python SDK activity/service boundaries, pytest  
 **Storage**: Existing `execution_remediation_links`, Temporal execution source records, Temporal artifact metadata/content store, and in-memory guard/ledger state in the current service; no new persistent database tables planned  
 **Unit Testing**: `./tools/test_unit.sh` with focused pytest targets under `tests/unit/workflows/temporal/test_remediation_context.py` and related Temporal service tests  
-**Integration Testing**: `./tools/test_integration.sh` for hermetic `integration_ci` coverage when adding workflow/activity or artifact-boundary proof  
+**Integration Testing**: `./tools/test_integration.sh` for hermetic `integration_ci` coverage of the remediation action service/artifact boundary planned by this story  
 **Target Platform**: MoonMind API/Temporal service runtime on Linux containers  
 **Project Type**: Python web service plus Temporal orchestration services  
 **Performance Goals**: Registry listing and action decision serialization remain bounded and deterministic for one remediation action request; action evidence payloads contain refs and compact metadata rather than raw logs, secrets, or large bodies  
@@ -99,10 +99,10 @@ tests/unit/workflows/temporal/
 └── test_temporal_service.py    # service-boundary remediation validation coverage
 
 tests/integration/
-└── ...                         # hermetic integration_ci action/tool artifact boundary coverage if added
+└── temporal/test_remediation_action_contracts.py  # hermetic integration_ci action/tool artifact boundary coverage
 ```
 
-**Structure Decision**: Use the existing remediation service layout. Runtime behavior belongs in `moonmind/workflows/temporal/remediation_actions.py` and `remediation_tools.py`; durable evidence publication uses the existing remediation lifecycle publisher and Temporal artifact service. Unit tests remain focused in the existing remediation test module, with hermetic integration coverage added only for the real service/artifact boundary.
+**Structure Decision**: Use the existing remediation service layout. Runtime behavior belongs in `moonmind/workflows/temporal/remediation_actions.py` and `remediation_tools.py`; durable evidence publication uses the existing remediation lifecycle publisher and Temporal artifact service. Unit tests remain focused in the existing remediation test module, with hermetic integration coverage added for the real service/artifact boundary.
 
 ## Complexity Tracking
 

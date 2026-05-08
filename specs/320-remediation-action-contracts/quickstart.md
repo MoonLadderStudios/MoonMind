@@ -7,14 +7,14 @@
 - Python dependencies installed for the repository.
 - Local unit test mode enabled for managed-agent containers: `MOONMIND_FORCE_LOCAL_TESTS=1`.
 - No external provider credentials are required for planned unit coverage.
-- Hermetic integration checks require the normal MoonMind compose test environment when integration tests are added.
+- Hermetic integration checks require the normal MoonMind compose test environment because this story includes required `integration_ci` artifact-boundary coverage.
 
 ## Unit Test Strategy
 
 Write or update focused tests before implementation:
 
 ```bash
-MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py -q
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/test_temporal_service.py -q
 ```
 
 Required unit coverage:
@@ -29,7 +29,7 @@ Required unit coverage:
 
 ## Integration Test Strategy
 
-If action execution artifact publication or service/activity wiring changes, add hermetic integration coverage marked `integration` and `integration_ci`, then run:
+Add hermetic integration coverage marked `integration` and `integration_ci` for the remediation action artifact boundary, then run:
 
 ```bash
 ./tools/test_integration.sh
@@ -69,7 +69,7 @@ Run the full required unit suite before closing implementation:
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
 ```
 
-Run hermetic integration tests when integration coverage was added or service/activity boundaries changed:
+Run the required hermetic integration suite for the remediation action artifact boundary:
 
 ```bash
 ./tools/test_integration.sh
