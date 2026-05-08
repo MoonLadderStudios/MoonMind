@@ -49,15 +49,15 @@ Status summary: 4 missing, 20 partial, 6 implemented_unverified, 0 implemented_v
 
 ## Technical Context
 
-**Language/Version**: Python 3.12; TypeScript/React for Mission Control UI where availability display is affected  
-**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, Zod, Vitest, pytest  
-**Storage**: Existing Temporal execution records, memo/search attributes, Temporal artifact metadata/content store, task input snapshot artifacts, step ledger/checkpoint artifacts; no new persistent database table planned  
+**Language/Version**: Python 3.12; TypeScript/React for Mission Control UI where availability display is affected
+**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, Zod, Vitest, pytest
+**Storage**: Existing Temporal execution records, memo/search attributes, Temporal artifact metadata/content store, task input snapshot artifacts, step ledger/checkpoint artifacts; no new persistent database table planned
 **Unit Testing**: `./tools/test_unit.sh` for full unit verification; focused Python tests under `tests/unit/api/routers/test_executions.py` and `tests/unit/workflows/temporal/test_temporal_service.py`; focused UI tests through `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx` if display copy changes
 **Integration Testing**: `./tools/test_integration.sh` for hermetic `integration_ci` coverage; targeted workflow/step-ledger tests under `tests/integration/workflows/temporal/**` where no external credentials are required
-**Target Platform**: MoonMind API service, Temporal execution service, and Mission Control task detail surface in the existing containerized deployment  
-**Project Type**: Web service plus frontend dashboard with Temporal-backed orchestration  
-**Performance Goals**: Eligibility computation remains bounded enough for task detail polling and recovery submission; checkpoint payloads stay compact by keeping large/binary data behind refs  
-**Constraints**: Preserve in-flight Temporal payload compatibility or explicitly version any breaking change; fail before execution on invalid evidence; do not add hidden full-rerun fallback; do not embed large checkpoint content in workflow history; preserve source execution immutability  
+**Target Platform**: MoonMind API service, Temporal execution service, and Mission Control task detail surface in the existing containerized deployment
+**Project Type**: Web service plus frontend dashboard with Temporal-backed orchestration
+**Performance Goals**: Eligibility computation remains bounded enough for task detail polling and recovery submission; checkpoint payloads stay compact by keeping large/binary data behind refs
+**Constraints**: Preserve in-flight Temporal payload compatibility or explicitly version any breaking change; fail before execution on invalid evidence; do not add hidden full-rerun fallback; do not embed large checkpoint content in workflow history; preserve source execution immutability
 **Scale/Scope**: One runtime story for `MoonMind.Run` failed-step Resume evidence gating; excludes implementing the full resumed step execution path beyond eligibility, checkpoint validation, and pre-execution failure guarantees
 
 ## Constitution Check
