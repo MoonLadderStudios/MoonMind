@@ -57,32 +57,53 @@ For canonical documentation under `docs/`, do not downgrade the documented desir
    - Record concise evidence for every `stale`, `missing`, or `ambiguous` item.
    - If the implementation appears internally inconsistent, document the inconsistency in the ledger and avoid inventing a new contract.
 
-5. Edit the document.
+5. Determine if the document is out-of-date or not fully implemented.
+   - Compare the drift ledger against the current codebase. If all claims are `accurate` and nothing is `missing`, the document is up-to-date; stop and report that no update is needed.
+   - If the document is `stale` or `missing`, check whether the needed update aligns with the project's declared direction.
+   - Read the constitution (`.specify/memory/constitution.md`), `README.md`, and the main architecture document under `docs/`.
+   - Assess whether the drift-correcting update would move the document toward or away from those canonical sources.
+   - If the update is clearly aligned with the constitution, README, and architecture, proceed to edit the document.
+   - If the update appears to contradict the project's declared direction, or if the correct direction is uncertain, do **not** edit the document. Instead, proceed to step 8 (Jira fallback).
+
+6. Edit the document.
    - Update only the sections needed to correct the drift.
    - Describe the current behavior directly and concretely.
    - Remove obsolete compatibility language, stale migration framing, and contradicted examples.
    - Preserve the document's existing voice, heading structure, and terminology where they remain accurate.
    - Add or update cross-references only when they help readers find the canonical contract.
 
-6. Verify the update.
+7. Verify the update.
    - Re-read the changed sections and compare them against the drift ledger.
    - Run targeted documentation checks if available.
    - Run the repository-mandated programmatic checks from `AGENTS.md`, even for documentation-only updates.
    - Add any extra targeted code tests needed when the documentation change depends on behavior that is not already evident from existing tests or source inspection.
    - If verification cannot be run, record the exact blocker.
 
-7. Finalize the evidence.
+8. Jira fallback for misaligned updates.
+   - If step 5 determined that the document update is not aligned with the project's direction, create a Jira issue instead of editing the document.
+   - Read `.agents/skills/jira-issue-creator/SKILL.md` and follow its workflow.
+   - The Jira issue must include:
+     - A clear summary naming the document and the planned update.
+     - A description that explains the drift found in the drift ledger.
+     - An explicit statement of why the update may conflict with the constitution, README, or main architecture document.
+     - The specific document path and relevant implementation evidence.
+   - Do not edit the document when creating the Jira fallback issue.
+   - Report the created Jira issue key and URL as the primary output.
+
+9. Finalize the evidence.
    - Summarize which document changed, what drift was corrected, and the implementation evidence used.
    - Include validation commands and results.
+   - If a Jira fallback issue was created, include its key, URL, and rationale.
    - If requested by the task, commit the documentation update with a concise message.
 
 ## Outputs
 
-- Updated document path(s).
+- Updated document path(s), or the reason no update was performed.
 - Drift ledger summary with each corrected or intentionally deferred claim.
 - Implementation evidence references, including file paths and relevant tests or schemas.
 - Validation commands run and their result, or the reason validation was not run.
 - Commit hash when the user requested a commit.
+- Jira issue key and URL when a misaligned update triggered the Jira fallback.
 
 ## Failure Modes
 
@@ -92,3 +113,5 @@ For canonical documentation under `docs/`, do not downgrade the documented desir
 - The document describes intended behavior that code does not implement: report the gap clearly and update only if the user's goal is to document actual behavior.
 - Required verification cannot run: keep the doc update if source evidence is sufficient, but report the blocked command and reason.
 - Secret-like content appears in examples or copied logs: redact it before writing or reporting.
+- Document update contradicts the constitution, README, or architecture: do not edit; create a Jira issue and report the misalignment.
+- Jira fallback blocked: report the exact blocker and preserve the drift ledger for manual review.

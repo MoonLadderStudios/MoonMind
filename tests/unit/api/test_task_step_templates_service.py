@@ -1879,6 +1879,66 @@ async def test_jira_breakdown_orchestrate_can_create_source_subtasks(tmp_path):
                 "dependencyMode": "linear_blocker_chain",
             }
 
+async def test_seed_catalog_includes_document_update_orchestrate_preset(tmp_path):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service._get_template_for_scope(
+                slug="document-update-orchestrate",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+            assert template.title == "Document Update Orchestrate"
+            assert template.latest_version is not None
+            assert template.latest_version.annotations["sourceSkill"] == (
+                "document-update-orchestrate"
+            )
+            assert template.latest_version.annotations["output"] == (
+                "document-update-tasks"
+            )
+            assert [
+                step.get("tool", step.get("skill", {})).get("id")
+                for step in template.latest_version.steps
+            ] == [
+                "document.discover",
+                "story.create_document_update_tasks",
+            ]
+
+            expanded = await service.expand_template(
+                slug="document-update-orchestrate",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "document_directory": "docs",
+                    "publish_mode": "pr_with_merge_automation",
+                },
+                context={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                },
+            )
+
+            assert len(expanded["steps"]) == 2
+            assert expanded["steps"][0]["tool"]["id"] == "document.discover"
+            assert expanded["steps"][1]["tool"]["id"] == "story.create_document_update_tasks"
+            assert expanded["steps"][1]["documentUpdateOrchestration"]["task"]["publish"] == {
+                "mode": "pr",
+                "mergeAutomation": {"enabled": True},
+            }
+            assert expanded["steps"][1]["documentUpdateOrchestration"]["traceability"][
+                "sourceDirectory"
+            ] == "docs"
+
 async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
     tmp_path,
 ):

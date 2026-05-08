@@ -186,6 +186,36 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             },
         }
 
+        result = await session.execute(
+            select(TaskStepTemplate)
+            .where(
+                TaskStepTemplate.slug == "document-update-orchestrate",
+                TaskStepTemplate.scope_type == TaskTemplateScopeType.GLOBAL,
+                TaskStepTemplate.scope_ref.is_(None),
+            )
+            .options(selectinload(TaskStepTemplate.latest_version))
+        )
+        doc_template = result.scalar_one_or_none()
+        assert doc_template is not None
+        assert doc_template.latest_version is not None
+        doc_steps = doc_template.latest_version.steps
+        assert len(doc_steps) == 2
+        assert doc_steps[0]["type"] == "tool"
+        assert doc_steps[0]["tool"]["id"] == "document.discover"
+        assert "{{ inputs.document_directory }}" in doc_steps[0]["instructions"]
+        assert doc_steps[1]["type"] == "tool"
+        assert doc_steps[1]["tool"]["id"] == "story.create_document_update_tasks"
+        assert "documentUpdateOrchestration" in doc_steps[1]
+        assert doc_steps[1]["documentUpdateOrchestration"]["task"]["publish"] == {
+            "mode": "pr",
+            "mergeAutomation": {
+                "enabled": "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
+            },
+        }
+        assert doc_steps[1]["documentUpdateOrchestration"]["traceability"][
+            "sourceDirectory"
+        ] == "{{ inputs.document_directory }}"
+
 @pytest.mark.asyncio
 async def test_startup_deactivates_legacy_speckit_orchestrate_template(
     disabled_env_keys, tmp_path

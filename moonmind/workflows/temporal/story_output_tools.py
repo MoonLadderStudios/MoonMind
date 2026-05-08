@@ -6,7 +6,9 @@ import base64
 import hashlib
 import inspect
 import json
+import os
 import re
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 import httpx
@@ -36,6 +38,9 @@ JIRA_DEPENDENCY_MODE_LINEAR_BLOCKER_CHAIN = "linear_blocker_chain"
 JIRA_DEPENDENCY_MODES = frozenset(
     {JIRA_DEPENDENCY_MODE_NONE, JIRA_DEPENDENCY_MODE_LINEAR_BLOCKER_CHAIN}
 )
+
+DOCUMENT_DISCOVER_TOOL_NAME = "document.discover"
+DOCUMENT_UPDATE_TASKS_TOOL_NAME = "story.create_document_update_tasks"
 
 StoryFetcher = Callable[
     [str, str, str],
@@ -1597,6 +1602,282 @@ async def check_jira_blockers(
         },
     )
 
+async def discover_documents(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+) -> ToolResult:
+    """Discover .md, .txt, and .tex files in a directory."""
+
+    directory = _string(inputs.get("directory") or inputs.get("path"))
+    if not directory:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "documentPaths": [],
+                "error": "Missing required input: directory or path.",
+            },
+        )
+
+    root = Path(directory).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "documentPaths": [],
+                "error": f"Directory does not exist or is not a directory: {directory}",
+            },
+        )
+
+    extensions = frozenset(
+        _list(
+            inputs.get("extensions")
+            or [".md", ".txt", ".tex"]
+        )
+    )
+    if not extensions:
+        extensions = frozenset({".md", ".txt", ".tex"})
+
+    document_paths: list[str] = []
+    for ext in extensions:
+        pattern = f"*{ext}"
+        for path in root.rglob(pattern):
+            if path.is_file():
+                document_paths.append(str(path))
+
+    document_paths = sorted(document_paths)
+
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "directory": str(root),
+            "extensions": sorted(extensions),
+            "documentCount": len(document_paths),
+            "documentPaths": document_paths,
+        },
+    )
+
+def _document_update_task_payload(
+    *,
+    document_path: str,
+    task_payload: Mapping[str, Any],
+    traceability: Mapping[str, Any],
+    depends_on: Sequence[str],
+    source_directory: str,
+) -> tuple[str, dict[str, Any]]:
+    instructions = (
+        f"Update the technical document at {document_path} to align with the current "
+        "codebase implementation. Follow the document-update skill workflow."
+    )
+    runtime = _mapping(task_payload.get("runtime"))
+    publish = _mapping(task_payload.get("publish"))
+    repository = _string(task_payload.get("repository") or task_payload.get("repo"))
+    task: dict[str, Any] = {
+        "title": f"Document update: {Path(document_path).name}",
+        "instructions": instructions,
+        "inputs": {
+            "document_path": document_path,
+            "source_directory": source_directory,
+        },
+        "taskTemplate": {
+            "slug": "document-update",
+            "version": "1.0.0",
+        },
+    }
+    if runtime:
+        task["runtime"] = runtime
+    if publish:
+        task["publish"] = publish
+    if repository:
+        task["repository"] = repository
+    if depends_on:
+        task["dependsOn"] = list(depends_on)
+    selected_skill = _string(traceability.get("selectedSkill") or traceability.get("selected_skill"))
+    if selected_skill:
+        metadata = task.setdefault("metadata", {})
+        moonmind = metadata.setdefault("moonmind", {})
+        moonmind["selectedSkill"] = selected_skill
+        metadata["moonmind"] = moonmind
+        task["metadata"] = metadata
+    return task["title"], task
+
+async def create_document_update_tasks_from_paths(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    execution_creator: ExecutionCreator | None = None,
+) -> ToolResult:
+    """Create document-update tasks from a list of document paths."""
+
+    if execution_creator is None:
+        raise ValueError("execution_creator is required for document update task creation.")
+
+    context = _context or {}
+    previous_outputs = _mapping(context.get("previousOutputs") or context.get("previous_outputs"))
+    document_paths: list[str] = []
+    raw_paths = inputs.get("documentPaths") or inputs.get("document_paths")
+    if isinstance(raw_paths, Sequence) and not isinstance(raw_paths, (str, bytes, bytearray)):
+        document_paths = [str(p) for p in raw_paths if _string(p)]
+    if not document_paths and previous_outputs:
+        raw_paths = previous_outputs.get("documentPaths") or previous_outputs.get("document_paths")
+        if isinstance(raw_paths, Sequence) and not isinstance(raw_paths, (str, bytes, bytearray)):
+            document_paths = [str(p) for p in raw_paths if _string(p)]
+
+    orchestration_payload = _mapping(
+        inputs.get("documentUpdateOrchestration")
+        or inputs.get("document_update_orchestration")
+    )
+    task_payload = _mapping(
+        orchestration_payload.get("task")
+        or inputs.get("task")
+    )
+    traceability = _mapping(
+        orchestration_payload.get("traceability")
+        or inputs.get("traceability")
+    )
+    source_directory = _string(
+        traceability.get("sourceDirectory")
+        or traceability.get("source_directory")
+        or inputs.get("sourceDirectory")
+        or inputs.get("source_directory")
+        or ""
+    )
+    repository = _string(task_payload.get("repository") or task_payload.get("repo"))
+    owner_id = (
+        _string(task_payload.get("ownerId") or task_payload.get("owner_id"))
+        or _string(inputs.get("ownerId") or inputs.get("owner_id"))
+        or _string(context.get("ownerId") or context.get("owner_id"))
+        or None
+    )
+    owner_type = (
+        _string(task_payload.get("ownerType") or task_payload.get("owner_type"))
+        or _string(inputs.get("ownerType") or inputs.get("owner_type"))
+        or _string(context.get("ownerType") or context.get("owner_type"))
+        or None
+    )
+
+    tasks: list[dict[str, Any]] = []
+    dependencies: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    previous_workflow_id = ""
+
+    for index, document_path in enumerate(document_paths, start=1):
+        base_result = {
+            "documentIndex": index,
+            "documentPath": document_path,
+        }
+        depends_on = [previous_workflow_id] if previous_workflow_id else []
+        title, task = _document_update_task_payload(
+            document_path=document_path,
+            task_payload=task_payload,
+            traceability=traceability,
+            depends_on=depends_on,
+            source_directory=source_directory,
+        )
+        idempotency_key = _stable_idempotency_key(
+            source_issue_key=source_directory,
+            story_id=f"doc-{index:03d}",
+            issue_key=document_path,
+        )
+        try:
+            created = execution_creator(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                owner_type=owner_type,
+                title=title,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "requestType": "task",
+                    "repository": repository or None,
+                    "targetRuntime": _string(_mapping(task.get("runtime")).get("mode")) or None,
+                    "publishMode": _string(_mapping(task.get("publish")).get("mode")) or None,
+                    "task": task,
+                    "traceability": {
+                        "sourceDirectory": source_directory,
+                    },
+                },
+                idempotency_key=idempotency_key,
+                repository=repository or None,
+                integration="document_update",
+                summary=f"Document update task for {document_path}.",
+            )
+            if inspect.isawaitable(created):
+                created = await created  # type: ignore[assignment]
+        except Exception as exc:
+            failures.append(
+                {
+                    **base_result,
+                    "errorCode": "task_creation_failed",
+                    "message": str(exc) or "Downstream task creation failed.",
+                    "dependsOn": depends_on,
+                }
+            )
+            remaining = document_paths[index:]
+            for skipped_path in remaining:
+                failures.append(
+                    {
+                        "documentIndex": document_paths.index(skipped_path) + 1,
+                        "documentPath": skipped_path,
+                        "errorCode": "dependency_not_created",
+                        "message": "Earlier downstream task creation failed.",
+                    }
+                )
+            break
+
+        created_mapping = dict(created)
+        workflow_id = _string(
+            created_mapping.get("workflowId") or created_mapping.get("workflow_id")
+        )
+        task_result = {
+            **base_result,
+            "workflowId": workflow_id,
+            "runId": _string(created_mapping.get("runId") or created_mapping.get("run_id")),
+            "title": _string(created_mapping.get("title")) or title,
+            "created": not bool(created_mapping.get("existing")),
+            "existing": bool(created_mapping.get("existing")),
+            "dependsOn": depends_on,
+            "idempotencyKey": idempotency_key,
+        }
+        tasks.append(task_result)
+        if depends_on:
+            dependencies.append(
+                {
+                    "fromWorkflowId": depends_on[0],
+                    "toWorkflowId": workflow_id,
+                    "fromDocumentPath": tasks[-2]["documentPath"] if len(tasks) > 1 else "",
+                    "toDocumentPath": document_path,
+                    "status": "created",
+                }
+            )
+        previous_workflow_id = workflow_id
+
+    if not document_paths:
+        status = "no_downstream_tasks"
+    elif failures:
+        status = "partial" if tasks else "no_downstream_tasks"
+    else:
+        status = "completed"
+
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "documentUpdateOrchestration": {
+                "status": status,
+                "documentCount": len(document_paths),
+                "createdTaskCount": len(tasks),
+                "dependencyCount": len(dependencies),
+                "tasks": tasks,
+                "dependencies": dependencies,
+                "failures": failures,
+                "traceability": {
+                    "sourceDirectory": source_directory,
+                },
+            }
+        },
+    )
+
 def register_story_output_tool_handlers(
     dispatcher: Any,
     *,
@@ -1647,11 +1928,43 @@ def register_story_output_tool_handlers(
         handler=_check_jira_blockers,
     )
 
+    async def _discover_documents(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await discover_documents(inputs, context)
+
+    dispatcher.register_skill(
+        skill_name=DOCUMENT_DISCOVER_TOOL_NAME,
+        version="1.0",
+        handler=_discover_documents,
+    )
+
+    async def _create_document_update_tasks(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await create_document_update_tasks_from_paths(
+            inputs,
+            context,
+            execution_creator=execution_creator,
+        )
+
+    dispatcher.register_skill(
+        skill_name=DOCUMENT_UPDATE_TASKS_TOOL_NAME,
+        version="1.0",
+        handler=_create_document_update_tasks,
+    )
+
 __all__ = [
     "JIRA_CHECK_BLOCKERS_TOOL_NAME",
     "JIRA_STORY_TOOL_NAMES",
     "check_jira_blockers",
     "create_jira_issues_from_stories",
     "create_jira_orchestrate_tasks_from_issue_mappings",
+    "discover_documents",
+    "create_document_update_tasks_from_paths",
+    "DOCUMENT_DISCOVER_TOOL_NAME",
+    "DOCUMENT_UPDATE_TASKS_TOOL_NAME",
     "register_story_output_tool_handlers",
 ]
