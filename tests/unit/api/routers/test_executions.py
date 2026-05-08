@@ -6266,7 +6266,7 @@ def test_temporal_task_editing_actions_require_original_snapshot(
     )
 
 
-def test_terminal_task_editing_actions_allow_parameter_fallback_without_snapshot(
+def test_terminal_task_editing_actions_reject_parameter_fallback_without_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
@@ -6298,10 +6298,16 @@ def test_terminal_task_editing_actions_allow_parameter_fallback_without_snapshot
         actions.disabled_reasons["canUpdateInputs"]
         == "original_task_input_snapshot_missing"
     )
-    assert actions.can_edit_for_rerun is True
-    assert actions.can_rerun is True
-    assert "canEditForRerun" not in actions.disabled_reasons
-    assert "canRerun" not in actions.disabled_reasons
+    assert actions.can_edit_for_rerun is False
+    assert actions.can_rerun is False
+    assert (
+        actions.disabled_reasons["canEditForRerun"]
+        == "original_task_input_snapshot_missing"
+    )
+    assert (
+        actions.disabled_reasons["canRerun"]
+        == "original_task_input_snapshot_missing"
+    )
 
 
 def test_terminal_task_editing_actions_reject_title_only_parameter_fallback(
