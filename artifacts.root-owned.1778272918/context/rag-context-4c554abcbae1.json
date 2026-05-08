@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/auth_providers.py (score: 1.000, trust: canonical)\n    line 20: from moonmind.auth import AuthProviderManager, EnvAuthProvider, ProfileAuthProvider\n2. api_service/test_ui_route.py (score: 1.000, trust: canonical)\n    line 23: <script id=\"moonmind-ui-boot\" type=\"application/json\">\n3. api_service/migrations/env.py (score: 1.000, trust: canonical)\n    line 27: from moonmind.config.settings import AppSettings  # Import AppSettings class\n4. api_service/db/base.py (score: 1.000, trust: canonical)\n    line 8: from moonmind.config.settings import settings\n5. moonmind/utils/build_info.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Runtime helpers for MoonMind build metadata.\"\"\"\n6. docs/ExternalAgents/ExternalAgentIntegrationSystem.md (score: 1.000, trust: canonical)\n    line 15: Define one canonical architecture for MoonMind external-agent integrations.\n7. moonmind/schemas/agent_runtime_models.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Canonical contracts for managed and external agent runtime execution.\"\"\"\n8. docs/ManagedAgents/ClaudeAnthropicOAuth.md (score: 1.000, trust: canonical)\n    line 9: Code through Claude's own interactive login flow in a MoonMind browser terminal,",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/auth_providers.py",
+      "text": "line 20: from moonmind.auth import AuthProviderManager, EnvAuthProvider, ProfileAuthProvider",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 20,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/test_ui_route.py",
+      "text": "line 23: <script id=\"moonmind-ui-boot\" type=\"application/json\">",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 23,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/migrations/env.py",
+      "text": "line 27: from moonmind.config.settings import AppSettings  # Import AppSettings class",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 27,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/db/base.py",
+      "text": "line 8: from moonmind.config.settings import settings",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/utils/build_info.py",
+      "text": "line 1: \"\"\"Runtime helpers for MoonMind build metadata.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ExternalAgents/ExternalAgentIntegrationSystem.md",
+      "text": "line 15: Define one canonical architecture for MoonMind external-agent integrations.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 15,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/schemas/agent_runtime_models.py",
+      "text": "line 1: \"\"\"Canonical contracts for managed and external agent runtime execution.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+      "text": "line 9: Code through Claude's own interactive login flow in a MoonMind browser terminal,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 9,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-08T20:10:56Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

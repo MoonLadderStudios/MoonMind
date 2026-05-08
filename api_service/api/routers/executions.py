@@ -1769,6 +1769,11 @@ def _serialize_execution(
     )
     resume_summary = _build_resume_summary(record, actions=actions)
     related_runs = _build_resume_related_runs(record, params=params)
+    target_diagnostics = _build_target_diagnostics(
+        record,
+        params=params,
+        resume_summary=resume_summary,
+    )
     proposal_summary = _proposal_summary_from_memo(memo)
     proposal_outcomes = _proposal_outcomes_from_summary(proposal_summary)
 
@@ -1857,6 +1862,7 @@ def _serialize_execution(
         actions=actions,
         resume=resume_summary,
         related_runs=related_runs,
+        target_diagnostics=target_diagnostics,
         proposal_summary=proposal_summary,
         proposal_outcomes=proposal_outcomes,
         debug_fields=debug_fields,
@@ -2137,6 +2143,390 @@ def _build_resume_related_runs(
             href=f"/tasks/{source_workflow_id}",
         )
     ]
+
+def _target_diagnostics_block(
+    *,
+    params: Mapping[str, Any],
+    memo: Mapping[str, Any],
+    search_attributes: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    for source in (params, memo, search_attributes):
+        for key in ("targetDiagnostics", "target_diagnostics"):
+            value = source.get(key)
+            if isinstance(value, Mapping):
+                return value
+    return {}
+
+def _attachment_ref_from_payload(value: Mapping[str, Any]) -> str | None:
+    for key in ("artifactRef", "artifact_ref", "artifactId", "artifact_id", "ref"):
+        candidate = str(value.get(key) or "").strip()
+        if candidate:
+            return candidate
+    return None
+
+def _normalize_target_attachment(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, str):
+        ref = value.strip()
+        if not ref:
+            return None
+        return {"artifactRef": ref, "previewAvailable": True}
+    if not isinstance(value, Mapping):
+        return None
+    artifact_ref = _attachment_ref_from_payload(value)
+    filename = str(
+        value.get("filename") or value.get("name") or value.get("fileName") or ""
+    ).strip() or None
+    content_type = str(
+        value.get("contentType")
+        or value.get("content_type")
+        or value.get("mimeType")
+        or ""
+    ).strip() or None
+    size_bytes = value.get("sizeBytes", value.get("size_bytes"))
+    try:
+        normalized_size = int(size_bytes) if size_bytes is not None else None
+    except (TypeError, ValueError):
+        normalized_size = None
+    return {
+        "artifactRef": artifact_ref,
+        "filename": filename,
+        "contentType": content_type,
+        "sizeBytes": normalized_size,
+        "previewAvailable": bool(value.get("previewAvailable", bool(artifact_ref))),
+    }
+
+def _target_attachment_payloads(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        return []
+    candidates: list[Any] = []
+    for key in (
+        "attachmentRefs",
+        "attachment_refs",
+        "attachments",
+        "inputAttachments",
+        "input_attachments",
+    ):
+        raw = value.get(key)
+        if isinstance(raw, list):
+            candidates.extend(raw)
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in candidates:
+        attachment = _normalize_target_attachment(item)
+        if attachment is None:
+            continue
+        identity = str(
+            attachment.get("artifactRef") or attachment.get("filename") or len(seen)
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized.append(attachment)
+    return normalized
+
+def _normalize_target_refs(values: Any) -> list[dict[str, Any]]:
+    if not isinstance(values, list):
+        return []
+    refs: list[dict[str, Any]] = []
+    for item in values:
+        if isinstance(item, str):
+            ref = item.strip()
+            if ref:
+                refs.append({"refKind": "artifact", "artifactRef": ref})
+            continue
+        if not isinstance(item, Mapping):
+            continue
+        ref_kind = str(
+            item.get("refKind") or item.get("ref_kind") or item.get("kind") or "artifact"
+        ).strip()
+        artifact_ref = str(
+            item.get("artifactRef") or item.get("artifact_ref") or item.get("ref") or ""
+        ).strip() or None
+        path = str(item.get("path") or "").strip() or None
+        if ref_kind and (artifact_ref or path):
+            refs.append({"refKind": ref_kind, "artifactRef": artifact_ref, "path": path})
+    return refs
+
+def _normalize_attachment_failure_phase(value: Any) -> str:
+    phase = str(value or "").strip().lower().replace("-", "_")
+    if phase in {
+        "upload",
+        "validation",
+        "materialization",
+        "context_generation",
+        "degraded",
+    }:
+        return phase
+    if phase in {"context", "context_generation_failed", "generated_context"}:
+        return "context_generation"
+    if phase in {"materialize", "prepare", "download", "download_failed"}:
+        return "materialization"
+    if phase in {"validate", "invalid", "schema"}:
+        return "validation"
+    if phase in {"create", "submit", "submitted"}:
+        return "upload"
+    return "degraded"
+
+def _normalize_target_failures(values: Any) -> list[dict[str, Any]]:
+    if not isinstance(values, list):
+        return []
+    failures: list[dict[str, Any]] = []
+    for item in values:
+        if not isinstance(item, Mapping):
+            continue
+        message = str(item.get("message") or item.get("summary") or "").strip()
+        if not message:
+            continue
+        phase = _normalize_attachment_failure_phase(
+            item.get("phase") or item.get("kind")
+        )
+        evidence_ref = str(
+            item.get("evidenceRef") or item.get("evidence_ref") or item.get("artifactRef") or ""
+        ).strip() or None
+        failures.append(
+            {"phase": phase, "message": message, "evidenceRef": evidence_ref}
+        )
+    return failures
+
+def _target_step_id(value: Mapping[str, Any], fallback: str) -> str:
+    return str(
+        value.get("id")
+        or value.get("stepId")
+        or value.get("step_id")
+        or value.get("logicalStepId")
+        or fallback
+    ).strip()
+
+def _target_step_label(value: Mapping[str, Any], step_id: str, index: int) -> str:
+    return (
+        str(value.get("title") or value.get("label") or value.get("name") or "").strip()
+        or step_id
+        or f"Step {index}"
+    )
+
+def _merge_target_overlay(
+    targets: list[dict[str, Any]],
+    *,
+    target_kind: str,
+    step_id: str | None,
+    overlay: Mapping[str, Any],
+) -> None:
+    if not overlay:
+        return
+    for target in targets:
+        if target.get("targetKind") != target_kind:
+            continue
+        if target_kind == "step" and target.get("stepId") != step_id:
+            continue
+        if overlay.get("label"):
+            target["label"] = str(overlay.get("label"))
+        target["attachments"] = [
+            *target.get("attachments", []),
+            *_target_attachment_payloads(overlay),
+        ]
+        target["refs"] = [
+            *target.get("refs", []),
+            *_normalize_target_refs(overlay.get("refs")),
+        ]
+        target["failures"] = [
+            *target.get("failures", []),
+            *_normalize_target_failures(overlay.get("failures")),
+        ]
+        return
+
+    label = str(overlay.get("label") or "").strip()
+    if not label:
+        label = "Task objective" if target_kind == "objective" else step_id or "Step"
+    targets.append(
+        {
+            "targetKind": target_kind,
+            "stepId": step_id,
+            "label": label,
+            "attachments": _target_attachment_payloads(overlay),
+            "refs": _normalize_target_refs(overlay.get("refs")),
+            "failures": _normalize_target_failures(overlay.get("failures")),
+        }
+    )
+
+def _preserved_steps_from_resume_source(
+    resume_source: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    raw_steps = resume_source.get("preservedSteps") or resume_source.get(
+        "preserved_steps"
+    )
+    if not isinstance(raw_steps, list):
+        return []
+    preserved_steps: list[dict[str, Any]] = []
+    for item in raw_steps:
+        if not isinstance(item, Mapping):
+            continue
+        logical_step_id = str(
+            item.get("logicalStepId")
+            or item.get("logical_step_id")
+            or item.get("stepId")
+            or item.get("step_id")
+            or ""
+        ).strip()
+        if not logical_step_id:
+            continue
+        source_attempt = item.get("sourceAttempt", item.get("attempt"))
+        try:
+            normalized_attempt = (
+                int(source_attempt) if source_attempt is not None else None
+            )
+        except (TypeError, ValueError):
+            normalized_attempt = None
+        preserved_steps.append(
+            {
+                "logicalStepId": logical_step_id,
+                "title": str(item.get("title") or "").strip() or None,
+                "sourceAttempt": normalized_attempt,
+                "sourceWorkflowId": str(
+                    item.get("sourceWorkflowId")
+                    or item.get("source_workflow_id")
+                    or resume_source.get("sourceWorkflowId")
+                    or resume_source.get("source_workflow_id")
+                    or ""
+                ).strip()
+                or None,
+                "sourceRunId": str(
+                    item.get("sourceRunId")
+                    or item.get("source_run_id")
+                    or resume_source.get("sourceRunId")
+                    or resume_source.get("source_run_id")
+                    or ""
+                ).strip()
+                or None,
+            }
+        )
+    return preserved_steps
+
+def _failed_resume_phase(disabled_reason: str | None) -> str | None:
+    if not disabled_reason:
+        return None
+    if disabled_reason == "workspace_checkpoint_missing":
+        return "workspace_restoration"
+    if disabled_reason == "completed_step_refs_missing":
+        return "preserved_output_injection"
+    if disabled_reason in {
+        "resume_checkpoint_missing",
+        "failed_step_identity_missing",
+        "plan_identity_missing",
+    }:
+        return "checkpoint_validation"
+    return None
+
+def _build_target_diagnostics(
+    record,
+    *,
+    params: Mapping[str, Any],
+    resume_summary: ExecutionResumeSummaryModel | None,
+) -> dict[str, Any] | None:
+    memo = dict(getattr(record, "memo", None) or {})
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
+    task_payload = params.get("task") if isinstance(params.get("task"), Mapping) else {}
+    diagnostics_block = _target_diagnostics_block(
+        params=params,
+        memo=memo,
+        search_attributes=search_attributes,
+    )
+
+    targets: list[dict[str, Any]] = []
+    objective_attachments = _target_attachment_payloads(task_payload)
+    if objective_attachments or diagnostics_block:
+        targets.append(
+            {
+                "targetKind": "objective",
+                "label": "Task objective",
+                "attachments": objective_attachments,
+                "refs": [],
+                "failures": [],
+            }
+        )
+
+    raw_steps = task_payload.get("steps") if isinstance(task_payload, Mapping) else None
+    if isinstance(raw_steps, list):
+        for index, raw_step in enumerate(raw_steps, start=1):
+            if not isinstance(raw_step, Mapping):
+                continue
+            step_id = _target_step_id(raw_step, f"step-{index}")
+            step_target = {
+                "targetKind": "step",
+                "stepId": step_id,
+                "label": _target_step_label(raw_step, step_id, index),
+                "attachments": _target_attachment_payloads(raw_step),
+                "refs": [],
+                "failures": [],
+            }
+            if step_target["attachments"] or diagnostics_block:
+                targets.append(step_target)
+
+    raw_overlay_targets = diagnostics_block.get("targets")
+    if isinstance(raw_overlay_targets, list):
+        for overlay in raw_overlay_targets:
+            if not isinstance(overlay, Mapping):
+                continue
+            target_kind = str(overlay.get("targetKind") or overlay.get("target_kind") or "").strip()
+            if target_kind not in {"objective", "step"}:
+                continue
+            step_id = (
+                str(overlay.get("stepId") or overlay.get("step_id") or "").strip()
+                or None
+            )
+            _merge_target_overlay(
+                targets,
+                target_kind=target_kind,
+                step_id=step_id,
+                overlay=overlay,
+            )
+
+    resume_source = _resume_source_block_from_record(record)
+    source_workflow_id = str(
+        resume_source.get("sourceWorkflowId")
+        or resume_source.get("source_workflow_id")
+        or ""
+    ).strip() or None
+    source_run_id = str(
+        resume_source.get("sourceRunId") or resume_source.get("source_run_id") or ""
+    ).strip() or None
+    failed_resume_phase = _failed_resume_phase(
+        resume_summary.disabled_reason if resume_summary else None
+    )
+    recovery = None
+    has_resume_evidence = bool(
+        resume_source
+        or (
+            resume_summary
+            and (
+                resume_summary.checkpoint_ref
+                or resume_summary.failed_step_id
+                or failed_resume_phase
+            )
+        )
+    )
+    if has_resume_evidence:
+        recovery = {
+            "resumed": bool(source_workflow_id or source_run_id or resume_source),
+            "sourceWorkflowId": source_workflow_id,
+            "sourceRunId": source_run_id,
+            "checkpointRef": resume_summary.checkpoint_ref if resume_summary else None,
+            "preservedSteps": _preserved_steps_from_resume_source(resume_source),
+            "failedResumePhase": failed_resume_phase,
+        }
+
+    degraded_reason = str(
+        diagnostics_block.get("degradedReason")
+        or diagnostics_block.get("degraded_reason")
+        or ""
+    ).strip() or None
+
+    if not targets and not recovery and not degraded_reason:
+        return None
+    return {
+        "targets": targets,
+        "recovery": recovery,
+        "degradedReason": degraded_reason,
+    }
 
 async def _enrich_execution_dependencies(
     execution: ExecutionModel,

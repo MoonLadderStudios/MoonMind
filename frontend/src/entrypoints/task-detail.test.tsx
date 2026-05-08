@@ -1675,6 +1675,111 @@ describe('Task Detail Entrypoint', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');
   });
 
+  it('renders target attachment diagnostics without replacing raw diagnostics', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      taskRunId: '123e4567-e89b-12d3-a456-426614174000',
+      title: 'Target diagnostic task',
+      summary: 'Attachment preparation degraded.',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      targetDiagnostics: {
+        targets: [
+          {
+            targetKind: 'objective',
+            label: 'Task objective',
+            attachments: [
+              {
+                artifactRef: 'artifact://input/objective',
+                filename: 'objective.png',
+                contentType: 'image/png',
+                previewAvailable: true,
+              },
+            ],
+            refs: [{ refKind: 'attachment_manifest', artifactRef: 'artifact://diagnostics/input-manifest' }],
+            failures: [],
+          },
+          {
+            targetKind: 'step',
+            stepId: 'inspect',
+            label: 'Inspect screenshot',
+            attachments: [],
+            refs: [],
+            failures: [
+              {
+                phase: 'materialization',
+                message: 'Attachment download failed before step execution.',
+                evidenceRef: 'artifact://diagnostics/prepare',
+              },
+            ],
+          },
+        ],
+        recovery: {
+          resumed: true,
+          sourceWorkflowId: 'mm:source',
+          sourceRunId: 'run-source',
+          checkpointRef: 'artifact://resume/checkpoint',
+          preservedSteps: [
+            {
+              logicalStepId: 'prepare',
+              title: 'Prepare context',
+              sourceAttempt: 1,
+              sourceWorkflowId: 'mm:source',
+              sourceRunId: 'run-source',
+            },
+          ],
+          failedResumePhase: null,
+        },
+        degradedReason: 'step_attachment_missing',
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/diagnostics')) {
+        return Promise.resolve({ ok: true, text: async () => '{"raw":"diagnostics"}' } as Response);
+      }
+      if (url.includes('/logs/') || url.includes('/observability')) {
+        return Promise.resolve({ ok: true, text: async () => '' } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Target diagnostic task')).toBeTruthy();
+    });
+    expect(screen.getByRole('heading', { name: 'Target Diagnostics' })).toBeTruthy();
+    expect(screen.getAllByText('Task objective').length).toBeGreaterThan(0);
+    expect(screen.getByText('objective.png')).toBeTruthy();
+    expect(screen.getByText('Inspect screenshot')).toBeTruthy();
+    expect(screen.getByText('Attachment download failed before step execution.')).toBeTruthy();
+    expect(screen.getByText('artifact://diagnostics/input-manifest')).toBeTruthy();
+    expect(screen.getByText('Resumed from mm:source')).toBeTruthy();
+    expect(screen.getByText('Prepare context')).toBeTruthy();
+    expect(screen.getByText('artifact://resume/checkpoint')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Diagnostics'));
+    await waitFor(() => {
+      expect(screen.getByText(/\{"raw":"diagnostics"\}/)).toBeTruthy();
+    });
+  });
+
   it('renders remediation create action, relationships, evidence, and degraded states', async () => {
     const mockExecution = {
       taskId: 'test-123',

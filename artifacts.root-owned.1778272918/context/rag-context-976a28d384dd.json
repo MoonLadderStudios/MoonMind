@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/auth.py (score: 1.000, trust: canonical)\n    line 96: Falls back to built-in default ID and email unless overridden in settings.\n2. api_service/main.py (score: 1.000, trust: canonical)\n    line 45: from api_service.api.routers.jira_browser import router as jira_browser_router\n3. moonmind/indexers/jira_indexer.py (score: 1.000, trust: canonical)\n    line 8: # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)\n4. moonmind/planning/__init__.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"\n5. moonmind/planning/jira_story_planner.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"\n6. docs/Memory/MemoryResearch.md (score: 1.000, trust: canonical)\n    line 88: - Cons: Still bounded; often brittle under long-horizon tasks unless paired with durable stores.\n7. docs/Rag/LlamaIndexManifestSystem.md (score: 1.000, trust: canonical)\n    line 54: * Ingest/indexing: `moonmind/indexers/*` (Jira, Google Drive, Local, GitHub)\n8. docs/Temporal/RunHistoryAndRerunSemantics.md (score: 1.000, trust: canonical)\n    line 66: This document makes those semantics explicit and treats them as the v1 default unless a later doc intentionally changes them.",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/auth.py",
+      "text": "line 96: Falls back to built-in default ID and email unless overridden in settings.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 96,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/main.py",
+      "text": "line 45: from api_service.api.routers.jira_browser import router as jira_browser_router",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 45,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/jira_indexer.py",
+      "text": "line 8: # LlamaIndex Jira reader (ensure this import path is correct if it's part of an integration package)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 8,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/__init__.py",
+      "text": "line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/jira_story_planner.py",
+      "text": "line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Memory/MemoryResearch.md",
+      "text": "line 88: - Cons: Still bounded; often brittle under long-horizon tasks unless paired with durable stores.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 88,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Rag/LlamaIndexManifestSystem.md",
+      "text": "line 54: * Ingest/indexing: `moonmind/indexers/*` (Jira, Google Drive, Local, GitHub)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 54,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Temporal/RunHistoryAndRerunSemantics.md",
+      "text": "line 66: This document makes those semantics explicit and treats them as the v1 default unless a later doc intentionally changes them.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 66,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-08T20:12:07Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

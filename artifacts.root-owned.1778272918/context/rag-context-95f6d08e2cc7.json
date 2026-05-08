@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/services/agent_skills_service.py (score: 1.000, trust: canonical)\n    line 22: from moonmind.workflows.temporal import TemporalArtifactService\n2. moonmind/core/artifacts.py (score: 1.000, trust: canonical)\n    line 3: class TemporalArtifactStorageBackend(str, enum.Enum):\n3. moonmind/codex_cloud/settings.py (score: 1.000, trust: canonical)\n    line 23: missing: tuple[str, ...]\n4. moonmind/config/logging.py (score: 1.000, trust: canonical)\n    line 89: structured: When true, emit JSON logs that preserve ``extra`` fields.\n5. moonmind/indexers/jira_indexer.py (score: 1.000, trust: canonical)\n    line 135: # and will only stop when JiraReader returns an empty list.\n6. moonmind/claude/runtime.py (score: 1.000, trust: canonical)\n    line 16: \"\"\"Canonical error text for disabled Claude runtime (ANTHROPIC/CLAUDE API key missing).\"\"\"\n7. moonmind/indexers/local_data_indexer.py (score: 1.000, trust: canonical)\n    line 110: # After reviewing LlamaIndex docs, VectorStoreIndex constructor when given nodes\n8. moonmind/config/settings.py (score: 1.000, trust: canonical)\n    line 79: activity_artifacts_task_queue: str = Field(",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/services/agent_skills_service.py",
+      "text": "line 22: from moonmind.workflows.temporal import TemporalArtifactService",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 22,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/core/artifacts.py",
+      "text": "line 3: class TemporalArtifactStorageBackend(str, enum.Enum):",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/codex_cloud/settings.py",
+      "text": "line 23: missing: tuple[str, ...]",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 23,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/config/logging.py",
+      "text": "line 89: structured: When true, emit JSON logs that preserve ``extra`` fields.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 89,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/jira_indexer.py",
+      "text": "line 135: # and will only stop when JiraReader returns an empty list.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 135,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/claude/runtime.py",
+      "text": "line 16: \"\"\"Canonical error text for disabled Claude runtime (ANTHROPIC/CLAUDE API key missing).\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 16,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/indexers/local_data_indexer.py",
+      "text": "line 110: # After reviewing LlamaIndex docs, VectorStoreIndex constructor when given nodes",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 110,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/config/settings.py",
+      "text": "line 79: activity_artifacts_task_queue: str = Field(",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 79,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-05-08T20:19:52Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
