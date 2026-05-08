@@ -95,3 +95,19 @@ Evidence: The integration test exercises context build, authority decision, muta
 Rationale: The integration suite verifies the service boundary and artifact contract without requiring external credentials.
 Alternatives considered: Provider verification tests were rejected because MM-621 is local control-plane behavior and does not require third-party provider credentials.
 Test implications: integration verification remains explicit and credential-free.
+
+## Implementation Verification Evidence
+
+Decision: No new red-first tests or production code edits were required during `moonspec-implement`.
+Evidence: Focused unit verification passed with `41 passed` for `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`; the wrapper UI phase also passed with `20` files and `324` tests passed. Focused hermetic integration verification passed with `2 passed` for `pytest tests/integration/temporal/test_remediation_action_contracts.py -m 'integration_ci' -q --tb=short`.
+Rationale: The existing implemented-verified unit and integration evidence already covers MM-621 guard behavior and the action evidence boundary, so adding artificial failing tests would duplicate current coverage instead of improving TDD confidence.
+Alternatives considered: Adding new duplicate red-first tests was rejected because the plan classified all rows as implemented-verified and focused verification passed.
+Test implications: Run the full unit suite and required hermetic integration wrapper as final implementation validation.
+
+## Final Implementation Validation
+
+Decision: MM-621 implementation validation is complete except for the compose-backed integration wrapper and downstream `/moonspec-verify`, which remain blocked until Docker compose builds are permitted in this managed environment.
+Evidence: Full unit verification passed via `./tools/test_unit.sh` with `4546 passed`, `1 xpassed`, `16 subtests passed`, followed by frontend unit verification with `20` files and `324` tests passed. Full hermetic integration wrapper `./tools/test_integration.sh` failed before running pytest because Docker returned `403 Forbidden` while building the compose pytest image after creating `.env` from `.env-template`.
+Rationale: The required compose-backed integration command depends on Docker/buildx access that is denied by administrative rules in this runtime; rerunning without environment changes would reproduce the same blocker.
+Alternatives considered: Replacing the wrapper with the already-passed focused integration pytest command was rejected for final closure because task T019 explicitly requires `./tools/test_integration.sh`.
+Test implications: T019 and T020 remain incomplete; rerun `./tools/test_integration.sh` in an environment with permitted Docker compose build access, then run `/moonspec-verify`.

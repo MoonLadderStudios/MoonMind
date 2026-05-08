@@ -25,8 +25,8 @@ Tasks use the exact checklist format `- [ ] T### [P?] Description with file path
 
 **Purpose**: Confirm the active feature artifacts and validation commands before story work.
 
-- [ ] T001 Verify active MM-621 feature artifacts and `.specify/feature.json` point to `specs/321-remediation-lock-ledger-guards/spec.md`, `specs/321-remediation-lock-ledger-guards/plan.md`, `specs/321-remediation-lock-ledger-guards/research.md`, `specs/321-remediation-lock-ledger-guards/data-model.md`, `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md`, and `specs/321-remediation-lock-ledger-guards/quickstart.md` for FR-014 and SC-005
-- [ ] T002 Confirm test commands and managed-branch helper blockers recorded in `specs/321-remediation-lock-ledger-guards/quickstart.md` and `specs/321-remediation-lock-ledger-guards/research.md` for MM-621 validation
+- [X] T001 Verify active MM-621 feature artifacts and `.specify/feature.json` point to `specs/321-remediation-lock-ledger-guards/spec.md`, `specs/321-remediation-lock-ledger-guards/plan.md`, `specs/321-remediation-lock-ledger-guards/research.md`, `specs/321-remediation-lock-ledger-guards/data-model.md`, `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md`, and `specs/321-remediation-lock-ledger-guards/quickstart.md` for FR-014 and SC-005
+- [X] T002 Confirm test commands and managed-branch helper blockers recorded in `specs/321-remediation-lock-ledger-guards/quickstart.md` and `specs/321-remediation-lock-ledger-guards/research.md` for MM-621 validation
 
 ---
 
@@ -36,9 +36,9 @@ Tasks use the exact checklist format `- [ ] T### [P?] Description with file path
 
 **CRITICAL**: No conditional implementation work can begin until this phase confirms the current source/test files under review.
 
-- [ ] T003 Inspect existing guard implementation in `moonmind/workflows/temporal/remediation_actions.py` against `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md` for FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, DESIGN-REQ-011, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-025
-- [ ] T004 Inspect persistent guard state fields in `api_service/db/models.py` and `api_service/migrations/versions/f2a3b4c5d6e7_remediation_guard_state.py` for FR-002, FR-006, FR-009, and DESIGN-REQ-019
-- [ ] T005 Inspect existing unit and integration fixtures in `tests/unit/workflows/temporal/test_remediation_context.py` and `tests/integration/temporal/test_remediation_action_contracts.py` for FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SCN-006, SC-001, SC-002, SC-003, SC-004
+- [X] T003 Inspect existing guard implementation in `moonmind/workflows/temporal/remediation_actions.py` against `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md` for FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, DESIGN-REQ-011, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-025
+- [X] T004 Inspect persistent guard state fields in `api_service/db/models.py` and `api_service/migrations/versions/f2a3b4c5d6e7_remediation_guard_state.py` for FR-002, FR-006, FR-009, and DESIGN-REQ-019
+- [X] T005 Inspect existing unit and integration fixtures in `tests/unit/workflows/temporal/test_remediation_context.py` and `tests/integration/temporal/test_remediation_action_contracts.py` for FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SCN-006, SC-001, SC-002, SC-003, SC-004
 
 **Checkpoint**: Existing implementation and test surfaces are identified; story verification can begin.
 
@@ -58,29 +58,29 @@ Tasks use the exact checklist format `- [ ] T### [P?] Description with file path
 
 ### Unit Tests (write/verify first)
 
-- [ ] T006 Audit existing red-first unit coverage in `tests/unit/workflows/temporal/test_remediation_context.py` for exclusive locks, lock recovery, lock loss, ledger duplicate decisions, unsafe idempotency reuse, budgets, cooldowns, nested remediation, target freshness, and redaction covering FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SCN-006
-- [ ] T007 Run `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and confirm current unit evidence passes for FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, SC-001, SC-002, SC-003, SC-004, DESIGN-REQ-011, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-025 before touching `moonmind/workflows/temporal/remediation_actions.py`
+- [X] T006 Audit existing red-first unit coverage in `tests/unit/workflows/temporal/test_remediation_context.py` for exclusive locks, lock recovery, lock loss, ledger duplicate decisions, unsafe idempotency reuse, budgets, cooldowns, nested remediation, target freshness, and redaction covering FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SCN-006
+- [X] T007 Run `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and confirm current unit evidence passes for FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, SC-001, SC-002, SC-003, SC-004, DESIGN-REQ-011, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-025 before touching `moonmind/workflows/temporal/remediation_actions.py`
 
 ### Integration Tests (write/verify first)
 
-- [ ] T008 Audit existing integration coverage in `tests/integration/temporal/test_remediation_action_contracts.py` for remediation context, authority decision, mutation guard decision, action request/result artifacts, verification artifacts, and raw action rejection covering DESIGN-REQ-011 and DESIGN-REQ-019
-- [ ] T009 Run `pytest tests/integration/temporal/test_remediation_action_contracts.py -m 'integration_ci' -q --tb=short` and confirm the action evidence boundary passes before touching `moonmind/workflows/temporal/remediation_tools.py` or `moonmind/workflows/temporal/remediation_context.py`
+- [X] T008 Audit existing integration coverage in `tests/integration/temporal/test_remediation_action_contracts.py` for remediation context, authority decision, mutation guard decision, action request/result artifacts, verification artifacts, and raw action rejection covering DESIGN-REQ-011 and DESIGN-REQ-019
+- [X] T009 Run `pytest tests/integration/temporal/test_remediation_action_contracts.py -m 'integration_ci' -q --tb=short` and confirm the action evidence boundary passes before touching `moonmind/workflows/temporal/remediation_tools.py` or `moonmind/workflows/temporal/remediation_context.py`
 
 ### Red-First Confirmation
 
-- [ ] T010 Confirm the MM-621 plan status remains `implemented_verified` in `specs/321-remediation-lock-ledger-guards/plan.md`; if T006 or T008 finds missing coverage, add the missing failing unit or integration test first in `tests/unit/workflows/temporal/test_remediation_context.py` or `tests/integration/temporal/test_remediation_action_contracts.py` before any production edit
-- [ ] T011 Confirm any newly added MM-621 test fails for the intended reason before production edits, or record in `specs/321-remediation-lock-ledger-guards/research.md` that no new red-first test was needed because existing implemented-verified coverage passed
+- [X] T010 Confirm the MM-621 plan status remains `implemented_verified` in `specs/321-remediation-lock-ledger-guards/plan.md`; if T006 or T008 finds missing coverage, add the missing failing unit or integration test first in `tests/unit/workflows/temporal/test_remediation_context.py` or `tests/integration/temporal/test_remediation_action_contracts.py` before any production edit
+- [X] T011 Confirm any newly added MM-621 test fails for the intended reason before production edits, or record in `specs/321-remediation-lock-ledger-guards/research.md` that no new red-first test was needed because existing implemented-verified coverage passed
 
 ### Conditional Implementation Tasks
 
-- [ ] T012 If T007 fails for guard decision semantics, update `moonmind/workflows/temporal/remediation_actions.py` to restore FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013 behavior while preserving the v1 guard response contract in `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md`
-- [ ] T013 If T007 exposes durable state drift, update `api_service/db/models.py` or `api_service/migrations/versions/f2a3b4c5d6e7_remediation_guard_state.py` only as needed to preserve lock and ledger durability for FR-006, FR-009, and DESIGN-REQ-019
-- [ ] T014 If T009 fails at the evidence boundary, update `moonmind/workflows/temporal/remediation_context.py` or `moonmind/workflows/temporal/remediation_tools.py` to preserve bounded context, action request/result artifacts, and verification artifacts for DESIGN-REQ-011 and DESIGN-REQ-019
-- [ ] T015 If T010 or T011 added failing tests, rerun `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and `pytest tests/integration/temporal/test_remediation_action_contracts.py -m 'integration_ci' -q --tb=short` until MM-621 behavior passes in `tests/unit/workflows/temporal/test_remediation_context.py` and `tests/integration/temporal/test_remediation_action_contracts.py`
+- [X] T012 If T007 fails for guard decision semantics, update `moonmind/workflows/temporal/remediation_actions.py` to restore FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013 behavior while preserving the v1 guard response contract in `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md`
+- [X] T013 If T007 exposes durable state drift, update `api_service/db/models.py` or `api_service/migrations/versions/f2a3b4c5d6e7_remediation_guard_state.py` only as needed to preserve lock and ledger durability for FR-006, FR-009, and DESIGN-REQ-019
+- [X] T014 If T009 fails at the evidence boundary, update `moonmind/workflows/temporal/remediation_context.py` or `moonmind/workflows/temporal/remediation_tools.py` to preserve bounded context, action request/result artifacts, and verification artifacts for DESIGN-REQ-011 and DESIGN-REQ-019
+- [X] T015 If T010 or T011 added failing tests, rerun `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and `pytest tests/integration/temporal/test_remediation_action_contracts.py -m 'integration_ci' -q --tb=short` until MM-621 behavior passes in `tests/unit/workflows/temporal/test_remediation_context.py` and `tests/integration/temporal/test_remediation_action_contracts.py`
 
 ### Story Validation
 
-- [ ] T016 Validate the independent story using `specs/321-remediation-lock-ledger-guards/quickstart.md` and record whether lock conflict, duplicate ledger, stale target, budget, cooldown, missing freshness, self-target, nested remediation, and allowed action evidence outcomes satisfy FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-014, SC-001, SC-002, SC-003, SC-004, SC-005
+- [X] T016 Validate the independent story using `specs/321-remediation-lock-ledger-guards/quickstart.md` and record whether lock conflict, duplicate ledger, stale target, budget, cooldown, missing freshness, self-target, nested remediation, and allowed action evidence outcomes satisfy FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-014, SC-001, SC-002, SC-003, SC-004, SC-005
 
 **Checkpoint**: The single MM-621 story is validated independently with unit and integration evidence.
 
@@ -90,8 +90,8 @@ Tasks use the exact checklist format `- [ ] T### [P?] Description with file path
 
 **Purpose**: Preserve traceability and run final verification without expanding scope.
 
-- [ ] T017 [P] Review `specs/321-remediation-lock-ledger-guards/spec.md`, `specs/321-remediation-lock-ledger-guards/plan.md`, `specs/321-remediation-lock-ledger-guards/research.md`, `specs/321-remediation-lock-ledger-guards/data-model.md`, `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md`, and `specs/321-remediation-lock-ledger-guards/quickstart.md` to ensure MM-621 and the canonical Jira preset brief remain preserved for FR-014 and SC-005
-- [ ] T018 Run `./tools/test_unit.sh` for full unit-suite verification after focused MM-621 validation in `tests/unit/workflows/temporal/test_remediation_context.py`
+- [X] T017 [P] Review `specs/321-remediation-lock-ledger-guards/spec.md`, `specs/321-remediation-lock-ledger-guards/plan.md`, `specs/321-remediation-lock-ledger-guards/research.md`, `specs/321-remediation-lock-ledger-guards/data-model.md`, `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md`, and `specs/321-remediation-lock-ledger-guards/quickstart.md` to ensure MM-621 and the canonical Jira preset brief remain preserved for FR-014 and SC-005
+- [X] T018 Run `./tools/test_unit.sh` for full unit-suite verification after focused MM-621 validation in `tests/unit/workflows/temporal/test_remediation_context.py`
 - [ ] T019 Run `./tools/test_integration.sh` for full hermetic integration verification after focused MM-621 validation in `tests/integration/temporal/test_remediation_action_contracts.py`
 - [ ] T020 Run `/moonspec-verify` for `specs/321-remediation-lock-ledger-guards/spec.md` after implementation and tests pass, comparing final evidence against the preserved MM-621 Jira preset brief
 
