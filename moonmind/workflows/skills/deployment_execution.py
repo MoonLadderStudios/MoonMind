@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Mapping, Protocol
+from pathlib import Path
+from typing import Any, Mapping, Protocol, Sequence
 
 from .deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
@@ -67,10 +70,22 @@ class ComposeRunner(Protocol):
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         """Capture before/after state for a deployment stack."""
 
-    async def pull(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+    async def pull(
+        self,
+        *,
+        stack: str,
+        command: tuple[str, ...],
+        requested_image: str,
+    ) -> Mapping[str, Any]:
         """Run the pull command."""
 
-    async def up(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+    async def up(
+        self,
+        *,
+        stack: str,
+        command: tuple[str, ...],
+        requested_image: str,
+    ) -> Mapping[str, Any]:
         """Run the up command."""
 
     async def verify(
@@ -172,7 +187,13 @@ class DisabledComposeRunner:
             },
         )
 
-    async def pull(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+    async def pull(
+        self,
+        *,
+        stack: str,
+        command: tuple[str, ...],
+        requested_image: str,
+    ) -> Mapping[str, Any]:
         raise ToolFailure(
             error_code="POLICY_VIOLATION",
             message="Deployment update runner is not configured for this worker.",
@@ -184,7 +205,13 @@ class DisabledComposeRunner:
             },
         )
 
-    async def up(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+    async def up(
+        self,
+        *,
+        stack: str,
+        command: tuple[str, ...],
+        requested_image: str,
+    ) -> Mapping[str, Any]:
         raise ToolFailure(
             error_code="POLICY_VIOLATION",
             message="Deployment update runner is not configured for this worker.",
@@ -214,6 +241,273 @@ class DisabledComposeRunner:
                 "failureClass": "policy_violation",
             },
         )
+
+
+@dataclass(frozen=True, slots=True)
+class HostDockerComposeRunner:
+    """Docker Compose runner for a trusted deployment-control worker."""
+
+    project_dir: str
+    compose_file: str | None = None
+    project_name: str = "moonmind"
+    command_timeout_seconds: int = 900
+
+    async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
+        services = await self._run_compose_json(("ps", "--format", "json"))
+        images = await self._run_compose_json(("images", "--format", "json"))
+        return {
+            "stack": stack,
+            "phase": phase,
+            "projectName": self.project_name,
+            "services": services,
+            "images": images,
+            "capturedAt": _utc_now(),
+        }
+
+    async def pull(
+        self,
+        *,
+        stack: str,
+        command: tuple[str, ...],
+        requested_image: str,
+    ) -> Mapping[str, Any]:
+        return await self._run_compose_command(command, requested_image=requested_image)
+
+    async def up(
+        self,
+        *,
+        stack: str,
+        command: tuple[str, ...],
+        requested_image: str,
+    ) -> Mapping[str, Any]:
+        return await self._run_compose_command(command, requested_image=requested_image)
+
+    async def verify(
+        self,
+        *,
+        stack: str,
+        requested_image: str,
+        resolved_digest: str | None,
+    ) -> ComposeVerification:
+        target = await self._inspect_image(requested_image)
+        target_id = str(target.get("Id") or "").strip()
+        images = await self._run_compose_json(("images", "--format", "json"))
+        services = await self._run_compose_json(("ps", "--format", "json"))
+        repository, reference = _split_requested_image(requested_image)
+        matched_images = [
+            image
+            for image in images
+            if isinstance(image, Mapping)
+            and str(image.get("Repository") or image.get("repository") or "").strip()
+            == repository
+        ]
+        mismatches: list[dict[str, Any]] = []
+        updated_services: list[str] = []
+        for image in matched_images:
+            image_id = str(
+                image.get("ID")
+                or image.get("Id")
+                or image.get("ImageID")
+                or image.get("image_id")
+                or ""
+            ).strip()
+            service_name = str(
+                image.get("Service") or image.get("Name") or image.get("Container")
+                or ""
+            ).strip()
+            tag = str(image.get("Tag") or image.get("tag") or "").strip()
+            if service_name:
+                updated_services.append(service_name)
+            if target_id and image_id and image_id != target_id:
+                mismatches.append(
+                    {
+                        "service": service_name or None,
+                        "repository": repository,
+                        "tag": tag or None,
+                        "imageId": image_id,
+                        "expectedImageId": target_id,
+                    }
+                )
+        succeeded = bool(matched_images) and not mismatches
+        details = {
+            "requestedImage": requested_image,
+            "resolvedDigest": resolved_digest,
+            "targetImageId": target_id or None,
+            "targetRepoDigests": target.get("RepoDigests") or [],
+            "matchedImageCount": len(matched_images),
+            "failedChecks": mismatches,
+            "requestedReference": reference,
+        }
+        if not matched_images:
+            details["failureReason"] = (
+                "No running Compose services were found for the requested image "
+                f"repository {repository}."
+            )
+        elif mismatches:
+            details["failureReason"] = (
+                "One or more Compose services are not running the pulled target image."
+            )
+        return ComposeVerification(
+            succeeded=succeeded,
+            updated_services=tuple(sorted(set(updated_services))),
+            running_services=tuple(
+                service for service in services if isinstance(service, Mapping)
+            ),
+            details=details,
+        )
+
+    def _compose_base_command(self) -> list[str]:
+        project_dir = Path(self.project_dir).expanduser()
+        if not project_dir.is_absolute():
+            raise ToolFailure(
+                error_code="POLICY_VIOLATION",
+                message="Deployment compose project directory must be absolute.",
+                retryable=False,
+                details={
+                    "project_dir": str(project_dir),
+                    "failureClass": "policy_violation",
+                },
+            )
+        if not project_dir.exists():
+            raise ToolFailure(
+                error_code="POLICY_VIOLATION",
+                message="Deployment compose project directory is not mounted.",
+                retryable=False,
+                details={
+                    "project_dir": str(project_dir),
+                    "failureClass": "policy_violation",
+                },
+            )
+        compose_file = Path(self.compose_file).expanduser() if self.compose_file else (
+            project_dir / "docker-compose.yaml"
+        )
+        if not compose_file.is_absolute():
+            compose_file = project_dir / compose_file
+        if not compose_file.exists():
+            raise ToolFailure(
+                error_code="POLICY_VIOLATION",
+                message="Deployment compose file is not mounted.",
+                retryable=False,
+                details={
+                    "compose_file": str(compose_file),
+                    "failureClass": "policy_violation",
+                },
+            )
+        return [
+            "docker",
+            "compose",
+            "--project-name",
+            self.project_name,
+            "--project-directory",
+            str(project_dir),
+            "-f",
+            str(compose_file),
+        ]
+
+    def _compose_command(self, command: Sequence[str]) -> list[str]:
+        parts = list(command)
+        if len(parts) < 3 or parts[0:2] != ["docker", "compose"]:
+            raise ToolFailure(
+                error_code="POLICY_VIOLATION",
+                message="Deployment command must use docker compose.",
+                retryable=False,
+                details={
+                    "command": parts,
+                    "failureClass": "policy_violation",
+                },
+            )
+        return [*self._compose_base_command(), *parts[2:]]
+
+    async def _run_compose_command(
+        self,
+        command: Sequence[str],
+        *,
+        requested_image: str | None = None,
+        max_output_chars: int = 512,
+    ) -> Mapping[str, Any]:
+        resolved = self._compose_command(command)
+        env = os.environ.copy()
+        if requested_image:
+            env["MOONMIND_IMAGE"] = requested_image
+        process = await asyncio.create_subprocess_exec(
+            *resolved,
+            cwd=str(Path(self.project_dir).expanduser()),
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=self.command_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+            await process.wait()
+            raise ToolFailure(
+                error_code="DEPLOYMENT_COMMAND_FAILED",
+                message="Deployment compose command timed out.",
+                retryable=False,
+                details={
+                    "command": resolved,
+                    "timeoutSeconds": self.command_timeout_seconds,
+                    "failureClass": "compose_config_validation_failure",
+                },
+            ) from exc
+        return {
+            "command": resolved,
+            "exitCode": process.returncode,
+            "stdout": _tail_text(stdout, max_chars=max_output_chars),
+            "stderr": _tail_text(stderr, max_chars=max_output_chars),
+        }
+
+    async def _run_compose_json(self, args: Sequence[str]) -> list[Mapping[str, Any]]:
+        result = await self._run_compose_command(
+            ("docker", "compose", *args),
+            max_output_chars=20000,
+        )
+        _ensure_command_succeeded("config", result)
+        payload = "\n".join(
+            part
+            for part in (str(result.get("stdout") or ""), str(result.get("stderr") or ""))
+            if part.strip()
+        )
+        return _parse_json_records(payload)
+
+    async def _inspect_image(self, requested_image: str) -> Mapping[str, Any]:
+        process = await asyncio.create_subprocess_exec(
+            "docker",
+            "image",
+            "inspect",
+            requested_image,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_COMMAND_FAILED",
+                message="Pulled deployment image could not be inspected.",
+                retryable=False,
+                details={
+                    "requestedImage": requested_image,
+                    "stderr": _tail_text(stderr),
+                    "failureClass": "image_pull_failure",
+                },
+            )
+        parsed = json.loads(stdout.decode("utf-8"))
+        if not isinstance(parsed, list) or not parsed or not isinstance(parsed[0], Mapping):
+            raise ToolFailure(
+                error_code="DEPLOYMENT_COMMAND_FAILED",
+                message="Docker image inspect returned an invalid payload.",
+                retryable=False,
+                details={
+                    "requestedImage": requested_image,
+                    "failureClass": "image_pull_failure",
+                },
+            )
+        return dict(parsed[0])
 
 
 @dataclass(slots=True)
@@ -341,7 +635,9 @@ class DeploymentUpdateExecutor:
                     progress_events, "PULLING_IMAGES", "Pulling requested images."
                 )
                 pull_result = await self.runner.pull(
-                    stack=parsed["stack"], command=command_plan.pull_args
+                    stack=parsed["stack"],
+                    command=command_plan.pull_args,
+                    requested_image=requested_image,
                 )
                 command_log["pull"]["result"] = pull_result
                 _ensure_command_succeeded("pull", pull_result)
@@ -352,7 +648,9 @@ class DeploymentUpdateExecutor:
                     "Recreating deployment services.",
                 )
                 up_result = await self.runner.up(
-                    stack=parsed["stack"], command=command_plan.up_args
+                    stack=parsed["stack"],
+                    command=command_plan.up_args,
+                    requested_image=requested_image,
                 )
                 command_log["up"]["result"] = up_result
                 _ensure_command_succeeded("up", up_result)
@@ -853,6 +1151,39 @@ def _record_command_exception(command_log: dict[str, Any], exc: Exception) -> No
         }
 
 
+def _parse_json_records(payload: str) -> list[Mapping[str, Any]]:
+    text = str(payload or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        records: list[Mapping[str, Any]] = []
+        for line in text.splitlines():
+            candidate = line.strip()
+            if not candidate:
+                continue
+            parsed_line = json.loads(candidate)
+            if isinstance(parsed_line, Mapping):
+                records.append(dict(parsed_line))
+        return records
+    if isinstance(parsed, list):
+        return [dict(item) for item in parsed if isinstance(item, Mapping)]
+    if isinstance(parsed, Mapping):
+        return [dict(parsed)]
+    return []
+
+
+def _split_requested_image(requested_image: str) -> tuple[str, str]:
+    if "@" in requested_image:
+        repository, reference = requested_image.rsplit("@", 1)
+        return repository, reference
+    repository, separator, reference = requested_image.rpartition(":")
+    if not separator or "/" not in repository:
+        return requested_image, ""
+    return repository, reference
+
+
 def _stable_ref(kind: str, payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     digest = hashlib.sha256(kind.encode("utf-8") + b"\0" + encoded).hexdigest()
@@ -872,6 +1203,7 @@ __all__ = [
     "DEPLOYMENT_UPDATE_STACKS",
     "DEPLOYMENT_UPDATE_MODES",
     "DisabledComposeRunner",
+    "HostDockerComposeRunner",
     "InMemoryDesiredStateStore",
     "InMemoryEvidenceWriter",
     "build_compose_command_plan",
