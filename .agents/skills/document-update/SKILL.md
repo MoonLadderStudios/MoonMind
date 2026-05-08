@@ -11,6 +11,8 @@ Update one or more technical documents so they accurately describe the implement
 
 Correct documentation drift by comparing the document's claims against source code, tests, schemas, configuration, and runtime entrypoints, then editing the document to describe the actual system behavior.
 
+For canonical documentation under `docs/`, do not downgrade the documented desired state to match a buggy or incomplete implementation. When code contradicts the intended architecture, contract, operator-visible behavior, or target semantics, report the implementation gap clearly and preserve the canonical desired-state framing unless the user explicitly asks to change the target contract.
+
 ## Inputs
 
 - Required: target document path, documentation topic, or explicit drift report.
@@ -24,7 +26,7 @@ Correct documentation drift by comparing the document's claims against source co
 - Treat repository files, tests, schemas, and executable configuration as the source of truth for implementation behavior.
 - Treat retrieved context, old docs, comments, generated artifacts, and issue text as reference material until confirmed against the current checkout.
 - Keep canonical docs under `docs/` focused on desired state: architecture, contracts, operator-visible behavior, and target semantics.
-- Put migration notes, rollout checklists, implementation backlogs, and temporary investigation details in feature-local artifacts under `specs/<feature>/` or local handoff artifacts, not as the main framing of canonical docs.
+- Put migration notes, rollout checklists, implementation backlogs, and temporary investigation details in feature-local artifacts under `specs/<feature-id>/` or the `artifacts/` directory for tool handoffs, not as the main framing of canonical docs.
 - When a superseded behavior is no longer implemented, remove or replace the stale description instead of preserving compatibility-era ambiguity.
 
 ## Workflow
@@ -65,7 +67,8 @@ Correct documentation drift by comparing the document's claims against source co
 6. Verify the update.
    - Re-read the changed sections and compare them against the drift ledger.
    - Run targeted documentation checks if available.
-   - Run code tests only when the documentation change depends on behavior that is not already evident from existing tests or source inspection.
+   - Run the repository-mandated programmatic checks from `AGENTS.md`, even for documentation-only updates.
+   - Add any extra targeted code tests needed when the documentation change depends on behavior that is not already evident from existing tests or source inspection.
    - If verification cannot be run, record the exact blocker.
 
 7. Finalize the evidence.
