@@ -223,6 +223,8 @@ Key diagnostics:
 - Existing Temporal execution records, artifact-backed original task input snapshots, Temporal artifact metadata/content store; no new persistent tables planned (320-normalize-task-shaped-submissions)
 - Python 3.12 + Pydantic v2, SQLAlchemy async ORM, FastAPI service models where exposed, Temporal Python SDK activity/service boundaries, pytest (320-remediation-action-contracts)
 - Existing `execution_remediation_links`, Temporal execution source records, Temporal artifact metadata/content store, and in-memory guard/ledger state in the current service; no new persistent database tables planned (320-remediation-action-contracts)
+- Python 3.12; TypeScript/React for Mission Control attachment upload UX + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Vitest/Testing Library, pytest, existing Temporal artifact service/router (321-route-binary-artifact-refs)
+- Existing Temporal artifact metadata/content store, Temporal execution records, artifact links; no new persistent tables planned (321-route-binary-artifact-refs)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
