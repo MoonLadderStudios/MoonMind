@@ -248,6 +248,8 @@ Key diagnostics:
 - Existing `execution_remediation_links`, Temporal execution source records, Temporal artifact metadata/content store, and existing remediation lock/ledger state; no new persistent database tables planned (322-remediation-lifecycle-repair-prevention)
 - Python 3.12 + Pydantic v2 where exposed, SQLAlchemy async ORM, FastAPI service/router patterns where query surfaces are exposed, Temporal Python SDK activity/service boundaries, existing Temporal artifact service (323-publish-remediation-audit)
 - Existing Temporal execution records, `execution_remediation_links`, Temporal artifact metadata/content store, and an existing or reusable control-event/audit persistence mechanism; no new persistent table planned unless queryable audit events cannot safely reuse current control-event/audit infrastructure (323-publish-remediation-audit)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind artifact and vision services (325-prepare-target-aware-inputs)
+- Existing artifact store plus workspace-local prepared files/manifest refs; no new persistent database tables planned (325-prepare-target-aware-inputs)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
