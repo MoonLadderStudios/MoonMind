@@ -2,31 +2,33 @@
 
 ## Focused Unit Tests
 
-1. Add red-first tests for enabled query behavior:
+Run the focused service and activity-boundary tests:
 
 ```bash
 ./tools/test_unit.sh tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py
 ```
 
-Expected before implementation: enabled query tests fail because the service returns `enabled_mode_not_implemented` and no metadata results.
-
-2. After implementation, the same command should pass and cover:
-- disabled query still returns `feature_disabled` and no results;
-- enabled valid query returns `ok` with bounded metadata;
-- invalid or blank query returns structured denial before catalog results;
-- metadata results omit body/content refs;
-- ineligible matches are filtered or marked `eligible: false`;
-- active snapshot membership sets `in_current_snapshot`.
+Expected result: Skills On Demand query tests pass for disabled behavior, enabled metadata-only results, invalid input, ineligible source diagnostics, active snapshot membership, bounded result counts, compact metadata, and no materialization.
 
 ## Activity Boundary Validation
 
-Run the activity-boundary subset:
+Run the activity-boundary scenario through the same focused file:
 
 ```bash
-./tools/test_unit.sh tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py::test_enabled_activity_query_returns_metadata_without_materializing_snapshot
+./tools/test_unit.sh tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py::test_enabled_activity_query_returns_typed_result
 ```
 
-Expected result: the Temporal activity wrapper invokes the same enabled query contract and does not call materialization.
+Expected result: the Temporal activity wrapper invokes the enabled query contract and does not call materialization.
+
+## Story Validation
+
+Run the focused story validation subset:
+
+```bash
+./tools/test_unit.sh tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py tests/unit/services/test_skill_resolution.py
+```
+
+Expected result: Skills On Demand query behavior and resolver catalog behavior remain compatible.
 
 ## Full Unit Verification
 
@@ -36,17 +38,21 @@ Before final verification, run:
 ./tools/test_unit.sh
 ```
 
+Expected result: the full Python unit suite and frontend Vitest suite pass through the repository test runner.
+
 ## Hermetic Integration Verification
 
-If implementation touches worker routing or activity catalog registration beyond the existing activity, run:
+If implementation later touches worker routing or activity catalog registration beyond the existing activity, run:
 
 ```bash
 ./tools/test_integration.sh
 ```
 
+Current MM-613 scope is covered by unit and Temporal activity-boundary tests; no compose-backed integration change is required by the current implementation.
+
 ## Final MoonSpec Verification
 
-After tasks and implementation are complete, run the final `/moonspec-verify` equivalent against:
+After implementation and tests are complete, run the final `/moonspec-verify` equivalent against:
 
 ```text
 specs/316-policy-aware-skill-query/spec.md
