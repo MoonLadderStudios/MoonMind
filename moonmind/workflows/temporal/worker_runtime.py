@@ -18,6 +18,7 @@ def _build_proposal_service_factory():
 """Temporal worker runtime entrypoint."""
 
 import asyncio
+from copy import deepcopy
 import json
 import logging
 import os
@@ -1030,6 +1031,7 @@ def _build_runtime_planner():
         explicit_plan = task_payload.get("plan")
         if isinstance(explicit_plan, list) and explicit_plan:
             nodes: list[dict[str, Any]] = []
+            node_ids: set[str] = set()
             for idx, plan_entry in enumerate(explicit_plan, start=1):
                 if not isinstance(plan_entry, Mapping):
                     raise RuntimeError("task.plan entries must be objects")
@@ -1057,9 +1059,14 @@ def _build_runtime_planner():
                     node_inputs = _coerce_mapping(
                         tool_payload.get("inputs") or tool_payload.get("args")
                     )
+                node_id = str(plan_entry.get("id") or f"node-{idx}").strip()
+                if not node_id:
+                    node_id = f"node-{idx}"
+                if node_id in node_ids:
+                    raise RuntimeError(f"task.plan duplicate node id: {node_id}")
+                node_ids.add(node_id)
                 node: dict[str, Any] = {
-                    "id": str(plan_entry.get("id") or f"node-{idx}").strip()
-                    or f"node-{idx}",
+                    "id": node_id,
                     "tool": {
                         "type": tool_type,
                         "name": tool_name,
@@ -1070,6 +1077,10 @@ def _build_runtime_planner():
                 options = _coerce_mapping(plan_entry.get("options"))
                 if options:
                     node["options"] = dict(options)
+                for key, value in plan_entry.items():
+                    if key in {"id", "tool", "skill", "inputs", "options"}:
+                        continue
+                    node[str(key)] = deepcopy(value)
                 nodes.append(node)
 
             explicit_edges = task_payload.get("edges")

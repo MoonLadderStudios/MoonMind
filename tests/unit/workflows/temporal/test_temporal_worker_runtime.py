@@ -354,6 +354,88 @@ def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
     registry_snapshot = plan["metadata"]["registry_snapshot"]
     assert registry_snapshot["artifact_ref"] == "art_registry_123"
 
+
+def test_runtime_planner_preserves_authored_task_plan_node_metadata():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={},
+        parameters={
+            "task": {
+                "instructions": "Run the authored deployment plan.",
+                "plan": [
+                    {
+                        "id": "update-moonmind-deployment",
+                        "title": "Update MoonMind deployment",
+                        "description": "Use the deployment operations service.",
+                        "tool": {
+                            "type": "skill",
+                            "name": "deployment.update_compose_stack",
+                            "version": "1.0.0",
+                        },
+                        "inputs": {
+                            "stack": "moonmind",
+                            "image": {
+                                "repository": (
+                                    "ghcr.io/moonladderstudios/moonmind"
+                                ),
+                                "reference": "v20260507.2470",
+                            },
+                        },
+                    }
+                ],
+            },
+        },
+        snapshot=snapshot,
+    )
+
+    node = plan["nodes"][0]
+    assert node["title"] == "Update MoonMind deployment"
+    assert node["description"] == "Use the deployment operations service."
+
+
+def test_runtime_planner_rejects_duplicate_authored_task_plan_node_ids():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    with pytest.raises(RuntimeError, match="task\\.plan duplicate node id: node-2"):
+        planner(
+            inputs={},
+            parameters={
+                "task": {
+                    "instructions": "Run the authored deployment plan.",
+                    "plan": [
+                        {
+                            "id": "node-2",
+                            "tool": {
+                                "type": "skill",
+                                "name": "deployment.update_compose_stack",
+                                "version": "1.0.0",
+                            },
+                            "inputs": {"stack": "moonmind"},
+                        },
+                        {
+                            "tool": {
+                                "type": "skill",
+                                "name": "deployment.update_compose_stack",
+                                "version": "1.0.0",
+                            },
+                            "inputs": {"stack": "moonmind"},
+                        },
+                    ],
+                },
+            },
+            snapshot=snapshot,
+        )
+
+
 @pytest.mark.parametrize(
     "source",
     [
