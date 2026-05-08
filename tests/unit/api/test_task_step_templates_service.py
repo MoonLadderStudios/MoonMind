@@ -379,6 +379,7 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
                     {
                         "title": "Lint target",
                         "instructions": "Lint {{ inputs.target }}",
+                        "source": {"kind": "manual"},
                         "skill": {
                             "id": "auto",
                             "args": {},
@@ -488,6 +489,7 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
             "quality:child-checks@1.0.0",
         ],
     }
+    assert expanded["steps"][0]["source"]["kind"] != "manual"
 
 async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
     async with template_db(tmp_path) as session_maker:

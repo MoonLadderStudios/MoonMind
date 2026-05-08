@@ -269,10 +269,6 @@ async def _expand_task_template_for_child_run(
         "authoredPresets"
     )
     if isinstance(authored_presets, list):
-        applied_template_payload["authoredPresets"] = [
-            dict(item) if isinstance(item, Mapping) else item
-            for item in authored_presets
-        ]
         task_payload["authoredPresets"] = [
             dict(item) if isinstance(item, Mapping) else item
             for item in authored_presets

@@ -86,6 +86,7 @@ _STEP_RESERVED_KEYS = frozenset(
     {
         "id",
         "kind",
+        "source",
         "type",
         "title",
         "slug",
@@ -431,6 +432,15 @@ def _composition_capabilities(node: dict[str, Any]) -> list[str]:
 def _authored_presets_from_composition(node: dict[str, Any]) -> list[dict[str, Any]]:
     presets: list[dict[str, Any]] = []
 
+    def has_authored_preset_value(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value)
+        if isinstance(value, (list, dict, tuple, set)):
+            return bool(value)
+        return True
+
     def visit(candidate: dict[str, Any]) -> None:
         entry: dict[str, Any] = {
             "presetSlug": str(candidate.get("slug") or "").strip(),
@@ -448,7 +458,13 @@ def _authored_presets_from_composition(node: dict[str, Any]) -> list[dict[str, A
         input_mapping = candidate.get("inputMapping")
         if isinstance(input_mapping, Mapping) and input_mapping:
             entry["inputMapping"] = dict(input_mapping)
-        presets.append({key: value for key, value in entry.items() if value})
+        presets.append(
+            {
+                key: value
+                for key, value in entry.items()
+                if has_authored_preset_value(value)
+            }
+        )
         for child in candidate.get("includes") or []:
             if isinstance(child, dict):
                 visit(child)
