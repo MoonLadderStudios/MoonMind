@@ -40,15 +40,15 @@ MM-614 is a single-story runtime feature for enabled-mode `moonmind.skills.reque
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Pydantic v2, Temporal Python SDK, existing agent skill resolver and materializer services  
-**Storage**: Existing artifact-backed skill body/manifest storage only; no new persistent tables  
-**Unit Testing**: pytest through `./tools/test_unit.sh`  
-**Integration Testing**: pytest activity-boundary coverage through `ActivityEnvironment`; hermetic integration via `./tools/test_integration.sh` for broader CI if needed  
-**Target Platform**: MoonMind managed runtime workers on Linux containers  
-**Project Type**: Python service/workflow runtime boundary  
-**Performance Goals**: Request/result payloads remain compact and carry refs/metadata rather than Skill bodies  
-**Constraints**: Preserve active snapshots on failure; do not expose hidden Skill bodies, arbitrary content refs, or secrets; do not mutate `.agents/skills` mid-turn beyond existing materialization boundary  
+**Language/Version**: Python 3.12
+**Primary Dependencies**: Pydantic v2, Temporal Python SDK, existing agent skill resolver and materializer services
+**Storage**: Existing artifact-backed skill body/manifest storage only; no new persistent tables
+**Unit Testing**: pytest through `./tools/test_unit.sh`
+**Integration Testing**: pytest activity-boundary coverage through `ActivityEnvironment`; hermetic integration via `./tools/test_integration.sh` for broader CI if needed
+**Target Platform**: MoonMind managed runtime workers on Linux containers
+**Project Type**: Python service/workflow runtime boundary
+**Performance Goals**: Request/result payloads remain compact and carry refs/metadata rather than Skill bodies
+**Constraints**: Preserve active snapshots on failure; do not expose hidden Skill bodies, arbitrary content refs, or secrets; do not mutate `.agents/skills` mid-turn beyond existing materialization boundary
 **Scale/Scope**: One enabled-mode request story; adapter-specific live refresh remains scoped to MM-615
 
 ## Constitution Check
