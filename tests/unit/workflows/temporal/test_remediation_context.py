@@ -633,6 +633,92 @@ async def test_remediation_context_builder_enriches_task_run_evidence_and_live_f
         }
 
 @pytest.mark.asyncio
+async def test_remediation_context_builder_matches_selected_step_by_full_identity(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+        )
+        target_source = await session.get(
+            TemporalExecutionCanonicalRecord, target.workflow_id
+        )
+        assert target_source is not None
+        target_source.memo = {
+            **target_source.memo,
+            "remediationEvidence": {
+                "selectedSteps": [
+                    {
+                        "logicalStepId": "plan",
+                        "attempt": 1,
+                        "taskRunId": "tr_shared",
+                        "status": "succeeded",
+                        "summary": "Plan passed",
+                        "artifactRefs": [
+                            {"artifact_id": "art_plan", "kind": "step.summary"}
+                        ],
+                    },
+                    {
+                        "logicalStepId": "implement",
+                        "attempt": 2,
+                        "taskRunId": "tr_shared",
+                        "status": "failed",
+                        "summary": "Implementation failed",
+                        "artifactRefs": [
+                            {"artifact_id": "art_implement", "kind": "step.summary"}
+                        ],
+                    },
+                ]
+            },
+        }
+        remediation_source = await session.get(
+            TemporalExecutionCanonicalRecord, remediation.workflow_id
+        )
+        assert remediation_source is not None
+        remediation_source.parameters = {
+            **remediation_source.parameters,
+            "task": {
+                "remediation": {
+                    "target": {
+                        "workflowId": target.workflow_id,
+                        "stepSelectors": [
+                            {
+                                "logicalStepId": "implement",
+                                "attempt": 2,
+                                "taskRunId": "tr_shared",
+                            }
+                        ],
+                        "taskRunIds": ["tr_shared"],
+                    }
+                }
+            },
+        }
+        await session.commit()
+
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        result = await RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        assert result.payload["selectedSteps"] == [
+            {
+                "logicalStepId": "implement",
+                "attempt": 2,
+                "taskRunId": "tr_shared",
+                "status": "failed",
+                "summary": "Implementation failed",
+                "artifactRefs": [
+                    {"artifact_id": "art_implement", "kind": "step.summary"}
+                ],
+            }
+        ]
+
+@pytest.mark.asyncio
 async def test_remediation_context_builder_records_historical_degraded_evidence(
     tmp_path, mock_client_adapter
 ):
@@ -742,6 +828,89 @@ async def test_remediation_context_builder_records_historical_degraded_evidence(
             "resumeCursor": None,
             "reason": "policy denies live observation",
             "fallbacks": ["merged_logs"],
+        }
+
+@pytest.mark.asyncio
+async def test_remediation_context_builder_marks_unsupported_live_follow_degraded(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+        )
+        target_source = await session.get(
+            TemporalExecutionCanonicalRecord, target.workflow_id
+        )
+        assert target_source is not None
+        target_source.state = MoonMindWorkflowState.EXECUTING
+        target_source.memo = {
+            **target_source.memo,
+            "remediationEvidence": {
+                "taskRuns": [
+                    {
+                        "taskRunId": "tr_no_live",
+                        "stdoutRef": {"artifact_id": "art_stdout"},
+                        "stderrRef": {"artifact_id": "art_stderr"},
+                        "mergedLogsRef": {"artifact_id": "art_merged"},
+                        "diagnosticsRef": {"artifact_id": "art_diag"},
+                        "providerSnapshotRef": {"artifact_id": "art_provider"},
+                        "continuityRefs": [
+                            {
+                                "artifact_id": "art_session_summary",
+                                "kind": "session.summary",
+                            }
+                        ],
+                    }
+                ],
+                "liveFollow": {"resumeCursor": {"sequence": 42}},
+            },
+        }
+        remediation_source = await session.get(
+            TemporalExecutionCanonicalRecord, remediation.workflow_id
+        )
+        assert remediation_source is not None
+        remediation_source.parameters = {
+            **remediation_source.parameters,
+            "task": {
+                "remediation": {
+                    "target": {
+                        "workflowId": target.workflow_id,
+                        "taskRunIds": ["tr_no_live"],
+                    },
+                    "mode": "snapshot_then_follow",
+                }
+            },
+        }
+        await session.commit()
+
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        result = await RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        assert result.payload["evidence"]["evidenceDegraded"] is True
+        assert result.payload["evidence"]["unavailableEvidenceClasses"] == [
+            "live_follow"
+        ]
+        assert result.payload["evidence"]["availability"][-1] == {
+            "class": "live_follow",
+            "status": "unsupported",
+            "reason": "task run does not support live follow",
+            "fallback": "merged_logs",
+        }
+        assert result.payload["liveFollow"] == {
+            "status": "unsupported",
+            "mode": "snapshot_then_follow",
+            "supported": False,
+            "taskRunId": "tr_no_live",
+            "resumeCursor": {"sequence": 42},
+            "reason": "task run does not support live follow",
+            "fallbacks": ["merged_logs", "stdout", "stderr", "diagnostics"],
         }
 
 def test_remediation_lifecycle_summary_audit_and_continuation_are_bounded():

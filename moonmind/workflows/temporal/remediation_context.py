@@ -232,7 +232,8 @@ class RemediationContextBuilder:
         unavailable_classes = [
             item["class"]
             for item in availability
-            if item.get("status") in {"missing", "partial", "denied", "unavailable"}
+            if item.get("status")
+            in {"missing", "partial", "denied", "unavailable", "unsupported"}
         ]
 
         return {
@@ -858,18 +859,23 @@ def _match_step_evidence(
     selector_task_run_id = _string_or_none(selector.get("taskRunId"))
     selector_logical_step_id = _string_or_none(selector.get("logicalStepId"))
     selector_attempt = _positive_int_or_none(selector.get("attempt"))
+    if (
+        not selector_task_run_id
+        and not selector_logical_step_id
+        and selector_attempt is None
+    ):
+        return None
     for item in evidence_steps:
         task_run_id = _string_or_none(item.get("taskRunId"))
-        if selector_task_run_id and task_run_id == selector_task_run_id:
-            return item
+        if selector_task_run_id and task_run_id != selector_task_run_id:
+            continue
         logical_step_id = _string_or_none(item.get("logicalStepId"))
+        if selector_logical_step_id and logical_step_id != selector_logical_step_id:
+            continue
         attempt = _positive_int_or_none(item.get("attempt"))
-        if (
-            selector_logical_step_id
-            and logical_step_id == selector_logical_step_id
-            and (selector_attempt is None or attempt == selector_attempt)
-        ):
-            return item
+        if selector_attempt is not None and attempt != selector_attempt:
+            continue
+        return item
     return None
 
 def _has_task_run_evidence(item: Mapping[str, Any], field_name: str) -> bool:
