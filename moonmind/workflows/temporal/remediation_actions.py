@@ -2025,19 +2025,40 @@ def _action_parameter_error(
     action_info: Mapping[str, Any],
     parameters: Mapping[str, Any] | None,
 ) -> str | None:
-    if not parameters:
-        return None
+    supplied_parameters = parameters or {}
     input_metadata = action_info.get("input_metadata")
     metadata = input_metadata if isinstance(input_metadata, Mapping) else {}
     allowed = {str(key) for key in metadata}
-    supplied = {str(key) for key in parameters}
+    supplied = {str(key) for key in supplied_parameters}
     if unknown := supplied - allowed:
         return "unsupported_action_parameter"
     for key, config in metadata.items():
         config_mapping = config if isinstance(config, Mapping) else {}
-        if config_mapping.get("required") is True and key not in parameters:
+        if config_mapping.get("required") is True and key not in supplied_parameters:
             return "required_action_parameter_missing"
+        if key in supplied_parameters and _parameter_type_error(
+            value=supplied_parameters[key],
+            expected_type=config_mapping.get("type"),
+        ):
+            return "invalid_action_parameter_type"
     return None
+
+
+def _parameter_type_error(*, value: Any, expected_type: Any) -> bool:
+    if expected_type == "string":
+        return not isinstance(value, str)
+    if expected_type == "boolean":
+        return not isinstance(value, bool)
+    if expected_type == "integer":
+        return not isinstance(value, int) or isinstance(value, bool)
+    if expected_type == "number":
+        return not isinstance(value, (int, float)) or isinstance(value, bool)
+    if expected_type == "object":
+        return not isinstance(value, Mapping)
+    if expected_type == "array":
+        return not isinstance(value, Sequence) or isinstance(value, (str, bytes))
+    return False
+
 
 def _scrub_paths(value: Any) -> Any:
     if isinstance(value, str):

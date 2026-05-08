@@ -26,6 +26,7 @@ from moonmind.workflows.temporal import (
     TemporalArtifactRepository,
     TemporalArtifactService,
     remediation_actions,
+    remediation_tools,
 )
 from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
@@ -1341,6 +1342,32 @@ class RecordingActionExecutor:
             },
         }
 
+
+class SensitiveHintActionExecutor:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def execute_action(self, *, action_request, guard_result, target_health):
+        self.calls.append(
+            {
+                "action_request": action_request,
+                "guard_result": guard_result,
+                "target_health": target_health,
+            }
+        )
+        return {
+            "status": "applied",
+            "beforeStateRef": "artifact://before-state",
+            "afterStateRef": "artifact://after-state",
+            "verificationHint": (
+                "inspect /work/agent_jobs/mm:secret/repo/.env "
+                "with token=raw-secret-token"
+            ),
+            "sideEffects": [{"kind": "subsystem_call", "status": "accepted"}],
+            "verification": {"status": "verified"},
+        }
+
+
 class StatusOnlyActionExecutor:
     def __init__(self, status: str) -> None:
         self.status = status
@@ -1864,7 +1891,7 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
         tools = RemediationEvidenceToolService(
             session=session,
             artifact_service=artifact_service,
-            action_executor=RecordingActionExecutor(),
+            action_executor=SensitiveHintActionExecutor(),
         )
 
         result = await tools.execute_action(
@@ -1904,6 +1931,8 @@ async def test_remediation_execute_action_publishes_v1_request_and_result_artifa
         assert result_payload["afterStateRef"] == "artifact://after-state"
         assert result_payload["verificationRequired"] is True
         assert result_payload["verificationHint"]
+        assert "raw-secret-token" not in result_payload["verificationHint"]
+        assert "/work/agent_jobs" not in result_payload["verificationHint"]
         assert result_payload["sideEffects"] == [
             {"kind": "subsystem_call", "status": "accepted"}
         ]
@@ -2403,6 +2432,33 @@ def test_remediation_action_redaction_handles_null_and_single_segment_paths(
     assert remediation_actions._redact_text(None) == ""
     assert remediation_actions._redact_text("/tmp") == "[REDACTED_PATH]"
 
+
+def test_remediation_tool_redaction_handles_null_redactor_and_single_pass_payload(
+    monkeypatch,
+):
+    calls = []
+
+    def redact_payload(value):
+        calls.append(value)
+        return {
+            "hint": "inspect /work/agent_jobs/mm:secret/repo/.env",
+            "nested": ["https://example.test/download?token=raw-secret-token"],
+        }
+
+    monkeypatch.setattr(remediation_tools, "redact_sensitive_payload", redact_payload)
+    monkeypatch.setattr(
+        remediation_tools,
+        "redact_sensitive_text",
+        lambda value: None if value == "return-none" else str(value),
+    )
+
+    assert remediation_tools._redact_text("return-none") is None
+    assert remediation_tools._redact_payload_value({"ignored": "input"}) == {
+        "hint": "inspect [REDACTED_PATH]",
+        "nested": ["[REDACTED_URL]"],
+    }
+    assert calls == [{"ignored": "input"}]
+
 @pytest.mark.asyncio
 async def test_remediation_action_authority_denies_raw_access_and_unknown_targets(
     tmp_path, mock_client_adapter
@@ -2523,6 +2579,21 @@ async def test_remediation_action_authority_validates_action_inputs(
         assert invalid.decision == "denied"
         assert invalid.reason == "unsupported_action_parameter"
         assert invalid.executable is False
+
+        wrong_type = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="workload.restart_helper_container",
+            parameters={"reason": False},
+            dry_run=False,
+            idempotency_key="invalid-input-type",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+
+        assert wrong_type.decision == "denied"
+        assert wrong_type.reason == "invalid_action_parameter_type"
+        assert wrong_type.executable is False
 
 @pytest.mark.asyncio
 async def test_remediation_mutation_guard_enforces_exclusive_locks_and_recovery(

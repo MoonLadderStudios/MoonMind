@@ -42,6 +42,9 @@ _PRESIGNED_URL_PATTERN = re.compile(
     r"https?://[^\s\"']*(?:X-Amz-Signature|X-Amz-Credential|AWSAccessKeyId|Signature|sig=|token=)[^\s\"']*",
     re.IGNORECASE,
 )
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b(?:token|password|secret|api[_-]?key|credential)\s*[:=]\s*([^\s,;\"']+)"
+)
 
 class RemediationEvidenceToolError(RuntimeError):
     """Raised when a remediation evidence tool request is invalid."""
@@ -443,6 +446,9 @@ class RemediationEvidenceToolService:
             raise RemediationEvidenceToolError(
                 "verificationHint is required when verificationRequired is true."
             )
+        redacted_verification_hint = _redact_text(verification_hint)
+        if verification_required and redacted_verification_hint is None:
+            redacted_verification_hint = "Verification hint redacted."
         applied_at = _string_or_none(raw_result.get("appliedAt"))
         if applied_at is None and status == "applied":
             applied_at = datetime.now(timezone.utc).isoformat()
@@ -455,7 +461,7 @@ class RemediationEvidenceToolService:
             or f"Action {action_kind} completed with status {status}.",
             "appliedAt": applied_at,
             "verificationRequired": verification_required,
-            "verificationHint": verification_hint,
+            "verificationHint": redacted_verification_hint,
             "beforeStateRef": _redact_text(raw_result.get("beforeStateRef")),
             "afterStateRef": _redact_text(raw_result.get("afterStateRef")),
             "sideEffects": _redact_sequence(raw_result.get("sideEffects")),
@@ -776,16 +782,19 @@ def _redact_sequence(value: Any) -> list[Any]:
     return [_redact_payload_value(item) for item in _safe_sequence(value)]
 
 def _redact_payload_value(value: Any) -> Any:
-    redacted = redact_sensitive_payload(value)
-    if isinstance(redacted, str):
-        return _redact_text(redacted)
-    if isinstance(redacted, Mapping):
-        return {str(key): _redact_payload_value(item) for key, item in redacted.items()}
-    if isinstance(redacted, list):
-        return [_redact_payload_value(item) for item in redacted]
-    if isinstance(redacted, tuple):
-        return [_redact_payload_value(item) for item in redacted]
-    return redacted
+    def apply_custom_redaction(node: Any) -> Any:
+        if isinstance(node, str):
+            return _redact_text(node)
+        if isinstance(node, Mapping):
+            return {
+                str(key): apply_custom_redaction(item)
+                for key, item in node.items()
+            }
+        if isinstance(node, (list, tuple)):
+            return [apply_custom_redaction(item) for item in node]
+        return node
+
+    return apply_custom_redaction(redact_sensitive_payload(value))
 
 def _redact_text(value: Any) -> str | None:
     normalized = _string_or_none(value)
@@ -794,7 +803,10 @@ def _redact_text(value: Any) -> str | None:
     if normalized.startswith(("artifact://", "ref://")):
         return normalized
     redacted = redact_sensitive_text(normalized)
+    if redacted is None:
+        return None
     redacted = _PRESIGNED_URL_PATTERN.sub("[REDACTED_URL]", redacted)
+    redacted = _SECRET_ASSIGNMENT_PATTERN.sub("[REDACTED_SECRET]", redacted)
     redacted = _ABSOLUTE_PATH_PATTERN.sub("[REDACTED_PATH]", redacted)
     return redacted
 
