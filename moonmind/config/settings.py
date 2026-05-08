@@ -620,6 +620,29 @@ class WorkflowSettings(BaseSettings):
             "WORKFLOW_DEFAULT_TASK_RUNTIME",
         ),
         description="Fallback runtime for queue task payloads that omit runtime fields.",
+        json_schema_extra={
+            "moonmind": {
+                "expose": True,
+                "key": "workflow.default_task_runtime",
+                "section": "user-workspace",
+                "category": "Workflow",
+                "scopes": ["workspace"],
+                "ui": "select",
+                "type": "enum",
+                "requires_reload": False,
+                "apply_mode": "next_task",
+                "title": "Default Task Runtime",
+                "options": [
+                    ("codex", "Codex"),
+                    ("codex_cli", "Codex CLI"),
+                    ("claude_code", "Claude Code"),
+                    ("gemini_cli", "Gemini CLI"),
+                    ("jules", "Jules"),
+                ],
+                "applies_to": ["task_creation", "workflow_runtime"],
+                "order": 10,
+            }
+        },
     )
     default_publish_mode: str = Field(
         "pr",
@@ -629,6 +652,23 @@ class WorkflowSettings(BaseSettings):
             "WORKFLOW_DEFAULT_PUBLISH_MODE",
         ),
         description="Fallback publish mode applied when queue task payloads omit publish.mode.",
+        json_schema_extra={
+            "moonmind": {
+                "expose": True,
+                "key": "workflow.default_publish_mode",
+                "section": "user-workspace",
+                "category": "Workflow",
+                "scopes": ["workspace"],
+                "ui": "select",
+                "type": "enum",
+                "requires_reload": False,
+                "apply_mode": "next_task",
+                "title": "Default Publish Mode",
+                "options": [("none", "None"), ("branch", "Branch"), ("pr", "Pull Request")],
+                "applies_to": ["task_creation", "publishing"],
+                "order": 20,
+            }
+        },
     )
     github_repository: Optional[str] = Field(
         "MoonLadderStudios/MoonMind",
@@ -710,6 +750,22 @@ class WorkflowSettings(BaseSettings):
         description="Percentage of runs routed through skills-first policy (0-100).",
         ge=0,
         le=100,
+        json_schema_extra={
+            "moonmind": {
+                "expose": True,
+                "key": "skills.canary_percent",
+                "section": "user-workspace",
+                "category": "Skills",
+                "scopes": ["workspace"],
+                "ui": "number",
+                "type": "integer",
+                "requires_reload": False,
+                "apply_mode": "next_task",
+                "title": "Skills Canary Percent",
+                "applies_to": ["workflow_runtime", "skills"],
+                "order": 40,
+            }
+        },
     )
     default_skill: str = Field(
         "auto",
@@ -756,6 +812,23 @@ class WorkflowSettings(BaseSettings):
             "SKILL_POLICY_MODE",
         ),
         description="Skill policy mode. 'permissive' allows any resolvable skill; 'allowlist' enforces allowed skills list.",
+        json_schema_extra={
+            "moonmind": {
+                "expose": True,
+                "key": "skills.policy_mode",
+                "section": "user-workspace",
+                "category": "Skills",
+                "scopes": ["workspace"],
+                "ui": "select",
+                "type": "enum",
+                "requires_reload": True,
+                "apply_mode": "worker_reload",
+                "title": "Skill Policy Mode",
+                "options": [("permissive", "Permissive"), ("allowlist", "Allowlist")],
+                "applies_to": ["workflow_runtime", "skills"],
+                "order": 30,
+            }
+        },
     )
     allowed_skills: Annotated[tuple[str, ...], NoDecode] = Field(
         ("auto",),
@@ -808,6 +881,22 @@ class WorkflowSettings(BaseSettings):
         True,
         validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT"),
         description="Enable live task sessions by default for queue task runs.",
+        json_schema_extra={
+            "moonmind": {
+                "expose": True,
+                "key": "live_sessions.default_enabled",
+                "section": "user-workspace",
+                "category": "Live Sessions",
+                "scopes": ["workspace"],
+                "ui": "toggle",
+                "type": "boolean",
+                "requires_reload": False,
+                "apply_mode": "next_task",
+                "title": "Live Sessions Enabled By Default",
+                "applies_to": ["task_creation", "live_sessions"],
+                "order": 50,
+            }
+        },
     )
     log_streaming_enabled: bool = Field(
         True,
