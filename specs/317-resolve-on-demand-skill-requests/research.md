@@ -10,11 +10,11 @@ Test implications: Unit and activity-boundary integration tests for the request 
 
 ## Existing Implementation Gap
 
-Decision: Enabled request mode is missing and must be implemented.
-Evidence: `SkillsOnDemandService.request()` currently returns `enabled_mode_not_implemented`; `agent_skill.request_on_demand` constructs the service but does not resolve or materialize additions.
-Rationale: Existing code supports disabled denial and query metadata, but not `activated` or `no_change` request outcomes.
+Decision: Enabled request mode was the implementation gap and has been closed for this story.
+Evidence: `SkillsOnDemandService.request()` now validates enabled requests and returns `no_change` or compact activated results when supplied a derived snapshot; `agent_skill.request_on_demand` now resolves requested additions, builds derived snapshot lineage, materializes the result, and maps failures safely. Unit tests in `tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py` and activity-boundary tests in `tests/integration/temporal/test_skills_on_demand_request_activation.py` cover the behavior.
+Rationale: Existing disabled denial and query metadata were preserved while the request path gained the `activated` and `no_change` outcomes required by MM-614.
 Alternatives considered: Leaving enabled mode denied was rejected because it fails the MM-614 acceptance criteria.
-Test implications: Add red-first tests proving no-change, activation, validation, and denial mapping.
+Test implications: Red-first unit and activity-boundary tests were added and then made to pass; final full unit verification passed, while full hermetic integration is blocked by Docker policy in this managed environment.
 
 ## Contract Strategy
 

@@ -7,36 +7,36 @@
 
 ## Summary
 
-MM-614 is a single-story runtime feature for enabled-mode `moonmind.skills.request`. Current code already has disabled request denial, query support, existing `ResolvedSkillSet` and materialization primitives, and an activity entrypoint, but enabled request mode still returns `enabled_mode_not_implemented`. The implementation will extend typed request/result contracts, service validation and derivation behavior, and the activity boundary so allowed requests produce a compact derived snapshot result while failures and no-change cases preserve the active snapshot.
+MM-614 is a single-story runtime feature for enabled-mode `moonmind.skills.request`. The implementation extends typed request/result contracts, service validation and derivation behavior, and the activity boundary so already-active requests return `no_change`, allowed requests produce compact derived snapshot results, and failures preserve the active snapshot with structured denial data. Focused unit and activity-boundary integration tests now cover validation, no-change, activation metadata, lineage, compact serialization, and materialization failure preservation.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | partial | `agent_skill.request_on_demand`; service currently denies enabled mode | implement governed enabled request path | unit + activity integration |
-| FR-002 | partial | request model exists but enabled validation is incomplete | validate snapshot, skills, versions, reason, runtime_id, step_id | unit |
-| FR-003 | missing | no enabled-mode shape validation beyond disabled path | add invalid request denials | unit |
-| FR-004 | partial | disabled path preserves snapshot; enabled failures not implemented | preserve active snapshot on all denials/errors | unit + activity integration |
-| FR-005 | partial | resolver enforces normal selection gates when called | route requested additions through resolver with combined selector | unit + activity integration |
-| FR-006 | missing | enabled request always denied as not implemented | add no_change result | unit |
-| FR-007 | missing | no derived snapshot creation for enabled request | add derived immutable snapshot result | unit + activity integration |
-| FR-008 | partial | current status literal only supports `ok`/`denied`; request uses denied placeholder | expand request status contract to activated/denied/no_change | unit |
-| FR-009 | missing | result lacks activation/materialization metadata | add compact refs and activation guidance | unit + activity integration |
-| FR-010 | partial | `ResolvedSkillSet.source_trace` can carry metadata but request path does not populate lineage | add compact lineage metadata | unit |
-| FR-011 | implemented_unverified | models are compact today; derived result must stay compact | add serialization guard for no Skill bodies/body refs | unit |
-| FR-012 | partial | disabled and invalid placeholders exist; other codes absent | add safe failure code vocabulary and mapping | unit |
+| FR-001 | implemented_verified | `agent_skill.request_on_demand`; `tests/integration/temporal/test_skills_on_demand_request_activation.py` | no new implementation | final verify |
+| FR-002 | implemented_verified | `SkillsOnDemandService._validate_activation_request`; enabled validation unit tests | no new implementation | final verify |
+| FR-003 | implemented_verified | invalid snapshot/requested skill validation tests in `test_skills_on_demand_controls.py` | no new implementation | final verify |
+| FR-004 | implemented_verified | denial helpers and materialization failure activity test preserve parent snapshot | no new implementation | final verify |
+| FR-005 | implemented_verified | activity route calls `AgentSkillResolver.resolve` for requested additions; activity-boundary test asserts invocation | no new implementation | final verify |
+| FR-006 | implemented_verified | `test_enabled_request_returns_no_change_for_already_active_skills` | no new implementation | final verify |
+| FR-007 | implemented_verified | activated result and activity-boundary derived snapshot tests | no new implementation | final verify |
+| FR-008 | implemented_verified | `SkillsOnDemandRequestStatus` supports `activated`, `denied`, and `no_change`; unit tests assert outcomes | no new implementation | final verify |
+| FR-009 | implemented_verified | request result fields and materialization summary assertions in unit/activity tests | no new implementation | final verify |
+| FR-010 | implemented_verified | `skillsOnDemandLineage` source trace and metadata tests | no new implementation | final verify |
+| FR-011 | implemented_verified | compact serialization test asserts Skill body refs are omitted from request results | no new implementation | final verify |
+| FR-012 | implemented_verified | structured validation, resolver, and materialization failure code coverage | no new implementation | final verify |
 | FR-013 | implemented_verified | `MM-614` preserved in `spec.md` and this plan | preserve through tasks/verification | final verify |
-| SCN-001 | missing | no no_change enabled test | add no_change test | unit |
-| SCN-002 | missing | no activated enabled test | add activated test | unit + activity integration |
-| SCN-003 | missing | no invalid enabled tests | add validation tests | unit |
-| SCN-004 | missing | no policy/version/runtime denial tests | add resolver failure mapping tests | unit |
-| SCN-005 | missing | no lineage/activation metadata tests | add result metadata tests | unit + activity integration |
-| DESIGN-REQ-002 | missing | enabled request path not implemented | add request resolution to derived snapshot | unit + activity integration |
-| DESIGN-REQ-004 | partial | request model has fields | add enabled validation behavior | unit |
-| DESIGN-REQ-005 | missing | activated/no_change statuses absent from request result | update contract/result behavior | unit |
-| DESIGN-REQ-008 | partial | resolver/materializer primitives exist; activity does not orchestrate enabled request | integrate resolve + persist + materialize boundary | activity integration |
-| DESIGN-REQ-013 | partial | lineage can live in `source_trace`; not populated | add source_trace lineage | unit |
-| DESIGN-REQ-014 | partial | disabled denial only | map common failure codes without snapshot mutation | unit |
+| SCN-001 | implemented_verified | no-change unit test | no new implementation | final verify |
+| SCN-002 | implemented_verified | activated service and activity-boundary tests | no new implementation | final verify |
+| SCN-003 | implemented_verified | invalid request shape unit tests | no new implementation | final verify |
+| SCN-004 | implemented_verified | resolver/materialization failure mapping tests | no new implementation | final verify |
+| SCN-005 | implemented_verified | lineage and activation metadata assertions | no new implementation | final verify |
+| DESIGN-REQ-002 | implemented_verified | enabled request path resolves additions into derived snapshot metadata | no new implementation | final verify |
+| DESIGN-REQ-004 | implemented_verified | request contract fields and validation tests | no new implementation | final verify |
+| DESIGN-REQ-005 | implemented_verified | request result statuses and compact result fields | no new implementation | final verify |
+| DESIGN-REQ-008 | implemented_verified | activity integrates resolve, manifest persistence path, materialization, and compact summary | no new implementation | final verify |
+| DESIGN-REQ-013 | implemented_verified | compact `skillsOnDemandLineage` metadata in derived snapshots | no new implementation | final verify |
+| DESIGN-REQ-014 | implemented_verified | denial helpers preserve parent snapshot and safe codes | no new implementation | final verify |
 
 ## Technical Context
 
