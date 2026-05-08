@@ -1,0 +1,283 @@
+{
+  "schemaVersion": "1.0",
+  "source": {
+    "path": "docs/Security/SettingsSystem.md",
+    "referencePath": "docs/Security/SettingsSystem.md",
+    "title": "Settings System",
+    "kind": "declarative_design"
+  },
+  "outputMode": "jira",
+  "storyCount": 13,
+  "coverage": {
+    "documentSections": [
+      "1 Summary",
+      "2 Document Boundaries",
+      "3 Goals",
+      "4 Non-Goals",
+      "5 Core Principles",
+      "6 Settings Page Topology",
+      "7 Key Concepts",
+      "8 Settings Catalog Contract",
+      "9 Eligibility Rules",
+      "10 Resolution Model",
+      "11 Persistence Model",
+      "12 API Contract",
+      "13 UI Contract",
+      "14 Secrets Integration",
+      "15 Provider Profiles Integration",
+      "16 User / Workspace Settings",
+      "17 Operations Settings",
+      "18 Validation Model",
+      "19 Change Application Semantics",
+      "20 Authorization Model",
+      "21 Audit and Observability",
+      "22 Security Requirements",
+      "23 Backup and Recovery",
+      "24 Migration and Deprecation",
+      "25 Testing Requirements",
+      "26 Suggested Internal Components",
+      "27 Example End-to-End Flows",
+      "28 Open Integration Points",
+      "29 Desired-State Invariants"
+    ],
+    "uncoveredSections": [],
+    "notes": "Sections 1-4 (Summary, Boundaries, Goals, Non-Goals) and Section 28 (Open Integration Points) are framing/scope notes; their requirements are absorbed by the 13 stories. Section 27 example flows are exercised as acceptance scenarios within the relevant stories."
+  },
+  "stories": [
+    {
+      "storyId": "STORY-001",
+      "storyIndex": 1,
+      "summary": "Backend-owned settings catalog registry and descriptor contract",
+      "description": "Establish the backend-owned settings catalog registry that emits typed `SettingDescriptor` records (key, title, description, category, section, type, ui, scopes, default/effective/override values, source, options, constraints, sensitive flag, secret_role, read_only, reload metadata, applies_to, depends_on, audit policy). The registry must enforce stable dotted setting keys, derive descriptors from typed backend models plus explicit MoonMind metadata (`moonmind.expose`, section, category, scopes, ui, requires_reload), and refuse to expose any field that lacks explicit metadata. Registry output drives Settings UI, API clients, CLI tooling, tests, diagnostics, onboarding flows, and documentation generators.\n\nAcceptance:\n- Catalog generation includes every explicitly exposed eligible setting and excludes everything else by default.\n- Setting keys are unique, stable, URL/JSON safe, and never overloaded across scopes.\n- Descriptor records carry every required field from §8.1 with backwards-compatible enum values, scope semantics, and option ordering.\n- A snapshot test detects accidental catalog drift (added/removed keys, changed scopes, changed types).\n- Changing or deleting a descriptor without an explicit migration entry fails the catalog build.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "5.1 Backend-Owned Truth",
+          "5.9 Durable Contracts Over Ad Hoc Forms",
+          "7.1 Setting Key",
+          "7.2 Setting Descriptor",
+          "8 Settings Catalog Contract",
+          "26 Suggested Internal Components"
+        ],
+        "coverageIds": ["S5.1", "S5.9", "S7.1", "S7.2", "S8.1", "S8.2", "S8.3", "S8.4", "S22.4", "S22.5", "S25.1", "S25.20", "S26.SettingsRegistry", "S26.SettingsCatalogBuilder", "S29.1"]
+      },
+      "dependencies": []
+    },
+    {
+      "storyId": "STORY-002",
+      "storyIndex": 2,
+      "summary": "Eligibility rules and sensitive-name heuristics enforcement",
+      "description": "Implement eligibility filtering so a setting is editable only when it has explicit `expose: true` metadata, is not plaintext-sensitive, declares at least one editable scope, has a supported UI representation, can be validated server-side, does not mutate deployment env vars, and does not bypass Secrets or Provider Profiles. The catalog must reject (or require manual review for) fields whose key, alias, or description matches sensitive heuristics (`secret`, `token`, `password`, `api_key`, `apikey`, `credential`, `private_key`, `refresh`, `oauth`) and represent them only as SecretRef pickers or via the Managed Secrets flow.\n\nAcceptance:\n- Settings without explicit MoonMind metadata never appear in the catalog.\n- Sensitive-name fields cannot be exposed as plaintext inputs and the test suite proves it.\n- The supported generic UI control table from §9.2 is enforced (bool→toggle, str→input, int/float→number, enum→select, list[str]→tag editor, dict→key/value, SecretRef→picker, computed→read-only).\n- Eligibility decisions are produced server-side; client-supplied descriptor metadata is ignored.\n- Ineligible classes (raw secrets, OAuth state blobs, provider credential values, deployment-only infra, profile-owned fields, ops command fields) cannot be exposed as ordinary editable settings.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "5.2 Explicit Exposure",
+          "7.8 Eligibility",
+          "9 Eligibility Rules",
+          "22 Security Requirements"
+        ],
+        "coverageIds": ["S5.2", "S7.8", "S9.1", "S9.2", "S9.3", "S9.4", "S22.3", "S22.6", "S29.1"]
+      },
+      "dependencies": ["STORY-001"]
+    },
+    {
+      "storyId": "STORY-003",
+      "storyIndex": 3,
+      "summary": "Scoped overrides persistence with sparse storage and reset",
+      "description": "Persist user/workspace setting overrides in a `settings_overrides` table keyed by (scope, workspace_id, user_id, key) with `value_json`, `schema_version`, `value_version`, audit columns, and uniqueness. Defaults remain immutable; overrides are sparse and absence means \"inherit.\" Reset deletes the override row and reverts the effective value to the inherited source without touching defaults, profiles, secrets, OAuth volumes, or audit history.\n\nPersistence rules: rows may store booleans, numbers, strings, enums, lists, small structured JSON, SecretRef strings, and resource references. Rows must not store raw secrets, OAuth session blobs, decrypted credentials, generated config containing secrets, large artifacts, workflow payloads, or operational command history beyond audit metadata.\n\nAcceptance:\n- Workspace and user overrides are persisted independently and round-trip correctly.\n- Reset endpoints delete only the relevant override row and return the inherited effective value.\n- Size limits and schema validation are enforced before persistence; oversized or off-schema writes are rejected.\n- Stored payloads never contain secret plaintext (a fixture verifies the payload contract).\n- Concurrent writes are guarded by `value_version` for optimistic concurrency.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "5.4 Scoped Overrides, Not Mutable Defaults",
+          "7.3 Scope",
+          "7.4 Override",
+          "11 Persistence Model",
+          "27.3 Reset User Override"
+        ],
+        "coverageIds": ["S5.4", "S7.3", "S7.4", "S11.1", "S11.3", "S11.4", "S22.4", "S22.10", "S25.11", "S26.SettingsOverrideStore", "S27.3", "S29.9"]
+      },
+      "dependencies": ["STORY-001"]
+    },
+    {
+      "storyId": "STORY-004",
+      "storyIndex": 4,
+      "summary": "Effective-value resolver with source explanation and operator locks",
+      "description": "Build the resolver that produces the effective value for a setting and the explanation of where it came from. Default resolution chain: `built-in default < config/env default < workspace override < user override`. Operator-locked resolution chain: `built-in default < workspace override < user override < operator lock`, with locks winning and forcing read-only state for non-operator editors. Each effective value carries a `source` label drawn from {`default`, `config_file`, `environment`, `workspace_override`, `user_override`, `provider_profile`, `secret_ref`, `operator_lock`}.\n\nThe resolver must distinguish missing/null/blocked states (no default, inherited null, intentionally null override, unresolvable SecretRef, missing provider profile, policy-blocked, post-migration invalid) and emit explicit diagnostics rather than silent fallback.\n\nAcceptance:\n- Workspace overrides shadow defaults, user overrides shadow workspace, operator locks shadow user.\n- Operator locks render the descriptor read-only with a populated `read_only_reason`.\n- Diagnostic states from §10.5 each produce a distinct, actionable explanation.\n- The resolver answers every question in §5.5 (effective value, scope, inherited/overridden, locked, default, reload requirement, dependent systems).",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "5.5 Explainability",
+          "7.5 Effective Value",
+          "7.6 Source",
+          "7.7 Lock",
+          "10 Resolution Model",
+          "16.4 Inheritance",
+          "27.1 Change Workspace Default Runtime"
+        ],
+        "coverageIds": ["S5.5", "S7.5", "S7.6", "S7.7", "S10.1", "S10.2", "S10.3", "S10.5", "S16.4", "S26.SettingsResolver", "S27.1", "S29.8", "S29.10"]
+      },
+      "dependencies": ["STORY-003"]
+    },
+    {
+      "storyId": "STORY-005",
+      "storyIndex": 5,
+      "summary": "Server-side validation and cross-setting policy enforcement",
+      "description": "Centralize all setting writes through a server-side validator that confirms: key exists, key is exposed, scope is allowed, actor is authorized, value type matches descriptor, enum/numeric/string/list/object constraints hold, SecretRef syntax is valid, referenced resources exist, dependencies are satisfied, and workspace policy permits the value. Cross-setting validation must enforce combinations such as profile selectors referencing only enabled profiles, canary percentage being zero when the feature is disabled, default runtime being inside the workspace allowed list, SecretRef backend matching workspace policy, and operational mode not conflicting with maintenance policy.\n\nValidation runs at descriptor generation, on write requests, before persistence, on effective-value preview, before launch/operation execution, and during readiness diagnostics. Invalid settings, missing SecretRefs, broken provider profile bindings, locked values, and unsupported scopes must fail explicitly with structured errors and never silently fall back to another sensitive source.\n\nAcceptance:\n- Type validation passes for booleans/strings/numbers/enums/lists/objects/SecretRefs and rejects mismatches.\n- Numeric and string constraints are enforced at write time and at preview time.\n- Cross-setting rules from §18.2 each have a regression test and produce typed structured errors.\n- Validation timing from §18.3 is exercised by tests at every listed boundary.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "5.7 Fail Fast",
+          "16.3 Workspace Policy Constraints",
+          "18 Validation Model"
+        ],
+        "coverageIds": ["S5.7", "S16.3", "S18.1", "S18.2", "S18.3", "S22.4", "S22.10", "S22.11", "S25.4", "S25.5", "S25.6", "S25.7", "S26.SettingsValidator", "S29.3"]
+      },
+      "dependencies": ["STORY-001", "STORY-003"]
+    },
+    {
+      "storyId": "STORY-006",
+      "storyIndex": 6,
+      "summary": "Settings HTTP API surface for catalog, effective, update, reset, validate, preview, audit",
+      "description": "Implement the settings API: `GET /api/v1/settings/catalog` (with `section` and `scope` filters), `GET /api/v1/settings/effective[/{key}]`, `PATCH /api/v1/settings/{user|workspace}` (with `changes`, `expected_versions`, `reason`), `DELETE /api/v1/settings/{user|workspace}/{key}`, `POST /api/v1/settings/validate`, `POST /api/v1/settings/preview`, and `GET /api/v1/settings/audit`. Responses return descriptor-grouped sections/categories, resolved values with sources, refreshed descriptors after writes, and structured error envelopes (`unknown_setting`, `setting_not_exposed`, `scope_not_allowed`, `read_only_setting`, `operator_locked`, `invalid_setting_value`, `secret_ref_not_resolvable`, `provider_profile_not_found`, `version_conflict`, `permission_denied`, `requires_confirmation`).\n\nValidation/preview must return effective-value diffs, dependency warnings, and reload requirements without committing.\n\nAcceptance:\n- All listed endpoints exist with the documented query parameters and request bodies.\n- Catalog responses are grouped into the three top-level sections (`providers-secrets`, `user-workspace`, `operations`).\n- Update writes use `expected_versions` for optimistic concurrency and emit `version_conflict` on stale writes.\n- Errors match the structured shape from §12.7 with `error`, `message`, `key`, `scope`, and contextual `details`.\n- Audit reads honor descriptor redaction policy.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "12 API Contract"
+        ],
+        "coverageIds": ["S12.1", "S12.2", "S12.3", "S12.4", "S12.5", "S12.6", "S12.7", "S20.3", "S22.5", "S22.9", "S25.14", "S29.1", "S29.2"]
+      },
+      "dependencies": ["STORY-001", "STORY-003", "STORY-004", "STORY-005"]
+    },
+    {
+      "storyId": "STORY-007",
+      "storyIndex": 7,
+      "summary": "Authorization model with permission-scoped reads and writes",
+      "description": "Enforce least-privilege authorization across the Settings System. Define and check the permissions: `settings.catalog.read`, `settings.effective.read`, `settings.user.write`, `settings.workspace.write`, `settings.system.read`, `settings.system.write`, `secrets.metadata.read`, `secrets.value.write`, `secrets.rotate`, `secrets.disable`, `secrets.delete`, `provider_profiles.read`, `provider_profiles.write`, `operations.read`, `operations.invoke`, `settings.audit.read`. Map them to the User, Workspace Admin, Secret Manager, Operator, System Admin, and Auditor roles per §20.2.\n\nAuthorization runs on every write and every sensitive metadata read; the frontend may hide unavailable controls but hidden UI is never the security boundary. Operator-locked settings cannot be overwritten through ordinary user/workspace APIs.\n\nAcceptance:\n- Each permission is checked at exactly the listed boundaries (write or sensitive read) and tests cover positive and negative cases per role.\n- Operator locks block ordinary user/workspace writes with `operator_locked` errors.\n- The Auditor role can read audit logs but cannot read plaintext.\n- Settings APIs enforce CSRF/session protections appropriate to MoonMind’s auth model.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "5.6 Least Privilege",
+          "20 Authorization Model",
+          "22 Security Requirements"
+        ],
+        "coverageIds": ["S5.6", "S20.1", "S20.2", "S20.3", "S22.4", "S22.7", "S22.9", "S22.12", "S25.19", "S26.SettingsAuthorizationService", "S29.10", "S29.11"]
+      },
+      "dependencies": ["STORY-006"]
+    },
+    {
+      "storyId": "STORY-008",
+      "storyIndex": 8,
+      "summary": "Settings audit events with descriptor-aware redaction",
+      "description": "Persist setting-change audit events in a `settings_audit_events` table (key, scope, workspace_id, user_id, actor_user_id, old/new value JSON, redacted flag, reason, request_id, timestamp). Audit writes capture: setting key, scope, actor, old/new values where descriptor allows, redaction status, source IP/request ID where available, supplied reason, validation outcome, apply mode, and affected systems. Redaction must blank out raw secret values, sensitive generated config, OAuth state, private keys, token-like values, provider-returned sensitive diagnostics, and any descriptor-marked redactable values. SecretRef values may be recorded only when policy authorizes it and are treated as security-relevant metadata.\n\nDiagnostic endpoints answer: why is this setting read-only, why is this value effective, where did it come from, what changed recently, why did validation fail, what needs restart, which provider profile or secret is missing, which setting is blocking launch readiness.\n\nAcceptance:\n- Every successful and failed write produces an audit event with the documented columns populated.\n- Redaction is descriptor-driven and is verified by unit tests for each sensitivity class.\n- Audit reads obey the `settings.audit.read` permission and never leak plaintext.\n- Diagnostic surfaces from §21.3 each have a backing test case.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "11.2 Settings Audit Table",
+          "21 Audit and Observability"
+        ],
+        "coverageIds": ["S11.2", "S11.3", "S21.1", "S21.2", "S21.3", "S22.8", "S25.12", "S25.13", "S26.SettingsAuditWriter", "S29.11"]
+      },
+      "dependencies": ["STORY-006"]
+    },
+    {
+      "storyId": "STORY-009",
+      "storyIndex": 9,
+      "summary": "Secrets integration with SecretRef pickers and no-plaintext readback",
+      "description": "Wire the Settings System to the Secrets System without redefining secret semantics. Sensitive settings are stored as `secret_ref` descriptors whose value is a reference (e.g., `db://github-pat-main`, `env://GITHUB_TOKEN`, `exec://onepassword/...`). Generic overrides must never store raw API keys, access tokens, refresh tokens, passwords, private keys, OAuth session state, or generated config containing credentials. The Settings UI exposes Managed Secrets workflows (create/replace/rotate/disable/re-enable/delete/validate/inspect/copy SecretRef) but treats stored secret values as write-only: no reveal action, plaintext input cleared on save, only metadata afterward. SecretRef pickers display label, backend type, status, presence indicator, last-updated, validation status, usage count, and the SecretRef value—never plaintext. Secret validation resolves in memory, performs a provider/integration-aware check, discards plaintext, stores redacted validation metadata, and returns redacted diagnostics only.\n\nAcceptance:\n- Sensitive values cannot be persisted in `settings_overrides`; attempts are rejected before write.\n- Plaintext is never returned by any settings read endpoint or rendered after submission.\n- Broken/missing/disabled/revoked SecretRefs surface explicit diagnostics and prevent affected launches where appropriate.\n- Secret usage views show references and object names only.\n- Acceptance scenario §27.2 (Add GitHub Token) passes end-to-end including the GitHub fine-grained PAT permission probe surfaces and SecretRef-alias resolver behavior described in §27.2.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "5.3 References Over Secrets",
+          "7.9 SecretRef Setting",
+          "13.5 SecretRef Picker",
+          "13.6 Managed Secret Editor",
+          "14 Secrets Integration",
+          "22 Security Requirements",
+          "27.2 Add GitHub Token"
+        ],
+        "coverageIds": ["S5.3", "S7.9", "S10.4", "S13.5", "S13.6", "S14.1", "S14.2", "S14.3", "S14.4", "S14.5", "S22.1", "S22.2", "S22.3", "S22.13", "S25.3", "S25.16", "S27.2", "S29.4", "S29.5", "S29.6"]
+      },
+      "dependencies": ["STORY-001", "STORY-005"]
+    },
+    {
+      "storyId": "STORY-010",
+      "storyIndex": 10,
+      "summary": "Provider Profiles section integration with role-based SecretRef binding and readiness",
+      "description": "Surface Provider Profiles as first-class resources inside the `providers-secrets` section without inlining profile semantics into generic settings. Provide specialized profile forms covering runtime, provider, credential source class, materialization mode, default model, model overrides, SecretRef role bindings, OAuth volume metadata, concurrency, cooldown, tags, priority, default status, and readiness. Role-aware SecretRef pickers must drive secret bindings (e.g., `secret_refs.anthropic_api_key: db://anthropic-team-api-key`) where the role describes profile need and the SecretRef identifies resolution. Readiness combines schema validity, required fields, SecretRef resolvability, OAuth volume status, provider-specific validation, enabled state, concurrency availability, and cooldown.\n\nUser/Workspace settings may select default profile references (e.g., `workflow.default_provider_profile_ref`) but must not duplicate launch semantics. Provider profile materialization never stores resolved plaintext in settings rows.\n\nAcceptance:\n- Profile create/update/delete/validate/enable/disable/select-default flows work through the Settings UI and respect `provider_profiles.read|write` permissions.\n- Profile selectors validate that they reference an enabled, ready profile.\n- Readiness reports each contributing factor and surfaces broken SecretRef or OAuth volume state.\n- A regression test proves no plaintext credential ever lands in `settings_overrides` from a profile binding.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "2.3 What Provider Profiles own",
+          "10.3 Provider Profile Resolution",
+          "15 Provider Profiles Integration"
+        ],
+        "coverageIds": ["S2.3", "S10.3", "S15.1", "S15.2", "S15.3", "S15.4", "S22.14", "S25.15", "S26.ProviderProfilesPanel", "S29.7"]
+      },
+      "dependencies": ["STORY-009"]
+    },
+    {
+      "storyId": "STORY-011",
+      "storyIndex": 11,
+      "summary": "Operations section with command semantics, confirmation, and audit",
+      "description": "Build the Operations section as discoverable from Settings but modeled as commands rather than preferences. Cover pause/resume workers, drain queue, quiesce runtime family, enable maintenance mode, disable launch scheduling, update operational reason text, and set operational banners. Each operational action carries actor, target, requested state, reason, confirmation state, timestamp, idempotency key, audit event, result status, and rollback/resume path. The UI shows current state, command impact, confirmation requirement, actor authorization, last-action+actor, pending transitions, failure reason, and safe rollback/resume.\n\nDisruptive actions (stop active work, prevent new launches, affect all workers/runtimes, delete data, revoke credentials, change global routing) require explicit confirmation. Operational subsystems remain authoritative for worker pause/drain/quiesce/resume semantics, runtime/queue/scheduler health, and destructive actions; Settings only mediates discovery and command issuance.\n\nAcceptance:\n- The acceptance scenario in §27.4 (Pause Workers) passes: operator opens Operations, validates permission, supplies reason, executes command, audit event captures actor/reason/target/result, UI shows paused state and resume action.\n- Operations endpoints honor `operations.read` and `operations.invoke` permissions and reject non-operator callers.\n- Idempotency keys prevent duplicate execution under retry.\n- Confirmation is enforced for the disruptive action classes from §17.3.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "2.4 What Operations own",
+          "6.3 Operations",
+          "13.7 Operations UI",
+          "17 Operations Settings",
+          "27.4 Pause Workers"
+        ],
+        "coverageIds": ["S2.4", "S6.3", "S13.7", "S17.1", "S17.2", "S17.3", "S22.12", "S25.19", "S26.OperationsPanel", "S27.4"]
+      },
+      "dependencies": ["STORY-007", "STORY-008"]
+    },
+    {
+      "storyId": "STORY-012",
+      "storyIndex": 12,
+      "summary": "Change application semantics with apply modes and reload events",
+      "description": "Make every setting declare how its changes take effect. Support apply modes `immediate`, `next_request`, `next_task`, `next_launch`, `worker_reload`, `process_restart`, and `manual_operation`. On commit, emit a structured `setting_changed` event carrying key, scope, source, apply mode, actor, and timestamp so Mission Control, task creation, provider profile manager, workers, and operational controls can subscribe and react. For settings requiring restart, the UI must surface current effective value, pending value, restart requirement, affected process/worker, whether the value is already active, and how to complete activation.\n\nAcceptance:\n- Each descriptor declares an apply mode; CI fails if a descriptor lacks one.\n- A successful write emits a `setting_changed` event with the documented schema.\n- Mission Control catalog state, task creation defaults, provider profile manager, and worker reloaders each refresh on the appropriate event class.\n- Restart-required settings display pending vs. active state until the worker/process has reloaded.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "13 UI Contract",
+          "19 Change Application Semantics"
+        ],
+        "coverageIds": ["S13.1", "S13.2", "S13.3", "S13.4", "S19.1", "S19.2", "S19.3", "S19.4", "S25.17", "S25.18", "S26.SettingsChangePublisher"]
+      },
+      "dependencies": ["STORY-006"]
+    },
+    {
+      "storyId": "STORY-013",
+      "storyIndex": 13,
+      "summary": "Migration, deprecation, backup integrity, and snapshot drift coverage",
+      "description": "Provide the migration and recovery contract for the catalog. Renaming a setting requires a new descriptor key, a migration from old overrides to new overrides, a deprecation descriptor for the old key where helpful, audit visibility, and tests proving effective values are preserved. Removing a setting requires rejecting new writes, preserving or migrating existing values, explaining deprecated values in diagnostics, and avoiding silent loss of operator intent. Type changes require an explicit migration; the resolver must not reinterpret existing JSON ambiguously.\n\nBackups must include override rows, audit events, SecretRef strings, and resource references but must not contain raw managed secret plaintext. Restoring without corresponding secrets, OAuth volumes, or profiles must surface broken-reference diagnostics in the UI.\n\nThe testing surface mandated by §25 is exhaustive and binding: catalog generation includes every exposed setting, excludes sensitive fields by default, represents secret-likes only as SecretRef pickers or specialized flows, rejects unknown keys, rejects invalid scopes, validates every type, enforces numeric/string constraints, applies workspace and user override layering, enforces operator locks, resets cleanly, audits writes, redacts sensitive values, detects version conflicts, validates profile references, validates SecretRefs without resolving plaintext, renders every generic control, displays source/reset correctly, gates operations by authorization, and runs snapshot tests for catalog drift.\n\nAcceptance:\n- A rename migration test shows old overrides mapped to new keys with effective-value preservation.\n- A removal test confirms new writes are rejected, existing values are preserved/migrated, and diagnostics surface deprecation.\n- A type-change migration test confirms no ambiguous JSON reinterpretation occurs.\n- A restore-from-backup integration test verifies broken SecretRef/profile/OAuth references surface as diagnostics.\n- The snapshot test from §25.20 fails on accidental catalog drift and the full §25 testing matrix is implemented.",
+      "sourceReference": {
+        "path": "docs/Security/SettingsSystem.md",
+        "title": "Settings System",
+        "sections": [
+          "8.4 Catalog Stability",
+          "23 Backup and Recovery",
+          "24 Migration and Deprecation",
+          "25 Testing Requirements",
+          "29 Desired-State Invariants"
+        ],
+        "coverageIds": ["S8.4", "S23.1", "S23.2", "S23.3", "S24.1", "S24.2", "S24.3", "S25.1", "S25.2", "S25.3", "S25.4", "S25.5", "S25.6", "S25.7", "S25.8", "S25.9", "S25.10", "S25.11", "S25.12", "S25.13", "S25.14", "S25.15", "S25.16", "S25.17", "S25.18", "S25.19", "S25.20", "S29.12"]
+      },
+      "dependencies": ["STORY-001", "STORY-003", "STORY-009", "STORY-010"]
+    }
+  ]
+}
