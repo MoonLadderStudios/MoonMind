@@ -875,17 +875,19 @@ export function OperationsSettingsSection({
               </label>
               <label className="block space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Target reference</span>
-                <select
+                <input
                   className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  list="deployment-target-references"
                   value={targetReference}
                   onChange={(event) => setTargetReference(event.target.value)}
-                >
+                />
+                <datalist id="deployment-target-references">
                   {referenceOptions.map((reference) => (
                     <option key={reference} value={reference}>
                       {reference}
                     </option>
                   ))}
-                </select>
+                </datalist>
               </label>
               {isMutableReference(targetReference) ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">

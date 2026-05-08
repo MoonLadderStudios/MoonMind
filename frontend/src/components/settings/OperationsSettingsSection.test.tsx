@@ -226,8 +226,9 @@ describe('OperationsSettingsSection deployment update card', () => {
     renderOperations();
 
     const card = await screen.findByRole('region', { name: /deployment update/i });
-    const reference = (await within(card).findByLabelText(/target reference/i)) as HTMLSelectElement;
+    const reference = (await within(card).findByLabelText(/target reference/i)) as HTMLInputElement;
     expect(reference.value).toBe('20260425.1234');
+    expect(within(card).getByDisplayValue('20260425.1234')).toBeTruthy();
 
     fireEvent.change(reference, { target: { value: 'latest' } });
     expect(within(card).getByText(/latest may resolve differently/i)).toBeTruthy();
@@ -286,7 +287,7 @@ describe('OperationsSettingsSection deployment update card', () => {
     const card = await screen.findByRole('region', { name: /deployment update/i });
 
     fireEvent.change(await within(card).findByLabelText(/target reference/i), {
-      target: { value: 'latest' },
+      target: { value: 'v20260507.2470' },
     });
     fireEvent.click(
       await within(card).findByRole('button', { name: /submit deployment update/i }),
@@ -294,11 +295,10 @@ describe('OperationsSettingsSection deployment update card', () => {
 
     await waitFor(() => {
       expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Current image: ghcr.io/moonladderstudios/moonmind:stable'));
-      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Target image: ghcr.io/moonladderstudios/moonmind:latest'));
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Target image: ghcr.io/moonladderstudios/moonmind:v20260507.2470'));
       expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Mode: Restart changed services'));
       expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Stack: moonmind'));
       expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Expected affected services: api, worker'));
-      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Mutable tag warning'));
       expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Services may restart'));
     });
 
@@ -309,7 +309,7 @@ describe('OperationsSettingsSection deployment update card', () => {
         stack: 'moonmind',
         image: {
           repository: 'ghcr.io/moonladderstudios/moonmind',
-          reference: 'latest',
+          reference: 'v20260507.2470',
         },
         mode: 'changed_services',
         removeOrphans: true,

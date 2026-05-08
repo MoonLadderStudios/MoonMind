@@ -18,6 +18,7 @@ def _build_proposal_service_factory():
 """Temporal worker runtime entrypoint."""
 
 import asyncio
+from copy import deepcopy
 import json
 import logging
 import os
@@ -1026,6 +1027,82 @@ def _build_runtime_planner():
         ).strip()
         if failure_mode not in {"FAIL_FAST", "CONTINUE"}:
             failure_mode = "FAIL_FAST"
+
+        explicit_plan = task_payload.get("plan")
+        if isinstance(explicit_plan, list) and explicit_plan:
+            nodes: list[dict[str, Any]] = []
+            node_ids: set[str] = set()
+            for idx, plan_entry in enumerate(explicit_plan, start=1):
+                if not isinstance(plan_entry, Mapping):
+                    raise RuntimeError("task.plan entries must be objects")
+                tool_payload = _coerce_mapping(
+                    plan_entry.get("tool")
+                ) or _coerce_mapping(plan_entry.get("skill"))
+                if not tool_payload:
+                    raise RuntimeError("task.plan entries require a tool object")
+                tool_type = str(
+                    tool_payload.get("type") or tool_payload.get("kind") or "skill"
+                ).strip() or "skill"
+                tool_name = str(
+                    tool_payload.get("name") or tool_payload.get("id") or ""
+                ).strip()
+                if not tool_name:
+                    raise RuntimeError("task.plan tool name is required")
+                tool_version = str(
+                    tool_payload.get("version")
+                    or ("1.0.0" if tool_type == "skill" else "1.0")
+                ).strip()
+                if not tool_version:
+                    raise RuntimeError("task.plan tool version is required")
+                node_inputs = _coerce_mapping(plan_entry.get("inputs"))
+                if not node_inputs:
+                    node_inputs = _coerce_mapping(
+                        tool_payload.get("inputs") or tool_payload.get("args")
+                    )
+                node_id = str(plan_entry.get("id") or f"node-{idx}").strip()
+                if not node_id:
+                    node_id = f"node-{idx}"
+                if node_id in node_ids:
+                    raise RuntimeError(f"task.plan duplicate node id: {node_id}")
+                node_ids.add(node_id)
+                node: dict[str, Any] = {
+                    "id": node_id,
+                    "tool": {
+                        "type": tool_type,
+                        "name": tool_name,
+                        "version": tool_version,
+                    },
+                    "inputs": dict(node_inputs),
+                }
+                options = _coerce_mapping(plan_entry.get("options"))
+                if options:
+                    node["options"] = dict(options)
+                for key, value in plan_entry.items():
+                    if key in {"id", "tool", "skill", "inputs", "options"}:
+                        continue
+                    node[str(key)] = deepcopy(value)
+                nodes.append(node)
+
+            explicit_edges = task_payload.get("edges")
+            edges = (
+                [dict(edge) for edge in explicit_edges if isinstance(edge, Mapping)]
+                if isinstance(explicit_edges, list)
+                else []
+            )
+            return {
+                "plan_version": "1.0",
+                "metadata": {
+                    "title": title,
+                    "created_at": created_at,
+                    "registry_snapshot": {
+                        "digest": snapshot.digest,
+                        "artifact_ref": snapshot.artifact_ref,
+                    },
+                },
+                "policy": {"failure_mode": failure_mode, "max_concurrency": 1},
+                "nodes": nodes,
+                "edges": edges,
+            }
 
         story_output_payload = _coerce_mapping(
             task_payload.get("storyOutput")
