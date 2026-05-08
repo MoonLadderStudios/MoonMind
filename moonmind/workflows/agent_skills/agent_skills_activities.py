@@ -11,6 +11,7 @@ from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
     ResolvedSkillSet,
     SkillSelector,
+    SkillSelectorEntry,
     SkillsOnDemandQueryRequest,
     SkillsOnDemandQueryResult,
     SkillsOnDemandRequest,
@@ -236,7 +237,159 @@ class AgentSkillsActivities:
         service = SkillsOnDemandService(
             enabled=settings.workflow.skills_on_demand_enabled
         )
-        return await service.request(request)
+        initial_result = await service.request(request)
+        if (
+            initial_result.status != "denied"
+            or initial_result.code != "enabled_mode_not_implemented"
+        ):
+            return initial_result
+
+        requested = service.normalized_requested_skills(request)
+        active_snapshot = request.active_snapshot
+        if active_snapshot is None:
+            return initial_result
+
+        try:
+            info = activity.info()
+            active_versions = {
+                skill.skill_name: skill.version for skill in active_snapshot.skills
+            }
+            addition_selector = SkillSelector(
+                include=[
+                    SkillSelectorEntry(name=name, version=version)
+                    for name, version in requested
+                    if name not in active_versions
+                    or (version is not None and active_versions[name] != version)
+                ]
+            )
+            context = SkillResolutionContext(
+                snapshot_id=f"skillset_{info.workflow_id}_{info.activity_id}_derived",
+                deployment_id=active_snapshot.deployment_id,
+                workspace_root=settings.workflow.repo_root,
+                async_session_maker=getattr(self, "_async_session_maker", None),
+            )
+            resolved_additions = await AgentSkillResolver().resolve(
+                addition_selector,
+                context,
+            )
+            derived_set = self._build_on_demand_derived_skillset(
+                active_snapshot=active_snapshot,
+                resolved_additions=resolved_additions,
+                request=request,
+                snapshot_id=context.snapshot_id,
+            )
+            if self._artifact_service:
+                derived_set = await self._persist_file_backed_skill_content(
+                    resolved_set=derived_set,
+                    activity_info=info,
+                )
+                derived_set = await self._persist_resolved_skillset_manifest(
+                    resolved_set=derived_set,
+                    snapshot_id=derived_set.snapshot_id,
+                    activity_info=info,
+                )
+            materializer = AgentSkillMaterializer(
+                workspace_root=settings.workflow.repo_root,
+                artifact_service=self._artifact_service,
+                backing_root=settings.workflow.skills_cache_root,
+                source_preservation_root=settings.workflow.skills_workspace_root,
+            )
+            materialization = await materializer.materialize(
+                derived_set,
+                request.runtime_id or "managed-runtime",
+                RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+            )
+        except ValueError as exc:
+            return service.denied_request_result(
+                request,
+                code=self._skills_on_demand_resolution_code(str(exc)),
+                message=self._safe_skills_on_demand_message(str(exc)),
+            )
+        except RuntimeError as exc:
+            return service.denied_request_result(
+                request,
+                code=self._skills_on_demand_runtime_code(str(exc)),
+                message=self._safe_skills_on_demand_message(str(exc)),
+            )
+
+        return await service.request(
+            request,
+            resolved_skillset=derived_set,
+            materialization=materialization,
+        )
+
+    def _build_on_demand_derived_skillset(
+        self,
+        *,
+        active_snapshot: ResolvedSkillSet,
+        resolved_additions: ResolvedSkillSet,
+        request: SkillsOnDemandRequest,
+        snapshot_id: str,
+    ) -> ResolvedSkillSet:
+        active_by_name = {skill.skill_name: skill for skill in active_snapshot.skills}
+        merged = dict(active_by_name)
+        for skill in resolved_additions.skills:
+            merged[skill.skill_name] = skill.model_copy(
+                update={"selection_reason": "skills_on_demand"}
+            )
+        requested_names = [
+            skill.name.strip()
+            for skill in request.requested_skills
+            if skill.name and skill.name.strip()
+        ]
+        source_trace = dict(active_snapshot.source_trace)
+        source_trace["skillsOnDemandLineage"] = {
+            "parentSnapshotId": active_snapshot.snapshot_id,
+            "parentManifestRef": active_snapshot.manifest_ref,
+            "createdBy": "skills_on_demand",
+            "requestedBy": "managed_agent",
+            "requestReason": request.reason,
+            "requestedSkills": requested_names,
+            "runtimeId": request.runtime_id,
+            "stepId": request.step_id,
+        }
+        return active_snapshot.model_copy(
+            update={
+                "snapshot_id": snapshot_id,
+                "resolved_at": resolved_additions.resolved_at,
+                "skills": sorted(merged.values(), key=lambda skill: skill.skill_name),
+                "manifest_ref": resolved_additions.manifest_ref,
+                "resolution_inputs": {
+                    "skills_on_demand": {
+                        "current_snapshot_ref": request.current_snapshot_ref,
+                        "requested_skills": requested_names,
+                        "runtime_id": request.runtime_id,
+                        "step_id": request.step_id,
+                    }
+                },
+                "source_trace": source_trace,
+            }
+        )
+
+    def _skills_on_demand_resolution_code(self, message: str) -> str:
+        lowered = message.lower()
+        if "pinned version" in lowered:
+            return "version_not_found"
+        if "runtime" in lowered:
+            return "runtime_incompatible"
+        if "policy" in lowered or "forbidden" in lowered:
+            return "policy_denied"
+        return "skill_not_found"
+
+    def _skills_on_demand_runtime_code(self, message: str) -> str:
+        lowered = message.lower()
+        if "checksum" in lowered:
+            return "checksum_mismatch"
+        if "artifact" in lowered or "content_ref" in lowered:
+            return "artifact_unavailable"
+        if "materializ" in lowered:
+            return "materialization_failed"
+        return "runtime_refresh_failed"
+
+    def _safe_skills_on_demand_message(self, message: str) -> str:
+        if not message:
+            return "Skills On Demand request failed."
+        return message.split("\n", 1)[0]
 
     @activity.defn(name="agent_skill.build_prompt_index")
     async def build_prompt_index(

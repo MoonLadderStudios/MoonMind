@@ -9,6 +9,8 @@ from moonmind.schemas.agent_skill_models import (
     AgentSkillSourceKind,
     ResolvedSkillEntry,
     ResolvedSkillSet,
+    RuntimeMaterializationMode,
+    RuntimeSkillMaterialization,
     SkillCatalogSearchResult,
     SkillsOnDemandQueryRequest,
     SkillsOnDemandRequest,
@@ -218,6 +220,7 @@ async def test_enabled_request_returns_structured_not_implemented_result() -> No
 
     result = await SkillsOnDemandService(enabled=True).request(
         SkillsOnDemandRequest(
+            current_snapshot_ref="skillset-active",
             requested_skills=[
                 SkillsOnDemandRequestedSkill(name="jira-issue-updater")
             ],
@@ -228,6 +231,156 @@ async def test_enabled_request_returns_structured_not_implemented_result() -> No
     assert result.status == "denied"
     assert result.code == SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_CODE
     assert result.active_snapshot_id == "skillset-active"
+    assert result.snapshot_id is None
+    assert result.resolved_skillset_ref is None
+
+
+async def test_enabled_request_validates_required_snapshot_and_requested_skills() -> None:
+    active_snapshot = ResolvedSkillSet(
+        snapshot_id="skillset-active",
+        resolved_at=datetime.now(UTC),
+        skills=[],
+    )
+    service = SkillsOnDemandService(enabled=True)
+
+    missing_snapshot = await service.request(
+        SkillsOnDemandRequest(
+            requested_skills=[SkillsOnDemandRequestedSkill(name="jira-issue-updater")],
+            active_snapshot=active_snapshot,
+        )
+    )
+    empty_requested = await service.request(
+        SkillsOnDemandRequest(
+            current_snapshot_ref="skillset-active",
+            requested_skills=[],
+            active_snapshot=active_snapshot,
+        )
+    )
+    blank_name = await service.request(
+        SkillsOnDemandRequest(
+            current_snapshot_ref="skillset-active",
+            requested_skills=[SkillsOnDemandRequestedSkill(name=" ")],
+            active_snapshot=active_snapshot,
+        )
+    )
+
+    assert missing_snapshot.status == "denied"
+    assert missing_snapshot.code == "invalid_request"
+    assert missing_snapshot.active_snapshot_id == "skillset-active"
+    assert empty_requested.status == "denied"
+    assert empty_requested.code == "invalid_request"
+    assert blank_name.status == "denied"
+    assert blank_name.code == "invalid_request"
+
+
+async def test_enabled_request_returns_no_change_for_already_active_skills() -> None:
+    active_snapshot = ResolvedSkillSet(
+        snapshot_id="skillset-active",
+        manifest_ref="manifest-active",
+        resolved_at=datetime.now(UTC),
+        skills=[_entry("jira-issue-updater")],
+    )
+
+    result = await SkillsOnDemandService(enabled=True).request(
+        SkillsOnDemandRequest(
+            current_snapshot_ref="skillset-active",
+            requested_skills=[SkillsOnDemandRequestedSkill(name="jira-issue-updater")],
+            active_snapshot=active_snapshot,
+        )
+    )
+
+    assert result.status == "no_change"
+    assert result.code == "already_active"
+    assert result.active_snapshot_id == "skillset-active"
+    assert result.parent_snapshot_ref == "skillset-active"
+    assert result.snapshot_id is None
+    assert result.resolved_skillset_ref == "manifest-active"
+    assert result.metadata["activated_skills"] == []
+
+
+async def test_enabled_request_builds_activated_result_with_compact_lineage() -> None:
+    active_snapshot = ResolvedSkillSet(
+        snapshot_id="skillset-active",
+        resolved_at=datetime.now(UTC),
+        skills=[_entry("moonspec-plan", content_ref="active-body-ref")],
+    )
+    derived_snapshot = ResolvedSkillSet(
+        snapshot_id="skillset-derived",
+        manifest_ref="manifest-derived",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            _entry("jira-issue-updater", content_ref="requested-body-ref"),
+            _entry("moonspec-plan", content_ref="active-body-ref"),
+        ],
+        source_trace={
+            "skillsOnDemandLineage": {
+                "parentSnapshotId": "skillset-active",
+                "createdBy": "skills_on_demand",
+                "requestedSkills": ["jira-issue-updater"],
+            }
+        },
+    )
+    materialization = RuntimeSkillMaterialization(
+        runtime_id="codex",
+        materialization_mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+        workspace_paths=["/workspace/.agents/skills"],
+        metadata={
+            "visiblePath": "/workspace/.agents/skills",
+            "manifestPath": "/workspace/runtime/skills_active/skillset-derived/_manifest.json",
+        },
+    )
+
+    result = await SkillsOnDemandService(enabled=True).request(
+        SkillsOnDemandRequest(
+            current_snapshot_ref="skillset-active",
+            requested_skills=[
+                SkillsOnDemandRequestedSkill(name="jira-issue-updater")
+            ],
+            reason="Need Jira workflow",
+            runtime_id="codex",
+            step_id="step-1",
+            active_snapshot=active_snapshot,
+        ),
+        resolved_skillset=derived_snapshot,
+        materialization=materialization,
+    )
+
+    assert result.status == "activated"
+    assert result.code is None
+    assert result.active_snapshot_id == "skillset-active"
+    assert result.parent_snapshot_ref == "skillset-active"
+    assert result.snapshot_id == "skillset-derived"
+    assert result.resolved_skillset_ref == "manifest-derived"
+    assert result.materialization is not None
+    assert result.materialization.mode == RuntimeMaterializationMode.WORKSPACE_MOUNTED
+    assert result.metadata["requested_skills"] == ["jira-issue-updater"]
+    assert result.metadata["activated_skills"] == ["jira-issue-updater"]
+    serialized = result.model_dump(mode="json")
+    assert "requested-body-ref" not in str(serialized)
+    assert "active-body-ref" not in str(serialized)
+
+
+async def test_enabled_request_denial_preserves_active_snapshot() -> None:
+    active_snapshot = ResolvedSkillSet(
+        snapshot_id="skillset-active",
+        resolved_at=datetime.now(UTC),
+        skills=[],
+    )
+
+    result = SkillsOnDemandService(enabled=True).denied_request_result(
+        SkillsOnDemandRequest(
+            current_snapshot_ref="skillset-active",
+            requested_skills=[SkillsOnDemandRequestedSkill(name="missing-skill")],
+            active_snapshot=active_snapshot,
+        ),
+        code="skill_not_found",
+        message="Requested Skill could not be resolved.",
+    )
+
+    assert result.status == "denied"
+    assert result.code == "skill_not_found"
+    assert result.active_snapshot_id == "skillset-active"
+    assert result.parent_snapshot_ref == "skillset-active"
     assert result.snapshot_id is None
     assert result.resolved_skillset_ref is None
 
