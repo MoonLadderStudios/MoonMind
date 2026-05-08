@@ -63,7 +63,7 @@
 - [X] T020 Review generated artifacts for source-design drift and update only feature-local files if implementation reveals a mismatch
 - [X] T021 Run final unit suite with `./tools/test_unit.sh`
 - [ ] T022 Run hermetic integration suite with `./tools/test_integration.sh` when Docker is available
-- [X] T023 Run `/speckit.verify` for `specs/317-resolve-on-demand-skill-requests/spec.md` after implementation and tests pass
+- [X] T023 Run `/moonspec-verify` for `specs/317-resolve-on-demand-skill-requests/spec.md` after implementation and tests pass
 
 ## Verification Evidence
 
