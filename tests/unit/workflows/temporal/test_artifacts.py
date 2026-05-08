@@ -13,6 +13,10 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
+    MoonMindWorkflowState,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionOwnerType,
+    TemporalWorkflowType,
     TemporalArtifactRedactionLevel,
     TemporalArtifactRetentionClass,
     TemporalArtifactStatus,
@@ -22,6 +26,7 @@ from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
     S3TemporalArtifactStore,
+    TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
     TemporalArtifactStateError,
@@ -1450,6 +1455,106 @@ async def test_write_integration_event_artifact_creates_restricted_preview(
             assert artifact.metadata_json["artifact_kind"] == "integration_event"
             assert artifact.retention_class.value == "ephemeral"
             assert policy.preview_artifact_ref is not None
+
+async def test_execution_owner_can_read_linked_input_attachment_from_other_principal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MM-628: browser reads may use execution ownership, not storage ownership alone."""
+
+    monkeypatch.setattr(artifact_module.settings.oidc, "AUTH_PROVIDER", "keycloak")
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            execution_owner = "user-execution-owner"
+            artifact, _upload = await service.create(
+                principal="user-uploader",
+                content_type="application/octet-stream",
+                size_bytes=4,
+                redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+            )
+            await service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="user-uploader",
+                payload=b"data",
+                content_type="application/octet-stream",
+            )
+            session.add(
+                TemporalExecutionCanonicalRecord(
+                    namespace="moonmind",
+                    workflow_id="wf-mm-628",
+                    run_id="run-mm-628",
+                    workflow_type=TemporalWorkflowType.RUN,
+                    owner_id=execution_owner,
+                    owner_type=TemporalExecutionOwnerType.USER,
+                    state=MoonMindWorkflowState.EXECUTING,
+                    entry="run",
+                    search_attributes={},
+                    memo={},
+                    artifact_refs=[artifact.artifact_id],
+                    parameters={},
+                )
+            )
+            session.add(
+                TemporalExecutionCanonicalRecord(
+                    namespace="moonmind",
+                    workflow_id="wf-mm-628-second",
+                    run_id="run-mm-628-second",
+                    workflow_type=TemporalWorkflowType.RUN,
+                    owner_id=execution_owner,
+                    owner_type=TemporalExecutionOwnerType.USER,
+                    state=MoonMindWorkflowState.EXECUTING,
+                    entry="run",
+                    search_attributes={},
+                    memo={},
+                    artifact_refs=[artifact.artifact_id],
+                    parameters={},
+                )
+            )
+            await session.flush()
+            await service.link_artifact(
+                artifact_id=artifact.artifact_id,
+                principal="service:execution-linker",
+                execution_ref=ExecutionRef(
+                    namespace="moonmind",
+                    workflow_id="wf-mm-628",
+                    run_id="run-mm-628",
+                    link_type="input.attachment",
+                ),
+            )
+            await service.link_artifact(
+                artifact_id=artifact.artifact_id,
+                principal="service:execution-linker",
+                execution_ref=ExecutionRef(
+                    namespace="moonmind",
+                    workflow_id="wf-mm-628-second",
+                    run_id="run-mm-628-second",
+                    link_type="input.attachment",
+                ),
+            )
+
+            linked_artifact, _links, _pinned, policy = await service.get_metadata(
+                artifact_id=artifact.artifact_id,
+                principal=execution_owner,
+            )
+            _raw_artifact, payload = await service.read(
+                artifact_id=artifact.artifact_id,
+                principal=execution_owner,
+            )
+
+            assert linked_artifact.artifact_id == artifact.artifact_id
+            assert policy.raw_access_allowed is True
+            assert payload == b"data"
+
+            with pytest.raises(TemporalArtifactAuthorizationError, match="cannot read"):
+                await service.get_metadata(
+                    artifact_id=artifact.artifact_id,
+                    principal="user-no-execution-access",
+                )
 
 async def test_write_integration_result_and_failure_artifacts_assign_link_retention(
     tmp_path: Path,

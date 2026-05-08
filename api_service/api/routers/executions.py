@@ -2858,6 +2858,7 @@ async def _validate_and_collect_task_input_attachments(
     *,
     task_payload: Mapping[str, Any],
     session: AsyncSession | None,
+    principal: str,
 ) -> tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]], list[dict[str, Any]]]:
     objective_refs = _normalize_attachment_ref_list(
         task_payload.get("inputAttachments") or task_payload.get("input_attachments"),
@@ -2950,6 +2951,16 @@ async def _validate_and_collect_task_input_attachments(
                 raise _invalid_task_request(
                     "input attachment artifact must be complete before execution start: "
                     f"{ref['artifactId']} is {artifact.status.value}."
+                )
+            owner = str(getattr(artifact, "created_by_principal", None) or "").strip()
+            if (
+                settings.oidc.AUTH_PROVIDER != "disabled"
+                and owner
+                and owner != principal
+                and not principal.startswith("service:")
+            ):
+                raise _invalid_task_request(
+                    f"input attachment artifact is not authorized for this execution: {ref['artifactId']}."
                 )
             artifact_content_type = _normalized_attachment_content_type(
                 artifact.content_type
@@ -4064,6 +4075,7 @@ async def _create_execution_from_task_request(
     ) = await _validate_and_collect_task_input_attachments(
         task_payload=task_payload,
         session=session,
+        principal=str(user.id),
     )
     step_count = _coerce_step_count(task_payload.get("steps"))
     normalized_steps = _normalize_task_steps(task_payload)

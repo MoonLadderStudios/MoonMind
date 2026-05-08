@@ -13,9 +13,17 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, TemporalArtifactRedactionLevel
+from api_service.db.models import (
+    Base,
+    MoonMindWorkflowState,
+    TemporalArtifactRedactionLevel,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionOwnerType,
+    TemporalWorkflowType,
+)
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
+    ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
@@ -199,3 +207,74 @@ class TestArtifactAuthorizationBoundaries:
                     principal="anyone",
                 )
                 assert payload2 == b"updated"
+
+    async def test_execution_owner_can_preview_and_download_linked_input_attachment(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """MM-628: linked input attachment reads are authorized by execution owner."""
+
+        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+        async with _db(tmp_path) as maker:
+            async with maker() as session:
+                service = TemporalArtifactService(
+                    TemporalArtifactRepository(session),
+                    store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+                )
+                execution_owner = "user-execution-owner"
+                artifact, _upload = await service.create(
+                    principal="uploader@example.com",
+                    content_type="application/octet-stream",
+                    redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                )
+                await service.write_complete(
+                    artifact_id=artifact.artifact_id,
+                    principal="uploader@example.com",
+                    payload=b"content",
+                    content_type="application/octet-stream",
+                )
+                session.add(
+                    TemporalExecutionCanonicalRecord(
+                        namespace="moonmind",
+                        workflow_id="wf-mm-628-auth",
+                        run_id="run-mm-628-auth",
+                        workflow_type=TemporalWorkflowType.RUN,
+                        owner_id=execution_owner,
+                        owner_type=TemporalExecutionOwnerType.USER,
+                        state=MoonMindWorkflowState.EXECUTING,
+                        entry="run",
+                        search_attributes={},
+                        memo={},
+                        artifact_refs=[artifact.artifact_id],
+                        parameters={},
+                    )
+                )
+                await session.flush()
+                await service.link_artifact(
+                    artifact_id=artifact.artifact_id,
+                    principal="service:execution-linker",
+                    execution_ref=ExecutionRef(
+                        namespace="moonmind",
+                        workflow_id="wf-mm-628-auth",
+                        run_id="run-mm-628-auth",
+                        link_type="input.attachment",
+                    ),
+                )
+
+                _metadata_artifact, _links, _pinned, policy = await service.get_metadata(
+                    artifact_id=artifact.artifact_id,
+                    principal=execution_owner,
+                )
+                _read_artifact, payload = await service.read(
+                    artifact_id=artifact.artifact_id,
+                    principal=execution_owner,
+                )
+
+                assert policy.raw_access_allowed is True
+                assert payload == b"content"
+                with pytest.raises(TemporalArtifactAuthorizationError):
+                    await service.read(
+                        artifact_id=artifact.artifact_id,
+                        principal="user-without-view",
+                    )

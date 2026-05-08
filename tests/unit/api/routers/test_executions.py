@@ -61,6 +61,21 @@ class _ExecuteResult:
 def _artifact_session(rows: list[SimpleNamespace]) -> SimpleNamespace:
     return SimpleNamespace(execute=AsyncMock(return_value=_ExecuteResult(rows)))
 
+def _completed_attachment_artifact(
+    artifact_id: str,
+    *,
+    content_type: str = "image/png",
+    size_bytes: int = 10,
+    created_by_principal: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        artifact_id=artifact_id,
+        status=TemporalArtifactStatus.COMPLETE,
+        content_type=content_type,
+        size_bytes=size_bytes,
+        created_by_principal=created_by_principal,
+    )
+
 class _QueryHandle:
     def __init__(
         self,
@@ -3178,6 +3193,192 @@ def test_create_task_shaped_execution_rejects_duplicate_attachment_declaration_f
 
     assert response.status_code == 422
     assert "declared more than once" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("artifact_status", "message_fragment"),
+    [
+        (TemporalArtifactStatus.PENDING_UPLOAD, "pending_upload"),
+        (TemporalArtifactStatus.FAILED, "failed"),
+        (TemporalArtifactStatus.DELETED, "deleted"),
+    ],
+)
+def test_create_task_shaped_execution_rejects_unfinalized_input_attachment_refs(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_status: TemporalArtifactStatus,
+    message_fragment: str,
+) -> None:
+    """MM-628: binary input refs must be finalized before execution creation."""
+
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    artifact_id = f"art_01MM628{artifact_status.value.upper():0<18}"[:30]
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id=artifact_id,
+                status=artifact_status,
+                content_type="image/png",
+                size_bytes=10,
+                created_by_principal=str(_user.id),
+            )
+        ]
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Review binary input.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": artifact_id,
+                            "filename": "input.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 10,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert message_fragment in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_missing_input_attachment_artifact(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session([])
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Review binary input.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": "art_01MM628MISSING000000000",
+                            "filename": "input.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 10,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "was not found" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_other_users_completed_input_attachment_ref(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MM-628: another user's completed artifact cannot be attached to a new execution."""
+
+    test_client, service, user = client
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    service.create_execution.return_value = _build_execution_record()
+    artifact_id = "art_01MM628WRONGOWNER0000000"
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        [
+            _completed_attachment_artifact(
+                artifact_id,
+                created_by_principal=f"other-{user.id}",
+            )
+        ]
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Review binary input.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": artifact_id,
+                            "filename": "input.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 10,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "not authorized" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_service_owned_attachment_for_user(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MM-628: service ownership does not make an artifact attachable by any user."""
+
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    artifact_id = "art_01MM628SERVICEOWNER0000"
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        [
+            _completed_attachment_artifact(
+                artifact_id,
+                created_by_principal="service:artifact-generator",
+            )
+        ]
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Review binary input.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": artifact_id,
+                            "filename": "input.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 10,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "not authorized" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
 
