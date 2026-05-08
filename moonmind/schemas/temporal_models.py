@@ -1228,6 +1228,102 @@ class ExecutionRelatedRunModel(BaseModel):
     created_at: Optional[datetime] = Field(None, alias="createdAt")
     href: str = Field(..., alias="href", min_length=1)
 
+class ExecutionTargetDiagnosticAttachmentModel(BaseModel):
+    """Attachment bound to the objective or a single executable step."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    artifact_ref: str | None = Field(None, alias="artifactRef")
+    filename: str | None = Field(None, alias="filename")
+    content_type: str | None = Field(None, alias="contentType")
+    size_bytes: int | None = Field(None, alias="sizeBytes", ge=0)
+    preview_available: bool = Field(False, alias="previewAvailable")
+
+class ExecutionTargetDiagnosticRefModel(BaseModel):
+    """Semantic evidence ref associated with target preparation."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    ref_kind: str = Field(..., alias="refKind", min_length=1)
+    artifact_ref: str | None = Field(None, alias="artifactRef")
+    path: str | None = Field(None, alias="path")
+
+class ExecutionTargetDiagnosticFailureModel(BaseModel):
+    """Failure evidence for upload, validation, materialization, or context build."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    phase: Literal[
+        "upload",
+        "validation",
+        "materialization",
+        "context_generation",
+    ] = Field(..., alias="phase")
+    message: str = Field(..., alias="message", min_length=1)
+    evidence_ref: str | None = Field(None, alias="evidenceRef")
+
+class ExecutionTargetDiagnosticTargetModel(BaseModel):
+    """Diagnostics for one target scope: objective or individual step."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    target_kind: Literal["objective", "step"] = Field(..., alias="targetKind")
+    step_id: str | None = Field(None, alias="stepId")
+    label: str = Field(..., alias="label", min_length=1)
+    attachments: list[ExecutionTargetDiagnosticAttachmentModel] = Field(
+        default_factory=list,
+        alias="attachments",
+    )
+    refs: list[ExecutionTargetDiagnosticRefModel] = Field(
+        default_factory=list,
+        alias="refs",
+    )
+    failures: list[ExecutionTargetDiagnosticFailureModel] = Field(
+        default_factory=list,
+        alias="failures",
+    )
+
+class ExecutionTargetDiagnosticsPreservedStepModel(BaseModel):
+    """Source provenance for a step output preserved into a resumed run."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    title: str | None = Field(None, alias="title")
+    source_attempt: int | None = Field(None, alias="sourceAttempt", ge=1)
+    source_workflow_id: str | None = Field(None, alias="sourceWorkflowId")
+    source_run_id: str | None = Field(None, alias="sourceRunId")
+
+class ExecutionTargetDiagnosticsRecoveryModel(BaseModel):
+    """Failed-step Resume provenance and degraded recovery diagnostics."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    resumed: bool = Field(False, alias="resumed")
+    source_workflow_id: str | None = Field(None, alias="sourceWorkflowId")
+    source_run_id: str | None = Field(None, alias="sourceRunId")
+    checkpoint_ref: str | None = Field(None, alias="checkpointRef")
+    preserved_steps: list[ExecutionTargetDiagnosticsPreservedStepModel] = Field(
+        default_factory=list,
+        alias="preservedSteps",
+    )
+    failed_resume_phase: str | None = Field(None, alias="failedResumePhase")
+
+class ExecutionTargetDiagnosticsModel(BaseModel):
+    """Target-aware task diagnostics surfaced on execution detail."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    targets: list[ExecutionTargetDiagnosticTargetModel] = Field(
+        default_factory=list,
+        alias="targets",
+    )
+    recovery: ExecutionTargetDiagnosticsRecoveryModel | None = Field(
+        None,
+        alias="recovery",
+    )
+    degraded_reason: str | None = Field(None, alias="degradedReason")
+
 class ExecutionModel(BaseModel):
     """Materialized execution view returned by lifecycle APIs."""
 
@@ -1329,6 +1425,9 @@ class ExecutionModel(BaseModel):
     resume: ExecutionResumeSummaryModel | None = Field(None, alias="resume")
     related_runs: list[ExecutionRelatedRunModel] = Field(
         default_factory=list, alias="relatedRuns"
+    )
+    target_diagnostics: ExecutionTargetDiagnosticsModel | None = Field(
+        None, alias="targetDiagnostics"
     )
     proposal_summary: dict[str, Any] | None = Field(None, alias="proposalSummary")
     proposal_outcomes: list[dict[str, Any]] = Field(

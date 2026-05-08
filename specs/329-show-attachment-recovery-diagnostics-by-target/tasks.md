@@ -37,10 +37,10 @@
 
 **Purpose**: Confirm active artifacts and test entry points before red-first work begins
 
-- [ ] T001 Confirm `specs/329-show-attachment-recovery-diagnostics-by-target/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/task-detail-target-diagnostics.md`, and `quickstart.md` are present and still reference MM-635, FR-001 through FR-013, DESIGN-REQ-023, and DESIGN-REQ-024
+- [X] T001 Confirm `specs/329-show-attachment-recovery-diagnostics-by-target/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/task-detail-target-diagnostics.md`, and `quickstart.md` are present and still reference MM-635, FR-001 through FR-013, DESIGN-REQ-023, and DESIGN-REQ-024
 - [ ] T002 Confirm backend, frontend, and integration test commands from `specs/329-show-attachment-recovery-diagnostics-by-target/quickstart.md` are runnable in the current environment before editing production files
-- [ ] T003 [P] Review existing backend projection helpers in `api_service/api/routers/executions.py` for extension points for compact `targetDiagnostics` refs and degraded evidence
-- [ ] T004 [P] Review existing task detail schemas and render sections in `frontend/src/entrypoints/task-detail.tsx` for the target diagnostics panel insertion point
+- [X] T003 [P] Review existing backend projection helpers in `api_service/api/routers/executions.py` for extension points for compact `targetDiagnostics` refs and degraded evidence
+- [X] T004 [P] Review existing task detail schemas and render sections in `frontend/src/entrypoints/task-detail.tsx` for the target diagnostics panel insertion point
 - [ ] T005 [P] Review existing target-aware attachment and vision evidence in `moonmind/agents/codex_worker/worker.py`, `moonmind/vision/service.py`, and `tests/integration/vision/test_context_artifacts.py`
 
 ---
@@ -51,10 +51,10 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete.
 
-- [ ] T006 Define the compact target diagnostics fixture shape in `tests/unit/api/routers/test_executions.py` from `contracts/task-detail-target-diagnostics.md` without editing production schemas yet (FR-001 through FR-012, SC-001 through SC-005)
+- [X] T006 Define the compact target diagnostics fixture shape in `tests/unit/api/routers/test_executions.py` from `contracts/task-detail-target-diagnostics.md` without editing production schemas yet (FR-001 through FR-012, SC-001 through SC-005)
 - [ ] T007 Add reusable backend fixture builders for objective targets, step targets, manifest refs, generated context refs, attachment failure phases, and recovery provenance in `tests/unit/api/routers/test_executions.py` (FR-001 through FR-012, DESIGN-REQ-023, DESIGN-REQ-024)
 - [ ] T008 Add reusable frontend fixture payloads for populated targets, empty targets, degraded target diagnostics, Resume provenance, preserved steps, and failed Resume phases in `frontend/src/entrypoints/task-detail.test.tsx` (FR-001 through FR-012, SC-001 through SC-005)
-- [ ] T009 [P] Add contract fixture examples matching `contracts/task-detail-target-diagnostics.md` in `tests/contract/test_temporal_execution_api.py` or the nearest existing execution API contract test file (FR-001 through FR-012, DESIGN-REQ-023, DESIGN-REQ-024)
+- [X] T009 [P] Add contract fixture examples matching `contracts/task-detail-target-diagnostics.md` in `tests/contract/test_temporal_execution_api.py` or the nearest existing execution API contract test file (FR-001 through FR-012, DESIGN-REQ-023, DESIGN-REQ-024)
 
 **Checkpoint**: Foundation ready - story test and implementation work can now begin.
 
@@ -77,19 +77,19 @@
 
 > Write these tests FIRST. Run them, confirm they FAIL for the expected reason, then implement only enough code to make them pass.
 
-- [ ] T010 [P] Add failing backend unit tests for `targetDiagnostics.targets` grouping objective and step attachment metadata in `tests/unit/api/routers/test_executions.py` (FR-001, FR-002, SC-001, DESIGN-REQ-023)
-- [ ] T011 [P] Add failing backend unit tests for manifest refs, generated context refs, degraded refs, target failure ownership, and bounded attachment phases in `tests/unit/api/routers/test_executions.py` (FR-003, FR-004, FR-005, FR-006, SC-002, SC-003, DESIGN-REQ-023)
-- [ ] T012 [P] Add failing backend unit tests for Resume provenance, preserved prior steps, failed Resume phase labels, and raw-history-free structured diagnostics in `tests/unit/api/routers/test_executions.py` (FR-008, FR-009, FR-010, FR-012, SC-004, SC-005, DESIGN-REQ-024)
-- [ ] T013 [P] Add failing frontend unit tests rendering objective target diagnostics, step target diagnostics, empty target states, refs, failures, and degraded evidence in `frontend/src/entrypoints/task-detail.test.tsx` (FR-001 through FR-007, FR-011, FR-012, SC-001, SC-002, SC-003)
-- [ ] T014 [P] Add failing frontend unit tests rendering resumed execution source, preserved prior steps, failed Resume phases, and MM-635 traceability-adjacent labels where operator-visible evidence appears in `frontend/src/entrypoints/task-detail.test.tsx` (FR-008, FR-009, FR-010, FR-013, SC-004, SC-005, SC-006)
+- [X] T010 [P] Add failing backend unit tests for `targetDiagnostics.targets` grouping objective and step attachment metadata in `tests/unit/api/routers/test_executions.py` (FR-001, FR-002, SC-001, DESIGN-REQ-023)
+- [X] T011 [P] Add failing backend unit tests for manifest refs, generated context refs, degraded refs, target failure ownership, and bounded attachment phases in `tests/unit/api/routers/test_executions.py` (FR-003, FR-004, FR-005, FR-006, SC-002, SC-003, DESIGN-REQ-023)
+- [X] T012 [P] Add failing backend unit tests for Resume provenance, preserved prior steps, failed Resume phase labels, and raw-history-free structured diagnostics in `tests/unit/api/routers/test_executions.py` (FR-008, FR-009, FR-010, FR-012, SC-004, SC-005, DESIGN-REQ-024)
+- [X] T013 [P] Add failing frontend unit tests rendering objective target diagnostics, step target diagnostics, empty target states, refs, failures, and degraded evidence in `frontend/src/entrypoints/task-detail.test.tsx` (FR-001 through FR-007, FR-011, FR-012, SC-001, SC-002, SC-003)
+- [X] T014 [P] Add failing frontend unit tests rendering resumed execution source, preserved prior steps, failed Resume phases, and MM-635 traceability-adjacent labels where operator-visible evidence appears in `frontend/src/entrypoints/task-detail.test.tsx` (FR-008, FR-009, FR-010, FR-013, SC-004, SC-005, SC-006)
 - [ ] T015 [P] Add failing schema unit tests for target diagnostics validation, bounded phase values, empty target handling, and degraded evidence in `tests/unit/schemas/test_temporal_models.py` (FR-002, FR-005, FR-006, FR-010, DESIGN-REQ-023, DESIGN-REQ-024)
 
 ### Integration Tests (write first)
 
-- [ ] T016 [P] Add failing execution API contract or route test for the compact `targetDiagnostics` response shape in `tests/contract/test_temporal_execution_api.py` or `tests/unit/api/routers/test_executions.py` (FR-001 through FR-012, DESIGN-REQ-023, DESIGN-REQ-024)
+- [X] T016 [P] Add failing execution API contract or route test for the compact `targetDiagnostics` response shape in `tests/contract/test_temporal_execution_api.py` or `tests/unit/api/routers/test_executions.py` (FR-001 through FR-012, DESIGN-REQ-023, DESIGN-REQ-024)
 - [ ] T017 [P] Extend target-aware generated context integration coverage in `tests/integration/vision/test_context_artifacts.py` so the generated index provides refs that can be projected by target diagnostics (FR-003, FR-004, SC-003, DESIGN-REQ-023)
 - [ ] T018 [P] Extend failed-step Resume integration coverage in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` to preserve source execution and prior-step evidence expected by task detail diagnostics (FR-008, FR-009, SC-004, DESIGN-REQ-024)
-- [ ] T019 [P] Add task-detail integration-style UI test coverage in `frontend/src/entrypoints/task-detail.test.tsx` for the full operator journey across attachment targets, refs, failure phases, Resume provenance, and raw diagnostics fallback (acceptance scenarios 1-6, FR-001 through FR-012)
+- [X] T019 [P] Add task-detail integration-style UI test coverage in `frontend/src/entrypoints/task-detail.test.tsx` for the full operator journey across attachment targets, refs, failure phases, Resume provenance, and raw diagnostics fallback (acceptance scenarios 1-6, FR-001 through FR-012)
 
 ### Red-First Confirmation
 
@@ -100,28 +100,28 @@
 
 ### Conditional Fallback Implementation For Implemented-Unverified Rows
 
-- [ ] T024 If FR-008 or SC-004 verification fails, update Resume source projection in `api_service/api/routers/executions.py` and related frontend rendering in `frontend/src/entrypoints/task-detail.tsx` to expose source workflow/run provenance in target diagnostics (FR-008, SC-004, DESIGN-REQ-024)
-- [ ] T025 If FR-009 verification fails, update step ledger projection or task-detail rendering in `api_service/api/routers/executions.py` and `frontend/src/entrypoints/task-detail.tsx` so preserved prior steps remain visible with source workflow ID, run ID, logical step ID, and attempt provenance (FR-009, SC-004, DESIGN-REQ-024)
+- [X] T024 If FR-008 or SC-004 verification fails, update Resume source projection in `api_service/api/routers/executions.py` and related frontend rendering in `frontend/src/entrypoints/task-detail.tsx` to expose source workflow/run provenance in target diagnostics (FR-008, SC-004, DESIGN-REQ-024)
+- [X] T025 If FR-009 verification fails, update step ledger projection or task-detail rendering in `api_service/api/routers/executions.py` and `frontend/src/entrypoints/task-detail.tsx` so preserved prior steps remain visible with source workflow ID, run ID, logical step ID, and attempt provenance (FR-009, SC-004, DESIGN-REQ-024)
 - [ ] T026 If FR-013 or SC-006 traceability verification fails, update `specs/329-show-attachment-recovery-diagnostics-by-target/tasks.md`, implementation notes, and later verification output to preserve MM-635 and the original Jira preset brief (FR-013, SC-006)
 
 ### Implementation
 
-- [ ] T027 Implement target diagnostics Pydantic models and serialization aliases in `moonmind/schemas/temporal_models.py` (FR-001 through FR-012, SC-001 through SC-005)
-- [ ] T028 Implement bounded attachment and Resume phase normalization helpers in `api_service/api/routers/executions.py` (FR-005, FR-006, FR-010, SC-002, SC-005, DESIGN-REQ-023, DESIGN-REQ-024)
+- [X] T027 Implement target diagnostics Pydantic models and serialization aliases in `moonmind/schemas/temporal_models.py` (FR-001 through FR-012, SC-001 through SC-005)
+- [X] T028 Implement bounded attachment and Resume phase normalization helpers in `api_service/api/routers/executions.py` (FR-005, FR-006, FR-010, SC-002, SC-005, DESIGN-REQ-023, DESIGN-REQ-024)
 - [ ] T029 Implement target diagnostics extraction from task input snapshot, execution parameters, memo/search attributes, artifact refs, step ledger rows, and Resume summary in `api_service/api/routers/executions.py` (FR-001 through FR-010, FR-012, DESIGN-REQ-023, DESIGN-REQ-024)
-- [ ] T030 Wire `targetDiagnostics` into execution detail responses without embedding large artifact bodies in `api_service/api/routers/executions.py` and `moonmind/schemas/temporal_models.py` (FR-003, FR-004, FR-011, FR-012)
-- [ ] T031 Update task detail Zod schemas for target diagnostics in `frontend/src/entrypoints/task-detail.tsx` (FR-001 through FR-012)
-- [ ] T032 Implement target diagnostics UI sections for objective targets, step targets, empty targets, attachment metadata, refs, failures, and degraded evidence in `frontend/src/entrypoints/task-detail.tsx` (FR-001 through FR-007, FR-011, FR-012, SC-001 through SC-003)
-- [ ] T033 Implement Recovery Provenance UI for resumed execution source, preserved prior steps, checkpoint refs, and failed Resume phases in `frontend/src/entrypoints/task-detail.tsx` (FR-008, FR-009, FR-010, SC-004, SC-005, DESIGN-REQ-024)
-- [ ] T034 Preserve raw diagnostics panels while adding structured diagnostics summaries in `frontend/src/entrypoints/task-detail.tsx` (FR-012, acceptance scenarios 2-3, acceptance scenario 6)
-- [ ] T035 Keep generated context and manifest evidence as refs and preserve artifact authorization/redaction behavior in `api_service/api/routers/executions.py` and `frontend/src/entrypoints/task-detail.tsx` (FR-003, FR-004, FR-011, DESIGN-REQ-023)
+- [X] T030 Wire `targetDiagnostics` into execution detail responses without embedding large artifact bodies in `api_service/api/routers/executions.py` and `moonmind/schemas/temporal_models.py` (FR-003, FR-004, FR-011, FR-012)
+- [X] T031 Update task detail Zod schemas for target diagnostics in `frontend/src/entrypoints/task-detail.tsx` (FR-001 through FR-012)
+- [X] T032 Implement target diagnostics UI sections for objective targets, step targets, empty targets, attachment metadata, refs, failures, and degraded evidence in `frontend/src/entrypoints/task-detail.tsx` (FR-001 through FR-007, FR-011, FR-012, SC-001 through SC-003)
+- [X] T033 Implement Recovery Provenance UI for resumed execution source, preserved prior steps, checkpoint refs, and failed Resume phases in `frontend/src/entrypoints/task-detail.tsx` (FR-008, FR-009, FR-010, SC-004, SC-005, DESIGN-REQ-024)
+- [X] T034 Preserve raw diagnostics panels while adding structured diagnostics summaries in `frontend/src/entrypoints/task-detail.tsx` (FR-012, acceptance scenarios 2-3, acceptance scenario 6)
+- [X] T035 Keep generated context and manifest evidence as refs and preserve artifact authorization/redaction behavior in `api_service/api/routers/executions.py` and `frontend/src/entrypoints/task-detail.tsx` (FR-003, FR-004, FR-011, DESIGN-REQ-023)
 - [ ] T036 Update or add integration fixture plumbing for target-aware generated context refs and Resume preserved-step evidence in `tests/integration/vision/test_context_artifacts.py` and `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` only as needed to support T017-T018 (FR-003, FR-004, FR-008, FR-009)
 
 ### Story Validation
 
-- [ ] T037 Run `./tools/test_unit.sh tests/unit/api/routers/test_executions.py` and verify backend target diagnostics unit coverage passes (FR-001 through FR-012, DESIGN-REQ-023, DESIGN-REQ-024)
+- [X] T037 Run `./tools/test_unit.sh tests/unit/api/routers/test_executions.py` and verify backend target diagnostics unit coverage passes (FR-001 through FR-012, DESIGN-REQ-023, DESIGN-REQ-024)
 - [ ] T038 Run `./tools/test_unit.sh tests/unit/schemas/test_temporal_models.py` and verify schema validation coverage passes (FR-002, FR-005, FR-006, FR-010)
-- [ ] T039 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx` and verify task-detail target diagnostics UI coverage passes (acceptance scenarios 1-6, FR-001 through FR-012)
+- [X] T039 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx` and verify task-detail target diagnostics UI coverage passes (acceptance scenarios 1-6, FR-001 through FR-012)
 - [ ] T040 Run focused integration coverage from `quickstart.md` for vision target context artifacts and failed-step Resume preservation, documenting Docker or Temporal test-server blockers if present (SC-003, SC-004, DESIGN-REQ-023, DESIGN-REQ-024)
 - [ ] T041 Validate the story end-to-end against `specs/329-show-attachment-recovery-diagnostics-by-target/quickstart.md`, confirming raw diagnostics remain available but are not required for target ownership, refs, recovery provenance, or failure phase inspection (FR-001 through FR-012, SC-001 through SC-005)
 
@@ -134,8 +134,8 @@
 **Purpose**: Strengthen the completed story without adding hidden scope
 
 - [ ] T042 [P] Review `specs/329-show-attachment-recovery-diagnostics-by-target/plan.md`, `research.md`, `data-model.md`, `contracts/task-detail-target-diagnostics.md`, and `quickstart.md` for drift after implementation and update only if behavior changed (FR-013, SC-006)
-- [ ] T043 [P] Review task-detail copy and accessibility semantics in `frontend/src/entrypoints/task-detail.tsx` so target groups, failure phases, refs, and empty/degraded states are scannable and do not require raw history parsing (FR-002, FR-006, FR-012)
-- [ ] T044 [P] Review backend projection output in `api_service/api/routers/executions.py` for bounded metadata, no secret leakage, no large artifact bodies, and no hidden fallback semantics (FR-003, FR-004, FR-011, DESIGN-REQ-023, DESIGN-REQ-024)
+- [X] T043 [P] Review task-detail copy and accessibility semantics in `frontend/src/entrypoints/task-detail.tsx` so target groups, failure phases, refs, and empty/degraded states are scannable and do not require raw history parsing (FR-002, FR-006, FR-012)
+- [X] T044 [P] Review backend projection output in `api_service/api/routers/executions.py` for bounded metadata, no secret leakage, no large artifact bodies, and no hidden fallback semantics (FR-003, FR-004, FR-011, DESIGN-REQ-023, DESIGN-REQ-024)
 - [ ] T045 Run final unit verification with `./tools/test_unit.sh`, documenting any blocker with exact failing command and reason (FR-001 through FR-013)
 - [ ] T046 Run final hermetic integration verification with `./tools/test_integration.sh`, or document Docker/socket/environment blocker and focused integration evidence already collected (SC-001 through SC-006)
 - [ ] T047 Run `/moonspec-verify` to validate the final implementation against MM-635, the original Jira preset brief, `spec.md`, `plan.md`, `tasks.md`, required tests, DESIGN-REQ-023, and DESIGN-REQ-024 (FR-013, SC-006)
