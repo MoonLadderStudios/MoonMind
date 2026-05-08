@@ -20,6 +20,7 @@ from api_service.api.routers.executions import (
     _get_service,
     _artifact_id_from_ref,
     _merge_task_preserving_artifact_instructions,
+    _resume_not_available_reason,
     get_temporal_client,
     _serialize_execution,
     router,
@@ -38,6 +39,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionValidationError,
 )
+from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
 from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
@@ -6454,6 +6456,57 @@ def test_failed_step_resume_hydrates_checkpoint_artifact(
     call_kwargs = mock_service.create_failed_step_resume_execution.await_args.kwargs
     assert call_kwargs["checkpoint_payload"] == checkpoint_payload
     assert call_kwargs["resume_checkpoint_ref"] is None
+
+
+def test_failed_step_resume_reports_checkpoint_authorization_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.memo = {
+        **canonical.memo,
+        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "task_input_snapshot_ref": "artifact://snapshot/source",
+    }
+    mock_service.describe_execution.return_value = canonical
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(side_effect=TemporalArtifactAuthorizationError("denied"))
+    )
+
+    class Session:
+        async def get(self, model, key):
+            return canonical
+
+        async def commit(self):
+            return None
+
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: Session()
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/resume-from-failed-step",
+            json={"idempotencyKey": "resume-1"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "checkpoint_unauthorized"
+    mock_service.create_failed_step_resume_execution.assert_not_awaited()
+
+
+def test_resume_not_available_reason_prioritizes_mismatch_over_missing_plan() -> None:
+    reason = _resume_not_available_reason(
+        ValueError("Resume checkpoint plan identity does not match source execution.")
+    )
+
+    assert reason == "checkpoint_inconsistent"
 
 def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
     monkeypatch: pytest.MonkeyPatch,

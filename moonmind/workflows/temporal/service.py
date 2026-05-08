@@ -88,6 +88,45 @@ FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
 ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
+
+
+def _first_nonempty_text(*values: Any) -> str | None:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple, set)):
+            nested = _first_nonempty_text(*value)
+            if nested:
+                return nested
+            continue
+        candidate = str(value).strip()
+        if candidate:
+            return candidate
+    return None
+
+
+def _resume_source_block_from_record(record: TemporalExecutionRecord) -> Mapping[str, Any]:
+    parameters = getattr(record, "parameters", None)
+    if not isinstance(parameters, Mapping):
+        return {}
+    resume_source = parameters.get("resumeSource") or parameters.get("resume_source")
+    if isinstance(resume_source, Mapping):
+        return resume_source
+    return {}
+
+
+def _resume_plan_digest_from_record(record: TemporalExecutionRecord) -> str | None:
+    memo = dict(getattr(record, "memo", None) or {})
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
+    resume_block = _resume_source_block_from_record(record)
+    return _first_nonempty_text(
+        memo.get("resume_plan_digest"),
+        memo.get("resumePlanDigest"),
+        memo.get("plan_digest"),
+        search_attributes.get("mm_resume_plan_digest"),
+        resume_block.get("sourcePlanDigest"),
+        resume_block.get("source_plan_digest"),
+    )
 ALLOWED_REMEDIATION_ACTION_POLICY_REFS = frozenset({"admin_healer_default"})
 PENDING_REMEDIATION_APPROVAL_STATUSES = frozenset(
     {"awaiting_approval", "approval_required"}
@@ -2629,6 +2668,12 @@ class TemporalExecutionService:
         source_plan_ref = str(record.plan_ref or "").strip() or None
         if checkpoint.plan_ref is not None and source_plan_ref is not None:
             if checkpoint.plan_ref != source_plan_ref:
+                raise TemporalExecutionResumeCheckpointError(
+                    "Resume checkpoint plan identity does not match source execution."
+                )
+        source_plan_digest = _resume_plan_digest_from_record(record)
+        if checkpoint.plan_digest is not None and source_plan_digest is not None:
+            if checkpoint.plan_digest != source_plan_digest:
                 raise TemporalExecutionResumeCheckpointError(
                     "Resume checkpoint plan identity does not match source execution."
                 )

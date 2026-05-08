@@ -95,7 +95,10 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
-from moonmind.workflows.temporal.artifacts import build_artifact_ref
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactAuthorizationError,
+    build_artifact_ref,
+)
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
@@ -3784,7 +3787,7 @@ async def _hydrate_resume_checkpoint_payload(
             allow_restricted_raw=True,
         )
         decoded = json.loads(body.decode("utf-8"))
-    except PermissionError as exc:
+    except (PermissionError, TemporalArtifactAuthorizationError) as exc:
         logger.warning(
             "Failed to hydrate Resume checkpoint artifact %s: %s",
             artifact_id,
@@ -3840,6 +3843,8 @@ async def _hydrate_resume_checkpoint_payload(
 
 def _resume_not_available_reason(exc: Exception) -> str:
     message = str(exc).lower()
+    if "does not match" in message:
+        return "checkpoint_inconsistent"
     if "plan" in message:
         return "plan_identity_missing"
     if "workspace" in message:
@@ -3852,8 +3857,6 @@ def _resume_not_available_reason(exc: Exception) -> str:
         return "original_task_input_snapshot_missing"
     if "payload" in message or "invalid" in message:
         return "checkpoint_corrupted"
-    if "does not match" in message:
-        return "checkpoint_inconsistent"
     return "resume_checkpoint_missing"
 
 

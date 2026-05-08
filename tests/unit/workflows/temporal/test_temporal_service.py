@@ -2398,6 +2398,50 @@ async def test_failed_step_resume_rejects_checkpoint_plan_mismatch(
                 checkpoint_payload=payload,
             )
 
+
+@pytest.mark.asyncio
+async def test_failed_step_resume_rejects_checkpoint_plan_digest_mismatch(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="resume source",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "resume_checkpoint_ref": "artifact://checkpoint/source",
+            "resume_plan_digest": "sha256:source-plan",
+        }
+        await session.commit()
+
+        with pytest.raises(
+            TemporalExecutionResumeCheckpointError,
+            match="plan identity does not match",
+        ):
+            await service.create_failed_step_resume_execution(
+                created,
+                resume_checkpoint_ref=None,
+                idempotency_key="resume-1",
+                checkpoint_payload=_valid_resume_checkpoint_payload(
+                    workflow_id=created.workflow_id,
+                    run_id=created.run_id,
+                    snapshot_ref="artifact://snapshot/source",
+                ),
+            )
+
 @pytest.mark.asyncio
 async def test_request_rerun_bounds_fresh_execution_idempotency_key(
     tmp_path, mock_client_adapter
