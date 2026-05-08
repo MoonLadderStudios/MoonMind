@@ -19,6 +19,7 @@ Focused unit iteration should cover:
 ./tools/test_unit.sh tests/unit/moonmind/vision/test_service.py
 ./tools/test_unit.sh tests/unit/agents/codex_worker/test_attachment_materialization.py
 ./tools/test_unit.sh tests/unit/agents/codex_worker/test_worker.py
+./tools/test_unit.sh tests/unit/workflows/tasks/test_prepared_context.py tests/unit/workflows/adapters/test_target_aware_prepared_context.py tests/unit/workflows/temporal/workflows/test_run_target_aware_inputs.py
 ./tools/test_unit.sh tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py
 ```
 
@@ -39,6 +40,11 @@ Run hermetic integration CI before finalizing when Docker is available:
 ```
 
 Focused integration scenarios should cover:
+
+```bash
+pytest tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py -q --tb=short
+```
+
 - A task with one objective attachment and two step-scoped attachments.
 - Runtime prepare writes a manifest or manifest artifact ref before first affected step execution.
 - Step 1 receives objective context plus Step 1 context and no Step 2 context.

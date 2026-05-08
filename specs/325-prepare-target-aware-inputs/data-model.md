@@ -1,5 +1,7 @@
 # Data Model: Prepare Target-Aware Inputs
 
+Traceability: Jira issue `MM-631`; this artifact supports the original Jira preset brief preserved in `spec.md`.
+
 ## Input Attachment Ref
 
 Represents one authored structured input from the canonical task payload.
