@@ -104,7 +104,7 @@ Requirements
 ## Source Design Requirements
 
 - **DESIGN-REQ-022** (`docs/Tasks/TaskRemediation.md` lines 1084-1115): Remediation runs must publish the applicable durable evidence artifacts with remediation artifact types, bounded safe metadata, artifact references instead of URLs, preview/redaction handling, and no secrets in metadata or bodies. Scope: in scope. Mapped to FR-001, FR-002, FR-007, and FR-008.
-- **DESIGN-REQ-023** (`docs/Tasks/TaskRemediation.md` lines 1117-1127 and 1476-1487): When remediation mutates a target-managed session or workload, target-side annotations or continuity artifacts must supplement, not replace, subsystem-native artifacts, and corrected or side-effecting decisions must remain auditable rather than silently mutating the original input. Scope: in scope. Mapped to FR-003, FR-005, FR-006, and FR-007.
+- **DESIGN-REQ-023** (`docs/Tasks/TaskRemediation.md` lines 1117-1127, 1179-1192, and 1476-1487): When remediation mutates a target-managed session or workload, target-side annotations or continuity artifacts must supplement, not replace, subsystem-native artifacts; side-effecting remediation decisions must produce compact queryable audit events; and corrected or side-effecting decisions must remain auditable rather than silently mutating the original input. Scope: in scope. Mapped to FR-003, FR-005, FR-006, and FR-007.
 - **DESIGN-REQ-028** (`docs/Tasks/TaskRemediation.md` lines 1129-1165 and 1434-1469): Remediation summaries must expose stable remediation fields, immediate repair and prevention outcomes when applicable, bounded resolution states, degraded-evidence state, and escalation state. Scope: in scope. Mapped to FR-004, FR-007, and FR-008.
 
 ## Requirements *(mandatory)*

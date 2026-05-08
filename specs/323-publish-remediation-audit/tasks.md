@@ -38,8 +38,8 @@
 
 **CRITICAL**: No production implementation work can begin until this phase is complete.
 
-- [ ] T004 Add or update shared remediation evidence fixture helpers in `tests/unit/workflows/temporal/test_remediation_context.py` for diagnosis-only, action-attempted, skipped, denied, escalated, degraded, and no-PR cases. (FR-001, FR-003, FR-007, DESIGN-REQ-022, DESIGN-REQ-023)
-- [ ] T005 Add or update integration fixture helpers in `tests/integration/temporal/test_remediation_action_contracts.py` for querying remediation artifacts, audit records, target-side annotations, and target-native artifacts by workflow/run identity. (FR-005, FR-006, SCN-003, SCN-004)
+- [ ] T004 [P] Add or update shared remediation evidence fixture helpers in `tests/unit/workflows/temporal/test_remediation_context.py` for diagnosis-only, action-attempted, skipped, denied, escalated, degraded, and no-PR cases. (FR-001, FR-003, FR-007, DESIGN-REQ-022, DESIGN-REQ-023)
+- [ ] T005 [P] Add or update integration fixture helpers in `tests/integration/temporal/test_remediation_action_contracts.py` for querying remediation artifacts, audit records, target-side annotations, and target-native artifacts by workflow/run identity. (FR-005, FR-006, SCN-003, SCN-004)
 - [ ] T006 Confirm the remediation audit evidence contract in `specs/323-publish-remediation-audit/contracts/remediation-audit-evidence.md` matches the current test fixture shapes before adding red tests. (FR-005, FR-006, DESIGN-REQ-023)
 
 **Checkpoint**: Foundation ready - story test and implementation work can now begin.
@@ -63,26 +63,26 @@
 
 > Write these tests FIRST. Run them and confirm missing/partial behavior fails for the expected reason before production implementation.
 
-- [ ] T007 [P] Add failing unit tests for applicable artifact set and non-applicable artifact reasons in `tests/unit/workflows/temporal/test_remediation_context.py`. (FR-001, FR-002, FR-007, SC-001, DESIGN-REQ-022)
-- [ ] T008 [P] Add failing unit tests for decision log attempted, skipped, denied, escalated, prevention, verification-ref, and no-PR reason entries in `tests/unit/workflows/temporal/test_remediation_context.py`. (FR-003, FR-007, SC-004, DESIGN-REQ-023)
-- [ ] T009 [P] Add verification-first unit tests for the full remediation summary field set across repaired, no-action, degraded, unsafe, and escalated outcomes in `tests/unit/workflows/temporal/test_remediation_context.py`. (FR-004, FR-007, SC-003, DESIGN-REQ-028)
-- [ ] T010 [P] Add failing unit tests for queryable remediation audit event persistence payload validation, redaction, timestamp normalization, and idempotency key behavior in `tests/unit/workflows/temporal/test_remediation_context.py`. (FR-005, SC-002, DESIGN-REQ-023)
-- [ ] T011 [P] Add failing unit tests for target-side remediation annotation payload validation, safe artifact refs, supplemental semantics, and retry-safe identity in `tests/unit/workflows/temporal/test_remediation_context.py`. (FR-006, SCN-004, DESIGN-REQ-023)
-- [ ] T012 [P] Add verification-first unit tests proving remediation artifact metadata and default presentation payloads reject raw URLs, local paths, storage keys, tokens, and secret-like values in `tests/unit/workflows/temporal/test_remediation_context.py`. (FR-008, SC-005, DESIGN-REQ-022)
+- [ ] T007 Add failing unit tests for applicable artifact set and non-applicable artifact reasons in `tests/unit/workflows/temporal/test_remediation_context.py`. (FR-001, FR-002, FR-007, SC-001, DESIGN-REQ-022)
+- [ ] T008 Add failing unit tests for decision log attempted, skipped, denied, escalated, prevention, verification-ref, and no-PR reason entries in `tests/unit/workflows/temporal/test_remediation_context.py`. (FR-003, FR-007, SC-004, DESIGN-REQ-023)
+- [ ] T009 Add verification-first unit tests for the full remediation summary field set across repaired, no-action, degraded, unsafe, and escalated outcomes in `tests/unit/workflows/temporal/test_remediation_context.py`. (FR-004, FR-007, SC-003, DESIGN-REQ-028)
+- [ ] T010 Add failing unit tests for queryable remediation audit event persistence payload validation, redaction, timestamp normalization, and idempotency key behavior in `tests/unit/workflows/temporal/test_remediation_context.py`. (FR-005, SC-002, DESIGN-REQ-023)
+- [ ] T011 Add failing unit tests for target-side remediation annotation payload validation, safe artifact refs, supplemental semantics, and retry-safe identity in `tests/unit/workflows/temporal/test_remediation_context.py`. (FR-006, SCN-004, DESIGN-REQ-023)
+- [ ] T012 Add verification-first unit tests proving remediation artifact metadata and default presentation payloads reject raw URLs, local paths, storage keys, tokens, and secret-like values in `tests/unit/workflows/temporal/test_remediation_context.py`. (FR-008, SC-005, DESIGN-REQ-022)
 - [ ] T013 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and confirm T007, T008, T010, and T011 fail for missing/partial behavior while T009 and T012 establish verification evidence or expose gaps. (FR-001, FR-003, FR-004, FR-005, FR-006, FR-008)
 
 ### Integration Tests (write first) ⚠️
 
-- [ ] T014 [P] Add failing integration test for a diagnosis-only remediation run publishing applicable artifacts, bounded non-applicable action evidence, decision log, and summary in `tests/integration/temporal/test_remediation_action_contracts.py`. (SCN-001, FR-001, FR-003, FR-007, SC-001)
-- [ ] T015 [P] Add failing integration test for side-effecting action execution publishing action request, action result, verification, decision log, summary, queryable audit event, and target-side annotation evidence in `tests/integration/temporal/test_remediation_action_contracts.py`. (SCN-003, SCN-004, FR-005, FR-006, DESIGN-REQ-023)
-- [ ] T016 [P] Add failing integration test for skipped, denied, escalated, prevention, and no-PR decision evidence remaining bounded and linked from the final summary in `tests/integration/temporal/test_remediation_action_contracts.py`. (SCN-002, FR-003, FR-007, SC-004)
-- [ ] T017 [P] Add verification-first integration test for degraded and escalated remediation summaries exposing stable fields and bounded degraded reasons in `tests/integration/temporal/test_remediation_action_contracts.py`. (SCN-005, FR-004, FR-007, DESIGN-REQ-028)
-- [ ] T018 [P] Add verification-first integration test for remediation artifact metadata and preview/default-read safety in `tests/integration/temporal/test_remediation_action_contracts.py`. (SCN-006, FR-008, SC-005, DESIGN-REQ-022)
+- [ ] T014 Add failing integration test for a diagnosis-only remediation run publishing applicable artifacts, bounded non-applicable action evidence, decision log, and summary in `tests/integration/temporal/test_remediation_action_contracts.py`. (SCN-001, FR-001, FR-003, FR-007, SC-001)
+- [ ] T015 Add failing integration test for side-effecting action execution publishing action request, action result, verification, decision log, summary, queryable audit event, and target-side annotation evidence in `tests/integration/temporal/test_remediation_action_contracts.py`. (SCN-003, SCN-004, FR-005, FR-006, DESIGN-REQ-023)
+- [ ] T016 Add failing integration test for skipped, denied, escalated, prevention, and no-PR decision evidence remaining bounded and linked from the final summary in `tests/integration/temporal/test_remediation_action_contracts.py`. (SCN-002, FR-003, FR-007, SC-004)
+- [ ] T017 Add verification-first integration test for degraded and escalated remediation summaries exposing stable fields and bounded degraded reasons in `tests/integration/temporal/test_remediation_action_contracts.py`. (SCN-005, FR-004, FR-007, DESIGN-REQ-028)
+- [ ] T018 Add verification-first integration test for remediation artifact metadata and preview/default-read safety in `tests/integration/temporal/test_remediation_action_contracts.py`. (SCN-006, FR-008, SC-005, DESIGN-REQ-022)
 - [ ] T019 Run `./tools/test_integration.sh` and confirm T014, T015, and T016 fail for missing/partial behavior while T017 and T018 establish verification evidence or expose gaps. (SCN-001 through SCN-006)
 
 ### Red-First Confirmation
 
-- [ ] T020 Record the expected red-first failures from T013 and T019 in `specs/323-publish-remediation-audit/tasks.md` implementation notes before modifying production code. (FR-001, FR-003, FR-005, FR-006, FR-007)
+- [ ] T020 Confirm and summarize the expected red-first failures from T013 and T019 for `tests/unit/workflows/temporal/test_remediation_context.py` and `tests/integration/temporal/test_remediation_action_contracts.py` before modifying production code. (FR-001, FR-003, FR-005, FR-006, FR-007)
 - [ ] T021 Confirm no implementation tasks are started before missing/partial unit and integration tests fail for the intended reason in `tests/unit/workflows/temporal/test_remediation_context.py` and `tests/integration/temporal/test_remediation_action_contracts.py`. (FR-001, FR-003, FR-005, FR-006, DESIGN-REQ-022, DESIGN-REQ-023)
 
 ### Conditional Fallback Implementation for Implemented-Unverified Rows
@@ -117,8 +117,8 @@
 
 **Purpose**: Strengthen the completed story without expanding beyond MM-623.
 
-- [ ] T037 Review `specs/323-publish-remediation-audit/contracts/remediation-audit-evidence.md` against implemented behavior and update it only if implementation reveals a contract clarification need. (FR-005, FR-006, DESIGN-REQ-023)
-- [ ] T038 Review `specs/323-publish-remediation-audit/data-model.md` against implemented persistence and artifact behavior and update it only if implementation reveals a model clarification need. (FR-001 through FR-008)
+- [ ] T037 [P] Review `specs/323-publish-remediation-audit/contracts/remediation-audit-evidence.md` against implemented behavior and update it only if implementation reveals a contract clarification need. (FR-005, FR-006, DESIGN-REQ-023)
+- [ ] T038 [P] Review `specs/323-publish-remediation-audit/data-model.md` against implemented persistence and artifact behavior and update it only if implementation reveals a model clarification need. (FR-001 through FR-008)
 - [ ] T039 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for the full unit suite and fix any regressions. (FR-001 through FR-009)
 - [ ] T040 Run `./tools/test_integration.sh` for the required hermetic integration suite and fix any regressions. (SCN-001 through SCN-006)
 - [ ] T041 Run the quickstart validation steps in `specs/323-publish-remediation-audit/quickstart.md` and record any deviations in final verification evidence. (SC-001 through SC-006)
@@ -149,8 +149,8 @@
 
 - T002 and T003 can run in parallel after T001.
 - T004 and T005 can run in parallel after T003 because they update different test files.
-- T007 through T012 are logically parallel test-authoring tasks, but they all edit `tests/unit/workflows/temporal/test_remediation_context.py`; coordinate carefully if multiple agents work on them.
-- T014 through T018 are logically parallel scenario tasks, but they all edit `tests/integration/temporal/test_remediation_action_contracts.py`; coordinate carefully if multiple agents work on them.
+- T007 through T012 are ordered unit-test authoring tasks because they all edit `tests/unit/workflows/temporal/test_remediation_context.py`.
+- T014 through T018 are ordered integration-test authoring tasks because they all edit `tests/integration/temporal/test_remediation_action_contracts.py`.
 - T028 and T030 can run in parallel after red-first confirmation because they build different domain helpers in the same module only with careful coordination; otherwise run sequentially.
 - T037 and T038 can run in parallel after story validation.
 
