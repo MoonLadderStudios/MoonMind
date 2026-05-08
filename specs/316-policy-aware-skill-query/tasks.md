@@ -1,9 +1,9 @@
 # Tasks: Policy-Aware Skill Query
 
 **Input**: `specs/316-policy-aware-skill-query/spec.md`, `specs/316-policy-aware-skill-query/plan.md`, `specs/316-policy-aware-skill-query/research.md`, `specs/316-policy-aware-skill-query/data-model.md`, `specs/316-policy-aware-skill-query/contracts/skills-on-demand-query-contract.md`
-**Prerequisites**: Existing disabled-first Skills On Demand settings, service, schema, and activity registrations.
+**Prerequisites**: Existing Skills On Demand settings, service, schema, resolver, and activity registrations.
 **Unit Test Command**: `./tools/test_unit.sh tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py tests/unit/services/test_skill_resolution.py`
-**Integration Test Command**: `./tools/test_unit.sh tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py::test_enabled_activity_query_returns_metadata_without_materializing_snapshot`
+**Integration Test Command**: `./tools/test_unit.sh tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py::test_enabled_activity_query_returns_typed_result`
 **Final Verification**: `/speckit.verify`
 
 ## Source Traceability Summary
@@ -11,8 +11,9 @@
 - Jira issue: MM-613
 - Source design: `docs/Steps/SkillsOnDemand.md`
 - Coverage IDs: DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-010, DESIGN-REQ-013, DESIGN-REQ-014
-- Code-and-test rows: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-009, FR-010, SCN-001 through SCN-005, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-010, DESIGN-REQ-013, DESIGN-REQ-014
-- Verification/traceability rows: FR-008, FR-011, SC-006
+- Upstream plan status: all FR, SCN, and in-scope DESIGN-REQ rows are `implemented_verified` in `plan.md`.
+- Completed code-and-test rows: FR-001 through FR-010, SCN-001 through SCN-005, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-010, DESIGN-REQ-013, DESIGN-REQ-014
+- Completed verification/traceability rows: FR-011, SC-006
 
 ## Phase 1: Setup
 
@@ -78,4 +79,4 @@
 
 ## Implementation Strategy
 
-Start with tests that replace the enabled-not-implemented placeholder expectations. Keep disabled behavior unchanged. Add typed metadata result contracts first, then implement service-level validation and projection from resolver-backed Skill entries. Activity wiring should remain thin and must not materialize snapshots. Preserve `MM-613` and source coverage IDs in verification evidence.
+The completed task sequence followed TDD: red-first tests replaced enabled-not-implemented placeholder expectations, then typed metadata result contracts, service-level validation/projection, resolver-backed catalog search, and activity wiring were implemented. Disabled behavior remained unchanged, query activity wiring stayed thin, and materialization is explicitly guarded by tests. `MM-613` and source coverage IDs are preserved in verification evidence.
