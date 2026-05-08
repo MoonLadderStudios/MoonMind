@@ -279,6 +279,23 @@ class DeploymentOperationsService:
             plan_inputs["rollbackSourceActionId"] = submission.rollback_source_action_id
         if submission.confirmation:
             plan_inputs["confirmation"] = submission.confirmation
+        deployment_step = {
+            "id": "update-moonmind-deployment",
+            "type": "tool",
+            "title": "Update MoonMind deployment",
+            "instructions": (
+                "Run the policy-gated deployment update operation for "
+                f"stack '{policy.stack}' using the typed "
+                f"{DEPLOYMENT_UPDATE_TOOL_NAME} tool contract."
+            ),
+            "tool": {
+                "type": "skill",
+                "name": DEPLOYMENT_UPDATE_TOOL_NAME,
+                "id": DEPLOYMENT_UPDATE_TOOL_NAME,
+                "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
+                "inputs": plan_inputs,
+            },
+        }
         return {
             "task": {
                 "instructions": (
@@ -293,10 +310,13 @@ class DeploymentOperationsService:
                     "kind": submission.operation_kind,
                     "rollbackSourceActionId": submission.rollback_source_action_id,
                 },
+                "steps": [deployment_step],
+                # Keep the legacy projection shape until deployment action
+                # readers are fully migrated to task.steps.
                 "plan": [
                     {
-                        "id": "update-moonmind-deployment",
-                        "title": "Update MoonMind deployment",
+                        "id": deployment_step["id"],
+                        "title": deployment_step["title"],
                         "tool": {
                             "type": "skill",
                             "name": DEPLOYMENT_UPDATE_TOOL_NAME,
@@ -315,11 +335,11 @@ class DeploymentOperationsService:
         submission: DeploymentUpdateSubmission,
     ) -> str:
         normalized_reason = str(submission.reason or "").strip()
-        explicit_action_key = (
-            uuid4().hex
-            if submission.operation_kind == "rollback"
-            else normalized_reason
-        )
+        explicit_action_key = normalized_reason
+        if submission.operation_kind == "rollback" or _is_mutable_reference(
+            policy=policy, reference=submission.reference
+        ):
+            explicit_action_key = uuid4().hex
         return "|".join(
             [
                 "deployment-update",
@@ -330,3 +350,10 @@ class DeploymentOperationsService:
                 explicit_action_key,
             ]
         )[:128]
+
+
+def _is_mutable_reference(*, policy: DeploymentStackPolicy, reference: str) -> bool:
+    normalized = str(reference or "").strip()
+    if not normalized or normalized.startswith("sha256:"):
+        return False
+    return policy.allow_mutable_tags and normalized in policy.allowed_references

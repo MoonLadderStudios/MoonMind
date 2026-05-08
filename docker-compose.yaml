@@ -49,7 +49,7 @@ services:
       - TEMPORAL_TASK_EDITING_ENABLED=${TEMPORAL_TASK_EDITING_ENABLED:-true}
       - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
-      - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+      - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
       # OIDC specific variables for API service
       - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # local, google, or disabled
@@ -516,7 +516,7 @@ services:
       - TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE:-mm.activity.agent_runtime}
       - TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY=${TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY:-4}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:8000}
-      - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+      - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
       - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_CONFIG_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
@@ -547,10 +547,14 @@ services:
       - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - MOONMIND_DOCKER_PROXY_NETWORK=${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
+      - MOONMIND_DEPLOYMENT_PROJECT_DIR=${MOONMIND_DEPLOYMENT_PROJECT_DIR:-${PWD}}
+      - MOONMIND_DEPLOYMENT_COMPOSE_FILE=${MOONMIND_DEPLOYMENT_COMPOSE_FILE:-${PWD}/docker-compose.yaml}
+      - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - .env
     volumes:
+      - ${MOONMIND_DEPLOYMENT_PROJECT_DIR:-${PWD}}:${MOONMIND_DEPLOYMENT_PROJECT_DIR:-${PWD}}:ro
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro

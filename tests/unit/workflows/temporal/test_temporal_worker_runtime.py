@@ -27,6 +27,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     OpenTelemetryLoggingFilter,
     _OPENTELEMETRY_LOG_FORMAT,
     _build_agent_runtime_deps,
+    _build_deployment_update_executor,
     _enforce_codex_config_for_managed_fleet,
     _expand_task_template_for_child_run,
     _persist_child_run_task_input_snapshot,
@@ -398,6 +399,56 @@ def test_runtime_planner_preserves_authored_task_plan_node_metadata():
     assert node["description"] == "Use the deployment operations service."
 
 
+def test_runtime_planner_maps_deployment_update_step_to_typed_tool_node():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={},
+        parameters={
+            "task": {
+                "instructions": "Run deployment update.",
+                "runtime": {"mode": "codex_cli"},
+                "steps": [
+                    {
+                        "id": "update-moonmind-deployment",
+                        "type": "tool",
+                        "instructions": "Update MoonMind deployment.",
+                        "tool": {
+                            "type": "skill",
+                            "name": "deployment.update_compose_stack",
+                            "version": "1.0.0",
+                            "inputs": {
+                                "stack": "moonmind",
+                                "image": {
+                                    "repository": (
+                                        "ghcr.io/moonladderstudios/moonmind"
+                                    ),
+                                    "reference": "latest",
+                                },
+                            },
+                        },
+                    }
+                ],
+            }
+        },
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"][0]["tool"] == {
+        "type": "skill",
+        "name": "deployment.update_compose_stack",
+        "version": "1.0.0",
+    }
+    assert plan["nodes"][0]["inputs"]["selectedSkill"] == (
+        "deployment.update_compose_stack"
+    )
+    assert plan["nodes"][0]["inputs"]["image"]["reference"] == "latest"
+
+
 def test_runtime_planner_rejects_duplicate_authored_task_plan_node_ids():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
@@ -434,6 +485,27 @@ def test_runtime_planner_rejects_duplicate_authored_task_plan_node_ids():
             },
             snapshot=snapshot,
         )
+
+
+def test_deployment_update_executor_is_enabled_only_with_project_mount(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_PROJECT_DIR", raising=False)
+
+    assert _build_deployment_update_executor() is None
+
+    compose_file = tmp_path / "docker-compose.yaml"
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_PROJECT_DIR", str(tmp_path))
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", str(compose_file))
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind-test")
+
+    executor = _build_deployment_update_executor()
+
+    assert executor is not None
+    assert executor.runner.project_dir == str(tmp_path)
+    assert executor.runner.compose_file == str(compose_file)
+    assert executor.runner.project_name == "moonmind-test"
 
 
 @pytest.mark.parametrize(

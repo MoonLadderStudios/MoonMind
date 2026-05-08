@@ -45,6 +45,11 @@ from api_service.db.models import (
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.deployment_execution import (
+    DeploymentUpdateExecutor,
+    DeploymentUpdateLockManager,
+    HostDockerComposeRunner,
+    InMemoryDesiredStateStore,
+    InMemoryEvidenceWriter,
     register_deployment_update_tool_handler,
 )
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
@@ -490,6 +495,37 @@ _CODEX_CONFIG_FLEETS = frozenset({SANDBOX_FLEET, AGENT_RUNTIME_FLEET})
 # ``automationMode`` / ``AUTO_CREATE_PR``), not by appending ``gh pr create``
 # to plan instructions.
 _TOOLS_WITH_AUTO_PR_CREATION = frozenset({"jules", "jules_api"})
+
+
+def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
+    project_dir = str(os.environ.get("MOONMIND_DEPLOYMENT_PROJECT_DIR") or "").strip()
+    if not project_dir:
+        return None
+    compose_file = (
+        str(os.environ.get("MOONMIND_DEPLOYMENT_COMPOSE_FILE") or "").strip() or None
+    )
+    project_name = (
+        str(os.environ.get("MOONMIND_DEPLOYMENT_PROJECT_NAME") or "").strip()
+        or "moonmind"
+    )
+    timeout_raw = str(
+        os.environ.get("MOONMIND_DEPLOYMENT_COMMAND_TIMEOUT_SECONDS") or ""
+    ).strip()
+    try:
+        timeout_seconds = int(timeout_raw) if timeout_raw else 900
+    except ValueError:
+        timeout_seconds = 900
+    return DeploymentUpdateExecutor(
+        lock_manager=DeploymentUpdateLockManager(),
+        desired_state_store=InMemoryDesiredStateStore(),
+        evidence_writer=InMemoryEvidenceWriter(),
+        runner=HostDockerComposeRunner(
+            project_dir=project_dir,
+            compose_file=compose_file,
+            project_name=project_name,
+            command_timeout_seconds=timeout_seconds,
+        ),
+    )
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
@@ -1679,7 +1715,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 launcher=workload_launcher,
                 workflow_docker_mode=settings.workflow.workflow_docker_mode,
             )
-            register_deployment_update_tool_handler(dispatcher)
+            register_deployment_update_tool_handler(
+                dispatcher,
+                executor=_build_deployment_update_executor(),
+            )
 
         bindings = build_worker_activity_bindings(
             fleet=topology.fleet,

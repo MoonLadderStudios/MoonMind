@@ -198,9 +198,14 @@ def test_admin_can_submit_policy_valid_deployment_update(
     parameters = request["initial_parameters"]
     assert isinstance(parameters, dict)
     plan = parameters["task"]["plan"]
+    steps = parameters["task"]["steps"]
     assert plan[0]["tool"]["name"] == DEPLOYMENT_UPDATE_TOOL_NAME
     assert plan[0]["tool"]["version"] == DEPLOYMENT_UPDATE_TOOL_VERSION
     assert plan[0]["inputs"]["stack"] == "moonmind"
+    assert steps[0]["type"] == "tool"
+    assert steps[0]["tool"]["name"] == DEPLOYMENT_UPDATE_TOOL_NAME
+    assert steps[0]["tool"]["version"] == DEPLOYMENT_UPDATE_TOOL_VERSION
+    assert steps[0]["tool"]["inputs"]["stack"] == "moonmind"
 
 
 def test_deployment_update_uses_canonical_policy_stack_for_queued_run(
@@ -265,6 +270,34 @@ def test_repeated_update_submission_without_reason_reuses_idempotency_key(
     assert second.status_code == 202
     assert len(execution_service.requests) == 2
     assert execution_service.requests[0]["idempotency_key"] == (
+        execution_service.requests[1]["idempotency_key"]
+    )
+
+
+def test_mutable_tag_update_submission_without_reason_is_not_stale_idempotent(
+    admin_client: tuple[TestClient, _FakeExecutionService],
+) -> None:
+    client, execution_service = admin_client
+    payload = _valid_update_payload()
+    payload["image"] = {
+        "repository": "ghcr.io/moonladderstudios/moonmind",
+        "reference": "latest",
+    }
+    payload.pop("reason")
+
+    first = client.post(
+        "/api/v1/operations/deployment/update",
+        json=payload,
+    )
+    second = client.post(
+        "/api/v1/operations/deployment/update",
+        json=payload,
+    )
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert len(execution_service.requests) == 2
+    assert execution_service.requests[0]["idempotency_key"] != (
         execution_service.requests[1]["idempotency_key"]
     )
 

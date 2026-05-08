@@ -66,15 +66,29 @@ class RecordingRunner:
             await self._release_event.wait()
         return {"stack": stack, "phase": phase, "services": ["api"]}
 
-    async def pull(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+    async def pull(
+        self, *, stack: str, command: tuple[str, ...], requested_image: str
+    ) -> Mapping[str, Any]:
         self.events.append("runner:pull")
         self.commands.append(("pull", command))
-        return {"stack": stack, "command": list(command), "exitCode": 0}
+        return {
+            "stack": stack,
+            "command": list(command),
+            "requestedImage": requested_image,
+            "exitCode": 0,
+        }
 
-    async def up(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+    async def up(
+        self, *, stack: str, command: tuple[str, ...], requested_image: str
+    ) -> Mapping[str, Any]:
         self.events.append("runner:up")
         self.commands.append(("up", command))
-        return {"stack": stack, "command": list(command), "exitCode": 0}
+        return {
+            "stack": stack,
+            "command": list(command),
+            "requestedImage": requested_image,
+            "exitCode": 0,
+        }
 
     async def verify(
         self,
@@ -155,14 +169,18 @@ def _executor(
 
 
 class FailingUpRunner(RecordingRunner):
-    async def up(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+    async def up(
+        self, *, stack: str, command: tuple[str, ...], requested_image: str
+    ) -> Mapping[str, Any]:
         self.events.append("runner:up")
         self.commands.append(("up", command))
         return {"stack": stack, "command": list(command), "exitCode": 17}
 
 
 class FailingPullRunner(RecordingRunner):
-    async def pull(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+    async def pull(
+        self, *, stack: str, command: tuple[str, ...], requested_image: str
+    ) -> Mapping[str, Any]:
         self.events.append("runner:pull")
         self.commands.append(("pull", command))
         return {"stack": stack, "command": list(command), "exitCode": 23}
@@ -183,7 +201,9 @@ class SecretRecordingRunner(RecordingRunner):
             },
         }
 
-    async def pull(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+    async def pull(
+        self, *, stack: str, command: tuple[str, ...], requested_image: str
+    ) -> Mapping[str, Any]:
         self.events.append("runner:pull")
         self.commands.append(("pull", command))
         return {

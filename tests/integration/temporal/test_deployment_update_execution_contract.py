@@ -35,11 +35,15 @@ class HermeticRunner:
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         return {"stack": stack, "phase": phase}
 
-    async def pull(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+    async def pull(
+        self, *, stack: str, command: tuple[str, ...], requested_image: str
+    ) -> Mapping[str, Any]:
         self.commands.append(("pull", command))
         return {"ok": True}
 
-    async def up(self, *, stack: str, command: tuple[str, ...]) -> Mapping[str, Any]:
+    async def up(
+        self, *, stack: str, command: tuple[str, ...], requested_image: str
+    ) -> Mapping[str, Any]:
         self.commands.append(("up", command))
         return {"ok": True}
 
