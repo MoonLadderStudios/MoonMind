@@ -1174,8 +1174,6 @@ def _safe_identifier_string(value: Any) -> str | None:
     normalized = _string_or_none(value)
     if not normalized:
         return None
-    if _is_unsafe_context_string(normalized):
-        return None
     return normalized
 
 def _required_redacted_text(value: Any, field_name: str) -> str:
@@ -1208,7 +1206,7 @@ def _safe_public_url(value: Any) -> str | None:
     if not lowered.startswith(("http://", "https://")):
         return None
     if any(
-        part in lowered
+        part in lowered and "[redacted]" not in lowered
         for part in ("token=", "signature=", "credential=", "password=")
     ):
         return None
@@ -1354,7 +1352,15 @@ def _safe_policy_value(value: Any) -> Any:
     return None
 
 def _safe_lifecycle_payload(value: Mapping[str, Any]) -> dict[str, Any]:
-    return _safe_policy_mapping(value) or {}
+    if not isinstance(value, Mapping):
+        return {}
+    sanitized = _safe_policy_mapping(value) or {}
+    if "pullRequestUrl" in value:
+        if safe_pr_url := _safe_public_url(value.get("pullRequestUrl")):
+            sanitized["pullRequestUrl"] = safe_pr_url
+        else:
+            sanitized.pop("pullRequestUrl", None)
+    return sanitized
 
 def _bounded_action_summaries(
     actions_attempted: Sequence[Mapping[str, Any]],

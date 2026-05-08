@@ -1050,6 +1050,19 @@ def test_remediation_summary_allows_hierarchical_target_identifiers():
     assert summary["targetWorkflowId"] == "/tenant/workflows/target"
     assert summary["targetRunId"] == "/runs/target-run"
 
+    repair = build_remediation_repair_decision(
+        target_workflow_id="/tenant/workflows/target",
+        pinned_run_id="/runs/pinned-target-run",
+        current_run_id="/runs/current-target-run",
+        decision="skipped",
+        decision_reason="target_already_healthy",
+        repair_outcome="not_attempted",
+    )
+    assert repair["target"]["workflowId"] == "/tenant/workflows/target"
+    assert repair["target"]["pinnedRunId"] == "/runs/pinned-target-run"
+    assert repair["target"]["currentRunId"] == "/runs/current-target-run"
+    assert repair["target"]["targetRunChanged"] is True
+
 def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
     repair = build_remediation_repair_decision(
         target_workflow_id="target-workflow",
@@ -1183,6 +1196,39 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
     serialized = json.dumps(final_summary, sort_keys=True)
     assert "raw-secret" not in serialized
     assert "/tmp/raw/path" not in serialized
+
+def test_reviewable_prevention_pr_url_survives_final_summary_sanitization():
+    repair = build_remediation_repair_decision(
+        target_workflow_id="target-workflow",
+        pinned_run_id="target-run",
+        decision="skipped",
+        decision_reason="target_already_healthy",
+        repair_outcome="not_attempted",
+    )
+    prevention = build_remediation_prevention_outcome(
+        status="reviewable_change_created",
+        root_cause_category="provider_profile_lease_recovery_gap",
+        summary="Created a recurrence-prevention change.",
+        pull_request_url="https://github.com/org/repo/pull/123?token=raw-secret",
+    )
+    final_summary = build_remediation_final_summary(
+        summary=build_remediation_summary_block(
+            target_workflow_id="target-workflow",
+            target_run_id="target-run",
+            phase="resolved",
+            mode="snapshot_then_follow",
+            authority_mode="admin_auto",
+        ),
+        repair=repair,
+        prevention=prevention,
+        lock_release="released",
+    )
+
+    assert (
+        final_summary["prevention"]["pullRequestUrl"]
+        == "https://github.com/org/repo/pull/123?token=[REDACTED]"
+    )
+    assert "raw-secret" not in json.dumps(final_summary)
 
 def test_remediation_lifecycle_contract_rejects_invalid_or_incomplete_values():
     with pytest.raises(ValueError, match="repair_outcome"):
