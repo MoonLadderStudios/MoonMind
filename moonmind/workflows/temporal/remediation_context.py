@@ -61,6 +61,14 @@ REMEDIATION_RESOLUTIONS = frozenset(
 )
 MAX_REMEDIATION_CONTEXT_TAIL_LINES = 2000
 MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS = 20
+TARGET_EVIDENCE_CLASSES = (
+    ("stdout", "stdoutRef"),
+    ("stderr", "stderrRef"),
+    ("merged_logs", "mergedLogsRef"),
+    ("diagnostics", "diagnosticsRef"),
+    ("provider_snapshot", "providerSnapshotRef"),
+    ("continuity", "continuityRefs"),
+)
 SECRET_LIKE_POLICY_KEY_PARTS = (
     "api_key",
     "apikey",
@@ -197,11 +205,35 @@ class RemediationContextBuilder:
         target = remediation.get("target") if isinstance(remediation, Mapping) else {}
         target_mapping = target if isinstance(target, Mapping) else {}
         task_run_ids = self._normalize_task_run_ids(target_mapping.get("taskRunIds"))
+        target_evidence = self._target_evidence_payload(target_record)
+        if not task_run_ids:
+            task_run_ids = self._task_run_ids_from_evidence(target_evidence)
         evidence_policy = self._normalize_evidence_policy(
             remediation.get("evidencePolicy")
             if isinstance(remediation, Mapping)
             else None
         )
+        task_runs = self._normalize_task_run_evidence(
+            task_run_ids=task_run_ids,
+            target_evidence=target_evidence,
+        )
+        live_follow = self._live_follow_payload(
+            link=link,
+            target_record=target_record,
+            task_run_ids=task_run_ids,
+            task_runs=task_runs,
+            target_evidence=target_evidence,
+            evidence_policy=evidence_policy,
+        )
+        availability = self._evidence_availability(
+            task_runs=task_runs,
+            live_follow=live_follow,
+        )
+        unavailable_classes = [
+            item["class"]
+            for item in availability
+            if item.get("status") in {"missing", "partial", "denied", "unavailable"}
+        ]
 
         return {
             "schemaVersion": REMEDIATION_CONTEXT_SCHEMA_VERSION,
@@ -209,18 +241,18 @@ class RemediationContextBuilder:
             "generatedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "target": self._target_payload(target_record, link=link),
             "selectedSteps": self._normalize_step_selectors(
-                target_mapping.get("stepSelectors")
+                target_mapping.get("stepSelectors"),
+                target_evidence=target_evidence,
             ),
             "evidence": {
                 "targetArtifactRefs": self._target_artifact_refs(target_record),
-                "taskRuns": [{"taskRunId": item} for item in task_run_ids],
+                "taskRuns": task_runs,
+                "availability": availability,
+                "evidenceDegraded": bool(unavailable_classes),
+                "unavailableEvidenceClasses": unavailable_classes,
+                **self._diagnosis_hints_payload(target_evidence),
             },
-            "liveFollow": {
-                "mode": link.mode,
-                "supported": False,
-                "taskRunId": task_run_ids[0] if task_run_ids else None,
-                "resumeCursor": None,
-            },
+            "liveFollow": live_follow,
             "policies": {
                 "authorityMode": link.authority_mode,
                 "actionPolicyRef": self._string_or_none(
@@ -259,6 +291,20 @@ class RemediationContextBuilder:
         return remediation if isinstance(remediation, Mapping) else {}
 
     @staticmethod
+    def _target_evidence_payload(
+        record: db_models.TemporalExecutionCanonicalRecord,
+    ) -> Mapping[str, Any]:
+        for source in (record.memo, record.parameters, record.integration_state):
+            if not isinstance(source, Mapping):
+                continue
+            evidence = source.get("remediationEvidence") or source.get(
+                "remediation_evidence"
+            )
+            if isinstance(evidence, Mapping):
+                return evidence
+        return {}
+
+    @staticmethod
     def _target_payload(
         record: db_models.TemporalExecutionCanonicalRecord,
         *,
@@ -275,9 +321,14 @@ class RemediationContextBuilder:
         }
 
     @staticmethod
-    def _normalize_step_selectors(value: Any) -> list[dict[str, Any]]:
+    def _normalize_step_selectors(
+        value: Any,
+        *,
+        target_evidence: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
         if not isinstance(value, list):
             return []
+        evidence_steps = _mapping_list(target_evidence.get("selectedSteps"))
         selectors: list[dict[str, Any]] = []
         for item in value[:MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS]:
             if not isinstance(item, Mapping):
@@ -294,6 +345,15 @@ class RemediationContextBuilder:
             task_run_id = _string_or_none(item.get("taskRunId") or item.get("task_run_id"))
             if task_run_id:
                 selector["taskRunId"] = task_run_id
+            evidence_step = _match_step_evidence(selector, evidence_steps)
+            if evidence_step is not None:
+                if status := _safe_optional_string(evidence_step.get("status")):
+                    selector["status"] = status
+                if summary := _safe_optional_string(evidence_step.get("summary")):
+                    selector["summary"] = summary
+                artifact_refs = _artifact_ref_list(evidence_step.get("artifactRefs"))
+                if artifact_refs:
+                    selector["artifactRefs"] = artifact_refs
             if selector:
                 selectors.append(selector)
         return selectors
@@ -313,6 +373,165 @@ class RemediationContextBuilder:
             if len(task_run_ids) >= MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS:
                 break
         return task_run_ids
+
+    @staticmethod
+    def _task_run_ids_from_evidence(target_evidence: Mapping[str, Any]) -> list[str]:
+        task_run_ids: list[str] = []
+        seen: set[str] = set()
+        for item in _mapping_list(target_evidence.get("taskRuns")):
+            task_run_id = _string_or_none(item.get("taskRunId"))
+            if not task_run_id or task_run_id in seen:
+                continue
+            seen.add(task_run_id)
+            task_run_ids.append(task_run_id)
+            if len(task_run_ids) >= MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS:
+                break
+        return task_run_ids
+
+    @staticmethod
+    def _normalize_task_run_evidence(
+        *,
+        task_run_ids: Sequence[str],
+        target_evidence: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        source_by_id = {
+            task_run_id: item
+            for item in _mapping_list(target_evidence.get("taskRuns"))
+            if (task_run_id := _string_or_none(item.get("taskRunId")))
+        }
+        task_runs: list[dict[str, Any]] = []
+        for task_run_id in task_run_ids[:MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS]:
+            entry: dict[str, Any] = {"taskRunId": task_run_id}
+            source = source_by_id.get(task_run_id, {})
+            for field in (
+                "observabilitySummaryRef",
+                "stdoutRef",
+                "stderrRef",
+                "mergedLogsRef",
+                "diagnosticsRef",
+                "providerSnapshotRef",
+            ):
+                if ref := _artifact_ref_payload(source.get(field), kind=None):
+                    entry[field] = ref
+            continuity_refs = _artifact_ref_list(source.get("continuityRefs"))
+            if continuity_refs:
+                entry["continuityRefs"] = continuity_refs
+            task_runs.append(entry)
+        return task_runs
+
+    @staticmethod
+    def _evidence_availability(
+        *,
+        task_runs: Sequence[Mapping[str, Any]],
+        live_follow: Mapping[str, Any],
+    ) -> list[dict[str, str]]:
+        has_merged = any(isinstance(item.get("mergedLogsRef"), Mapping) for item in task_runs)
+        availability: list[dict[str, str]] = []
+        for class_name, field_name in TARGET_EVIDENCE_CLASSES:
+            available = any(_has_task_run_evidence(item, field_name) for item in task_runs)
+            if available:
+                availability.append({"class": class_name, "status": "available"})
+            else:
+                record = {"class": class_name, "status": "missing"}
+                if has_merged:
+                    record["fallback"] = "merged_logs"
+                availability.append(record)
+
+        live_status = _string_or_none(live_follow.get("status")) or "unsupported"
+        if live_status == "active":
+            availability.append({"class": "live_follow", "status": "available"})
+        else:
+            status = "denied" if live_status == "policy_denied" else live_status
+            record = {"class": "live_follow", "status": status}
+            if reason := _string_or_none(live_follow.get("reason")):
+                record["reason"] = reason
+            fallbacks = live_follow.get("fallbacks")
+            if isinstance(fallbacks, Sequence) and not isinstance(
+                fallbacks, (str, bytes, bytearray)
+            ):
+                if fallback := _string_or_none(next(iter(fallbacks), None)):
+                    record["fallback"] = fallback
+            availability.append(record)
+        return availability
+
+    @staticmethod
+    def _live_follow_payload(
+        *,
+        link: db_models.TemporalExecutionRemediationLink,
+        target_record: db_models.TemporalExecutionCanonicalRecord,
+        task_run_ids: Sequence[str],
+        task_runs: Sequence[Mapping[str, Any]],
+        target_evidence: Mapping[str, Any],
+        evidence_policy: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        mode = link.mode
+        task_run_id = task_run_ids[0] if task_run_ids else None
+        live_evidence = target_evidence.get("liveFollow")
+        live_mapping = live_evidence if isinstance(live_evidence, Mapping) else {}
+        resume_cursor = _safe_policy_mapping(live_mapping.get("resumeCursor"))
+        fallbacks = _durable_fallback_classes(task_runs)
+
+        if _live_follow_denied_by_policy(evidence_policy):
+            return {
+                "status": "policy_denied",
+                "mode": mode,
+                "supported": False,
+                "taskRunId": task_run_id,
+                "resumeCursor": resume_cursor,
+                "reason": "policy denies live observation",
+                "fallbacks": fallbacks,
+            }
+        if mode not in {"follow", "snapshot_then_follow"}:
+            return {
+                "status": "unsupported",
+                "mode": mode,
+                "supported": False,
+                "taskRunId": task_run_id,
+                "resumeCursor": resume_cursor,
+                "reason": "remediation mode does not request live observation",
+                "fallbacks": fallbacks,
+            }
+        if _enum_value(target_record.state) not in {
+            "executing",
+            "awaiting_external",
+            "awaiting_slot",
+            "finalizing",
+        }:
+            return {
+                "status": "unavailable",
+                "mode": mode,
+                "supported": False,
+                "taskRunId": task_run_id,
+                "resumeCursor": resume_cursor,
+                "reason": "target is terminal",
+                "fallbacks": fallbacks,
+            }
+        if not _task_run_supports_live_follow(
+            task_run_id=task_run_id,
+            target_evidence=target_evidence,
+        ):
+            return {
+                "status": "unsupported",
+                "mode": mode,
+                "supported": False,
+                "taskRunId": task_run_id,
+                "resumeCursor": resume_cursor,
+                "reason": "task run does not support live follow",
+                "fallbacks": fallbacks,
+            }
+        return {
+            "status": "active",
+            "mode": mode,
+            "supported": True,
+            "taskRunId": task_run_id,
+            "resumeCursor": resume_cursor,
+            "fallbacks": fallbacks,
+        }
+
+    @staticmethod
+    def _diagnosis_hints_payload(target_evidence: Mapping[str, Any]) -> dict[str, Any]:
+        hints = _safe_string_list(target_evidence.get("diagnosisHints") or [])
+        return {"diagnosisHints": hints} if hints else {}
 
     @staticmethod
     def _normalize_evidence_policy(value: Any) -> dict[str, Any]:
@@ -598,13 +817,104 @@ def build_target_remediation_linkage_summary(
     return summary
 
 def _artifact_ref_payload(raw_ref: Any, *, kind: str | None) -> dict[str, str] | None:
-    ref = _string_or_none(raw_ref)
+    source_kind = kind
+    if isinstance(raw_ref, Mapping):
+        source_kind = kind or _safe_optional_string(raw_ref.get("kind"))
+        ref = _string_or_none(raw_ref.get("artifact_id") or raw_ref.get("artifactId"))
+    else:
+        ref = _string_or_none(raw_ref)
     if not ref or not ref.startswith("art_"):
         return None
     payload: dict[str, str] = {"artifact_id": ref}
-    if kind:
-        payload["kind"] = kind
+    if source_kind:
+        payload["kind"] = source_kind
     return payload
+
+def _artifact_ref_list(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    refs: list[dict[str, str]] = []
+    seen: set[tuple[str, str | None]] = set()
+    for item in value[:50]:
+        ref = _artifact_ref_payload(item, kind=None)
+        if ref is None:
+            continue
+        key = (ref.get("artifact_id") or "", ref.get("kind"))
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append(ref)
+    return refs
+
+def _mapping_list(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+def _match_step_evidence(
+    selector: Mapping[str, Any],
+    evidence_steps: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    selector_task_run_id = _string_or_none(selector.get("taskRunId"))
+    selector_logical_step_id = _string_or_none(selector.get("logicalStepId"))
+    selector_attempt = _positive_int_or_none(selector.get("attempt"))
+    for item in evidence_steps:
+        task_run_id = _string_or_none(item.get("taskRunId"))
+        if selector_task_run_id and task_run_id == selector_task_run_id:
+            return item
+        logical_step_id = _string_or_none(item.get("logicalStepId"))
+        attempt = _positive_int_or_none(item.get("attempt"))
+        if (
+            selector_logical_step_id
+            and logical_step_id == selector_logical_step_id
+            and (selector_attempt is None or attempt == selector_attempt)
+        ):
+            return item
+    return None
+
+def _has_task_run_evidence(item: Mapping[str, Any], field_name: str) -> bool:
+    value = item.get(field_name)
+    if field_name == "continuityRefs":
+        return isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ) and any(isinstance(ref, Mapping) for ref in value)
+    return isinstance(value, Mapping)
+
+def _durable_fallback_classes(task_runs: Sequence[Mapping[str, Any]]) -> list[str]:
+    classes: list[str] = []
+    for class_name, field_name in (
+        ("merged_logs", "mergedLogsRef"),
+        ("stdout", "stdoutRef"),
+        ("stderr", "stderrRef"),
+        ("diagnostics", "diagnosticsRef"),
+    ):
+        if any(_has_task_run_evidence(item, field_name) for item in task_runs):
+            classes.append(class_name)
+    return classes
+
+def _live_follow_denied_by_policy(evidence_policy: Mapping[str, Any]) -> bool:
+    for key in ("allowLiveFollow", "liveFollowAllowed", "includeLiveFollow"):
+        if evidence_policy.get(key) is False:
+            return True
+    return False
+
+def _task_run_supports_live_follow(
+    *,
+    task_run_id: str | None,
+    target_evidence: Mapping[str, Any],
+) -> bool:
+    live_follow = target_evidence.get("liveFollow")
+    if isinstance(live_follow, Mapping) and live_follow.get("supported") is True:
+        return True
+    if not task_run_id:
+        return False
+    for item in _mapping_list(target_evidence.get("taskRuns")):
+        if _string_or_none(item.get("taskRunId")) == task_run_id:
+            return bool(
+                item.get("liveFollowSupported") is True
+                or item.get("supportsLiveFollow") is True
+            )
+    return False
 
 def _safe_policy_mapping(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):

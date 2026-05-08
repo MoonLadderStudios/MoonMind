@@ -446,10 +446,13 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
         assert payload["policies"]["approvalPolicy"]["reviewers"] == [{"user": "ops"}]
         assert payload["policies"]["lockPolicy"]["mode"] == "exclusive"
         assert payload["liveFollow"] == {
+            "status": "unavailable",
             "mode": "snapshot_then_follow",
             "supported": False,
             "taskRunId": "tr_00",
             "resumeCursor": None,
+            "reason": "target is terminal",
+            "fallbacks": [],
         }
         assert payload["boundedness"] == {
             "maxTailLines": 2000,
@@ -468,6 +471,278 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
         assert "raw-api-key" not in serialized
         assert "password" not in serialized.lower()
         assert "token=" not in serialized.lower()
+
+@pytest.mark.asyncio
+async def test_remediation_context_builder_enriches_task_run_evidence_and_live_follow(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        mock_client_adapter.start_workflow.side_effect = [
+            SimpleNamespace(run_id="target-run"),
+            SimpleNamespace(run_id="remediation-run"),
+        ]
+        execution_service = TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+
+        target = await execution_service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target with evidence",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+            summary="Target summary",
+        )
+        target_source = await session.get(
+            TemporalExecutionCanonicalRecord, target.workflow_id
+        )
+        assert target_source is not None
+        target_source.state = MoonMindWorkflowState.EXECUTING
+        target_source.memo = {
+            **target_source.memo,
+            "remediationEvidence": {
+                "selectedSteps": [
+                    {
+                        "logicalStepId": "run-tests",
+                        "attempt": 2,
+                        "taskRunId": "tr_live",
+                        "status": "failed",
+                        "summary": "Integration tests failed",
+                        "artifactRefs": [
+                            {"artifact_id": "art_step_summary", "kind": "step.summary"}
+                        ],
+                    }
+                ],
+                "taskRuns": [
+                    {
+                        "taskRunId": "tr_live",
+                        "observabilitySummaryRef": {"artifact_id": "art_obs"},
+                        "stdoutRef": {"artifact_id": "art_stdout"},
+                        "stderrRef": {"artifact_id": "art_stderr"},
+                        "mergedLogsRef": {"artifact_id": "art_merged"},
+                        "diagnosticsRef": {"artifact_id": "art_diag"},
+                        "providerSnapshotRef": {"artifact_id": "art_provider"},
+                        "continuityRefs": [
+                            {
+                                "artifact_id": "art_session_summary",
+                                "kind": "session.summary",
+                            }
+                        ],
+                        "liveFollowSupported": True,
+                    }
+                ],
+                "diagnosisHints": ["Prefer diagnostics before merged logs"],
+                "liveFollow": {"resumeCursor": {"sequence": 12}},
+            },
+        }
+        await session.commit()
+
+        remediation = await execution_service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "remediation": {
+                        "target": {
+                            "workflowId": target.workflow_id,
+                            "stepSelectors": [
+                                {
+                                    "logicalStepId": "run-tests",
+                                    "attempt": "2",
+                                    "taskRunId": "tr_live",
+                                }
+                            ],
+                            "taskRunIds": ["tr_live"],
+                        },
+                        "mode": "snapshot_then_follow",
+                        "evidencePolicy": {
+                            "tailLines": 250,
+                            "allowLiveFollow": True,
+                        },
+                    }
+                }
+            },
+            idempotency_key=None,
+        )
+
+        result = await RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        assert result.payload["selectedSteps"] == [
+            {
+                "logicalStepId": "run-tests",
+                "attempt": 2,
+                "taskRunId": "tr_live",
+                "status": "failed",
+                "summary": "Integration tests failed",
+                "artifactRefs": [
+                    {"artifact_id": "art_step_summary", "kind": "step.summary"}
+                ],
+            }
+        ]
+        assert result.payload["evidence"]["taskRuns"] == [
+            {
+                "taskRunId": "tr_live",
+                "observabilitySummaryRef": {"artifact_id": "art_obs"},
+                "stdoutRef": {"artifact_id": "art_stdout"},
+                "stderrRef": {"artifact_id": "art_stderr"},
+                "mergedLogsRef": {"artifact_id": "art_merged"},
+                "diagnosticsRef": {"artifact_id": "art_diag"},
+                "providerSnapshotRef": {"artifact_id": "art_provider"},
+                "continuityRefs": [
+                    {"artifact_id": "art_session_summary", "kind": "session.summary"}
+                ],
+            }
+        ]
+        assert result.payload["evidence"]["availability"] == [
+            {"class": "stdout", "status": "available"},
+            {"class": "stderr", "status": "available"},
+            {"class": "merged_logs", "status": "available"},
+            {"class": "diagnostics", "status": "available"},
+            {"class": "provider_snapshot", "status": "available"},
+            {"class": "continuity", "status": "available"},
+            {"class": "live_follow", "status": "available"},
+        ]
+        assert result.payload["evidence"]["evidenceDegraded"] is False
+        assert result.payload["evidence"]["diagnosisHints"] == [
+            "Prefer diagnostics before merged logs"
+        ]
+        assert result.payload["liveFollow"] == {
+            "status": "active",
+            "mode": "snapshot_then_follow",
+            "supported": True,
+            "taskRunId": "tr_live",
+            "resumeCursor": {"sequence": 12},
+            "fallbacks": ["merged_logs", "stdout", "stderr", "diagnostics"],
+        }
+
+@pytest.mark.asyncio
+async def test_remediation_context_builder_records_historical_degraded_evidence(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+        )
+        target_source = await session.get(
+            TemporalExecutionCanonicalRecord, target.workflow_id
+        )
+        assert target_source is not None
+        target_source.state = MoonMindWorkflowState.FAILED
+        target_source.memo = {
+            **target_source.memo,
+            "remediationEvidence": {
+                "taskRuns": [
+                    {
+                        "taskRunId": "tr_history",
+                        "mergedLogsRef": {"artifact_id": "art_merged"},
+                    }
+                ]
+            },
+        }
+        remediation_source = await session.get(
+            TemporalExecutionCanonicalRecord, remediation.workflow_id
+        )
+        assert remediation_source is not None
+        remediation_source.parameters = {
+            **remediation_source.parameters,
+            "task": {
+                "remediation": {
+                    "target": {
+                        "workflowId": target.workflow_id,
+                        "taskRunIds": ["tr_history"],
+                    },
+                    "mode": "snapshot_then_follow",
+                    "evidencePolicy": {"allowLiveFollow": False},
+                }
+            },
+        }
+        await session.commit()
+
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        result = await RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        assert result.payload["evidence"]["taskRuns"] == [
+            {
+                "taskRunId": "tr_history",
+                "mergedLogsRef": {"artifact_id": "art_merged"},
+            }
+        ]
+        assert result.payload["evidence"]["evidenceDegraded"] is True
+        assert result.payload["evidence"]["unavailableEvidenceClasses"] == [
+            "stdout",
+            "stderr",
+            "diagnostics",
+            "provider_snapshot",
+            "continuity",
+            "live_follow",
+        ]
+        assert result.payload["evidence"]["availability"] == [
+            {
+                "class": "stdout",
+                "status": "missing",
+                "fallback": "merged_logs",
+            },
+            {
+                "class": "stderr",
+                "status": "missing",
+                "fallback": "merged_logs",
+            },
+            {"class": "merged_logs", "status": "available"},
+            {
+                "class": "diagnostics",
+                "status": "missing",
+                "fallback": "merged_logs",
+            },
+            {
+                "class": "provider_snapshot",
+                "status": "missing",
+                "fallback": "merged_logs",
+            },
+            {
+                "class": "continuity",
+                "status": "missing",
+                "fallback": "merged_logs",
+            },
+            {
+                "class": "live_follow",
+                "status": "denied",
+                "reason": "policy denies live observation",
+                "fallback": "merged_logs",
+            },
+        ]
+        assert result.payload["liveFollow"] == {
+            "status": "policy_denied",
+            "mode": "snapshot_then_follow",
+            "supported": False,
+            "taskRunId": "tr_history",
+            "resumeCursor": None,
+            "reason": "policy denies live observation",
+            "fallbacks": ["merged_logs"],
+        }
 
 def test_remediation_lifecycle_summary_audit_and_continuation_are_bounded():
     assert normalize_remediation_phase("diagnosing") == "diagnosing"
