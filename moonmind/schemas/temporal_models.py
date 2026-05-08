@@ -1258,6 +1258,7 @@ class ExecutionTargetDiagnosticFailureModel(BaseModel):
         "validation",
         "materialization",
         "context_generation",
+        "degraded",
     ] = Field(..., alias="phase")
     message: str = Field(..., alias="message", min_length=1)
     evidence_ref: str | None = Field(None, alias="evidenceRef")
@@ -1307,7 +1308,12 @@ class ExecutionTargetDiagnosticsRecoveryModel(BaseModel):
         default_factory=list,
         alias="preservedSteps",
     )
-    failed_resume_phase: str | None = Field(None, alias="failedResumePhase")
+    failed_resume_phase: Literal[
+        "checkpoint_validation",
+        "workspace_restoration",
+        "preserved_output_injection",
+        "failed_step_execution",
+    ] | None = Field(None, alias="failedResumePhase")
 
 class ExecutionTargetDiagnosticsModel(BaseModel):
     """Target-aware task diagnostics surfaced on execution detail."""

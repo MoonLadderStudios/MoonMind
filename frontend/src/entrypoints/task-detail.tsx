@@ -307,7 +307,13 @@ const TargetDiagnosticsSchema = z
               .array(
                 z
                   .object({
-                    phase: z.string(),
+                    phase: z.enum([
+                      'upload',
+                      'validation',
+                      'materialization',
+                      'context_generation',
+                      'degraded',
+                    ]),
                     message: z.string(),
                     evidenceRef: z.string().nullable().optional(),
                   })
@@ -337,7 +343,15 @@ const TargetDiagnosticsSchema = z
               .passthrough(),
           )
           .default([]),
-        failedResumePhase: z.string().nullable().optional(),
+        failedResumePhase: z
+          .enum([
+            'checkpoint_validation',
+            'workspace_restoration',
+            'preserved_output_injection',
+            'failed_step_execution',
+          ])
+          .nullable()
+          .optional(),
       })
       .passthrough()
       .nullable()

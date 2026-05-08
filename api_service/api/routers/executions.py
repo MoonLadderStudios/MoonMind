@@ -2249,7 +2249,13 @@ def _normalize_target_refs(values: Any) -> list[dict[str, Any]]:
 
 def _normalize_attachment_failure_phase(value: Any) -> str:
     phase = str(value or "").strip().lower().replace("-", "_")
-    if phase in {"upload", "validation", "materialization", "context_generation"}:
+    if phase in {
+        "upload",
+        "validation",
+        "materialization",
+        "context_generation",
+        "degraded",
+    }:
         return phase
     if phase in {"context", "context_generation_failed", "generated_context"}:
         return "context_generation"
@@ -2259,7 +2265,7 @@ def _normalize_attachment_failure_phase(value: Any) -> str:
         return "validation"
     if phase in {"create", "submit", "submitted"}:
         return "upload"
-    return "materialization"
+    return "degraded"
 
 def _normalize_target_failures(values: Any) -> list[dict[str, Any]]:
     if not isinstance(values, list):
@@ -2408,7 +2414,7 @@ def _failed_resume_phase(disabled_reason: str | None) -> str | None:
         "plan_identity_missing",
     }:
         return "checkpoint_validation"
-    return "failed_step_execution"
+    return None
 
 def _build_target_diagnostics(
     record,
@@ -2483,6 +2489,9 @@ def _build_target_diagnostics(
     source_run_id = str(
         resume_source.get("sourceRunId") or resume_source.get("source_run_id") or ""
     ).strip() or None
+    failed_resume_phase = _failed_resume_phase(
+        resume_summary.disabled_reason if resume_summary else None
+    )
     recovery = None
     has_resume_evidence = bool(
         resume_source
@@ -2491,7 +2500,7 @@ def _build_target_diagnostics(
             and (
                 resume_summary.checkpoint_ref
                 or resume_summary.failed_step_id
-                or resume_summary.disabled_reason
+                or failed_resume_phase
             )
         )
     )
@@ -2502,9 +2511,7 @@ def _build_target_diagnostics(
             "sourceRunId": source_run_id,
             "checkpointRef": resume_summary.checkpoint_ref if resume_summary else None,
             "preservedSteps": _preserved_steps_from_resume_source(resume_source),
-            "failedResumePhase": _failed_resume_phase(
-                resume_summary.disabled_reason if resume_summary else None
-            ),
+            "failedResumePhase": failed_resume_phase,
         }
 
     degraded_reason = str(

@@ -6433,6 +6433,10 @@ def test_describe_execution_exposes_target_attachment_and_recovery_diagnostics(
                             "phase": "materialization",
                             "message": "Attachment download failed before step execution.",
                             "evidenceRef": "artifact://diagnostics/prepare",
+                        },
+                        {
+                            "phase": "unknown-provider-phase",
+                            "message": "Provider returned an unrecognized phase.",
                         }
                     ],
                 },
@@ -6485,11 +6489,48 @@ def test_describe_execution_exposes_target_attachment_and_recovery_diagnostics(
     assert step["label"] == "Inspect screenshot"
     assert step["attachments"][0]["filename"] == "step.png"
     assert step["failures"][0]["phase"] == "materialization"
+    assert step["failures"][1]["phase"] == "degraded"
     assert diagnostics["recovery"]["resumed"] is True
     assert diagnostics["recovery"]["sourceWorkflowId"] == "mm:source"
     assert diagnostics["recovery"]["sourceRunId"] == "run-source"
     assert diagnostics["recovery"]["checkpointRef"] == "artifact://resume/checkpoint"
     assert diagnostics["recovery"]["preservedSteps"][0]["logicalStepId"] == "prepare"
+
+
+def test_describe_execution_omits_recovery_for_routine_resume_action_gating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = {
+        "task": {
+            "instructions": "Review the screenshot.",
+            "attachmentRefs": [
+                {
+                    "artifactRef": "artifact://input/objective-image",
+                    "filename": "objective.png",
+                    "contentType": "image/png",
+                }
+            ],
+        }
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resume"]["disabledReason"] == "state_not_eligible"
+    assert body["targetDiagnostics"]["targets"][0]["targetKind"] == "objective"
+    assert body["targetDiagnostics"]["recovery"] is None
 
 
 @pytest.mark.parametrize(

@@ -58,7 +58,12 @@ def test_execution_model_preserves_target_diagnostics_alias_contract() -> None:
                             "artifactRef": "artifact://context/objective",
                         }
                     ],
-                    "failures": [],
+                    "failures": [
+                        {
+                            "phase": "degraded",
+                            "message": "Raw event used an unknown target phase.",
+                        }
+                    ],
                 }
             ],
             "recovery": {
@@ -75,7 +80,7 @@ def test_execution_model_preserves_target_diagnostics_alias_contract() -> None:
                         "sourceRunId": "run-source",
                     }
                 ],
-                "failedResumePhase": None,
+                "failedResumePhase": "checkpoint_validation",
             },
             "degradedReason": None,
         },
@@ -91,3 +96,11 @@ def test_execution_model_preserves_target_diagnostics_alias_contract() -> None:
     assert payload["targetDiagnostics"]["recovery"]["preservedSteps"][0][
         "logicalStepId"
     ] == "prepare"
+    assert (
+        payload["targetDiagnostics"]["targets"][0]["failures"][0]["phase"]
+        == "degraded"
+    )
+    assert (
+        payload["targetDiagnostics"]["recovery"]["failedResumePhase"]
+        == "checkpoint_validation"
+    )
