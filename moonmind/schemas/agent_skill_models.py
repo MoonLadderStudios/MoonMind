@@ -97,7 +97,9 @@ class RuntimeSkillMaterialization(BaseModel):
 
 
 SkillsOnDemandStatus = Literal["denied"]
-SkillsOnDemandDeniedCode = Literal["feature_disabled"]
+SkillsOnDemandDeniedCode = Literal[
+    "feature_disabled", "enabled_mode_not_implemented"
+]
 
 
 class SkillsOnDemandQueryRequest(BaseModel):
