@@ -227,6 +227,8 @@ Key diagnostics:
 - Existing Temporal artifact metadata/content store, Temporal execution records, artifact links; no new persistent tables planned (321-route-binary-artifact-refs)
 - Python 3.12 + Pydantic v2 where models are exposed, SQLAlchemy async ORM, Temporal Python SDK service/activity boundaries, existing Temporal artifact service, pytest (322-remediation-lifecycle-repair-prevention)
 - Existing `execution_remediation_links`, Temporal execution source records, Temporal artifact metadata/content store, and existing remediation lock/ledger state; no new persistent database tables planned (322-remediation-lifecycle-repair-prevention)
+- Python 3.12; TypeScript/React for Mission Control + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Zod, generated OpenAPI types (324-remediation-mission-control-panels)
+- Existing Temporal execution records, `execution_remediation_links`, Temporal artifact metadata/content store, and existing audit/control-event data; no new persistent table planned (324-remediation-mission-control-panels)
 - Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind artifact and vision services (325-prepare-target-aware-inputs)
 - Existing artifact store plus workspace-local prepared files/manifest refs; no new persistent database tables planned (325-prepare-target-aware-inputs)
 - Python 3.12; TypeScript/React for Mission Control UI where availability display is affected + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, Zod, Vitest, pytest (327-gate-resume-checkpoint-evidence)

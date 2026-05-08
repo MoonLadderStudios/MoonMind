@@ -417,6 +417,25 @@ const RemediationApprovalStateSchema = z
   })
   .passthrough();
 
+const RemediationLiveObservationSchema = z
+  .object({
+    status: z.string().nullable().optional(),
+    label: z.string().nullable().optional(),
+    sequenceCursor: z.string().nullable().optional(),
+    reconnectState: z.string().nullable().optional(),
+    epoch: z.string().nullable().optional(),
+    fallbackReason: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const RemediationLockOutcomeSchema = z
+  .object({
+    state: z.string().nullable().optional(),
+    holder: z.string().nullable().optional(),
+    releasedAt: z.string().nullable().optional(),
+  })
+  .passthrough();
+
 const RemediationLinkSchema = z
   .object({
     remediationWorkflowId: z.string(),
@@ -431,6 +450,13 @@ const RemediationLinkSchema = z
     latestActionSummary: z.string().nullable().optional(),
     resolution: z.string().nullable().optional(),
     contextArtifactRef: z.string().nullable().optional(),
+    selectedSteps: z.array(z.string()).nullable().optional(),
+    currentTargetState: z.string().nullable().optional(),
+    allowedActions: z.array(z.string()).nullable().optional(),
+    evidenceDegraded: z.boolean().nullable().optional(),
+    unavailableEvidenceClasses: z.array(z.string()).nullable().optional(),
+    liveObservation: RemediationLiveObservationSchema.nullable().optional(),
+    lockOutcome: RemediationLockOutcomeSchema.nullable().optional(),
     approvalState: RemediationApprovalStateSchema.nullable().optional(),
     createdAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
@@ -3285,6 +3311,10 @@ function remediationArtifactLabel(type: string): string {
   return labels[type] ?? type.replace(/^remediation\./, '').replaceAll('_', ' ');
 }
 
+function remediationListValue(items: string[] | null | undefined): string {
+  return items && items.length > 0 ? items.join(', ') : '—';
+}
+
 function RemediationApprovalSummary({
   approval,
 }: {
@@ -3367,6 +3397,9 @@ function RemediationRelationshipsPanel({
                   <Card label="Latest Action">{item.latestActionSummary || '—'}</Card>
                   <Card label="Resolution">{item.resolution || '—'}</Card>
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
+                  {item.activeLockHolder && item.activeLockHolder !== item.remediationWorkflowId ? (
+                    <Card label="Lock Holder">{item.activeLockHolder}</Card>
+                  ) : null}
                   <Card label="Updated">{formatWhen(item.updatedAt)}</Card>
                 </div>
                 {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
@@ -3413,7 +3446,32 @@ function RemediationRelationshipsPanel({
                   <Card label="Status">{formatStatusLabel(item.status)}</Card>
                   <Card label="Evidence Bundle">{item.contextArtifactRef || 'Missing'}</Card>
                   <Card label="Approval">{item.approvalState?.decision || 'not_required'}</Card>
+                  <Card label="Selected Steps">{remediationListValue(item.selectedSteps)}</Card>
+                  <Card label="Current Target">{item.currentTargetState || '—'}</Card>
+                  <Card label="Allowed Actions">{remediationListValue(item.allowedActions)}</Card>
+                  <Card label="Lock">{item.activeLockScope || 'None'}</Card>
+                  <Card label="Lock Holder">{item.activeLockHolder || item.lockOutcome?.holder || '—'}</Card>
+                  <Card label="Lock Outcome">{item.lockOutcome?.state || '—'}</Card>
                 </div>
+                {item.evidenceDegraded ? (
+                  <p className="notice subtle">
+                    Evidence is degraded. Unavailable: {remediationListValue(item.unavailableEvidenceClasses)}.
+                  </p>
+                ) : null}
+                {item.liveObservation ? (
+                  <div className="td-remediation-live">
+                    <strong>{item.liveObservation.label || 'Live observation'}</strong>
+                    <div className="grid-2">
+                      <Card label="Cursor">{item.liveObservation.sequenceCursor || '—'}</Card>
+                      <Card label="Reconnect">{item.liveObservation.reconnectState || '—'}</Card>
+                      <Card label="Epoch">{item.liveObservation.epoch || '—'}</Card>
+                      <Card label="Live Status">{item.liveObservation.status || '—'}</Card>
+                    </div>
+                    {item.liveObservation.fallbackReason ? (
+                      <p className="small">{item.liveObservation.fallbackReason}</p>
+                    ) : null}
+                  </div>
+                ) : null}
                 {!item.contextArtifactRef ? (
                   <p className="notice subtle">Evidence bundle is missing.</p>
                 ) : null}

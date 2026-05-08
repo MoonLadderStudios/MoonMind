@@ -5889,6 +5889,18 @@ export interface components {
             resolution?: string | null;
             /** Contextartifactref */
             contextArtifactRef?: string | null;
+            /** Selectedsteps */
+            selectedSteps?: string[] | null;
+            /** Currenttargetstate */
+            currentTargetState?: string | null;
+            /** Allowedactions */
+            allowedActions?: string[] | null;
+            /** Evidencedegraded */
+            evidenceDegraded?: boolean | null;
+            /** Unavailableevidenceclasses */
+            unavailableEvidenceClasses?: string[] | null;
+            liveObservation?: components["schemas"]["RemediationLiveObservationModel"] | null;
+            lockOutcome?: components["schemas"]["RemediationLockOutcomeModel"] | null;
             approvalState?: components["schemas"]["RemediationApprovalStateModel"] | null;
             /**
              * Createdat
@@ -5907,6 +5919,30 @@ export interface components {
             direction: string;
             /** Items */
             items: components["schemas"]["RemediationLinkSummaryModel"][];
+        };
+        /** RemediationLiveObservationModel */
+        RemediationLiveObservationModel: {
+            /** Status */
+            status?: string | null;
+            /** Label */
+            label?: string | null;
+            /** Sequencecursor */
+            sequenceCursor?: string | null;
+            /** Reconnectstate */
+            reconnectState?: string | null;
+            /** Epoch */
+            epoch?: string | null;
+            /** Fallbackreason */
+            fallbackReason?: string | null;
+        };
+        /** RemediationLockOutcomeModel */
+        RemediationLockOutcomeModel: {
+            /** State */
+            state?: string | null;
+            /** Holder */
+            holder?: string | null;
+            /** Releasedat */
+            releasedAt?: string | null;
         };
         /** RepositorySummarizationRequest */
         RepositorySummarizationRequest: {

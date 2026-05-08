@@ -254,6 +254,54 @@ describe('Task Detail Entrypoint', () => {
     ],
   };
 
+  function richOutboundRemediationLink(overrides: Record<string, unknown> = {}) {
+    return {
+      remediationWorkflowId: 'test-remediation-rich',
+      remediationRunId: '01-run',
+      targetWorkflowId: 'mm:target-rich',
+      targetRunId: 'run-target-rich',
+      mode: 'snapshot_then_follow',
+      authorityMode: 'approval_gated',
+      status: 'awaiting_approval',
+      activeLockScope: 'target_execution',
+      activeLockHolder: 'test-remediation-rich',
+      latestActionSummary: 'Proposed session interrupt',
+      resolution: 'precondition_failed',
+      contextArtifactRef: 'art_context_rich',
+      selectedSteps: ['collect-context', 'repair-runtime'],
+      currentTargetState: 'awaiting_external',
+      allowedActions: ['inspect_context', 'request_approval', 'terminate_session'],
+      evidenceDegraded: true,
+      unavailableEvidenceClasses: ['runtime_stderr', 'provider_snapshot'],
+      liveObservation: {
+        status: 'active',
+        label: 'Live observation active',
+        sequenceCursor: 'stdout:42',
+        reconnectState: 'reconnected',
+        epoch: 'run-target-rich:2',
+        fallbackReason: 'Durable context remains authoritative.',
+      },
+      lockOutcome: {
+        state: 'conflict',
+        holder: 'test-remediation-rich',
+        releasedAt: null,
+      },
+      approvalState: {
+        requestId: 'approval-rich',
+        actionKind: 'session_interrupt',
+        riskTier: 'high',
+        preconditions: 'Target run is still awaiting an external session.',
+        blastRadius: 'One managed runtime session.',
+        decision: 'pending',
+        canDecide: true,
+        auditRef: 'audit-rich',
+      },
+      createdAt: '2026-04-22T00:00:02Z',
+      updatedAt: '2026-04-22T00:00:03Z',
+      ...overrides,
+    };
+  }
+
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
@@ -2063,6 +2111,67 @@ describe('Task Detail Entrypoint', () => {
 
     const longTarget = screen.getByText('mm:target-long-workflow-id-with-many-segments-for-mobile-containment');
     expect(longTarget.closest('code')?.className).toContain('break-all');
+  });
+
+  it('renders rich remediation target metadata for selected steps, live observation, evidence degradation, and locks', async () => {
+    const mockExecution = {
+      taskId: 'test-remediation-rich',
+      workflowId: 'test-remediation-rich',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Rich remediation task',
+      summary: 'Remediation work with live observation.',
+      status: 'running',
+      state: 'running',
+      rawState: 'running',
+      temporalStatus: 'running',
+      createdAt: '2026-04-22T00:00:00Z',
+      updatedAt: '2026-04-22T00:00:01Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-remediation-rich/remediations?direction=inbound')) {
+        return Promise.resolve({ ok: true, json: async () => ({ direction: 'inbound', items: [] }) } as Response);
+      }
+      if (url.includes('/executions/test-remediation-rich/remediations?direction=outbound')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            direction: 'outbound',
+            items: [richOutboundRemediationLink()],
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Remediation Target' })).toBeTruthy();
+    expect(screen.getByText('mm:target-rich')).toBeTruthy();
+    expect(screen.getByText('collect-context, repair-runtime')).toBeTruthy();
+    expect(screen.getByText('awaiting_external')).toBeTruthy();
+    expect(screen.getByText('inspect_context, request_approval, terminate_session')).toBeTruthy();
+    expect(screen.getByText(/Unavailable: runtime_stderr, provider_snapshot/)).toBeTruthy();
+    expect(screen.getByText('Live observation active')).toBeTruthy();
+    expect(screen.getByText('stdout:42')).toBeTruthy();
+    expect(screen.getByText('reconnected')).toBeTruthy();
+    expect(screen.getByText('run-target-rich:2')).toBeTruthy();
+    expect(screen.getByText('conflict')).toBeTruthy();
+    expect(screen.getAllByText('test-remediation-rich').length).toBeGreaterThan(0);
+    expect(screen.queryByText('/var/lib/moonmind/raw-context.json')).toBeNull();
   });
 
   it('keeps remediation panels accessible and contained in Mission Control CSS', async () => {

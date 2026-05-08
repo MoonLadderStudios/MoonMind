@@ -211,6 +211,19 @@ class RemediationApprovalStateModel(BaseModel):
     canDecide: bool = False
     auditRef: str | None = None
 
+class RemediationLiveObservationModel(BaseModel):
+    status: str | None = None
+    label: str | None = None
+    sequenceCursor: str | None = None
+    reconnectState: str | None = None
+    epoch: str | None = None
+    fallbackReason: str | None = None
+
+class RemediationLockOutcomeModel(BaseModel):
+    state: str | None = None
+    holder: str | None = None
+    releasedAt: datetime | str | None = None
+
 class RemediationLinkSummaryModel(BaseModel):
     remediationWorkflowId: str
     remediationRunId: str
@@ -224,6 +237,13 @@ class RemediationLinkSummaryModel(BaseModel):
     latestActionSummary: str | None = None
     resolution: str | None = None
     contextArtifactRef: str | None = None
+    selectedSteps: list[str] | None = None
+    currentTargetState: str | None = None
+    allowedActions: list[str] | None = None
+    evidenceDegraded: bool | None = None
+    unavailableEvidenceClasses: list[str] | None = None
+    liveObservation: RemediationLiveObservationModel | None = None
+    lockOutcome: RemediationLockOutcomeModel | None = None
     approvalState: RemediationApprovalStateModel | None = None
     createdAt: datetime
     updatedAt: datetime
@@ -4912,23 +4932,68 @@ async def create_remediation_execution(
         session=session,
     )
 
+def _bounded_string_list(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list | tuple | set):
+        return None
+    items = [str(item) for item in value if item is not None]
+    return items or None
+
+def _bounded_live_observation(value: Any) -> RemediationLiveObservationModel | None:
+    if not isinstance(value, dict):
+        return None
+    allowed = {
+        "status",
+        "label",
+        "sequenceCursor",
+        "reconnectState",
+        "epoch",
+        "fallbackReason",
+    }
+    bounded = {key: val for key in allowed if (val := value.get(key)) is not None}
+    return RemediationLiveObservationModel.model_validate(bounded) if bounded else None
+
+def _bounded_lock_outcome(value: Any) -> RemediationLockOutcomeModel | None:
+    if not isinstance(value, dict):
+        return None
+    allowed = {"state", "holder", "releasedAt"}
+    bounded = {key: value.get(key) for key in allowed if key in value}
+    return RemediationLockOutcomeModel.model_validate(bounded) if bounded else None
+
+def _remediation_approval_state_from_link(
+    link: Any,
+    *,
+    authority_mode: str,
+    status_value: str,
+) -> RemediationApprovalStateModel | None:
+    raw_state = getattr(link, "approval_state", None)
+    if isinstance(raw_state, dict):
+        return RemediationApprovalStateModel.model_validate(raw_state)
+
+    approval_pending = status_value in _PENDING_REMEDIATION_APPROVAL_STATUSES
+    if authority_mode != "approval_gated":
+        return None
+    return RemediationApprovalStateModel(
+        requestId=(
+            _remediation_approval_request_id(
+                str(getattr(link, "remediation_workflow_id", ""))
+            )
+            if approval_pending
+            else None
+        ),
+        decision=("pending" if approval_pending else "not_required"),
+        canDecide=approval_pending,
+    )
+
 def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryModel:
     authority_mode = str(getattr(link, "authority_mode", "") or "")
     status_value = str(getattr(link, "status", "") or "")
-    approval_state: RemediationApprovalStateModel | None = None
-    approval_pending = status_value in _PENDING_REMEDIATION_APPROVAL_STATUSES
-    if authority_mode == "approval_gated":
-        approval_state = RemediationApprovalStateModel(
-            requestId=(
-                _remediation_approval_request_id(
-                    str(getattr(link, "remediation_workflow_id", ""))
-                )
-                if approval_pending
-                else None
-            ),
-            decision=("pending" if approval_pending else "not_required"),
-            canDecide=approval_pending,
-        )
+    approval_state = _remediation_approval_state_from_link(
+        link,
+        authority_mode=authority_mode,
+        status_value=status_value,
+    )
 
     return RemediationLinkSummaryModel(
         remediationWorkflowId=str(getattr(link, "remediation_workflow_id", "")),
@@ -4943,6 +5008,17 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         latestActionSummary=getattr(link, "latest_action_summary", None),
         resolution=getattr(link, "outcome", None),
         contextArtifactRef=getattr(link, "context_artifact_ref", None),
+        selectedSteps=_bounded_string_list(getattr(link, "selected_steps", None)),
+        currentTargetState=getattr(link, "current_target_state", None),
+        allowedActions=_bounded_string_list(getattr(link, "allowed_actions", None)),
+        evidenceDegraded=getattr(link, "evidence_degraded", None),
+        unavailableEvidenceClasses=_bounded_string_list(
+            getattr(link, "unavailable_evidence_classes", None)
+        ),
+        liveObservation=_bounded_live_observation(
+            getattr(link, "live_observation", None)
+        ),
+        lockOutcome=_bounded_lock_outcome(getattr(link, "lock_outcome", None)),
         approvalState=approval_state,
         createdAt=getattr(link, "created_at", None),
         updatedAt=getattr(link, "updated_at", None),
