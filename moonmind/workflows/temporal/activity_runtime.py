@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import inspect
 import json
+from copy import deepcopy
 from logging import getLogger
 import os
 import re
@@ -2492,6 +2493,7 @@ class TemporalProposalActivities:
     ) -> None:
         self._artifact_service = artifact_service
         self._proposal_service_factory = proposal_service_factory
+        self._redactor = SecretRedactor.from_environ(placeholder="[REDACTED]")
 
     @staticmethod
     def _resolve_task_instructions(parameters: Mapping[str, Any]) -> str:
@@ -2586,6 +2588,187 @@ class TemporalProposalActivities:
             f"{normalized_instructions}"
         )
 
+    @staticmethod
+    def _compact_mapping(value: object) -> dict[str, Any] | None:
+        if not isinstance(value, Mapping):
+            return None
+        return deepcopy(dict(value))
+
+    @classmethod
+    def _preserve_compact_task_metadata(
+        cls, *, source_task: Mapping[str, Any], target_task: dict[str, Any]
+    ) -> None:
+        """Carry compact selector/provenance metadata into generated candidates.
+
+        Runtime-local materialization outputs and full skill bodies are not part
+        of the canonical task contract, so only already-structured selector and
+        provenance fields are copied.
+        """
+
+        for key in ("skill", "tool", "skills"):
+            value = cls._compact_mapping(source_task.get(key))
+            if value is not None:
+                target_task[key] = value
+
+        authored_presets = source_task.get("authoredPresets")
+        if isinstance(authored_presets, list) and authored_presets:
+            target_task["authoredPresets"] = deepcopy(authored_presets)
+
+        steps = source_task.get("steps")
+        if not isinstance(steps, Sequence) or isinstance(steps, (str, bytes)):
+            return
+
+        source_steps: list[dict[str, Any]] = []
+        for raw_step in steps:
+            if not isinstance(raw_step, Mapping):
+                continue
+            preserved: dict[str, Any] = {}
+            for key in ("id", "title", "type"):
+                value = raw_step.get(key)
+                if isinstance(value, str) and value.strip():
+                    preserved[key] = value
+            for key in ("tool", "skill", "skills", "source"):
+                value = cls._compact_mapping(raw_step.get(key))
+                if value is not None:
+                    preserved[key] = value
+            if not any(
+                key in preserved for key in ("source", "skills", "skill", "tool")
+            ):
+                continue
+            step_type = str(preserved.get("type") or "").strip().lower()
+            source_kind = ""
+            source = preserved.get("source")
+            if isinstance(source, Mapping):
+                source_kind = str(source.get("kind") or "").strip()
+            if source_kind in {"preset-derived", "preset-include", "detached"}:
+                if step_type == "tool" and isinstance(preserved.get("tool"), Mapping):
+                    source_steps.append(preserved)
+                elif step_type == "skill" and (
+                    isinstance(preserved.get("skill"), Mapping)
+                    or isinstance(preserved.get("skills"), Mapping)
+                ):
+                    source_steps.append(preserved)
+                elif step_type not in {"tool", "skill"}:
+                    source_steps.append(preserved)
+                continue
+            source_steps.append(preserved)
+
+        if source_steps:
+            target_task["sourceSteps"] = source_steps
+
+    @staticmethod
+    def _reject_unsupported_tool_selectors(payload: Mapping[str, Any]) -> None:
+        task_node = payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+
+        def check_tool(tool_node: object, path: str) -> None:
+            if not isinstance(tool_node, Mapping):
+                return
+            tool_type = str(
+                tool_node.get("type") or tool_node.get("kind") or "skill"
+            ).strip()
+            if tool_type and tool_type.lower() != "skill":
+                raise ValueError(f"{path}.type must be 'skill'")
+
+        check_tool(task.get("tool"), "payload.task.tool")
+        steps = task.get("steps")
+        if not isinstance(steps, Sequence) or isinstance(steps, (str, bytes)):
+            return
+        for index, step_node in enumerate(steps):
+            if not isinstance(step_node, Mapping):
+                continue
+            check_tool(step_node.get("tool"), f"payload.task.steps[{index}].tool")
+
+    @classmethod
+    def _stamp_default_runtime(
+        cls, request: Mapping[str, Any], default_runtime: str | None
+    ) -> dict[str, Any]:
+        stamped_request = deepcopy(dict(request))
+        if not default_runtime:
+            return stamped_request
+        payload_node = stamped_request.get("payload")
+        if not isinstance(payload_node, dict):
+            return stamped_request
+        task_node = payload_node.get("task")
+        if isinstance(task_node, dict):
+            runtime_node = task_node.get("runtime")
+            if isinstance(runtime_node, dict):
+                if not runtime_node.get("mode"):
+                    runtime_node["mode"] = default_runtime
+            else:
+                task_node["runtime"] = {"mode": default_runtime}
+        else:
+            payload_node["task"] = {"runtime": {"mode": default_runtime}}
+        return stamped_request
+
+    @classmethod
+    def _validate_candidate_task_create_request(
+        cls, request: Mapping[str, Any], *, default_runtime: str | None
+    ) -> dict[str, Any]:
+        from moonmind.workflows.task_proposals.service import TaskProposalService
+        from moonmind.workflows.tasks.task_contract import (
+            CanonicalTaskPayload,
+            TaskContractError,
+        )
+
+        stamped_request = cls._stamp_default_runtime(request, default_runtime)
+        job_type = str(stamped_request.get("type") or "task").strip().lower()
+        if job_type != "task":
+            raise ValueError("taskCreateRequest.type must be 'task'")
+        max_attempts = stamped_request.get("maxAttempts", 3)
+        try:
+            if int(max_attempts) < 1:
+                raise ValueError("maxAttempts must be >= 1")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("taskCreateRequest.maxAttempts must be an integer >= 1") from exc
+
+        payload_node = stamped_request.get("payload")
+        if not isinstance(payload_node, Mapping):
+            raise ValueError("taskCreateRequest.payload must be an object")
+        normalized_payload = TaskProposalService._normalize_proposal_runtime_payload(
+            payload_node
+        )
+        validation_payload = deepcopy(normalized_payload)
+        task_node = validation_payload.get("task")
+        task = dict(task_node) if isinstance(task_node, Mapping) else {}
+        if not task:
+            task = {
+                "instructions": (
+                    str(
+                        validation_payload.get("instructions")
+                        or validation_payload.get("instruction")
+                        or ""
+                    ).strip()
+                    or "Queue job"
+                ),
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": None, "model": None, "effort": None},
+                "git": {"startingBranch": None, "targetBranch": None},
+                "publish": {"mode": "pr"},
+            }
+        elif not str(task.get("instructions") or "").strip():
+            skill = task.get("skill")
+            has_explicit_skill = False
+            if isinstance(skill, Mapping):
+                skill_id = str(skill.get("id") or "").strip().lower()
+                has_explicit_skill = bool(skill_id and skill_id != "auto")
+            if not has_explicit_skill:
+                task["instructions"] = (
+                    str(
+                        validation_payload.get("instructions")
+                        or validation_payload.get("instruction")
+                        or ""
+                    ).strip()
+                    or "Queue job"
+                )
+        validation_payload["task"] = task
+        cls._reject_unsupported_tool_selectors(validation_payload)
+        try:
+            CanonicalTaskPayload.model_validate(validation_payload)
+        except (ValidationError, TaskContractError) as exc:
+            raise ValueError(str(exc)) from exc
+        return stamped_request
+
     async def proposal_generate(
         self,
         request: Mapping[str, Any] | None = None,
@@ -2660,6 +2843,10 @@ class TemporalProposalActivities:
                 },
             },
         }
+        self._preserve_compact_task_metadata(
+            source_task=task,
+            target_task=task_create_request["payload"]["task"],
+        )
 
         candidate: dict[str, Any] = {
             "title": normalized_title,
@@ -2678,29 +2865,41 @@ class TemporalProposalActivities:
     ) -> dict[str, Any]:
         """Validate, filter, and submit generated proposals to the Proposal Queue API.
 
-        Returns a summary dict with ``generated_count``, ``submitted_count``,
-        and ``errors`` (redacted).
+        Returns a summary dict with generated/submitted counts, compact delivery
+        decisions, and redacted errors.
         """
         logger = getLogger(__name__)
         payload = dict(request or {})
         candidates: list[Any] = payload.get("candidates") or []
         policy: dict[str, Any] = payload.get("policy") or {}
         origin: dict[str, Any] = payload.get("origin") or {}
-        workflow_id: str = origin.get("workflow_id") or ""
-        run_id: str = origin.get("temporal_run_id") or ""
-        trigger_repo: str = origin.get("trigger_repo") or ""
+        workflow_id: str = str(origin.get("workflow_id") or "")
+        run_id: str = str(origin.get("temporal_run_id") or "")
+        trigger_repo: str = str(origin.get("trigger_repo") or "")
+        trigger_job_id: str = str(origin.get("trigger_job_id") or run_id or "")
 
         from moonmind.workflows.tasks.task_contract import (
             TaskProposalPolicy,
             build_effective_proposal_policy,
         )
 
+        generated_count = len(candidates)
+        delivery_decisions: list[dict[str, Any]] = []
+        errors: list[str] = []
+
         parsed_policy: TaskProposalPolicy | None = None
         if isinstance(policy, Mapping) and policy:
             try:
                 parsed_policy = TaskProposalPolicy.model_validate(policy)
             except Exception as exc:
-                logger.warning("proposal.submit: invalid proposal policy: %s", exc)
+                redacted = self._redactor.scrub(str(exc))[:200]
+                logger.warning("proposal.submit: invalid proposal policy: %s", redacted)
+                return {
+                    "generated_count": generated_count,
+                    "submitted_count": 0,
+                    "errors": [f"invalid proposal policy: {redacted}"],
+                    "delivery_decisions": [],
+                }
 
         effective_policy = build_effective_proposal_policy(
             policy=parsed_policy,
@@ -2734,21 +2933,53 @@ class TemporalProposalActivities:
         moonmind_repo = str(
             getattr(settings.task_proposals, "moonmind_ci_repository", "") or ""
         ).strip()
-        generated_count = len(candidates)
+        approved_moonmind_tags = {
+            "retry",
+            "duplicate_output",
+            "missing_ref",
+            "conflicting_instructions",
+            "flaky_test",
+            "loop_detected",
+            "artifact_gap",
+        }
         submitted_count = 0
-        errors: list[str] = []
 
         if not candidates:
             return {
                 "generated_count": 0,
                 "submitted_count": 0,
                 "errors": [],
+                "delivery_decisions": [],
             }
+
+        provider_metadata = dict(effective_policy.provider_metadata or {})
+        delivery_provider = effective_policy.delivery_provider
+        if delivery_provider == "auto" or (
+            not parsed_policy
+            or not parsed_policy.delivery
+            or not parsed_policy.delivery.provider
+            or parsed_policy.delivery.provider == "auto"
+        ):
+            delivery_provider = str(
+                getattr(
+                    settings.task_proposals,
+                    "proposal_delivery_provider_default",
+                    "github",
+                )
+                or "github"
+            ).strip().lower()
+        provider_payload = {
+            key: value
+            for key, value in provider_metadata.items()
+            if key in {"github", "jira"} and isinstance(value, Mapping)
+        }
 
         service_or_ctx = None
         if self._proposal_service_factory is not None:
             try:
                 service_or_ctx = self._proposal_service_factory()
+                if inspect.isawaitable(service_or_ctx):
+                    service_or_ctx = await service_or_ctx
             except Exception as exc:
                 logger.warning(
                     "proposal.submit: failed to create proposal service: %s", exc
@@ -2757,6 +2988,7 @@ class TemporalProposalActivities:
                     "generated_count": generated_count,
                     "submitted_count": 0,
                     "errors": ["proposal service unavailable"],
+                    "delivery_decisions": [],
                 }
 
         import contextlib
@@ -2776,51 +3008,89 @@ class TemporalProposalActivities:
                 title = str(candidate.get("title") or "").strip()
                 summary = str(candidate.get("summary") or "").strip()
                 task_create_request = candidate.get("taskCreateRequest")
-                if not title or not summary or not isinstance(task_create_request, Mapping):
+                if (
+                    not title
+                    or not summary
+                    or not isinstance(task_create_request, Mapping)
+                ):
                     errors.append(f"skipped malformed candidate: {title!r}")
                     continue
 
-                # Stamp default runtime into taskCreateRequest if not already set
-                stamped_request = dict(task_create_request)
-                if default_runtime and isinstance(default_runtime, str):
-                    payload_node = stamped_request.get("payload")
-                    if isinstance(payload_node, dict):
-                        task_node = payload_node.get("task")
-                        if isinstance(task_node, dict):
-                            runtime_node = task_node.get("runtime")
-                            if isinstance(runtime_node, dict):
-                                if not runtime_node.get("mode"):
-                                    runtime_node["mode"] = default_runtime
-                            else:
-                                task_node["runtime"] = {"mode": default_runtime}
-                        else:
-                            payload_node["task"] = {
-                                "runtime": {"mode": default_runtime}
-                            }
+                try:
+                    stamped_request = self._validate_candidate_task_create_request(
+                        task_create_request,
+                        default_runtime=(
+                            default_runtime if isinstance(default_runtime, str) else None
+                        ),
+                    )
+                except Exception as exc:
+                    redacted_error = self._redactor.scrub(str(exc))[:200]
+                    errors.append(
+                        f"invalid taskCreateRequest for {title!r}: {redacted_error}"
+                    )
+                    continue
 
                 payload_node = stamped_request.get("payload")
                 target_repo = ""
                 if isinstance(payload_node, Mapping):
                     target_repo = str(payload_node.get("repository") or "").strip()
-                
-                should_submit = False
-                if effective_policy.consume_project_slot():
-                    should_submit = True
-                else:
-                    severity = str(candidate.get("severity") or "medium")
-                    is_moonmind_repo = (
-                        bool(moonmind_repo)
-                        and target_repo.lower() == moonmind_repo.lower()
-                    )
-                    if (
-                        is_moonmind_repo
-                        and effective_policy.severity_meets_floor(severity)
-                        and effective_policy.consume_moonmind_slot()
-                    ):
-                        should_submit = True
 
-                if not should_submit:
-                    continue
+                tags = [
+                    str(tag or "").strip().lower()
+                    for tag in (candidate.get("tags") or [])
+                ]
+                tags = [tag for tag in tags if tag]
+                category = str(candidate.get("category") or "").strip().lower()
+                severity = str(candidate.get("severity") or "medium").strip().lower()
+                wants_moonmind = (
+                    bool(moonmind_repo)
+                    and effective_policy.allow_moonmind
+                    and (
+                        not effective_policy.allow_project
+                        or target_repo.lower() == moonmind_repo.lower()
+                        or category in {"run_quality", "moonmind_ci"}
+                    )
+                    and category in {"run_quality", "moonmind_ci"}
+                    and bool(set(tags) & approved_moonmind_tags)
+                    and effective_policy.severity_meets_floor(severity)
+                )
+
+                target = "project"
+                if wants_moonmind:
+                    if not effective_policy.consume_moonmind_slot():
+                        delivery_decisions.append(
+                            {
+                                "title": title,
+                                "target": "moonmind",
+                                "accepted": False,
+                                "reason": "capacity",
+                            }
+                        )
+                        continue
+                    target = "moonmind"
+                    if isinstance(payload_node, dict):
+                        payload_node["repository"] = moonmind_repo
+                        stamped_request["payload"] = payload_node
+                    target_repo = moonmind_repo
+                else:
+                    if not effective_policy.consume_project_slot():
+                        delivery_decisions.append(
+                            {
+                                "title": title,
+                                "target": "project",
+                                "accepted": False,
+                                "reason": "capacity",
+                            }
+                        )
+                        continue
+
+                decision = {
+                    "title": title,
+                    "target": target,
+                    "repository": target_repo,
+                    "provider": delivery_provider,
+                    "accepted": True,
+                }
 
                 try:
                     if service is not None:
@@ -2832,11 +3102,11 @@ class TemporalProposalActivities:
                         origin_metadata = {
                             "workflow_id": workflow_id,
                             "temporal_run_id": run_id,
-                            "triggerRepo": trigger_repo,
-                            "triggerJobId": run_id,
-                            "signal": {"severity": "normal", "type": "follow_up"}
+                            "trigger_repo": trigger_repo,
+                            "trigger_job_id": trigger_job_id,
+                            "signal": {"severity": "normal", "type": "follow_up"},
                         }
-                        await service.create_proposal(
+                        proposal = await service.create_proposal(
                             title=title,
                             summary=summary,
                             category=candidate.get("category"),
@@ -2844,32 +3114,128 @@ class TemporalProposalActivities:
                             task_create_request=stamped_request,
                             origin_source=origin_source,
                             origin_id=None,
+                            origin_external_id=workflow_id,
                             origin_metadata=origin_metadata,
                             proposed_by_worker_id=f"temporal:{workflow_id}",
                             proposed_by_user_id=None,
+                            provider=delivery_provider,
+                            provider_metadata=provider_payload,
+                            resolved_policy={
+                                "provider": delivery_provider,
+                                "target": target,
+                                "repository": target_repo,
+                                "workflow_id": workflow_id,
+                            },
                         )
+                        external_key = getattr(proposal, "external_key", None)
+                        external_url = getattr(proposal, "external_url", None)
+                        if external_key:
+                            decision["externalKey"] = external_key
+                        if external_url:
+                            decision["externalUrl"] = external_url
+                        delivery_metadata = getattr(
+                            proposal, "provider_metadata", {}
+                        )
+                        if isinstance(delivery_metadata, Mapping):
+                            delivery_node = delivery_metadata.get("delivery")
+                            if isinstance(delivery_node, Mapping):
+                                decision["deliveryStatus"] = delivery_node.get(
+                                    "status", "delivered"
+                                )
+                                if "created" in delivery_node:
+                                    decision["created"] = delivery_node["created"]
+                                if "duplicateSource" in delivery_node:
+                                    decision["duplicateSource"] = delivery_node[
+                                        "duplicateSource"
+                                    ]
+                                if "error" in delivery_node:
+                                    decision["error"] = delivery_node["error"]
                         submitted_count += 1
                     else:
-                        # No service available — log and count as submitted for
-                        # structural verification in tests.
                         logger.info(
                             "proposal.submit: would submit proposal %r (no service wired)",
                             title,
                         )
                         submitted_count += 1
+                    delivery_decisions.append(decision)
                 except Exception as exc:
-                    redacted_error = str(exc)[:200]
+                    redacted_error = self._redactor.scrub(str(exc))[:200]
                     errors.append(f"submission failed for {title!r}: {redacted_error}")
+                    decision["accepted"] = False
+                    decision["reason"] = "submission_failed"
+                    delivery_decisions.append(decision)
                     logger.warning(
                         "proposal.submit: failed to submit proposal %r: %s",
                         title,
                         redacted_error,
                     )
 
+        delivered_count = 0
+        external_links: list[dict[str, Any]] = []
+        dedup_updates: list[dict[str, Any]] = []
+        delivery_failures: list[dict[str, Any]] = []
+        for decision in delivery_decisions:
+            if not isinstance(decision, Mapping) or not decision.get("accepted"):
+                continue
+            status = str(decision.get("deliveryStatus") or "").strip().lower()
+            external_url = str(decision.get("externalUrl") or "").strip()
+            external_key = str(decision.get("externalKey") or "").strip()
+            provider = str(decision.get("provider") or delivery_provider).strip()
+            if external_url:
+                link: dict[str, Any] = {"externalUrl": external_url}
+                if provider:
+                    link["provider"] = provider
+                if external_key:
+                    link["externalKey"] = external_key
+                external_links.append(link)
+            if external_url and status in {"delivered", "updated", "deduped"}:
+                delivered_count += 1
+            if decision.get("created") is False or decision.get("duplicateSource"):
+                dedup: dict[str, Any] = {"created": bool(decision.get("created"))}
+                if provider:
+                    dedup["provider"] = provider
+                if external_key:
+                    dedup["externalKey"] = external_key
+                if decision.get("duplicateSource"):
+                    dedup["duplicateSource"] = decision["duplicateSource"]
+                dedup_updates.append(dedup)
+            if status == "failed":
+                failure: dict[str, Any] = {}
+                if provider:
+                    failure["provider"] = provider
+                error = decision.get("error")
+                if isinstance(error, Mapping):
+                    failure.update(dict(error))
+                failure.setdefault("code", "delivery_failed")
+                failure.setdefault(
+                    "message",
+                    str(
+                        failure.get("sanitizedReason")
+                        or failure.get("reason")
+                        or "delivery failed"
+                    ),
+                )
+                delivery_failures.append(failure)
+
         return {
             "generated_count": generated_count,
             "submitted_count": submitted_count,
+            "deliveredCount": delivered_count,
+            "validationErrors": [
+                {"code": "proposal_validation_error", "message": error}
+                for error in errors
+                if (
+                    "missing" in error
+                    or "invalid" in error
+                    or "malformed" in error
+                    or "skipped" in error
+                )
+            ],
+            "deliveryFailures": delivery_failures,
+            "externalLinks": external_links,
+            "dedupUpdates": dedup_updates,
             "errors": errors,
+            "delivery_decisions": delivery_decisions,
         }
 
 class TemporalAgentRuntimeActivities:
@@ -3484,23 +3850,54 @@ class TemporalAgentRuntimeActivities:
                     return value.strip()
             return ""
 
-        def _workspace_story_path(workspace: Path, raw_path: str) -> Path | None:
+        def _workspace_story_path_candidates(
+            workspace: Path,
+            raw_path: str,
+        ) -> list[Path]:
             if not raw_path:
-                return None
+                return []
             candidate = Path(raw_path)
+            candidates: list[Path] = []
             if not candidate.is_absolute():
-                candidate = workspace / candidate
-            resolved = candidate.expanduser().resolve()
-            try:
-                resolved.relative_to(workspace)
-            except ValueError:
+                candidates.append(workspace / candidate)
+                # Managed agent workspaces have a checked-out repo plus a
+                # sibling job-level artifact root. If repo-local artifacts/ is
+                # not writable, agents may still correctly write to the
+                # per-job artifact directory.
+                if candidate.parts and candidate.parts[0] == "artifacts":
+                    candidates.append(workspace.parent / candidate)
+            else:
+                candidates.append(candidate)
+
+            resolved_candidates: list[Path] = []
+            job_artifact_root = (workspace.parent / "artifacts").resolve()
+            for path in candidates:
+                resolved = path.expanduser().resolve()
+                allowed = resolved.is_relative_to(workspace) or resolved.is_relative_to(
+                    job_artifact_root
+                )
+                if not allowed:
+                    logger.warning(
+                        "Skipping story breakdown artifact publication outside "
+                        "workspace or job artifact root: %s",
+                        raw_path,
+                    )
+                    continue
+                if resolved not in resolved_candidates:
+                    resolved_candidates.append(resolved)
+            return resolved_candidates
+
+        def _workspace_story_path(workspace: Path, raw_path: str) -> Path | None:
+            candidates = _workspace_story_path_candidates(workspace, raw_path)
+            for candidate in candidates:
+                if candidate.is_file():
+                    return candidate
+            if candidates:
                 logger.warning(
-                    "Skipping story breakdown artifact publication outside "
-                    "workspace: %s",
+                    "Story breakdown handoff file was not found for publication: %s",
                     raw_path,
                 )
-                return None
-            return resolved
+            return None
 
         async def _publish_story_breakdown_file(
             *,
@@ -3513,12 +3910,6 @@ class TemporalAgentRuntimeActivities:
         ) -> str:
             path = _workspace_story_path(workspace, raw_path)
             if path is None:
-                return ""
-            if not path.is_file():
-                logger.warning(
-                    "Story breakdown handoff file was not found for publication: %s",
-                    raw_path,
-                )
                 return ""
             payload = path.read_bytes()
             artifact, _upload = await self._artifact_service.create(

@@ -20,7 +20,7 @@ class TaskProposalOriginModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     source: TaskProposalOriginSource = Field(..., alias="source")
-    id: Optional[UUID] = Field(None, alias="id")
+    id: Optional[str] = Field(None, alias="id")
     metadata: dict[str, Any] | None = Field(None, alias="metadata")
 
 class TaskProposalTaskPreview(BaseModel):
@@ -33,6 +33,8 @@ class TaskProposalTaskPreview(BaseModel):
     skill_id: Optional[str] = Field(None, alias="skillId")
     task_skills: Optional[list[str]] = Field(None, alias="taskSkills")
     publish_mode: Optional[str] = Field(None, alias="publishMode")
+    priority: Optional[int] = Field(None, alias="priority")
+    max_attempts: Optional[int] = Field(None, alias="maxAttempts")
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
     target_branch: Optional[str] = Field(None, alias="targetBranch")
     instructions: Optional[str] = Field(None, alias="instructions")
@@ -57,6 +59,15 @@ class TaskProposalModel(BaseModel):
     repository: str = Field(..., alias="repository")
     dedup_key: str = Field(..., alias="dedupKey")
     dedup_hash: str = Field(..., alias="dedupHash")
+    provider: str = Field("github", alias="provider")
+    external_key: Optional[str] = Field(None, alias="externalKey")
+    external_url: Optional[str] = Field(None, alias="externalUrl")
+    delivered_at: Optional[datetime] = Field(None, alias="deliveredAt")
+    last_synced_at: Optional[datetime] = Field(None, alias="lastSyncedAt")
+    task_snapshot_ref: Optional[str] = Field(None, alias="taskSnapshotRef")
+    provider_metadata: dict[str, Any] = Field(default_factory=dict, alias="providerMetadata")
+    resolved_policy: dict[str, Any] = Field(default_factory=dict, alias="resolvedPolicy")
+    review_delivery: dict[str, Any] = Field(default_factory=dict, alias="reviewDelivery")
     review_priority: TaskProposalReviewPriority = Field(
         TaskProposalReviewPriority.NORMAL, alias="reviewPriority"
     )
@@ -74,6 +85,7 @@ class TaskProposalModel(BaseModel):
     origin: TaskProposalOriginModel = Field(..., alias="origin")
     task_create_request: dict[str, Any] = Field(..., alias="taskCreateRequest")
     task_preview: Optional[TaskProposalTaskPreview] = Field(None, alias="taskPreview")
+    promotion_result: dict[str, Any] | None = Field(None, alias="promotionResult")
     similar: list["TaskProposalSimilarModel"] = Field(
         default_factory=list, alias="similar"
     )
@@ -101,6 +113,9 @@ class TaskProposalCreateRequest(BaseModel):
     origin: TaskProposalOriginModel = Field(..., alias="origin")
     task_create_request: dict[str, Any] = Field(..., alias="taskCreateRequest")
     review_priority: Optional[str] = Field(None, alias="reviewPriority")
+    provider: Optional[str] = Field(None, alias="provider")
+    provider_metadata: dict[str, Any] | None = Field(None, alias="providerMetadata")
+    resolved_policy: dict[str, Any] | None = Field(None, alias="resolvedPolicy")
 
 class TaskProposalListResponse(BaseModel):
     """Response payload for listing proposals."""
@@ -150,3 +165,54 @@ class TaskProposalPriorityRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     priority: str = Field(..., alias="priority")
+
+
+class TaskProposalProviderAuthenticityModel(BaseModel):
+    """Provider authenticity verification summary for decision ingress."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    verified: bool = Field(False, alias="verified")
+    method: Optional[str] = Field(None, alias="method")
+
+
+class TaskProposalProviderDecisionRequest(BaseModel):
+    """Trusted provider decision ingress payload."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    provider: str = Field(..., alias="provider")
+    external_key: str = Field(..., alias="externalKey")
+    provider_event_id: str = Field(..., alias="providerEventId")
+    actor: str = Field(..., alias="actor")
+    action: Optional[str] = Field(None, alias="action")
+    body: str = Field("", alias="body")
+    note: Optional[str] = Field(None, alias="note")
+    observed_at: Optional[datetime] = Field(None, alias="observedAt")
+    authenticity: TaskProposalProviderAuthenticityModel = Field(
+        default_factory=TaskProposalProviderAuthenticityModel,
+        alias="authenticity",
+    )
+    runtime_mode: Optional[str] = Field(None, alias="runtimeMode")
+    external_state: Optional[str] = Field(None, alias="externalState")
+
+
+class TaskProposalProviderDecisionResponse(BaseModel):
+    """Sanitized provider decision ingestion response."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    accepted: bool = Field(..., alias="accepted")
+    decision: Optional[str] = Field(None, alias="decision")
+    reason: Optional[str] = Field(None, alias="reason")
+    actor: str = Field(..., alias="actor")
+    provider_event_id: str = Field(..., alias="providerEventId")
+    note: Optional[str] = Field(None, alias="note")
+    priority: Optional[str] = Field(None, alias="priority")
+    defer_until: Optional[str] = Field(None, alias="deferUntil")
+    runtime_mode: Optional[str] = Field(None, alias="runtimeMode")
+    resulting_external_state: Optional[str] = Field(
+        None, alias="resultingExternalState"
+    )
+    promoted_execution_id: Optional[str] = Field(None, alias="promotedExecutionId")
+    proposal: TaskProposalModel = Field(..., alias="proposal")

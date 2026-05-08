@@ -1599,6 +1599,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/proposals/{proposal_id}/provider-decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Provider Decision */
+        post: operations["provider_decision_api_proposals__proposal_id__provider_decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/proposals/{proposal_id}/delivery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect Proposal Delivery */
+        get: operations["inspect_proposal_delivery_api_proposals__proposal_id__delivery_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/proposals/{proposal_id}/dismiss": {
         parameters: {
             query?: never;
@@ -4202,6 +4236,14 @@ export interface components {
             resume?: components["schemas"]["ExecutionResumeSummaryModel"] | null;
             /** Relatedruns */
             relatedRuns?: components["schemas"]["ExecutionRelatedRunModel"][];
+            /** Proposalsummary */
+            proposalSummary?: {
+                [key: string]: unknown;
+            } | null;
+            /** Proposaloutcomes */
+            proposalOutcomes?: {
+                [key: string]: unknown;
+            }[];
             debugFields?: components["schemas"]["ExecutionDebugFieldsModel"] | null;
             /** Redirectpath */
             redirectPath?: string | null;
@@ -6428,6 +6470,16 @@ export interface components {
             };
             /** Reviewpriority */
             reviewPriority?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Providermetadata */
+            providerMetadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Resolvedpolicy */
+            resolvedPolicy?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * TaskProposalDismissRequest
@@ -6472,6 +6524,33 @@ export interface components {
             dedupKey: string;
             /** Deduphash */
             dedupHash: string;
+            /**
+             * Provider
+             * @default github
+             */
+            provider: string;
+            /** Externalkey */
+            externalKey?: string | null;
+            /** Externalurl */
+            externalUrl?: string | null;
+            /** Deliveredat */
+            deliveredAt?: string | null;
+            /** Lastsyncedat */
+            lastSyncedAt?: string | null;
+            /** Tasksnapshotref */
+            taskSnapshotRef?: string | null;
+            /** Providermetadata */
+            providerMetadata?: {
+                [key: string]: unknown;
+            };
+            /** Resolvedpolicy */
+            resolvedPolicy?: {
+                [key: string]: unknown;
+            };
+            /** Reviewdelivery */
+            reviewDelivery?: {
+                [key: string]: unknown;
+            };
             /** @default normal */
             reviewPriority: components["schemas"]["TaskProposalReviewPriority"];
             /** Priorityoverridereason */
@@ -6504,6 +6583,10 @@ export interface components {
                 [key: string]: unknown;
             };
             taskPreview?: components["schemas"]["TaskProposalTaskPreview"] | null;
+            /** Promotionresult */
+            promotionResult?: {
+                [key: string]: unknown;
+            } | null;
             /** Similar */
             similar?: components["schemas"]["TaskProposalSimilarModel"][];
         };
@@ -6561,6 +6644,78 @@ export interface components {
             promotedExecutionId: string;
         };
         /**
+         * TaskProposalProviderAuthenticityModel
+         * @description Provider authenticity verification summary for decision ingress.
+         */
+        TaskProposalProviderAuthenticityModel: {
+            /**
+             * Verified
+             * @default false
+             */
+            verified: boolean;
+            /** Method */
+            method?: string | null;
+        };
+        /**
+         * TaskProposalProviderDecisionRequest
+         * @description Trusted provider decision ingress payload.
+         */
+        TaskProposalProviderDecisionRequest: {
+            /** Provider */
+            provider: string;
+            /** Externalkey */
+            externalKey: string;
+            /** Providereventid */
+            providerEventId: string;
+            /** Actor */
+            actor: string;
+            /** Action */
+            action?: string | null;
+            /**
+             * Body
+             * @default
+             */
+            body: string;
+            /** Note */
+            note?: string | null;
+            /** Observedat */
+            observedAt?: string | null;
+            authenticity?: components["schemas"]["TaskProposalProviderAuthenticityModel"];
+            /** Runtimemode */
+            runtimeMode?: string | null;
+            /** Externalstate */
+            externalState?: string | null;
+        };
+        /**
+         * TaskProposalProviderDecisionResponse
+         * @description Sanitized provider decision ingestion response.
+         */
+        TaskProposalProviderDecisionResponse: {
+            /** Accepted */
+            accepted: boolean;
+            /** Decision */
+            decision?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Actor */
+            actor: string;
+            /** Providereventid */
+            providerEventId: string;
+            /** Note */
+            note?: string | null;
+            /** Priority */
+            priority?: string | null;
+            /** Deferuntil */
+            deferUntil?: string | null;
+            /** Runtimemode */
+            runtimeMode?: string | null;
+            /** Resultingexternalstate */
+            resultingExternalState?: string | null;
+            /** Promotedexecutionid */
+            promotedExecutionId?: string | null;
+            proposal: components["schemas"]["TaskProposalModel"];
+        };
+        /**
          * TaskProposalReviewPriority
          * @description Reviewer-defined triage priority.
          * @enum {string}
@@ -6609,6 +6764,10 @@ export interface components {
             taskSkills?: string[] | null;
             /** Publishmode */
             publishMode?: string | null;
+            /** Priority */
+            priority?: number | null;
+            /** Maxattempts */
+            maxAttempts?: number | null;
             /** Startingbranch */
             startingBranch?: string | null;
             /** Targetbranch */
@@ -10896,6 +11055,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskProposalPromoteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    provider_decision_api_proposals__proposal_id__provider_decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskProposalProviderDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskProposalProviderDecisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_proposal_delivery_api_proposals__proposal_id__delivery_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskProposalModel"];
                 };
             };
             /** @description Validation Error */

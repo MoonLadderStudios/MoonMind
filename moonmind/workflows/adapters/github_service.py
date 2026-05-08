@@ -60,6 +60,18 @@ class PullRequestReadinessResult(BaseModel):
     blockers: list[dict[str, Any]] = Field(default_factory=list, alias="blockers")
 
 
+class GitHubIssueResult(BaseModel):
+    """Result from GitHub issue create/update operations."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    external_key: Optional[str] = Field(None, alias="externalKey")
+    external_url: Optional[str] = Field(None, alias="externalUrl")
+    created: bool = Field(False, alias="created")
+    updated: bool = Field(False, alias="updated")
+    summary: str = Field("", alias="summary")
+
+
 @dataclass(frozen=True, slots=True)
 class GitHubPermissionProfile:
     profile_id: str
@@ -467,6 +479,176 @@ class GitHubService:
                         }
                     )
         return result
+
+    # -- Issue operations -------------------------------------------------
+
+    async def search_issue_by_marker(
+        self,
+        *,
+        repo: str,
+        marker: str,
+        github_token: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Find an open GitHub Issue containing a deterministic proposal marker."""
+
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            logger.info("GitHub issue search skipped for %s: %s", repo, resolution_error)
+            return None
+        headers = self._github_headers(token)
+        query = f"repo:{repo} is:issue is:open {marker}"
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.get(
+                    "https://api.github.com/search/issues",
+                    headers=headers,
+                    params={"q": query, "per_page": 1},
+                )
+                response.raise_for_status()
+                data = response.json()
+            except (
+                httpx.HTTPStatusError,
+                httpx.TransportError,
+                httpx.TimeoutException,
+            ) as exc:
+                logger.warning(
+                    "GitHub issue search failed for %s: %s",
+                    repo,
+                    exc.__class__.__name__,
+                )
+                return None
+        items = data.get("items") if isinstance(data, Mapping) else None
+        if not isinstance(items, list) or not items:
+            return None
+        issue = items[0]
+        if not isinstance(issue, Mapping):
+            return None
+        return {
+            "key": str(issue.get("number") or ""),
+            "url": str(issue.get("html_url") or ""),
+            "source": "provider_marker",
+        }
+
+    async def create_issue(
+        self,
+        *,
+        repo: str,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+        github_token: str | None = None,
+    ) -> GitHubIssueResult:
+        """Create a GitHub Issue via REST API."""
+
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return GitHubIssueResult(
+                created=False,
+                summary=resolution_error
+                or self._missing_auth_summary("create an issue"),
+            )
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.post(
+                    f"https://api.github.com/repos/{repo}/issues",
+                    headers=headers,
+                    json={"title": title, "body": body, "labels": labels or []},
+                )
+                response.raise_for_status()
+                data = response.json()
+            except httpx.HTTPStatusError as exc:
+                summary = self._github_permission_summary(exc.response)
+                return GitHubIssueResult(
+                    created=False,
+                    summary=(
+                        f"GitHub create issue failed with HTTP {exc.response.status_code}"
+                        + (f" for {repo}. {summary}" if summary else f" for {repo}.")
+                    ),
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return GitHubIssueResult(
+                    created=False,
+                    summary=(
+                        "GitHub create issue request failed: "
+                        f"{exc.__class__.__name__}"
+                    ),
+                )
+        return GitHubIssueResult(
+            externalKey=str(data.get("number") or ""),
+            externalUrl=data.get("html_url"),
+            created=True,
+            summary=f"GitHub issue created: {data.get('html_url')}",
+        )
+
+    async def update_issue(
+        self,
+        *,
+        repo: str,
+        issue_number: str,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+        github_token: str | None = None,
+    ) -> GitHubIssueResult:
+        """Update a GitHub Issue via REST API."""
+
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return GitHubIssueResult(
+                externalKey=issue_number,
+                updated=False,
+                summary=resolution_error
+                or self._missing_auth_summary("update an issue"),
+            )
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.patch(
+                    f"https://api.github.com/repos/{repo}/issues/{issue_number}",
+                    headers=headers,
+                    json={"title": title, "body": body, "labels": labels or []},
+                )
+                response.raise_for_status()
+                data = response.json()
+            except httpx.HTTPStatusError as exc:
+                summary = self._github_permission_summary(exc.response)
+                return GitHubIssueResult(
+                    externalKey=issue_number,
+                    updated=False,
+                    summary=(
+                        f"GitHub update issue failed with HTTP {exc.response.status_code}"
+                        + (
+                            f" for {repo}#{issue_number}. {summary}"
+                            if summary
+                            else f" for {repo}#{issue_number}."
+                        )
+                    ),
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return GitHubIssueResult(
+                    externalKey=issue_number,
+                    updated=False,
+                    summary=(
+                        "GitHub update issue request failed: "
+                        f"{exc.__class__.__name__}"
+                    ),
+                )
+        return GitHubIssueResult(
+            externalKey=str(data.get("number") or issue_number),
+            externalUrl=data.get("html_url"),
+            updated=True,
+            summary=f"GitHub issue updated: {data.get('html_url')}",
+        )
 
     # -- PR operations ----------------------------------------------------
 

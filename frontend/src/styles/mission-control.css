@@ -192,6 +192,8 @@ samp {
 }
 
 .masthead {
+  --masthead-padding-block-end: 0.46rem;
+
   position: relative;
   z-index: 50;
   isolation: isolate;
@@ -199,7 +201,7 @@ samp {
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   column-gap: 1rem;
-  padding: 0.65rem 1rem 0.62rem;
+  padding: 0.65rem 1rem var(--masthead-padding-block-end);
 }
 
 .masthead::before {
@@ -354,12 +356,14 @@ h1 {
 .route-nav {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: stretch;
   gap: 0.55rem;
 }
 
 .masthead-nav {
+  position: relative;
   display: flex;
+  align-self: stretch;
   justify-content: center;
   justify-self: center;
   min-width: 0;
@@ -416,30 +420,46 @@ h1 {
 }
 
 .route-nav a {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
   text-decoration: none;
   color: rgb(var(--mm-ink) / 0.82);
-  border: 1px solid rgb(var(--mm-border) / 0.7);
-  border-radius: 999px;
+  border: 0;
+  border-radius: 0.5rem;
   padding: 0.48rem 0.82rem;
   font-size: 0.9rem;
-  background: rgb(var(--mm-panel) / 0.65);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  transition: border-color 130ms ease, background 130ms ease, box-shadow 130ms ease, color 130ms ease;
+  background: transparent;
+  transition: background 130ms ease, color 130ms ease;
 }
 
-@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
-  .route-nav a {
-    background: rgb(var(--mm-panel) / 0.92);
-  }
+.route-nav a::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(-1 * var(--masthead-padding-block-end));
+  height: 3px;
+  background: transparent;
+  transition: background 130ms ease;
 }
 
-.route-nav a.active,
 .route-nav a:hover {
-  border-color: rgb(var(--mm-accent));
-  background: rgb(var(--mm-accent) / 0.14);
+  background: rgb(var(--mm-ink) / 0.06);
   color: rgb(var(--mm-ink));
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.35), 0 12px 30px -24px rgb(var(--mm-accent) / 0.85);
+}
+
+.route-nav a.active {
+  color: rgb(var(--mm-ink));
+  text-shadow: 0.5px 0 0 currentColor;
+}
+
+.route-nav a.active::after {
+  background: rgb(var(--mm-accent));
+}
+
+.route-nav a.active:hover {
+  background: rgb(var(--mm-ink) / 0.06);
 }
 
 .route-nav a:focus-visible {
@@ -3545,15 +3565,28 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-radius: inherit;
   pointer-events: none;
   border: 0;
-  background: radial-gradient(
-    circle at center,
-    rgb(255 255 255 / 0.48) 0%,
-    rgb(var(--mm-accent-2) / 0.3) 22%,
-    rgb(var(--mm-action-primary) / 0.18) 48%,
-    rgb(var(--mm-action-primary) / 0.08) 68%,
-    rgb(var(--mm-action-primary) / 0) 88%
-  );
-  filter: blur(8px);
+  background:
+    radial-gradient(
+      circle at center,
+      rgb(var(--mm-action-primary) / 0) 64%,
+      rgb(var(--mm-action-primary) / 0.58) 70%,
+      rgb(var(--mm-action-primary) / 0.34) 73%,
+      rgb(var(--mm-action-primary) / 0) 79%
+    ),
+    radial-gradient(
+      circle at center,
+      rgb(255 255 255 / 0.22) 0%,
+      rgb(var(--mm-action-primary) / 0.08) 28%,
+      rgb(var(--mm-action-primary) / 0.5) 41%,
+      rgb(var(--mm-action-primary) / 0.28) 54%,
+      rgb(var(--mm-action-primary) / 0.16) 68%,
+      rgb(var(--mm-action-primary) / 0) 100%
+    );
+  box-shadow:
+    0 0 0 1px rgb(var(--mm-action-primary) / 0.54),
+    0 0 22px 3px rgb(var(--mm-action-primary) / 0.42),
+    0 0 38px 8px rgb(var(--mm-action-primary) / 0.18);
+  filter: blur(2px);
   transform-origin: center;
   animation: queue-submit-primary-ripple 620ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
 }
@@ -4196,6 +4229,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     gap: 0.75rem;
     min-height: 3.25rem;
     padding: 0 1rem;
+    margin-bottom: 0;
     border: 0;
     border-radius: 1rem;
     font-weight: 600;
@@ -4232,6 +4266,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     box-shadow:
       inset 3px 0 0 var(--mm-mobile-nav-active-edge),
       inset 0 1px 0 var(--mm-mobile-nav-edge);
+  }
+
+  .route-nav a::after,
+  .route-nav a.active::after {
+    content: none;
   }
 }
 

@@ -189,7 +189,9 @@ export function ProposalsPage({ payload }: { payload: BootPayload }) {
       <div className="toolbar">
         <div>
           <h2 className="page-title">Proposals</h2>
-          <p className="page-meta">Review and manage task proposals in the queue.</p>
+          <p className="page-meta">
+            Admin and recovery view for proposals delivered to GitHub or Jira.
+          </p>
         </div>
       </div>
 

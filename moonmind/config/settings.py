@@ -1806,6 +1806,14 @@ class TaskProposalSettings(BaseSettings):
         ),
         description="Minimum severity that must be met before MoonMind CI proposals are emitted when policy omits a floor.",
     )
+    proposal_delivery_provider_default: str = Field(
+        "github",
+        validation_alias=AliasChoices("TASK_PROPOSALS_DELIVERY_PROVIDER"),
+        description=(
+            "Default non-secret proposal delivery provider when policy omits "
+            "delivery.provider (github|jira)."
+        ),
+    )
     severity_vocabulary: tuple[str, ...] = Field(
         _ALLOWED_PROPOSAL_SEVERITIES,
         validation_alias=AliasChoices("TASK_PROPOSALS_SEVERITY_VOCABULARY"),
@@ -1832,6 +1840,16 @@ class TaskProposalSettings(BaseSettings):
         description="Webhook timeout in seconds.",
         gt=0,
     )
+
+    @field_validator("proposal_delivery_provider_default", mode="before")
+    @classmethod
+    def _normalize_proposal_delivery_provider_default(cls, value: object) -> str:
+        normalized = str(value or "").strip().lower() or "github"
+        if normalized not in {"github", "jira"}:
+            raise ValueError(
+                "task_proposals.proposal_delivery_provider_default must be github or jira"
+            )
+        return normalized
 
     @field_validator("proposal_targets_default", mode="before")
     @classmethod

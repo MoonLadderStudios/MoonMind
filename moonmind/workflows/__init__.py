@@ -34,8 +34,20 @@ def get_task_proposal_repository(session: AsyncSession) -> TaskProposalRepositor
 def get_task_proposal_service(session: AsyncSession) -> TaskProposalService:
     """Factory helper returning the task proposal service."""
 
+    from moonmind.integrations.jira.tool import JiraToolService
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from moonmind.workflows.task_proposals.delivery import (
+        GitHubProposalIssueProvider,
+        JiraProposalIssueProvider,
+        ProposalDeliveryService,
+    )
+
     return TaskProposalService(
         get_task_proposal_repository(session),
+        delivery_service=ProposalDeliveryService(
+            github=GitHubProposalIssueProvider(GitHubService()),
+            jira=JiraProposalIssueProvider(JiraToolService()),
+        ),
     )
 
 def get_temporal_execution_service(session: AsyncSession) -> TemporalExecutionService:

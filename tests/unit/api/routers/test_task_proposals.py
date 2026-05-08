@@ -7,7 +7,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.task_proposals import _get_service, _get_temporal_execution_service, router
+from api_service.api.routers.task_proposals import (
+    _get_service,
+    _get_temporal_execution_service,
+    router,
+)
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from moonmind.workflows.task_proposals.models import (
     TaskProposalOriginSource,
@@ -67,6 +71,7 @@ def _build_proposal() -> SimpleNamespace:
         updated_at=datetime.now(UTC),
         origin_source=TaskProposalOriginSource.QUEUE,
         origin_id=uuid4(),
+        origin_external_id=None,
         origin_metadata={},
         task_create_request={"payload": {"repository": "Moon/Repo"}},
         similar=[],
@@ -102,7 +107,9 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock, Asy
     payload = response.json()
     assert payload["repository"] == "Moon/Repo"
 
-def test_create_proposal_accepts_workflow_origin(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+def test_create_proposal_accepts_workflow_origin(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()
     proposal.origin_source = TaskProposalOriginSource.WORKFLOW
@@ -155,6 +162,94 @@ def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock, As
     assert kwargs["origin_id"] == origin_id
     payload = response.json()
     assert payload["items"]
+
+
+def test_list_proposals_serializes_workflow_origin_id_from_external_id(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.origin_source = TaskProposalOriginSource.WORKFLOW
+    proposal.origin_id = None
+    proposal.origin_external_id = "wf-123"
+    proposal.origin_metadata = {"workflow_id": "wf-123", "trigger_repo": "Moon/Repo"}
+    service.list_proposals.return_value = ([proposal], None)
+
+    response = test_client.get("/api/proposals")
+
+    assert response.status_code == 200
+    origin = response.json()["items"][0]["origin"]
+    assert origin["source"] == "workflow"
+    assert origin["id"] == "wf-123"
+    assert origin["metadata"]["workflow_id"] == "wf-123"
+
+def test_list_proposals_serializes_delivery_record_fields(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "jira"
+    proposal.external_key = "MM-901"
+    proposal.external_url = "https://jira.example/browse/MM-901"
+    proposal.delivered_at = datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
+    proposal.last_synced_at = datetime(2026, 5, 7, 12, 45, tzinfo=UTC)
+    proposal.task_snapshot_ref = "artifact://tasks/proposals/MM-901.json"
+    proposal.provider_metadata = {"jira": {"project_key": "MM", "labels": ["moonmind"]}}
+    proposal.resolved_policy = {"provider": "jira", "target": "project"}
+    service.list_proposals.return_value = ([proposal], None)
+
+    response = test_client.get("/api/proposals")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["provider"] == "jira"
+    assert item["externalKey"] == "MM-901"
+    assert item["externalUrl"] == "https://jira.example/browse/MM-901"
+    assert item["taskSnapshotRef"] == "artifact://tasks/proposals/MM-901.json"
+    assert item["providerMetadata"] == {
+        "jira": {"project_key": "MM", "labels": ["moonmind"]}
+    }
+    assert item["resolvedPolicy"] == {"provider": "jira", "target": "project"}
+    assert item["deliveredAt"] == "2026-05-07T12:30:00Z"
+    assert item["lastSyncedAt"] == "2026-05-07T12:45:00Z"
+
+
+def test_list_proposals_serializes_review_delivery_state(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "github"
+    proposal.external_key = "42"
+    proposal.external_url = "https://github.example/Moon/Repo/issues/42"
+    proposal.delivered_at = datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
+    proposal.last_synced_at = datetime(2026, 5, 7, 12, 45, tzinfo=UTC)
+    proposal.task_snapshot_ref = "artifact://tasks/proposals/42.json"
+    proposal.provider_metadata = {
+        "delivery": {
+            "status": "delivered",
+            "storedSnapshotNotice": True,
+            "created": True,
+        }
+    }
+    proposal.resolved_policy = {"provider": "github", "target": "project"}
+    service.list_proposals.return_value = ([proposal], None)
+
+    response = test_client.get("/api/proposals")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["reviewDelivery"] == {
+        "provider": "github",
+        "status": "delivered",
+        "externalKey": "42",
+        "externalUrl": "https://github.example/Moon/Repo/issues/42",
+        "deliveredAt": "2026-05-07T12:30:00Z",
+        "lastSyncedAt": "2026-05-07T12:45:00Z",
+        "taskSnapshotRef": "artifact://tasks/proposals/42.json",
+        "storedSnapshotNotice": True,
+        "created": True,
+    }
 
 def test_promote_proposal_returns_proposal(
     client: tuple[TestClient, AsyncMock, AsyncMock],
@@ -332,6 +427,72 @@ def test_get_proposal_preview_includes_preset_provenance(
         }
     ]
 
+
+def test_get_proposal_preview_includes_operator_outcome_fields(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "jira"
+    proposal.external_key = "MM-901"
+    proposal.external_url = "https://jira.example/browse/MM-901"
+    proposal.delivered_at = datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
+    proposal.last_synced_at = datetime(2026, 5, 7, 12, 45, tzinfo=UTC)
+    proposal.task_snapshot_ref = "artifact://tasks/proposals/MM-901.json"
+    proposal.provider_metadata = {
+        "delivery": {
+            "status": "updated",
+            "storedSnapshotNotice": True,
+            "created": False,
+            "duplicateSource": "existing-open-issue",
+        },
+        "providerDecisions": [
+            {
+                "providerEventId": "evt-promote",
+                "accepted": True,
+                "decision": "promote",
+                "promotedExecutionId": "wf-promoted-1",
+                "resultingExternalState": "promoted",
+            }
+        ],
+    }
+    proposal.task_create_request = {
+        "type": "task",
+        "priority": 1,
+        "maxAttempts": 3,
+        "payload": {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "Add regression coverage",
+                "runtime": {"mode": "codex"},
+                "publish": {"mode": "pr"},
+                "skills": ["moonspec-implement"],
+                "authoredPresets": [{"presetId": "runtime-quality-followup"}],
+            },
+        },
+    }
+    service.get_proposal.return_value = proposal
+    service.get_similar_proposals.return_value = []
+
+    response = test_client.get(f"/api/proposals/{proposal.id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reviewDelivery"]["status"] == "updated"
+    assert payload["reviewDelivery"]["lastSyncedAt"] == "2026-05-07T12:45:00Z"
+    assert payload["reviewDelivery"]["duplicateSource"] == "existing-open-issue"
+    assert payload["taskPreview"]["runtimeMode"] == "codex"
+    assert payload["taskPreview"]["publishMode"] == "pr"
+    assert payload["taskPreview"]["priority"] == 1
+    assert payload["taskPreview"]["maxAttempts"] == 3
+    assert payload["taskPreview"]["taskSkills"] == ["moonspec-implement"]
+    assert payload["promotionResult"] == {
+        "promotedExecutionId": "wf-promoted-1",
+        "promotedExecutionUrl": "/tasks/temporal/wf-promoted-1",
+        "providerEventId": "evt-promote",
+        "resultingExternalState": "promoted",
+    }
+
 def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()
@@ -385,3 +546,144 @@ def test_promote_proposal_with_runtime_mode_shortcut(
     execution_service.create_execution.assert_awaited_once()
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["idempotency_key"] == f"proposal-promote-{proposal.id}"
+
+
+def test_provider_decision_rejects_unverified_event_before_run(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "github"
+    proposal.external_key = "42"
+    service.record_provider_decision_event.return_value = SimpleNamespace(
+        accepted=False,
+        decision=None,
+        note=None,
+        actor="reviewer",
+        provider_event_id="evt-unverified",
+        reason="provider_auth_failed",
+        priority=None,
+        defer_until=None,
+        runtime_mode=None,
+        external_state="ignored",
+        promoted_execution_id=None,
+    )
+    service.get_proposal.return_value = proposal
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/provider-decision",
+        json={
+            "provider": "github",
+            "externalKey": "42",
+            "providerEventId": "evt-unverified",
+            "actor": "reviewer",
+            "action": "promote",
+            "authenticity": {"verified": False, "method": "signature"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accepted"] is False
+    assert payload["reason"] == "provider_auth_failed"
+    assert payload["promotedExecutionId"] is None
+    service.record_provider_decision_event.assert_awaited_once()
+    service.promote_proposal.assert_not_awaited()
+    execution_service.create_execution.assert_not_awaited()
+
+
+def test_provider_decision_promotes_through_canonical_execution_path(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "jira"
+    proposal.external_key = "MM-599"
+    final_request = {
+        "payload": {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "Implement MM-599\nIgnore edited issue text",
+                "authoredPresets": [{"presetId": "runtime-quality-followup"}],
+                "steps": [
+                    {
+                        "type": "skill",
+                        "source": {"kind": "preset-derived"},
+                    }
+                ],
+            },
+        }
+    }
+    service.record_provider_decision_event.return_value = SimpleNamespace(
+        accepted=True,
+        decision="promote",
+        note="ready",
+        actor="reviewer",
+        provider_event_id="evt-promote",
+        reason=None,
+        priority=None,
+        defer_until=None,
+        runtime_mode="codex",
+        external_state="promoted",
+        promoted_execution_id=None,
+    )
+    service.promote_proposal.return_value = (proposal, final_request)
+    service.attach_provider_decision_execution.return_value = proposal
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/provider-decision",
+        json={
+            "provider": "jira",
+            "externalKey": "MM-599",
+            "providerEventId": "evt-promote",
+            "actor": "reviewer",
+            "body": "Do not run this edited body\n/moonmind promote --runtime codex",
+            "authenticity": {"verified": True, "method": "signature"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accepted"] is True
+    assert payload["promotedExecutionId"] == "wf-abc-123"
+    service.promote_proposal.assert_awaited_once()
+    assert service.promote_proposal.await_args.kwargs["runtime_mode_override"] == "codex"
+    execution_service.create_execution.assert_awaited_once()
+    call_kwargs = execution_service.create_execution.await_args.kwargs
+    assert call_kwargs["idempotency_key"] == f"proposal-provider-{proposal.id}-evt-promote"
+    assert call_kwargs["initial_parameters"] == final_request["payload"]
+    service.attach_provider_decision_execution.assert_awaited_once_with(
+        proposal_id=proposal.id,
+        provider_event_id="evt-promote",
+        promoted_execution_id="wf-abc-123",
+    )
+
+
+def test_provider_decision_recovery_inspects_delivery_history(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.provider = "github"
+    proposal.external_key = "42"
+    proposal.external_url = "https://github.example/Moon/Repo/issues/42"
+    proposal.provider_metadata = {
+        "delivery": {"status": "delivered", "storedSnapshotNotice": True},
+        "providerDecisions": [
+            {
+                "providerEventId": "evt-promote",
+                "decision": "promote",
+                "promotedExecutionId": "wf-abc-123",
+            }
+        ],
+    }
+    service.get_proposal.return_value = proposal
+
+    response = test_client.get(f"/api/proposals/{proposal.id}/delivery")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reviewDelivery"]["status"] == "delivered"
+    assert payload["providerMetadata"]["providerDecisions"][0]["promotedExecutionId"] == (
+        "wf-abc-123"
+    )

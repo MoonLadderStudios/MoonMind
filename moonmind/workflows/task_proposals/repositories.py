@@ -32,11 +32,20 @@ class TaskProposalRepository:
         proposed_by_user_id: UUID | None,
         origin_source: models.TaskProposalOriginSource,
         origin_id: UUID | None,
+        origin_external_id: str | None = None,
         origin_metadata: dict[str, object],
         dedup_key: str,
         dedup_hash: str,
         review_priority: models.TaskProposalReviewPriority,
         priority_override_reason: str | None,
+        provider: str = "github",
+        external_key: str | None = None,
+        external_url: str | None = None,
+        delivered_at: datetime | None = None,
+        last_synced_at: datetime | None = None,
+        task_snapshot_ref: str | None = None,
+        provider_metadata: dict[str, object] | None = None,
+        resolved_policy: dict[str, object] | None = None,
     ) -> models.TaskProposal:
         entity = models.TaskProposal(
             title=title,
@@ -49,15 +58,46 @@ class TaskProposalRepository:
             proposed_by_user_id=proposed_by_user_id,
             origin_source=origin_source,
             origin_id=origin_id,
+            origin_external_id=origin_external_id,
             origin_metadata=origin_metadata,
             dedup_key=dedup_key,
             dedup_hash=dedup_hash,
             review_priority=review_priority,
             priority_override_reason=priority_override_reason,
+            provider=provider,
+            external_key=external_key,
+            external_url=external_url,
+            delivered_at=delivered_at,
+            last_synced_at=last_synced_at,
+            task_snapshot_ref=task_snapshot_ref,
+            provider_metadata=provider_metadata or {},
+            resolved_policy=resolved_policy or {},
         )
         self._session.add(entity)
         await self._session.flush()
         return entity
+
+
+    async def find_open_duplicate(
+        self,
+        *,
+        provider: str,
+        repository: str,
+        dedup_hash: str,
+    ) -> models.TaskProposal | None:
+        stmt: Select[tuple[models.TaskProposal]] = (
+            select(models.TaskProposal)
+            .where(
+                models.TaskProposal.provider == provider,
+                models.TaskProposal.repository == repository,
+                models.TaskProposal.dedup_hash == dedup_hash,
+                models.TaskProposal.status == models.TaskProposalStatus.OPEN,
+            )
+            .order_by(models.TaskProposal.created_at.desc(), models.TaskProposal.id.desc())
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def list_proposals(
         self,

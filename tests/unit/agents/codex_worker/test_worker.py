@@ -1172,6 +1172,133 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
     assert first["origin"]["metadata"]["workingBranch"] == "feature/proposal-tests"
     assert not proposals_path.exists()
 
+
+async def test_worker_submission_report_aggregates_delivery_outcomes(
+    tmp_path: Path,
+) -> None:
+    class OutcomeQueue(FakeQueueClient):
+        async def create_task_proposal(self, *, proposal):
+            self.submitted_proposals.append(dict(proposal))
+            return {
+                "id": str(uuid4()),
+                "reviewDelivery": {
+                    "provider": "jira",
+                    "status": "updated",
+                    "externalKey": "MM-901",
+                    "externalUrl": "https://jira.example/browse/MM-901",
+                    "created": False,
+                    "duplicateSource": "existing-open-issue",
+                },
+            }
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        enable_task_proposals=True,
+    )
+    queue = OutcomeQueue()
+    worker = CodexWorker(
+        config=config,
+        queue_client=queue,
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+        ),
+    )  # type: ignore[arg-type]
+
+    job = ClaimedJob(id=uuid4(), type="task", payload={"repository": "moon/org"})
+    context_dir = tmp_path / "context"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    (context_dir / "task_proposals.json").write_text(
+        json.dumps(
+            [
+                {
+                    "title": "Add regression tests",
+                    "summary": "Cover auth flow edge cases",
+                    "taskCreateRequest": {
+                        "type": "task",
+                        "priority": 0,
+                        "maxAttempts": 3,
+                        "payload": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "task": {"instructions": "Add tests"},
+                        },
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / "job",
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=context_dir,
+        publish_result_path=tmp_path / "publish-result.log",
+        default_branch="main",
+        starting_branch="main",
+        new_branch=None,
+        working_branch="feature/proposal-tests",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+
+    report = await worker._maybe_submit_task_proposals(job=job, prepared=prepared)
+
+    assert report.submitted_count == 1
+    assert report.delivered_count == 1
+    assert report.external_links == (
+        {
+            "provider": "jira",
+            "externalKey": "MM-901",
+            "externalUrl": "https://jira.example/browse/MM-901",
+        },
+    )
+    assert report.dedup_updates == (
+        {
+            "provider": "jira",
+            "externalKey": "MM-901",
+            "created": False,
+            "duplicateSource": "existing-open-issue",
+        },
+    )
+
+
+async def test_worker_submission_outcome_preserves_delivery_failure_details() -> None:
+    outcome = CodexWorker._proposal_submission_outcome(
+        {
+            "provider": "jira",
+            "reviewDelivery": {
+                "provider": "jira",
+                "status": "failed",
+                "error": {
+                    "code": "provider_rejected",
+                    "sanitizedReason": "provider rejected delivery",
+                    "retryable": False,
+                },
+            },
+        }
+    )
+
+    assert outcome["delivered_count"] == 0
+    assert outcome["delivery_failures"] == [
+        {
+            "provider": "jira",
+            "code": "provider_rejected",
+            "sanitizedReason": "provider rejected delivery",
+            "retryable": False,
+            "message": "provider rejected delivery",
+        }
+    ]
+
+
 async def test_task_proposal_request_uses_task_flag_with_config_gate(
     tmp_path: Path,
 ) -> None:
@@ -6986,6 +7113,89 @@ async def test_finish_reports_include_jules_runtime_artifact(
     assert runtime_payload["tasks"][0]["taskId"] == "task-123"
     assert runtime_payload["tasks"][0]["status"] == "completed"
     assert runtime_payload["tasks"][0]["providerStatus"] == "completed"
+
+
+async def test_finish_summary_includes_proposal_outcome_contract(
+    tmp_path: Path,
+) -> None:
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    started_at = datetime.now(UTC)
+    proposals = ProposalSubmissionReport(
+        requested=True,
+        hook_skills=["fix-proposal"],
+        generated_count=2,
+        submitted_count=2,
+        errors=["legacy validation error"],
+        delivered_count=1,
+        validation_errors=(
+            {"code": "proposal_missing_task", "message": "proposal skipped: [REDACTED]"},
+        ),
+        delivery_failures=(
+            {
+                "provider": "jira",
+                "code": "delivery_failed",
+                "message": "delivery failed: [REDACTED]",
+            },
+        ),
+        external_links=(
+            {
+                "provider": "jira",
+                "externalKey": "MM-901",
+                "externalUrl": "https://jira.example/browse/MM-901",
+            },
+        ),
+        dedup_updates=(
+            {
+                "provider": "github",
+                "externalKey": "42",
+                "created": False,
+                "duplicateSource": "existing-open-issue",
+            },
+        ),
+    )
+
+    finish_summary = worker._build_finish_summary(
+        job=ClaimedJob(id=uuid4(), type="task", payload={}, attempt=1, max_attempts=3),
+        canonical_payload={"repository": "owner/repo"},
+        runtime_mode="codex",
+        started_at=started_at,
+        finished_at=started_at,
+        stages=worker._new_finish_stages(),
+        finish_outcome=FinishOutcome(
+            code="COMPLETED", stage="finalize", reason="completed"
+        ),
+        prepared=None,
+        publish_mode="none",
+        publish_status="not_run",
+        publish_reason="publish mode is none",
+        publish_pr_url=None,
+        publish_base_branch=None,
+        publish_working_branch=None,
+        proposal_report=proposals,
+    )
+
+    proposal_summary = finish_summary["proposals"]
+    assert proposal_summary["requested"] is True
+    assert proposal_summary["generatedCount"] == 2
+    assert proposal_summary["submittedCount"] == 2
+    assert proposal_summary["deliveredCount"] == 1
+    assert proposal_summary["validationErrors"][0]["message"] == "proposal skipped: [REDACTED]"
+    assert proposal_summary["deliveryFailures"][0]["message"] == "delivery failed: [REDACTED]"
+    assert proposal_summary["externalLinks"][0]["externalKey"] == "MM-901"
+    assert proposal_summary["dedupUpdates"][0]["duplicateSource"] == "existing-open-issue"
 
 async def test_jules_worker_multiplexes_inflight_jobs_without_llm_execution(
     tmp_path: Path,

@@ -59,6 +59,13 @@ class TaskProposal(Base):
         Index("ix_task_proposals_origin", "origin_source", "origin_id"),
         Index("ix_task_proposals_repository", "repository"),
         Index("ix_task_proposals_dedup_hash_status", "dedup_hash", "status"),
+        Index(
+            "ix_task_proposals_provider_destination_dedup",
+            "provider",
+            "repository",
+            "dedup_hash",
+            "status",
+        ),
         Index("ix_task_proposals_priority_created", "review_priority", "created_at"),
     )
 
@@ -83,6 +90,22 @@ class TaskProposal(Base):
     repository: Mapped[str] = mapped_column(String(255), nullable=False)
     dedup_key: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     dedup_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="github")
+    external_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    task_snapshot_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_metadata: Mapped[dict[str, object]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    resolved_policy: Mapped[dict[str, object]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
     review_priority: Mapped[TaskProposalReviewPriority] = mapped_column(
         Enum(
             TaskProposalReviewPriority,
@@ -118,6 +141,7 @@ class TaskProposal(Base):
         default=TaskProposalOriginSource.MANUAL,
     )
     origin_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    origin_external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     origin_metadata: Mapped[dict[str, object]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
     )
