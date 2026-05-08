@@ -453,55 +453,10 @@ class AgentSkillResolver:
         """Resolve the selector against all sources and return a frozen snapshot."""
 
         # 1. Gather all candidates
-        candidates_by_source: dict[
-            AgentSkillSourceKind, list[ResolvedSkillEntry]
-        ] = {}
-        for loader in self.loaders:
-            source_kind = self._get_source_kind(loader)
-            try:
-                candidates = await loader.load_skills(selector, context)
-                candidates_by_source[source_kind] = candidates
-            except Exception as ex:
-                # Log context for diagnostic purposes
-                raise RuntimeError(
-                    f"Failed to load skills from source {source_kind.value}: {ex}"
-                ) from ex
+        candidates_by_source = await self._load_candidates(selector, context)
 
         # 2. Merge respecting precedence
-        resolved_map: dict[str, ResolvedSkillEntry] = {}
-
-        precedence_order = [
-            AgentSkillSourceKind.BUILT_IN,
-            AgentSkillSourceKind.DEPLOYMENT,
-            AgentSkillSourceKind.REPO,
-            AgentSkillSourceKind.LOCAL,
-        ]
-        precedence_rank = {
-            source: index for index, source in enumerate(precedence_order)
-        }
-
-        def merge_entry(entry: ResolvedSkillEntry) -> None:
-            existing = resolved_map.get(entry.skill_name)
-            if existing is None:
-                resolved_map[entry.skill_name] = entry
-                return
-            existing_rank = precedence_rank[existing.provenance.source_kind]
-            incoming_rank = precedence_rank[entry.provenance.source_kind]
-            if incoming_rank >= existing_rank:
-                resolved_map[entry.skill_name] = entry
-
-        for source in precedence_order:
-            if source in candidates_by_source:
-                bucket_seen = set()
-                for entry in candidates_by_source[source]:
-                    # Collision detection within the same source
-                    if entry.skill_name in bucket_seen:
-                        raise ValueError(
-                            f"Duplicate skill definition '{entry.skill_name}' found in source {source.value}"
-                        )
-                    bucket_seen.add(entry.skill_name)
-
-                    merge_entry(entry)
+        resolved_map = self._merge_candidates(candidates_by_source)
 
         excluded_names = {str(name).strip() for name in selector.exclude if str(name).strip()}
 
@@ -560,7 +515,7 @@ class AgentSkillResolver:
                                     if entry.skill_name not in deployment_seen:
                                         deployment_bucket.append(entry)
                                         deployment_seen.add(entry.skill_name)
-                                    merge_entry(entry)
+                                    resolved_map = self._merge_candidates(candidates_by_source)
                     if required_name not in resolved_map:
                         raise ValueError(
                             f"skill '{current_name}' requires missing skill '{required_name}'"
@@ -615,6 +570,78 @@ class AgentSkillResolver:
                 ],
             },
         )
+
+    async def query_catalog(
+        self,
+        selector: SkillSelector,
+        context: SkillResolutionContext,
+    ) -> list[ResolvedSkillEntry]:
+        """Return policy-visible Skill catalog candidates for metadata queries."""
+
+        candidates_by_source = await self._load_candidates(selector, context)
+        resolved_map = self._merge_candidates(candidates_by_source)
+        return sorted(resolved_map.values(), key=lambda entry: entry.skill_name)
+
+    async def _load_candidates(
+        self,
+        selector: SkillSelector,
+        context: SkillResolutionContext,
+    ) -> dict[AgentSkillSourceKind, list[ResolvedSkillEntry]]:
+        candidates_by_source: dict[
+            AgentSkillSourceKind, list[ResolvedSkillEntry]
+        ] = {}
+        for loader in self.loaders:
+            source_kind = self._get_source_kind(loader)
+            try:
+                candidates = await loader.load_skills(selector, context)
+                candidates_by_source[source_kind] = candidates
+            except Exception as ex:
+                # Log context for diagnostic purposes
+                raise RuntimeError(
+                    f"Failed to load skills from source {source_kind.value}: {ex}"
+                ) from ex
+        return candidates_by_source
+
+    def _merge_candidates(
+        self,
+        candidates_by_source: dict[AgentSkillSourceKind, list[ResolvedSkillEntry]],
+    ) -> dict[str, ResolvedSkillEntry]:
+        resolved_map: dict[str, ResolvedSkillEntry] = {}
+
+        precedence_order = [
+            AgentSkillSourceKind.BUILT_IN,
+            AgentSkillSourceKind.DEPLOYMENT,
+            AgentSkillSourceKind.REPO,
+            AgentSkillSourceKind.LOCAL,
+        ]
+        precedence_rank = {
+            source: index for index, source in enumerate(precedence_order)
+        }
+
+        def merge_entry(entry: ResolvedSkillEntry) -> None:
+            existing = resolved_map.get(entry.skill_name)
+            if existing is None:
+                resolved_map[entry.skill_name] = entry
+                return
+            existing_rank = precedence_rank[existing.provenance.source_kind]
+            incoming_rank = precedence_rank[entry.provenance.source_kind]
+            if incoming_rank >= existing_rank:
+                resolved_map[entry.skill_name] = entry
+
+        for source in precedence_order:
+            if source in candidates_by_source:
+                bucket_seen = set()
+                for entry in candidates_by_source[source]:
+                    # Collision detection within the same source
+                    if entry.skill_name in bucket_seen:
+                        raise ValueError(
+                            f"Duplicate skill definition '{entry.skill_name}' found in source {source.value}"
+                        )
+                    bucket_seen.add(entry.skill_name)
+
+                    merge_entry(entry)
+
+        return resolved_map
 
     def _get_source_kind(self, loader: SkillLoader) -> AgentSkillSourceKind:
         if isinstance(loader, BuiltInSkillLoader):
