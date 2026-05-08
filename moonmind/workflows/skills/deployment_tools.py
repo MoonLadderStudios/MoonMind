@@ -122,7 +122,7 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
             "selector": {"mode": "by_capability"},
         },
         "requirements": {
-            "capabilities": ["deployment_control", "docker_admin"],
+            "capabilities": ["docker_workload", "deployment_control", "docker_admin"],
         },
         "policies": {
             "timeouts": {
