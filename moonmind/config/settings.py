@@ -297,6 +297,14 @@ class WorkflowSettings(BaseSettings):
         validation_alias=AliasChoices("RECURRING_DISPATCH_ENGINE"),
         description="Engine for recurring schedules: 'app', 'temporal', or 'dual'",
     )
+    skills_on_demand_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "MOONMIND_SKILLS_ON_DEMAND_ENABLED",
+            "WORKFLOW_SKILLS_ON_DEMAND_ENABLED",
+        ),
+        description="Controls runtime Skills On Demand catalog query/request commands.",
+    )
     artifacts_root: str = Field(
         "var/artifacts/workflows",
         validation_alias=AliasChoices(

@@ -96,6 +96,69 @@ class RuntimeSkillMaterialization(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+SkillsOnDemandStatus = Literal["denied"]
+SkillsOnDemandDeniedCode = Literal[
+    "feature_disabled", "enabled_mode_not_implemented"
+]
+
+
+class SkillsOnDemandQueryRequest(BaseModel):
+    """Runtime request to search the on-demand Skill catalog."""
+
+    query: str = ""
+    runtime_id: str | None = None
+    current_snapshot_ref: str | None = None
+    max_results: int = Field(default=20, ge=1, le=100)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SkillsOnDemandQueryResult(BaseModel):
+    """Deterministic on-demand Skill catalog query result."""
+
+    status: SkillsOnDemandStatus
+    code: SkillsOnDemandDeniedCode
+    message: str
+    results: list[dict[str, Any]] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SkillsOnDemandRequestedSkill(BaseModel):
+    """A single on-demand Skill requested by a managed runtime."""
+
+    name: str
+    version: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SkillsOnDemandRequest(BaseModel):
+    """Runtime request to activate additional Skills for the current run."""
+
+    current_snapshot_ref: str | None = None
+    requested_skills: list[SkillsOnDemandRequestedSkill] = Field(default_factory=list)
+    reason: str | None = None
+    runtime_id: str | None = None
+    step_id: str | None = None
+    active_snapshot: ResolvedSkillSet | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SkillsOnDemandRequestResult(BaseModel):
+    """Deterministic on-demand Skill activation result."""
+
+    status: SkillsOnDemandStatus
+    code: SkillsOnDemandDeniedCode
+    message: str
+    active_snapshot_id: str | None = None
+    snapshot_id: str | None = None
+    resolved_skillset_ref: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
 RuntimeSkillProjectionStatus = Literal[
     "created", "reused", "skipped", "blocked", "failed"
 ]

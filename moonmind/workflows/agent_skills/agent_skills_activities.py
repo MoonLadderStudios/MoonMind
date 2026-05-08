@@ -11,9 +11,15 @@ from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
     ResolvedSkillSet,
     SkillSelector,
+    SkillsOnDemandQueryRequest,
+    SkillsOnDemandQueryResult,
+    SkillsOnDemandRequest,
+    SkillsOnDemandRequestResult,
     RuntimeSkillMaterialization,
     RuntimeMaterializationMode,
 )
+from moonmind.config.settings import settings
+from moonmind.services.skills_on_demand import SkillsOnDemandService
 from moonmind.services.skill_resolution import (
     AgentSkillResolver,
     SkillResolutionContext,
@@ -190,6 +196,30 @@ class AgentSkillsActivities:
             content_type="application/json",
         )
         return resolved_set.model_copy(update={"manifest_ref": artifact.artifact_id})
+
+    @activity.defn(name="agent_skill.query_on_demand")
+    async def query_on_demand(
+        self,
+        request: SkillsOnDemandQueryRequest,
+    ) -> SkillsOnDemandQueryResult:
+        """Query on-demand Skills through the runtime control gate."""
+
+        service = SkillsOnDemandService(
+            enabled=settings.workflow.skills_on_demand_enabled
+        )
+        return await service.query(request)
+
+    @activity.defn(name="agent_skill.request_on_demand")
+    async def request_on_demand(
+        self,
+        request: SkillsOnDemandRequest,
+    ) -> SkillsOnDemandRequestResult:
+        """Request additional runtime Skills through the runtime control gate."""
+
+        service = SkillsOnDemandService(
+            enabled=settings.workflow.skills_on_demand_enabled
+        )
+        return await service.request(request)
 
     @activity.defn(name="agent_skill.build_prompt_index")
     async def build_prompt_index(
