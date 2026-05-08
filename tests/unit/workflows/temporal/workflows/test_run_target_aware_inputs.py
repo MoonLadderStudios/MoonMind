@@ -36,7 +36,7 @@ def _task_payload() -> dict[str, object]:
     }
 
 
-def _build_request_for_step(step_id: str):
+def _build_request_for_step(step_id: str, *, runtime_mode: str = "jules"):
     wf = MoonMindRunWorkflow()
     with patch(
         "moonmind.workflows.temporal.workflows.run.workflow.info",
@@ -44,11 +44,11 @@ def _build_request_for_step(step_id: str):
     ):
         return wf._build_agent_execution_request(
             node_inputs={
-                "runtime": {"mode": "codex_cli"},
+                "runtime": {"mode": runtime_mode},
                 "inputRefs": ["artifact://explicit-node-input"],
             },
             node_id=step_id,
-            tool_name="codex_cli",
+            tool_name=runtime_mode,
             workflow_parameters={"task": _task_payload()},
         )
 
@@ -81,6 +81,30 @@ def test_child_agent_run_request_receives_only_represented_step_context() -> Non
 
     assert "report-notes" in str(request.model_dump(by_alias=True))
     assert "collect-notes" not in str(request.model_dump(by_alias=True))
+
+
+def test_managed_codex_request_keeps_prepared_context_out_of_input_refs() -> None:
+    wf = MoonMindRunWorkflow()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="collect-evidence",
+            tool_name="codex_cli",
+            workflow_parameters={"task": _task_payload()},
+        )
+
+    assert request.agent_kind == "managed"
+    assert request.input_refs == []
+    prepared_context = request.parameters["metadata"]["moonmind"]["preparedContext"]
+    assert prepared_context["inputRefs"] == [
+        "prepared-context://objective/objective-image",
+        "prepared-context://steps/collect-evidence/collect-notes",
+        "artifact://objective-image",
+        "artifact://collect-notes",
+    ]
 
 
 def test_prepare_failure_prevents_unbounded_context_dispatch() -> None:

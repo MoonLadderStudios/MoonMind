@@ -42,7 +42,6 @@ with workflow.unsafe.imports_passed_through():
         build_prepared_input_manifest,
         merge_prepared_input_refs,
         select_step_prepared_context,
-        task_payload_has_input_attachments,
     )
     from moonmind.workflows.agent_skills.selection import selected_agent_skill
     from moonmind.config.settings import settings
@@ -4878,27 +4877,34 @@ class MoonMindRunWorkflow:
         input_refs = node_inputs.get("inputRefs") or []
         if isinstance(workflow_parameters, Mapping):
             task_payload = workflow_parameters.get("task")
-            if isinstance(task_payload, Mapping) and task_payload_has_input_attachments(task_payload):
+            if isinstance(task_payload, Mapping):
                 prepared_manifest = build_prepared_input_manifest(task_payload)
-                prepared_context = select_step_prepared_context(
-                    prepared_manifest,
-                    logical_step_id=node_id,
-                )
-                if prepared_context.input_refs:
-                    input_refs = merge_prepared_input_refs(input_refs, prepared_context)
-                    metadata_payload = (
-                        parameters.get("metadata")
-                        if isinstance(parameters.get("metadata"), dict)
-                        else {}
+                if prepared_manifest.has_entries:
+                    prepared_context = select_step_prepared_context(
+                        prepared_manifest,
+                        logical_step_id=node_id,
                     )
-                    moonmind_payload = (
-                        metadata_payload.get("moonmind")
-                        if isinstance(metadata_payload.get("moonmind"), dict)
-                        else {}
-                    )
-                    moonmind_payload["preparedContext"] = prepared_context.to_metadata()
-                    metadata_payload["moonmind"] = moonmind_payload
-                    parameters["metadata"] = metadata_payload
+                    if prepared_context.input_refs:
+                        if agent_kind != "managed":
+                            input_refs = merge_prepared_input_refs(
+                                input_refs,
+                                prepared_context,
+                            )
+                        metadata_payload = (
+                            parameters.get("metadata")
+                            if isinstance(parameters.get("metadata"), dict)
+                            else {}
+                        )
+                        moonmind_payload = (
+                            metadata_payload.get("moonmind")
+                            if isinstance(metadata_payload.get("moonmind"), dict)
+                            else {}
+                        )
+                        moonmind_payload["preparedContext"] = (
+                            prepared_context.to_metadata()
+                        )
+                        metadata_payload["moonmind"] = moonmind_payload
+                        parameters["metadata"] = metadata_payload
 
         return AgentExecutionRequest(
             agent_kind=agent_kind,

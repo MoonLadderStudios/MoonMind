@@ -67,6 +67,22 @@ def test_prepared_manifest_preserves_objective_and_step_targets() -> None:
     assert manifest.entries[2].step_ref == "write-report"
 
 
+def test_prepared_manifest_preserves_zero_byte_size() -> None:
+    manifest = build_prepared_input_manifest(
+        {
+            "inputAttachments": [
+                {
+                    "artifactId": "empty-file",
+                    "sizeBytes": 0,
+                    "size": 42,
+                }
+            ]
+        }
+    )
+
+    assert manifest.entries[0].size_bytes == 0
+
+
 def test_prepared_models_reject_missing_step_binding_and_embedded_content() -> None:
     with pytest.raises(ValidationError, match="stepRef"):
         PreparedInputEntry.model_validate(
@@ -86,6 +102,19 @@ def test_prepared_models_reject_missing_step_binding_and_embedded_content() -> N
                         "filename": "objective.png",
                         "contentType": "image/png",
                         "dataUrl": "data:image/png;base64,AAAA",
+                    }
+                ]
+            }
+        )
+
+    with pytest.raises(ValueError, match="inline attachment content"):
+        build_prepared_input_manifest(
+            {
+                "inputAttachments": [
+                    {
+                        "artifactId": "artifact-objective",
+                        "filename": "has-space-in-data-url.txt",
+                        "url": "data:image/png;base64,AAAA remaining-safe-text",
                     }
                 ]
             }

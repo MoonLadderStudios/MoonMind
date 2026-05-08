@@ -19,7 +19,7 @@ _INLINE_ATTACHMENT_KEYS = {
     "generatedMarkdown",
     "markdown",
 }
-_DATA_URL_RE = re.compile(r"data:[^\\s'\")]+", re.IGNORECASE)
+_DATA_URL_RE = re.compile(r"data:[^\s'\")]+", re.IGNORECASE)
 _SECRETISH_RE = re.compile(
     r"(ghp_|github_pat_|AIza|ATATT|AKIA|token=|password=|"
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----)",
@@ -247,7 +247,11 @@ def _entry_from_attachment(
         contentType=_optional_text(
             attachment.get("contentType") or attachment.get("mimeType")
         ),
-        sizeBytes=_optional_int(attachment.get("sizeBytes") or attachment.get("size")),
+        sizeBytes=_optional_int(
+            attachment.get("sizeBytes")
+            if attachment.get("sizeBytes") is not None
+            else attachment.get("size")
+        ),
         targetKind=target_kind,
         rawInputRef=raw_input_ref,
         derivedContextRef=derived_context_ref,
