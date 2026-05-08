@@ -156,6 +156,62 @@ Readiness evaluation additionally needs:
 - `Checks: Read`
 - `Issues: Read` when reaction fallback is enabled
 
+### Pull Request Title and Body Metadata
+
+Pull request titles and bodies are semantic review artifacts. They must describe the implemented change, not the orchestration mechanics that produced the change.
+
+MoonMind publishing owns the durable side-effect boundary: selecting the repository and base branch, resolving credentials, pushing the work branch, creating or updating the pull request, recording the confirmed pull request URL, and enforcing downstream gates such as Jira Code Review transitions. Agents own the semantic description of their work: summary, rationale, test evidence, remaining risks, and reviewer-facing pull request metadata.
+
+Managed runtimes should therefore treat pull request metadata as a structured work product produced by the agent and consumed by the publisher. The preferred contract is:
+
+1. The agent proposes a concise pull request title and body after it has seen the final diff and verification evidence.
+2. MoonMind validates the proposed metadata against simple invariants.
+3. MoonMind creates or updates the pull request through the managed publishing path.
+4. Downstream workflows consume the confirmed pull request URL and validated metadata, not free-form log output.
+
+For Jira-backed work, the pull request title must include the canonical Jira issue key and should normally use the format:
+
+```text
+<ISSUE-KEY> <implemented capability>
+```
+
+Examples:
+
+```text
+MM-597 Validate proposal delivery records before submission
+MM-489 Render shimmer band and halo layers
+MM-398 Add Jira Orchestrate blocker preflight
+```
+
+The pull request body should include, when available:
+
+- Jira issue key and link
+- Active MoonSpec feature path
+- Summary of implemented behavior
+- Verification verdict
+- Tests run
+- Remaining risks or follow-up work
+
+The publisher must not derive the pull request title or body from arbitrary task-step instructions, workflow control text, Jira transition instructions, or the first step in a multi-step orchestration. In particular, titles such as the following are invalid for implementation pull requests:
+
+```text
+Change Jira issue MM-597 to status In Progress before implementation starts.
+Move Jira issue MM-597 to Code Review.
+Use the trusted Jira issue updater workflow.
+```
+
+Those strings describe control-plane actions, not the implemented code change.
+
+Higher-level presets may require a pull request URL before they can complete a trusted side effect. For example, Jira Orchestrate needs a confirmed pull request URL before moving the issue to Code Review. In those cases, the preset should still separate responsibilities:
+
+- Jira transition and blocker-check steps run with no repository publishing.
+- Implementation and verification steps produce the code changes and evidence.
+- The pull-request handoff step publishes only after the implementation is complete.
+- The handoff step uses validated pull request metadata derived from the final implementation, not from earlier Jira status-transition steps.
+- The workflow records the confirmed pull request URL before any downstream Jira transition depends on it.
+
+Provider-native publishing may supply pull request metadata directly when the provider has a reliable native contract. MoonMind should still capture the resulting pull request URL, readiness state, branch information, and metadata in the run record so retries, audit, merge automation, and Jira transitions remain deterministic.
+
 ### Agent Instructions
 
 Agents receive a commit-only instruction:
@@ -166,7 +222,11 @@ Some higher-level presets may include an explicit pull-request handoff step
 because a later trusted side effect needs the PR URL before workflow finalization
 (for example, Jira Orchestrate moving an issue to Code Review). In those cases,
 the step-specific handoff instruction is the controlling instruction for that
-step, and the resulting PR URL must be recorded for the workflow to consume.
+step, but the handoff must still use validated pull request metadata derived
+from the completed implementation and verification evidence. It must not use
+earlier control-plane step text, such as Jira status-transition instructions, as
+the pull request title or body. The resulting PR URL must be recorded for the
+workflow to consume.
 
 ## Jules: Special Case
 
