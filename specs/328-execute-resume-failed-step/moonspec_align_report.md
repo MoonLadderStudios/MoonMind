@@ -5,7 +5,7 @@
 
 ## Result
 
-PASS. The generated Moon Spec artifacts describe exactly one runtime story, preserve the original Jira preset brief, and provide TDD-first task coverage for every functional requirement, success criterion, acceptance scenario, and in-scope source design requirement.
+ADDITIONAL_WORK_NEEDED. The generated Moon Spec artifacts describe exactly one runtime story, preserve the original Jira preset brief, and provide TDD-first task coverage for every functional requirement, success criterion, acceptance scenario, and in-scope source design requirement. Final MoonSpec verification for the PR still requires follow-up evidence and implementation for the remaining runtime resume gaps listed below.
 
 ## Checks
 
@@ -19,6 +19,8 @@ PASS. The generated Moon Spec artifacts describe exactly one runtime story, pres
 - Corrected the `plan.md` requirement status summary counts to match the Requirement Status table.
 - Corrected the `tasks.md` parallel task range typo from `T015-T18` to `T015-T018`.
 
-## Remaining Risks
+## Remaining Work
 
-- Implementation has not started. Workspace restoration, preserved logical-step provenance, preserved-output injection, failed-step-first ordering, and no preserved-step re-execution remain planned implementation/test work.
+- Runtime restoration from `resumeWorkspace` before the failed step still needs implementation/evidence.
+- Preserved output injection into retried and downstream step input context is only partially proven.
+- Full workflow evidence for failed-step-first execution, downstream fresh evidence, and no fallback/no preserved-step reexecution remains incomplete.
