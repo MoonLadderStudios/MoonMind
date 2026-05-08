@@ -104,6 +104,12 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
         verification_payload = await _read_artifact_json(
             artifact_service, result["artifactRefs"]["verification"]
         )
+        audit_payload = await _read_artifact_json(
+            artifact_service, result["artifactRefs"]["auditEvent"]
+        )
+        annotation_payload = await _read_artifact_json(
+            artifact_service, result["artifactRefs"]["targetAnnotation"]
+        )
 
         assert request_payload["schemaVersion"] == "v1"
         assert request_payload["actionKind"] == action_kind
@@ -117,6 +123,36 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
         assert result_payload["verificationHint"]
         assert verification_payload["actionKind"] == action_kind
         assert verification_payload["actionId"] == action_id
+        assert audit_payload["eventType"] == "remediation.action"
+        assert audit_payload["remediationWorkflowId"] == remediation.workflow_id
+        assert audit_payload["targetWorkflowId"] == target.workflow_id
+        assert audit_payload["actionKind"] == action_kind
+        assert annotation_payload["kind"] == "remediation.target_annotation"
+        assert annotation_payload["targetWorkflowId"] == target.workflow_id
+        assert annotation_payload["remediationWorkflowId"] == remediation.workflow_id
+        assert (
+            annotation_payload["artifactRefs"]["actionRequest"]
+            == result["artifactRefs"]["actionRequest"]
+        )
+
+        audit_links = (
+            await session.execute(
+                select(TemporalArtifactLink).where(
+                    TemporalArtifactLink.workflow_id == remediation.workflow_id,
+                    TemporalArtifactLink.link_type == "remediation.audit_event",
+                )
+            )
+        ).scalars().all()
+        target_annotation_links = (
+            await session.execute(
+                select(TemporalArtifactLink).where(
+                    TemporalArtifactLink.workflow_id == target.workflow_id,
+                    TemporalArtifactLink.link_type == "remediation.target_annotation",
+                )
+            )
+        ).scalars().all()
+        assert len(audit_links) == 1
+        assert len(target_annotation_links) == 1
 
 
 async def test_remediation_raw_action_rejection_does_not_publish_side_effect_artifacts(

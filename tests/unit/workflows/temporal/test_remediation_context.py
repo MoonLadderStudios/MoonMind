@@ -34,12 +34,15 @@ from moonmind.workflows.temporal.remediation_context import (
     RemediationLifecyclePublisher,
     build_corrected_instruction_retry_provenance,
     build_remediation_decision_log,
+    build_remediation_evidence_set,
     build_remediation_audit_event,
     build_remediation_continue_as_new_state,
     build_remediation_final_summary,
+    build_non_applicable_remediation_artifact_reason,
     build_remediation_prevention_outcome,
     build_remediation_repair_decision,
     build_remediation_summary_block,
+    build_remediation_target_annotation,
     build_target_remediation_linkage_summary,
     normalize_remediation_phase,
     normalize_remediation_resolution,
@@ -1197,6 +1200,111 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
     assert "raw-secret" not in serialized
     assert "/tmp/raw/path" not in serialized
 
+
+def test_remediation_evidence_set_records_non_applicable_artifacts_safely():
+    reason = build_non_applicable_remediation_artifact_reason(
+        artifact_type="remediation.action_request",
+        reason="diagnosis_only",
+        metadata={
+            "safe": "value",
+            "token": "raw-secret",
+            "path": "/tmp/raw/path",
+        },
+    )
+    evidence = build_remediation_evidence_set(
+        remediation_workflow_id="remediation-workflow",
+        remediation_run_id="remediation-run",
+        target_workflow_id="target-workflow",
+        target_run_id="target-run",
+        artifacts={
+            "context": "art_context",
+            "decisionLog": "art_decision",
+            "summary": "art_summary",
+        },
+        non_applicable_artifacts=(reason,),
+        evidence_degraded=True,
+        degraded_reasons=("live_follow_unavailable", "token=raw-secret"),
+    )
+
+    assert evidence == {
+        "schemaVersion": "v1",
+        "remediationWorkflowId": "remediation-workflow",
+        "remediationRunId": "remediation-run",
+        "targetWorkflowId": "target-workflow",
+        "targetRunId": "target-run",
+        "artifacts": {
+            "context": "art_context",
+            "decisionLog": "art_decision",
+            "summary": "art_summary",
+        },
+        "nonApplicableArtifacts": [
+            {
+                "artifactType": "remediation.action_request",
+                "reason": "diagnosis_only",
+                "metadata": {"safe": "value"},
+            }
+        ],
+        "evidenceDegraded": True,
+        "degradedReasons": ["live_follow_unavailable"],
+    }
+    assert "raw-secret" not in json.dumps(evidence, sort_keys=True)
+    assert "/tmp/raw/path" not in json.dumps(evidence, sort_keys=True)
+
+
+def test_remediation_evidence_set_accepts_none_non_applicable_artifacts():
+    evidence = build_remediation_evidence_set(
+        remediation_workflow_id="remediation-workflow",
+        remediation_run_id="remediation-run",
+        target_workflow_id="target-workflow",
+        target_run_id="target-run",
+        artifacts={},
+        non_applicable_artifacts=None,
+    )
+
+    assert evidence["nonApplicableArtifacts"] == []
+
+
+def test_remediation_target_annotation_is_bounded_and_supplemental():
+    annotation = build_remediation_target_annotation(
+        target_workflow_id="target-workflow",
+        target_run_id="target-run",
+        remediation_workflow_id="remediation-workflow",
+        remediation_run_id="remediation-run",
+        action_kind="workload.restart_helper_container",
+        decision="attempted",
+        artifact_refs={
+            "actionRequest": "art_request",
+            "actionResult": "art_result",
+            "verification": "art_verification",
+        },
+        timestamp="2026-05-08T00:00:00Z",
+        metadata={
+            "nativeArtifactPolicy": "preserve",
+            "token": "raw-secret",
+            "path": "/tmp/raw/path",
+        },
+    )
+
+    assert annotation == {
+        "schemaVersion": "v1",
+        "kind": "remediation.target_annotation",
+        "targetWorkflowId": "target-workflow",
+        "targetRunId": "target-run",
+        "remediationWorkflowId": "remediation-workflow",
+        "remediationRunId": "remediation-run",
+        "actionKind": "workload.restart_helper_container",
+        "decision": "attempted",
+        "artifactRefs": {
+            "actionRequest": "art_request",
+            "actionResult": "art_result",
+            "verification": "art_verification",
+        },
+        "timestamp": "2026-05-08T00:00:00Z",
+        "metadata": {"nativeArtifactPolicy": "preserve"},
+    }
+    assert "raw-secret" not in json.dumps(annotation, sort_keys=True)
+    assert "/tmp/raw/path" not in json.dumps(annotation, sort_keys=True)
+
 def test_reviewable_prevention_pr_url_survives_final_summary_sanitization():
     repair = build_remediation_repair_decision(
         target_workflow_id="target-workflow",
@@ -2104,6 +2212,100 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
         assert link is not None
         assert link.latest_action_summary == action_kind
         assert link.outcome == "applied"
+
+
+@pytest.mark.asyncio
+async def test_remediation_execute_action_reuses_retry_artifacts(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        action_kind = "workload.restart_helper_container"
+        action_id = "execute-action-retry"
+        authority = await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind=action_kind,
+            parameters={"reason": "restart helper"},
+            dry_run=False,
+            idempotency_key=action_id,
+            requesting_principal="workflow:remediator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
+        )
+        guard = await RemediationMutationGuardService(session=session).evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind=action_kind,
+            idempotency_key=action_id,
+            parameters={"reason": "restart helper"},
+            policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+            now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+        )
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+        )
+
+        first = await tools.execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority.to_dict(),
+            guard_result=guard.to_dict(),
+            principal="service:test",
+        )
+        second = await tools.execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority.to_dict(),
+            guard_result=guard.to_dict(),
+            principal="service:test",
+        )
+
+        assert second["artifactRefs"] == first["artifactRefs"]
+        remediation_links = (
+            await session.execute(
+                select(TemporalArtifactLink).where(
+                    TemporalArtifactLink.workflow_id == remediation.workflow_id,
+                    TemporalArtifactLink.link_type.in_(
+                        [
+                            "remediation.action_request",
+                            "remediation.action_result",
+                            "remediation.verification",
+                            "remediation.audit_event",
+                            "remediation.target_annotation",
+                        ]
+                    ),
+                )
+            )
+        ).scalars().all()
+        target_links = (
+            await session.execute(
+                select(TemporalArtifactLink).where(
+                    TemporalArtifactLink.workflow_id == target.workflow_id,
+                    TemporalArtifactLink.link_type == "remediation.target_annotation",
+                )
+            )
+        ).scalars().all()
+
+        assert len(remediation_links) == 5
+        assert len(target_links) == 1
+
 
 @pytest.mark.asyncio
 async def test_remediation_execute_action_publishes_v1_request_and_result_artifacts(

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Sequence
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
@@ -31,6 +32,8 @@ REMEDIATION_ARTIFACT_TYPES = frozenset(
         "remediation.decision_log",
         "remediation.action_request",
         "remediation.action_result",
+        "remediation.audit_event",
+        "remediation.target_annotation",
         "remediation.verification",
         "remediation.summary",
     }
@@ -647,14 +650,21 @@ class RemediationLifecyclePublisher:
         if not isinstance(payload, Mapping):
             raise RemediationContextError("payload must be a mapping")
 
-        remediation_record = await self._session.get(
-            db_models.TemporalExecutionCanonicalRecord,
-            workflow_id,
-        )
+        remediation_record = await self._execution_record_for_update(workflow_id)
         if remediation_record is None:
             raise RemediationContextError(
                 f"Remediation execution not found: {workflow_id}"
             )
+        existing_artifact = await self._published_artifact(
+            namespace=remediation_record.namespace,
+            workflow_id=remediation_record.workflow_id,
+            run_id=remediation_record.run_id,
+            link_type=artifact_type,
+            label=name,
+        )
+        if existing_artifact is not None:
+            await self._append_artifact_ref(remediation_record, existing_artifact)
+            return existing_artifact
 
         safe_payload = _safe_lifecycle_payload(payload)
         payload_bytes = json.dumps(
@@ -701,6 +711,125 @@ class RemediationLifecyclePublisher:
         await self._session.commit()
         await self._session.refresh(artifact)
         return artifact
+
+    async def publish_target_annotation(
+        self,
+        *,
+        remediation_workflow_id: str,
+        target_workflow_id: str,
+        target_run_id: str,
+        name: str,
+        payload: Mapping[str, Any],
+        principal: str = "service:remediation-lifecycle",
+    ) -> db_models.TemporalArtifact:
+        """Publish a supplemental remediation annotation linked to the target."""
+
+        artifact = await self.publish_json_artifact(
+            remediation_workflow_id=remediation_workflow_id,
+            artifact_type="remediation.target_annotation",
+            name=name,
+            payload=payload,
+            target_workflow_id=target_workflow_id,
+            target_run_id=target_run_id,
+            principal=principal,
+        )
+        target_record = await self._execution_record_for_update(
+            _required_string(target_workflow_id, "target_workflow_id")
+        )
+        if target_record is None:
+            raise RemediationContextError(
+                f"Target execution not found: {target_workflow_id}"
+            )
+        target_run_id = _required_string(target_run_id, "target_run_id")
+        existing_target_link = await self._published_artifact(
+            namespace=target_record.namespace,
+            workflow_id=target_record.workflow_id,
+            run_id=target_run_id,
+            link_type="remediation.target_annotation",
+            label=name,
+            artifact_id=artifact.artifact_id,
+        )
+        if existing_target_link is None:
+            self._session.add(
+                db_models.TemporalArtifactLink(
+                    artifact_id=artifact.artifact_id,
+                    namespace=target_record.namespace,
+                    workflow_id=target_record.workflow_id,
+                    run_id=target_run_id,
+                    link_type="remediation.target_annotation",
+                    label=name,
+                    created_by_activity_type="remediation.target.annotation.publish",
+                )
+            )
+        self._append_artifact_ref_sync(target_record, artifact)
+        await self._session.commit()
+        await self._session.refresh(artifact)
+        return artifact
+
+    async def _execution_record_for_update(
+        self,
+        workflow_id: str,
+    ) -> db_models.TemporalExecutionCanonicalRecord | None:
+        return (
+            await self._session.execute(
+                select(db_models.TemporalExecutionCanonicalRecord)
+                .where(
+                    db_models.TemporalExecutionCanonicalRecord.workflow_id
+                    == workflow_id
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+
+    async def _published_artifact(
+        self,
+        *,
+        namespace: str,
+        workflow_id: str,
+        run_id: str,
+        link_type: str,
+        label: str,
+        artifact_id: str | None = None,
+    ) -> db_models.TemporalArtifact | None:
+        statement = (
+            select(db_models.TemporalArtifact)
+            .join(db_models.TemporalArtifactLink)
+            .where(
+                db_models.TemporalArtifactLink.namespace == namespace,
+                db_models.TemporalArtifactLink.workflow_id == workflow_id,
+                db_models.TemporalArtifactLink.run_id == run_id,
+                db_models.TemporalArtifactLink.link_type == link_type,
+                db_models.TemporalArtifactLink.label == label,
+                db_models.TemporalArtifact.status
+                == db_models.TemporalArtifactStatus.COMPLETE,
+            )
+            .order_by(db_models.TemporalArtifact.created_at.asc())
+            .limit(1)
+        )
+        if artifact_id is not None:
+            statement = statement.where(
+                db_models.TemporalArtifactLink.artifact_id == artifact_id
+            )
+        return (await self._session.execute(statement)).scalar_one_or_none()
+
+    async def _append_artifact_ref(
+        self,
+        record: db_models.TemporalExecutionCanonicalRecord,
+        artifact: db_models.TemporalArtifact,
+    ) -> None:
+        self._append_artifact_ref_sync(record, artifact)
+        await self._session.commit()
+        await self._session.refresh(artifact)
+
+    @staticmethod
+    def _append_artifact_ref_sync(
+        record: db_models.TemporalExecutionCanonicalRecord,
+        artifact: db_models.TemporalArtifact,
+    ) -> None:
+        refs = list(record.artifact_refs or [])
+        if artifact.artifact_id not in refs:
+            refs.append(artifact.artifact_id)
+            record.artifact_refs = refs
 
 def normalize_remediation_phase(value: Any) -> str:
     """Return a bounded remediation phase value."""
@@ -815,6 +944,109 @@ def build_remediation_continue_as_new_state(
         "retryBudgetState": _safe_policy_mapping(retry_budget_state) or {},
         "liveFollowCursor": _safe_policy_mapping(live_follow_cursor) or {},
     }
+
+def build_non_applicable_remediation_artifact_reason(
+    *,
+    artifact_type: str,
+    reason: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Describe why an expected remediation artifact is not applicable."""
+
+    normalized_artifact_type = _required_string(artifact_type, "artifact_type")
+    if normalized_artifact_type not in REMEDIATION_ARTIFACT_TYPES:
+        raise ValueError(
+            f"artifact_type must be one of {sorted(REMEDIATION_ARTIFACT_TYPES)}"
+        )
+    payload: dict[str, Any] = {
+        "artifactType": normalized_artifact_type,
+        "reason": _required_redacted_text(reason, "reason"),
+    }
+    if safe_metadata := _safe_policy_mapping(metadata):
+        payload["metadata"] = safe_metadata
+    return payload
+
+def build_remediation_evidence_set(
+    *,
+    remediation_workflow_id: str,
+    remediation_run_id: str,
+    target_workflow_id: str,
+    target_run_id: str,
+    artifacts: Mapping[str, Any],
+    non_applicable_artifacts: Sequence[Mapping[str, Any]] = (),
+    evidence_degraded: bool = False,
+    degraded_reasons: Sequence[Any] = (),
+) -> dict[str, Any]:
+    """Build the queryable remediation evidence set for verification."""
+
+    non_applicable: list[dict[str, Any]] = []
+    for item in (non_applicable_artifacts or [])[:50]:
+        if not isinstance(item, Mapping):
+            continue
+        reason = build_non_applicable_remediation_artifact_reason(
+            artifact_type=item.get("artifactType") or item.get("artifact_type"),
+            reason=item.get("reason"),
+            metadata=item.get("metadata")
+            if isinstance(item.get("metadata"), Mapping)
+            else None,
+        )
+        non_applicable.append(reason)
+
+    return {
+        "schemaVersion": "v1",
+        "remediationWorkflowId": _required_lifecycle_string(
+            remediation_workflow_id, "remediation_workflow_id"
+        ),
+        "remediationRunId": _required_lifecycle_string(
+            remediation_run_id, "remediation_run_id"
+        ),
+        "targetWorkflowId": _required_lifecycle_string(
+            target_workflow_id, "target_workflow_id"
+        ),
+        "targetRunId": _required_lifecycle_string(target_run_id, "target_run_id"),
+        "artifacts": _artifact_refs_mapping(artifacts),
+        "nonApplicableArtifacts": non_applicable,
+        "evidenceDegraded": bool(evidence_degraded),
+        "degradedReasons": _safe_string_list(degraded_reasons),
+    }
+
+def build_remediation_target_annotation(
+    *,
+    target_workflow_id: str,
+    target_run_id: str,
+    remediation_workflow_id: str,
+    remediation_run_id: str,
+    action_kind: str,
+    decision: str,
+    artifact_refs: Mapping[str, Any],
+    timestamp: datetime | str,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a bounded, supplemental annotation for the target execution."""
+
+    payload: dict[str, Any] = {
+        "schemaVersion": "v1",
+        "kind": "remediation.target_annotation",
+        "targetWorkflowId": _required_lifecycle_string(
+            target_workflow_id, "target_workflow_id"
+        ),
+        "targetRunId": _required_lifecycle_string(target_run_id, "target_run_id"),
+        "remediationWorkflowId": _required_lifecycle_string(
+            remediation_workflow_id, "remediation_workflow_id"
+        ),
+        "remediationRunId": _required_lifecycle_string(
+            remediation_run_id, "remediation_run_id"
+        ),
+        "actionKind": _required_redacted_text(action_kind, "action_kind"),
+        "decision": _validated_choice(
+            decision, REMEDIATION_REPAIR_DECISIONS, "decision"
+        ),
+        "artifactRefs": _artifact_refs_mapping(artifact_refs),
+        "timestamp": _timestamp_string(timestamp),
+    }
+    if safe_metadata := _safe_policy_mapping(metadata):
+        payload["metadata"] = safe_metadata
+    return payload
 
 def build_remediation_repair_decision(
     *,
