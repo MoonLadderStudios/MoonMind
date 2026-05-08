@@ -34,12 +34,15 @@ from moonmind.workflows.temporal.remediation_context import (
     RemediationLifecyclePublisher,
     build_corrected_instruction_retry_provenance,
     build_remediation_decision_log,
+    build_remediation_evidence_set,
     build_remediation_audit_event,
     build_remediation_continue_as_new_state,
     build_remediation_final_summary,
+    build_non_applicable_remediation_artifact_reason,
     build_remediation_prevention_outcome,
     build_remediation_repair_decision,
     build_remediation_summary_block,
+    build_remediation_target_annotation,
     build_target_remediation_linkage_summary,
     normalize_remediation_phase,
     normalize_remediation_resolution,
@@ -1196,6 +1199,98 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
     serialized = json.dumps(final_summary, sort_keys=True)
     assert "raw-secret" not in serialized
     assert "/tmp/raw/path" not in serialized
+
+
+def test_remediation_evidence_set_records_non_applicable_artifacts_safely():
+    reason = build_non_applicable_remediation_artifact_reason(
+        artifact_type="remediation.action_request",
+        reason="diagnosis_only",
+        metadata={
+            "safe": "value",
+            "token": "raw-secret",
+            "path": "/tmp/raw/path",
+        },
+    )
+    evidence = build_remediation_evidence_set(
+        remediation_workflow_id="remediation-workflow",
+        remediation_run_id="remediation-run",
+        target_workflow_id="target-workflow",
+        target_run_id="target-run",
+        artifacts={
+            "context": "art_context",
+            "decisionLog": "art_decision",
+            "summary": "art_summary",
+        },
+        non_applicable_artifacts=(reason,),
+        evidence_degraded=True,
+        degraded_reasons=("live_follow_unavailable", "token=raw-secret"),
+    )
+
+    assert evidence == {
+        "schemaVersion": "v1",
+        "remediationWorkflowId": "remediation-workflow",
+        "remediationRunId": "remediation-run",
+        "targetWorkflowId": "target-workflow",
+        "targetRunId": "target-run",
+        "artifacts": {
+            "context": "art_context",
+            "decisionLog": "art_decision",
+            "summary": "art_summary",
+        },
+        "nonApplicableArtifacts": [
+            {
+                "artifactType": "remediation.action_request",
+                "reason": "diagnosis_only",
+                "metadata": {"safe": "value"},
+            }
+        ],
+        "evidenceDegraded": True,
+        "degradedReasons": ["live_follow_unavailable"],
+    }
+    assert "raw-secret" not in json.dumps(evidence, sort_keys=True)
+    assert "/tmp/raw/path" not in json.dumps(evidence, sort_keys=True)
+
+
+def test_remediation_target_annotation_is_bounded_and_supplemental():
+    annotation = build_remediation_target_annotation(
+        target_workflow_id="target-workflow",
+        target_run_id="target-run",
+        remediation_workflow_id="remediation-workflow",
+        remediation_run_id="remediation-run",
+        action_kind="workload.restart_helper_container",
+        decision="attempted",
+        artifact_refs={
+            "actionRequest": "art_request",
+            "actionResult": "art_result",
+            "verification": "art_verification",
+        },
+        timestamp="2026-05-08T00:00:00Z",
+        metadata={
+            "nativeArtifactPolicy": "preserve",
+            "token": "raw-secret",
+            "path": "/tmp/raw/path",
+        },
+    )
+
+    assert annotation == {
+        "schemaVersion": "v1",
+        "kind": "remediation.target_annotation",
+        "targetWorkflowId": "target-workflow",
+        "targetRunId": "target-run",
+        "remediationWorkflowId": "remediation-workflow",
+        "remediationRunId": "remediation-run",
+        "actionKind": "workload.restart_helper_container",
+        "decision": "attempted",
+        "artifactRefs": {
+            "actionRequest": "art_request",
+            "actionResult": "art_result",
+            "verification": "art_verification",
+        },
+        "timestamp": "2026-05-08T00:00:00Z",
+        "metadata": {"nativeArtifactPolicy": "preserve"},
+    }
+    assert "raw-secret" not in json.dumps(annotation, sort_keys=True)
+    assert "/tmp/raw/path" not in json.dumps(annotation, sort_keys=True)
 
 def test_reviewable_prevention_pr_url_survives_final_summary_sanitization():
     repair = build_remediation_repair_decision(

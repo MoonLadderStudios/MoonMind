@@ -21,8 +21,10 @@ from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 from moonmind.workflows.temporal.remediation_context import (
     REMEDIATION_CONTEXT_LINK_TYPE,
     RemediationLifecyclePublisher,
+    build_remediation_audit_event,
     build_remediation_decision_log,
     build_remediation_final_summary,
+    build_remediation_target_annotation,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
@@ -496,6 +498,70 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
 
+        audit_timestamp = datetime.now(timezone.utc)
+        audit_payload = build_remediation_audit_event(
+            event_id=f"{link.remediation_workflow_id}:{action_request['actionId']}:action",
+            event_type="remediation.action",
+            actor_user=_string_or_none(action_request.get("requester")),
+            execution_principal=principal,
+            remediation_workflow_id=link.remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            action_kind=action_kind,
+            risk_tier=_string_or_none(
+                action_request.get("riskTier") or authority_result.get("risk")
+            ),
+            approval_decision=_string_or_none(authority_result.get("decision")),
+            timestamp=audit_timestamp,
+            metadata={
+                "status": status,
+                "idempotencyKey": action_request["actionId"],
+                "verificationRequired": verification_required,
+            },
+        )
+        audit_artifact = await self._lifecycle_publisher.publish_json_artifact(
+            remediation_workflow_id=link.remediation_workflow_id,
+            artifact_type="remediation.audit_event",
+            name=f"events/remediation_action-{action_request['actionId']}.json",
+            payload=audit_payload,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            principal=principal,
+        )
+        annotation_payload = build_remediation_target_annotation(
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            remediation_workflow_id=link.remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
+            action_kind=action_kind,
+            decision=_annotation_decision_for_status(status),
+            artifact_refs={
+                "actionRequest": request_artifact.artifact_id,
+                "actionResult": result_artifact.artifact_id,
+                "verification": verification_artifact.artifact_id,
+                "auditEvent": audit_artifact.artifact_id,
+            },
+            timestamp=audit_timestamp,
+            metadata={
+                "status": status,
+                "nativeArtifactPolicy": "preserve",
+            },
+        )
+        annotation_artifact = (
+            await self._lifecycle_publisher.publish_target_annotation(
+                remediation_workflow_id=link.remediation_workflow_id,
+                target_workflow_id=link.target_workflow_id,
+                target_run_id=link.target_run_id,
+                name=(
+                    "annotations/remediation_target-"
+                    f"{action_request['actionId']}.json"
+                ),
+                payload=annotation_payload,
+                principal=principal,
+            )
+        )
+
         link.latest_action_summary = action_kind
         link.outcome = status
         await self._session.commit()
@@ -507,6 +573,8 @@ class RemediationEvidenceToolService:
                 "actionRequest": request_artifact.artifact_id,
                 "actionResult": result_artifact.artifact_id,
                 "verification": verification_artifact.artifact_id,
+                "auditEvent": audit_artifact.artifact_id,
+                "targetAnnotation": annotation_artifact.artifact_id,
             },
         }
 
@@ -809,6 +877,17 @@ def _normalize_action_result_status(value: Any) -> str:
             f"Unsupported action result status: {status}."
         )
     return status
+
+def _annotation_decision_for_status(status: str) -> str:
+    if status in {"applied", "failed", "timed_out"}:
+        return "attempted"
+    if status == "no_op":
+        return "skipped"
+    if status == "approval_required":
+        return "approval_required"
+    if status in {"rejected", "precondition_failed"}:
+        return "denied"
+    return "escalated"
 
 def _required_string(value: Any, field_name: str) -> str:
     normalized = _string_or_none(value)

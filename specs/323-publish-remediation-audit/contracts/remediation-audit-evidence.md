@@ -4,13 +4,15 @@
 
 This contract describes the public and integration-visible behavior required by MM-623. It covers artifact metadata, lifecycle summary shape, queryable audit events, and target-side remediation annotations. It does not redefine artifact storage internals or grant raw artifact access.
 
+Source coverage: DESIGN-REQ-022, DESIGN-REQ-023, and DESIGN-REQ-028.
+
 ## Artifact Family Contract
 
 Every remediation evidence artifact published for this story must expose:
 
 ```json
 {
-  "artifact_type": "remediation.context | remediation.plan | remediation.decision_log | remediation.action_request | remediation.action_result | remediation.verification | remediation.summary",
+  "artifact_type": "remediation.context | remediation.plan | remediation.decision_log | remediation.action_request | remediation.action_result | remediation.audit_event | remediation.target_annotation | remediation.verification | remediation.summary",
   "name": "bounded display name",
   "schemaVersion": "v1",
   "targetWorkflowId": "target workflow identity when applicable",
@@ -149,11 +151,12 @@ When remediation mutates a target-managed session or workload, the target side m
   "remediationWorkflowId": "remediation workflow identity",
   "remediationRunId": "remediation run identity",
   "actionKind": "action kind",
-  "decision": "attempted | skipped | denied | escalated",
+  "decision": "attempted | skipped | denied | approval_required | escalated",
   "artifactRefs": {
     "actionRequest": "artifact id",
     "actionResult": "artifact id",
-    "verification": "artifact id"
+    "verification": "artifact id",
+    "auditEvent": "artifact id"
   },
   "timestamp": "RFC3339 timestamp",
   "metadata": {

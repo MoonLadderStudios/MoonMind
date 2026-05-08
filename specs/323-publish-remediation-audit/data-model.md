@@ -1,5 +1,7 @@
 # Data Model: Publish Remediation Audit Evidence
 
+Traceability: MM-623, DESIGN-REQ-022, DESIGN-REQ-023, and DESIGN-REQ-028.
+
 ## Remediation Evidence Set
 
 Represents the complete operator-facing evidence trail for one remediation run.
@@ -31,7 +33,7 @@ Represents one durable artifact in the remediation evidence trail.
 
 Fields:
 - `artifactId`: durable artifact reference.
-- `artifactType`: one of `remediation.context`, `remediation.plan`, `remediation.decision_log`, `remediation.action_request`, `remediation.action_result`, `remediation.verification`, or `remediation.summary`.
+- `artifactType`: one of `remediation.context`, `remediation.plan`, `remediation.decision_log`, `remediation.action_request`, `remediation.action_result`, `remediation.audit_event`, `remediation.target_annotation`, `remediation.verification`, or `remediation.summary`.
 - `name`: presentation label or path-like artifact name.
 - `contentType`: artifact content type.
 - `redactionLevel`: presentation safety classification.
