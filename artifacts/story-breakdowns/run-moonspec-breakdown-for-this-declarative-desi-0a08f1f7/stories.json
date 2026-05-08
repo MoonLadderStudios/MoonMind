@@ -1,0 +1,484 @@
+{
+  "source": {
+    "title": "Skills On Demand",
+    "path": "docs/Steps/SkillsOnDemand.md",
+    "referencePath": "docs/Steps/SkillsOnDemand.md",
+    "originalDesignText": "# Skills On Demand\n\nStatus: Desired State\nOwners: MoonMind Engineering\nLast Updated: 2026-05-06\nCanonical for: managed-agent requests for additional agent skills during execution\nRelated: `docs/Steps/SkillSystem.md`, `docs/Steps/StepTypes.md`, `docs/Tasks/SkillAndPlanContracts.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`\n\n---\n\n## 1. Purpose\n\nThis document defines the desired-state **Skills On Demand** extension to the MoonMind Agent Skill System.\n\nThe normal skill flow remains:\n\n1. task and step intent selects the Skills MoonMind already knows are needed;\n2. MoonMind resolves that intent into an immutable `ResolvedSkillSet` before runtime launch;\n3. workflows and runtime requests carry compact refs to the resolved snapshot;\n4. managed runtimes receive a compact activation summary and an active read-only projection at `.agents/skills`.\n\nSkills On Demand adds one controlled capability:\n\n> When the feature is enabled, a managed agent may ask MoonMind for additional Skill help during execution. MoonMind, not the agent, decides whether the request is allowed and produces any new resolved snapshot.\n\nThis is intended for cases where the initial workflow can predict the primary Skill, but the agent discovers during execution that another reusable instruction bundle would help.\n\nExamples:\n\n- a code implementation agent discovers the repo uses an unfamiliar framework and asks for a framework-specific review Skill;\n- a docs-writing Skill asks whether a deployment-managed API-writing Skill exists;\n- a PR fixer asks for an available CI-failure-triage Skill after reading failing test logs;\n- a repo migration task asks for a repository-specific migration convention Skill that was not selected up front.\n\n---\n\n## 2. Relationship to `SkillSystem.md`\n\n`docs/Steps/SkillSystem.md` remains canonical for:\n\n1. what a Skill is;\n2. how Skills differ from Tools;\n3. source precedence;\n4. policy gates;\n5. immutable `ResolvedSkillSet` snapshots;\n6. runtime materialization under `.agents/skills`.\n\nThis document defines an extension point that must preserve those invariants.\n\nThe managed agent does **not** directly fetch arbitrary Skill bodies, scan hidden catalogs, mutate `.agents/skills`, or re-resolve Skills locally.\n\nInstead:\n\n```text\nagent asks -> MoonMind validates -> MoonMind resolves -> MoonMind materializes -> agent receives updated activation context\n```\n\nA runtime-side request is therefore an input to MoonMind resolution, not an alternative resolution system.\n\n---\n\n## 3. Desired-State Summary\n\nSkills On Demand is controlled by a single global feature flag.\n\nWhen disabled:\n\n1. managed runtimes must not expose Skills On Demand commands;\n2. any attempted Skills On Demand call must fail with `feature_disabled`;\n3. no Skill catalog query results are returned to the agent;\n4. no additional Skill snapshot is created from a runtime request.\n\nWhen enabled:\n\n1. managed agents may query MoonMind for Skill metadata;\n2. managed agents may request that MoonMind add one or more Skills to the active execution context;\n3. MoonMind applies the same source, version, runtime, and policy rules used by normal resolution;\n4. approved requests create a new immutable resolved snapshot rather than mutating the previous one;\n5. the runtime receives a compact activation update and, where supported, an updated `.agents/skills` projection;\n6. all requests, denials, approvals, snapshot transitions, and materialization outcomes are auditable.\n\n---\n\n## 4. Feature Flag\n\n### 4.1 Global flag\n\nThe first implementation uses one global boolean flag.\n\nSuggested setting:\n\n```py\nskills_on_demand_enabled: bool = Field(\n    False,\n    validation_alias=AliasChoices(\n        \"MOONMIND_SKILLS_ON_DEMAND_ENABLED\",\n        \"WORKFLOW_SKILLS_ON_DEMAND_ENABLED\",\n    ),\n    description=\"Enable managed-agent Skills On Demand query/request capabilities.\",\n)\n```\n\nSuggested environment variable:\n\n```text\nMOONMIND_SKILLS_ON_DEMAND_ENABLED=false\n```\n\nDefault should be `false` until the feature is intentionally enabled for a deployment.\n\n### 4.2 Scope of the flag\n\nThe flag controls whether the functionality can be called at all.\n\nIf `false`, MoonMind treats both query and request calls as unavailable.\n\nIf `true`, MoonMind may expose the controlled commands to supported managed runtimes, but normal Skill resolution policy still applies.\n\nThis first version does not define per-user, per-workspace, per-skill, per-source, or per-runtime fetchability settings. Those may be added later without changing the basic request lifecycle.\n\n### 4.3 Interaction with existing policy\n\nThe global flag is a feature gate, not a replacement for existing policy.\n\nEven when enabled, MoonMind must still enforce:\n\n1. source-kind restrictions;\n2. repo Skill and local-only Skill permissions;\n3. Skill allowlists or policy mode where configured;\n4. runtime compatibility;\n5. version pins;\n6. selected Tool policy;\n7. autonomy and approval policy;\n8. checksum and artifact validation.\n\n---\n\n## 5. Terminology\n\n### 5.1 Initial Skill Snapshot\n\nThe immutable `ResolvedSkillSet` selected before runtime launch through the normal Skill System.\n\n### 5.2 On-Demand Skill Query\n\nA managed-runtime request for metadata about available Skills.\n\nQueries may return names, titles, descriptions, versions, source kind, tags, supported runtimes, and eligibility summaries.\n\nQueries must not return full Skill bodies.\n\n### 5.3 On-Demand Skill Request\n\nA managed-runtime request asking MoonMind to add one or more Skills to the active execution context.\n\nThe request is not itself approval. MoonMind must validate and resolve it.\n\n### 5.4 Derived Skill Snapshot\n\nA new immutable `ResolvedSkillSet` produced from an approved on-demand request.\n\nIt should record the parent snapshot, requested Skills, requesting runtime, reason, policy result, and resulting active Skills.\n\n### 5.5 Skills On Demand Command\n\nA runtime-facing MoonMind control command exposed to a managed agent.\n\nSuggested commands:\n\n```text\nmoonmind.skills.query\nmoonmind.skills.request\n```\n\nThese commands are not Agent Skills. They are not `AgentSkillDefinition` records. They must not appear inside a `ResolvedSkillSet` as active Skills.\n\n---\n\n## 6. Core Invariants\n\n1. Skills On Demand is unavailable unless the global flag is enabled.\n2. A managed agent may request Skills, but MoonMind resolves Skills.\n3. The agent must not directly read from hidden Skill catalogs or bypass resolution.\n4. Query results expose metadata only, not full Skill bodies.\n5. Fetch/request results expose refs, activation summaries, and materialization status, not ungoverned bodies.\n6. Existing snapshots are immutable.\n7. Approved on-demand additions create a derived snapshot.\n8. Source policy continues to apply.\n9. Local-only Skills must not bypass deployment policy.\n10. `.agents/skills` remains MoonMind-owned runtime projection state.\n11. Runtime adapters must not independently broaden the active Skill set.\n12. Workflow history carries compact refs, not large Skill bodies.\n13. All on-demand requests must be auditable.\n14. A denied on-demand request must not change the active snapshot.\n15. A materialization failure must not partially activate a new Skill set.\n\n---\n\n## 7. User-Facing Behavior\n\n### 7.1 When disabled\n\nThe runtime activation summary may include no mention of Skills On Demand, or it may explicitly say:\n\n```text\nSkills On Demand is disabled for this run. Use only the active Skills already available under .agents/skills.\n```\n\nThe runtime must not expose the `moonmind.skills.query` or `moonmind.skills.request` command where command exposure is controllable.\n\nIf a runtime cannot hide commands and a call is attempted, MoonMind returns:\n\n```json\n{\n  \"status\": \"denied\",\n  \"code\": \"feature_disabled\",\n  \"message\": \"Skills On Demand is disabled for this deployment.\"\n}\n```\n\n### 7.2 When enabled\n\nThe activation summary should include a compact note:\n\n```text\nSkills On Demand is enabled.\nYou may ask MoonMind for additional Skill metadata or request additional Skills when needed.\nMoonMind must approve and resolve any requested Skill before it becomes active.\n```\n\nThe note must also remind the agent that active Skill bodies remain under `.agents/skills` and that full Skill bodies should not be copied into responses unless specifically needed.\n\n---\n\n## 8. Runtime Commands\n\n### 8.1 `moonmind.skills.query`\n\nPurpose: discover whether MoonMind knows about relevant Skills.\n\nInputs:\n\n```ts\ntype SkillsOnDemandQuery = {\n  query: string;\n  runtime_id?: string;\n  current_snapshot_ref?: string;\n  max_results?: number;\n};\n```\n\nOutput:\n\n```ts\ntype SkillsOnDemandQueryResult = {\n  status: \"ok\" | \"denied\";\n  code?: string;\n  results: SkillCatalogSearchResult[];\n};\n\ntype SkillCatalogSearchResult = {\n  name: string;\n  title?: string;\n  description?: string;\n  latest_version?: string;\n  source_kind: \"built_in\" | \"deployment\" | \"repo\" | \"local\";\n  supported_runtimes?: string[];\n  eligible: boolean;\n  in_current_snapshot: boolean;\n  eligibility_summary?: string;\n};\n```\n\nRules:\n\n1. query returns metadata only;\n2. results should be filtered to policy-eligible candidates where practical;\n3. ineligible matches may be returned only when useful for diagnostics and must include `eligible: false`;\n4. query must not return content refs that permit direct body reads;\n5. query must be bounded and safe for workflow/activity payloads.\n\n### 8.2 `moonmind.skills.request`\n\nPurpose: ask MoonMind to add one or more Skills to the active runtime context.\n\nInputs:\n\n```ts\ntype SkillsOnDemandRequest = {\n  current_snapshot_ref: string;\n  requested_skills: {\n    name: string;\n    version?: string;\n  }[];\n  reason?: string;\n  runtime_id?: string;\n  step_id?: string;\n};\n```\n\nOutput:\n\n```ts\ntype SkillsOnDemandRequestResult = {\n  status: \"activated\" | \"denied\" | \"requires_approval\" | \"no_change\";\n  code?: string;\n  message?: string;\n  parent_snapshot_ref?: string;\n  resolved_skillset_ref?: string;\n  snapshot_id?: string;\n  activation_summary?: string;\n  materialization?: {\n    mode: \"prompt_bundled\" | \"workspace_mounted\" | \"hybrid\" | \"retrieval\";\n    visible_path?: string;\n    manifest_ref?: string;\n  };\n};\n```\n\nRules:\n\n1. requested Skills are treated as selector intent;\n2. MoonMind must not trust the request without policy validation;\n3. approval may be added later, but the v1 feature may return only `activated`, `denied`, or `no_change`;\n4. `requires_approval` is reserved for future use;\n5. if every requested Skill is already active, return `no_change`;\n6. if resolution succeeds, return compact refs and activation instructions;\n7. if resolution fails, return a denial or structured error without changing the active snapshot.\n\n---\n\n## 9. Resolution Lifecycle\n\n### 9.1 Initial launch\n\nBefore runtime launch, MoonMind follows normal Skill resolution:\n\n1. collect task-level and step-level Skill selectors;\n2. resolve the initial `ResolvedSkillSet`;\n3. persist the manifest and Skill body artifacts;\n4. materialize the active bundle;\n5. launch the managed runtime with the active snapshot ref.\n\n### 9.2 On-demand query\n\nWhen the agent calls `moonmind.skills.query`:\n\n1. MoonMind checks the global feature flag;\n2. MoonMind identifies the current deployment, runtime, step, and active snapshot;\n3. MoonMind searches eligible Skill metadata across allowed sources;\n4. MoonMind returns bounded metadata results;\n5. MoonMind records the query for observability.\n\n### 9.3 On-demand request\n\nWhen the agent calls `moonmind.skills.request`:\n\n1. MoonMind checks the global feature flag;\n2. MoonMind validates the request shape;\n3. MoonMind loads the current active snapshot by ref;\n4. MoonMind computes a new selector containing the currently active Skills plus requested additions;\n5. MoonMind applies normal source, version, runtime, and policy gates;\n6. MoonMind creates a derived immutable `ResolvedSkillSet` if the request is allowed;\n7. MoonMind persists the derived manifest;\n8. MoonMind materializes the derived active bundle;\n9. MoonMind updates the managed runtime using the adapter's supported refresh mechanism;\n10. MoonMind returns a compact activation summary to the agent.\n\n### 9.4 Snapshot lineage\n\nDerived snapshots should preserve lineage.\n\nSuggested fields to add to `ResolvedSkillSet` or its manifest metadata:\n\n```ts\ntype ResolvedSkillSetLineage = {\n  parent_snapshot_id?: string;\n  parent_manifest_ref?: string;\n  created_by: \"initial_resolution\" | \"skills_on_demand\" | \"operator_reresolution\";\n  requested_by?: \"managed_agent\" | \"operator\" | \"system\";\n  request_reason?: string;\n  requested_skills?: string[];\n};\n```\n\nLineage may live in the manifest artifact or `source_trace_ref` rather than in workflow history if the payload is large.\n\n---\n\n## 10. Materialization and Runtime Refresh\n\n### 10.1 Preferred behavior\n\nA derived snapshot should be fully materialized before the runtime is told it is active.\n\nThe runtime must never see a partially written `.agents/skills` tree.\n\nPreferred sequence:\n\n1. materialize derived snapshot into a new run-scoped backing store;\n2. verify manifest and checksums;\n3. atomically switch the runtime-visible projection where supported;\n4. send the activation update to the managed agent.\n\n### 10.2 First implementation behavior\n\nThe first implementation may avoid live mid-turn projection mutation.\n\nAcceptable v1 behavior:\n\n1. receive on-demand request;\n2. resolve and materialize a derived snapshot;\n3. send the updated activation summary on the next managed-session turn or controlled steer point;\n4. require the agent to read newly active Skill files after the activation update.\n\nThis avoids races where the agent is reading `.agents/skills` while MoonMind changes the projection.\n\n### 10.3 Retrieval mode\n\nA future implementation may use `retrieval` materialization for very large Skill catalogs or advanced adapters.\n\nEven in retrieval mode, the agent requests through MoonMind and receives governed refs or helper access. It must not be granted direct unrestricted catalog access.\n\n---\n\n## 11. External Agents\n\nSkills On Demand is initially scoped to managed runtimes.\n\nExternal agents may support it later only if the adapter can provide:\n\n1. authenticated MoonMind-mediated control calls;\n2. bounded metadata query results;\n3. immutable snapshot refs;\n4. governed materialization or prompt-bundled updates;\n5. audit events equivalent to managed runtimes.\n\nUntil then, external agents use the initial resolved snapshot only.\n\n---\n\n## 12. Failure Behavior\n\nSkills On Demand fails without changing the active snapshot when:\n\n1. the global feature flag is disabled;\n2. the command is called by an unsupported runtime;\n3. the current snapshot ref is missing or invalid;\n4. a requested Skill does not exist;\n5. a pinned version cannot be resolved;\n6. source policy forbids the requested Skill;\n7. runtime compatibility validation fails;\n8. a selected Skill would require disallowed Tools;\n9. artifact reads or checksums fail;\n10. materialization fails;\n11. the runtime refresh mechanism fails.\n\nFailure responses should include:\n\n```ts\ntype SkillsOnDemandFailure = {\n  status: \"denied\";\n  code: string;\n  message: string;\n  current_snapshot_ref?: string;\n  diagnostics_ref?: string;\n};\n```\n\nSuggested codes:\n\n```text\nfeature_disabled\nunsupported_runtime\ninvalid_request\nsnapshot_not_found\nskill_not_found\nversion_not_found\npolicy_denied\nruntime_incompatible\ntool_policy_denied\nartifact_unavailable\nchecksum_mismatch\nmaterialization_failed\nruntime_refresh_failed\n```\n\n---\n\n## 13. Observability and Audit\n\nMoonMind should record one audit/observability event for each query and request.\n\nMinimum query event fields:\n\n```ts\ntype SkillsOnDemandQueryEvent = {\n  event_type: \"skills_on_demand.query\";\n  workflow_id: string;\n  run_id?: string;\n  step_id?: string;\n  runtime_id?: string;\n  current_snapshot_id?: string;\n  query_hash: string;\n  result_count: number;\n  denied: boolean;\n  denial_code?: string;\n};\n```\n\nMinimum request event fields:\n\n```ts\ntype SkillsOnDemandRequestEvent = {\n  event_type: \"skills_on_demand.request\";\n  workflow_id: string;\n  run_id?: string;\n  step_id?: string;\n  runtime_id?: string;\n  parent_snapshot_id?: string;\n  requested_skills: string[];\n  result: \"activated\" | \"denied\" | \"requires_approval\" | \"no_change\";\n  result_code?: string;\n  derived_snapshot_id?: string;\n  manifest_ref?: string;\n  diagnostics_ref?: string;\n};\n```\n\nDo not store raw long natural-language query text in high-cardinality metrics. Store a hash in metrics and place detailed diagnostics in an artifact if needed.\n\n---\n\n## 14. Security Rules\n\n1. Skills On Demand must not expose secrets.\n2. Skill bodies must not be treated as secret storage.\n3. Query results must not reveal hidden content bodies.\n4. The managed agent must not receive direct database or artifact read capability for arbitrary Skill refs.\n5. The request path must enforce the same policy as initial resolution.\n6. Local-only Skills remain subject to deployment policy.\n7. Repo Skills remain source inputs, not mutable runtime state.\n8. Runtime refresh must not publish `.agents/skills` projection changes as repo-authored changes.\n9. Denied requests must be visible enough for operators to understand why they were denied.\n\n---\n\n## 15. Implementation Notes\n\nThe current architecture already contains most of the required primitives:\n\n1. `SkillSelector` models selector intent.\n2. `AgentSkillResolver` resolves selector intent across built-in, deployment, repo, and local loaders.\n3. `ResolvedSkillSet` models immutable active Skill snapshots.\n4. `agent_skill.resolve` persists file-backed Skill content and resolved manifests.\n5. `AgentSkillMaterializer` materializes a resolved snapshot for managed runtimes.\n6. `AgentExecutionRequest.resolvedSkillsetRef` carries a compact snapshot ref into runtime execution.\n\nSuggested implementation steps:\n\n1. Add `skills_on_demand_enabled` to workflow or deployment settings.\n2. Add schemas for query and request payloads.\n3. Add activities:\n   - `agent_skill.query_catalog`\n   - `agent_skill.request_on_demand`\n4. Register those activities in the Temporal activity catalog.\n5. Add a managed-runtime control surface for `moonmind.skills.query` and `moonmind.skills.request`.\n6. Update runtime instruction preparation to mention availability only when enabled.\n7. Add derived snapshot lineage metadata.\n8. Add materialization refresh support or a next-turn activation fallback.\n9. Add unit tests for disabled, denied, no-change, activated, and materialization-failure paths.\n\nThe v1 implementation should not add per-skill fetchability, per-user permissions, or approval workflows unless required by another feature. The single global flag is the only new feature gate defined here.\n\n---\n\n## 16. Test Cases\n\n### 16.1 Disabled feature\n\nGiven `MOONMIND_SKILLS_ON_DEMAND_ENABLED=false`, when a managed agent calls `moonmind.skills.query` or `moonmind.skills.request`, MoonMind returns `feature_disabled` and no snapshot is created.\n\n### 16.2 Query metadata\n\nGiven the feature is enabled, when a managed agent queries for `python testing`, MoonMind returns bounded Skill metadata and no Skill bodies.\n\n### 16.3 Request already active Skill\n\nGiven the requested Skill is already present in the active snapshot, MoonMind returns `no_change` and keeps the current snapshot ref.\n\n### 16.4 Request allowed Skill\n\nGiven the feature is enabled and the requested Skill is policy-eligible, MoonMind creates a derived snapshot, materializes it, and returns an activation summary.\n\n### 16.5 Request denied by policy\n\nGiven the feature is enabled but source or allowlist policy forbids the requested Skill, MoonMind returns `policy_denied` and keeps the current snapshot active.\n\n### 16.6 Materialization failure\n\nGiven resolution succeeds but materialization fails, MoonMind returns `materialization_failed`, records diagnostics, and keeps the current snapshot active.\n\n---\n\n## 17. Future Extensions\n\nFuture versions may add:\n\n1. per-skill `queryable` and `fetchable` metadata;\n2. source-kind-specific query and fetch permissions;\n3. per-user or per-workspace policy;\n4. approval-required Skills;\n5. cost or risk budgets for autonomous fetches;\n6. semantic catalog search;\n7. retrieval-mode Skill serving;\n8. external-agent support;\n9. UI controls for approving, denying, and inspecting on-demand requests.\n\nThese should extend the same core lifecycle rather than allowing agents to fetch Skill content directly.\n"
+  },
+  "extractedAt": "2026-05-08T01:56:46Z",
+  "outputMode": "jira",
+  "designSummary": "The design defines a desired-state Skills On Demand extension for managed-agent executions. A disabled-by-default global feature flag controls whether managed runtimes can query Skill metadata or request additional Skills during execution. MoonMind remains the only resolver: requests are validated through existing source, version, runtime, tool, policy, artifact, and materialization gates, and approved additions create derived immutable snapshots rather than mutating active state. The design also specifies bounded runtime command contracts, compact workflow payloads, runtime refresh behavior, failure semantics, audit events, and explicit non-goals for v1 such as no per-skill fetchability, per-user policy, approval workflows, or external-agent support.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Feature flag controls availability",
+      "type": "requirement",
+      "source_section": "4. Feature Flag; 7. User-Facing Behavior",
+      "explanation": "Skills On Demand is disabled by default through a global boolean setting; disabled query/request calls fail with feature_disabled and do not expose commands or catalog results."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Existing skill-system invariants are preserved",
+      "type": "constraint",
+      "source_section": "2. Relationship to SkillSystem.md; 6. Core Invariants",
+      "explanation": "Managed agents cannot fetch arbitrary Skill bodies, scan hidden catalogs, mutate .agents/skills, bypass source policy, or broaden active Skills outside MoonMind resolution."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Metadata-only on-demand query command",
+      "type": "integration",
+      "source_section": "5.2 On-Demand Skill Query; 8.1 moonmind.skills.query; 9.2 On-demand query",
+      "explanation": "moonmind.skills.query accepts bounded search input and returns policy-aware Skill metadata only, never body refs or content."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Governed on-demand request command",
+      "type": "integration",
+      "source_section": "5.3 On-Demand Skill Request; 8.2 moonmind.skills.request; 9.3 On-demand request",
+      "explanation": "moonmind.skills.request treats requested Skills as selector intent, validates shape/current snapshot, applies normal gates, and returns activated, denied, no_change, or reserved requires_approval results."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Derived immutable snapshot lineage",
+      "type": "state-model",
+      "source_section": "5.4 Derived Skill Snapshot; 9.4 Snapshot lineage",
+      "explanation": "Approved additions create a new ResolvedSkillSet with parent snapshot, requested Skills, requester/reason, policy result, and active Skill metadata stored compactly."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Safe materialization and runtime refresh",
+      "type": "requirement",
+      "source_section": "10. Materialization and Runtime Refresh",
+      "explanation": "Derived snapshots are materialized and verified before activation; v1 may defer visible projection updates to a next-turn or controlled steer point to avoid partial activation races."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Managed runtime scope and external-agent non-goal",
+      "type": "non-goal",
+      "source_section": "11. External Agents; 17. Future Extensions",
+      "explanation": "The first implementation is scoped to managed runtimes. External-agent support and richer policy/approval/query features are future extensions unless another feature requires them."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Structured failure behavior preserves active snapshot",
+      "type": "requirement",
+      "source_section": "12. Failure Behavior; 16. Test Cases",
+      "explanation": "Disabled, unsupported, invalid, missing, policy-denied, incompatible, artifact, checksum, materialization, and refresh failures return structured errors and must not change the active snapshot."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Audit and observability events",
+      "type": "observability",
+      "source_section": "13. Observability and Audit",
+      "explanation": "Each query and request records an audit/observability event with bounded fields, hashed query text for metrics, denial/result codes, snapshot IDs, manifest refs, and diagnostics refs as applicable."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Security and content exposure limits",
+      "type": "security",
+      "source_section": "14. Security Rules",
+      "explanation": "Skills On Demand must not expose secrets, hidden bodies, direct arbitrary artifact/database reads, or repo/runtime projection mutations; denials must remain operator-understandable."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Initial resolution remains normal path",
+      "type": "constraint",
+      "source_section": "1. Purpose; 9.1 Initial launch",
+      "explanation": "Initial task/step skill selection continues to resolve before runtime launch and runtimes receive compact refs plus a read-only active projection."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Runtime activation summary communicates availability",
+      "type": "artifact",
+      "source_section": "7. User-Facing Behavior; 8. Runtime Commands",
+      "explanation": "Runtime instruction preparation exposes commands and concise usage notes only when enabled, while reminding agents to use .agents/skills and avoid copying full bodies unnecessarily."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Existing implementation primitives should be reused",
+      "type": "constraint",
+      "source_section": "15. Implementation Notes",
+      "explanation": "The implementation should build on SkillSelector, AgentSkillResolver, ResolvedSkillSet, agent_skill.resolve, AgentSkillMaterializer, and AgentExecutionRequest.resolvedSkillsetRef rather than creating a parallel system."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Required test cases cover disabled, query, no-change, activated, denied, and materialization failure",
+      "type": "requirement",
+      "source_section": "16. Test Cases",
+      "explanation": "Downstream specs must support unit and boundary tests for the explicit behavior matrix in the design."
+    }
+  ],
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Add disabled-by-default Skills On Demand controls",
+      "shortName": "skill-demand-flag",
+      "description": "As a MoonMind operator, I want Skills On Demand controlled by a global disabled-by-default setting so managed agents cannot discover or request additional Skills unless the deployment intentionally enables the capability.",
+      "why": "Establishes the deployment safety boundary and preserves the existing initial skill snapshot behavior before any runtime command is exposed.",
+      "sourceReference": {
+        "path": "docs/Steps/SkillsOnDemand.md",
+        "title": "Skills On Demand",
+        "sections": [
+          "1. Purpose",
+          "3. Desired-State Summary",
+          "4. Feature Flag",
+          "7.1 When disabled",
+          "9.1 Initial launch"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012"
+        ]
+      },
+      "scope": [
+        "Add the global settings/env aliases and safe default false behavior.",
+        "Ensure disabled query/request attempts return feature_disabled with no catalog data and no snapshot creation.",
+        "Prepare runtime activation instructions so command exposure and availability text follow the flag."
+      ],
+      "outOfScope": [
+        "Implementing catalog search or skill request approval/resolution.",
+        "Adding per-user, per-workspace, per-runtime, or per-skill fetchability policy."
+      ],
+      "independentTest": "With the flag false or unset, invoke the runtime-facing query and request control handlers and verify feature_disabled responses, absent command exposure where controllable, and unchanged active snapshot refs.",
+      "acceptanceCriteria": [
+        "The default setting is false and supports MOONMIND_SKILLS_ON_DEMAND_ENABLED and WORKFLOW_SKILLS_ON_DEMAND_ENABLED aliases.",
+        "When disabled, query and request calls return status denied, code feature_disabled, and no Skill catalog results.",
+        "No derived ResolvedSkillSet is created when the flag is disabled.",
+        "Runtime activation text does not expose Skills On Demand commands when command exposure is controllable, or reports disabled when hiding is not possible."
+      ],
+      "requirements": [
+        "Add a namespaced global feature flag with deterministic default false behavior.",
+        "Gate all Skills On Demand command paths before catalog lookup or resolution.",
+        "Preserve the normal initial skill resolution path and compact active snapshot refs."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the global feature gate, disabled response, and no-results/no-snapshot behavior.",
+        "DESIGN-REQ-011": "Keeps initial pre-launch skill resolution as the default path.",
+        "DESIGN-REQ-012": "Owns disabled/enabled availability messaging for runtime activation summaries."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "The runtime control surface can report disabled responses even before full query/request behavior exists."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Expose policy-aware Skill metadata query for managed runtimes",
+      "shortName": "skill-query-metadata",
+      "description": "As a managed agent, I want to ask MoonMind for bounded metadata about available Skills so I can discover relevant help without receiving hidden Skill bodies or bypassing deployment policy.",
+      "why": "Provides discovery while preserving source-policy, security, and workflow payload boundaries.",
+      "sourceReference": {
+        "path": "docs/Steps/SkillsOnDemand.md",
+        "title": "Skills On Demand",
+        "sections": [
+          "5.2 On-Demand Skill Query",
+          "6. Core Invariants",
+          "8.1 moonmind.skills.query",
+          "9.2 On-demand query",
+          "14. Security Rules"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "scope": [
+        "Define and validate the query payload/result schemas.",
+        "Search allowed Skill metadata through existing resolver/catalog services under the feature flag.",
+        "Return bounded metadata including eligibility and in-current-snapshot status without content refs or bodies.",
+        "Record query observability in a bounded form."
+      ],
+      "outOfScope": [
+        "Returning full Skill body content.",
+        "Providing arbitrary artifact/database read refs.",
+        "Semantic catalog search beyond existing available metadata search unless already present."
+      ],
+      "independentTest": "With the flag enabled, query for a known Skill category and assert bounded metadata-only results, policy eligibility markings, no body refs/content, and a query audit event.",
+      "acceptanceCriteria": [
+        "moonmind.skills.query validates query, runtime_id, current_snapshot_ref, and max_results inputs.",
+        "Results include metadata fields such as name, title, description, latest_version, source_kind, supported_runtimes, eligible, in_current_snapshot, and eligibility_summary where available.",
+        "Results never include full Skill bodies or direct content refs that permit body reads.",
+        "Ineligible matches are either filtered or explicitly marked eligible false with diagnostic summaries.",
+        "Query payloads and results remain bounded for workflow/activity use."
+      ],
+      "requirements": [
+        "Add SkillsOnDemandQuery and SkillsOnDemandQueryResult contracts.",
+        "Reuse existing Skill resolver/catalog primitives instead of creating a parallel catalog.",
+        "Enforce source-kind restrictions, runtime compatibility summaries, and content exposure limits on query results."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-002": "Owns metadata-only discovery without local hidden-catalog scans or resolution bypass.",
+        "DESIGN-REQ-003": "Owns the query command contract and bounded result shape.",
+        "DESIGN-REQ-010": "Owns the no-secret, no-body, no-arbitrary-ref security rules for query.",
+        "DESIGN-REQ-013": "Requires reuse of existing resolver/catalog primitives.",
+        "DESIGN-REQ-014": "Covers the query metadata test case."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Existing Skill metadata loaders can provide enough fields to build a useful bounded query response."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Resolve approved on-demand Skill requests into derived snapshots",
+      "shortName": "skill-request-snapshot",
+      "description": "As a managed agent, I want MoonMind to evaluate my request for additional Skills and activate only policy-eligible additions as a new immutable snapshot so active Skill state changes are governed and traceable.",
+      "why": "Delivers the central behavior of Skills On Demand while preserving immutable snapshots, policy gates, and no-change/denial semantics.",
+      "sourceReference": {
+        "path": "docs/Steps/SkillsOnDemand.md",
+        "title": "Skills On Demand",
+        "sections": [
+          "5.3 On-Demand Skill Request",
+          "5.4 Derived Skill Snapshot",
+          "8.2 moonmind.skills.request",
+          "9.3 On-demand request",
+          "9.4 Snapshot lineage",
+          "12. Failure Behavior"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "scope": [
+        "Define and validate request/result/failure schemas.",
+        "Load and validate the current snapshot ref before resolution.",
+        "Combine current active Skills with requested additions as selector intent.",
+        "Apply normal source, version, runtime, tool, artifact, checksum, and policy gates.",
+        "Return no_change for already-active requests, activated for successful derived snapshots, and structured denials/errors without changing active state.",
+        "Persist lineage metadata for derived snapshots."
+      ],
+      "outOfScope": [
+        "Human approval workflow for requires_approval.",
+        "Runtime projection switching or activation delivery beyond producing compact refs and activation data."
+      ],
+      "independentTest": "With the flag enabled and an existing active snapshot, request an already-active Skill, an allowed Skill, and a policy-denied Skill; verify no_change, activated derived snapshot lineage, and denied unchanged-snapshot outcomes.",
+      "acceptanceCriteria": [
+        "moonmind.skills.request validates current_snapshot_ref, requested_skills, optional versions, reason, runtime_id, and step_id.",
+        "Every request is resolved by MoonMind using existing skill resolution policy, not by the agent or adapter.",
+        "Already-active requested Skills return no_change and keep the current snapshot ref.",
+        "Allowed additions create a derived immutable ResolvedSkillSet with parent snapshot lineage and requested Skill metadata.",
+        "Denied or failed requests preserve the previous active snapshot and return structured code/message data."
+      ],
+      "requirements": [
+        "Add SkillsOnDemandRequest, SkillsOnDemandRequestResult, and SkillsOnDemandFailure contracts.",
+        "Add or extend activity/service behavior for agent_skill.request_on_demand.",
+        "Persist compact lineage metadata including parent snapshot, request origin, reason, requested Skills, and resulting refs.",
+        "Keep workflow history compact by carrying refs and metadata rather than Skill bodies."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-002": "Owns the rule that agents request but MoonMind resolves and validates.",
+        "DESIGN-REQ-004": "Owns the request command lifecycle and result states.",
+        "DESIGN-REQ-005": "Owns derived immutable snapshot lineage.",
+        "DESIGN-REQ-008": "Owns unchanged active snapshot behavior for denial and failure cases.",
+        "DESIGN-REQ-013": "Requires reuse of existing resolver/materializer artifacts and contracts.",
+        "DESIGN-REQ-014": "Covers no-change, activated, denied, and failure-oriented tests."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Existing resolved skill manifest persistence can carry lineage metadata without a new database table."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Refresh managed runtimes after derived Skill activation",
+      "shortName": "skill-runtime-refresh",
+      "description": "As a managed runtime, I want MoonMind to materialize an approved derived Skill snapshot and provide a compact activation update only after the new bundle is ready so I never observe a partially active Skill set.",
+      "why": "Connects derived snapshots to usable runtime context while protecting read-only projection ownership and avoiding mid-turn races.",
+      "sourceReference": {
+        "path": "docs/Steps/SkillsOnDemand.md",
+        "title": "Skills On Demand",
+        "sections": [
+          "6. Core Invariants",
+          "7.2 When enabled",
+          "10. Materialization and Runtime Refresh",
+          "11. External Agents",
+          "14. Security Rules"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "scope": [
+        "Materialize derived snapshots into a run-scoped backing store and verify manifest/checksums before activation.",
+        "Support either atomic projection switch where available or v1 next-turn/controlled-steer activation fallback.",
+        "Send compact activation updates containing refs, summary, and materialization status.",
+        "Keep .agents/skills MoonMind-owned runtime projection state.",
+        "Fail materialization or refresh safely without partially activating the new snapshot."
+      ],
+      "outOfScope": [
+        "External-agent Skills On Demand support.",
+        "Retrieval-mode Skill serving except as future-compatible result metadata where already supported.",
+        "Direct agent mutation of .agents/skills."
+      ],
+      "independentTest": "Force a successful derived snapshot materialization and a materialization failure; verify the runtime receives activation only after verified materialization, and failure leaves the previous active snapshot/projection unchanged with diagnostics.",
+      "acceptanceCriteria": [
+        "Derived snapshots are fully materialized and verified before a runtime is told they are active.",
+        "The runtime-visible projection is switched atomically where supported or deferred to a documented next-turn/controlled steer point.",
+        "Activation results include compact activation_summary and materialization fields without large Skill bodies.",
+        "Materialization_failed and runtime_refresh_failed outcomes preserve the current active snapshot and produce diagnostics.",
+        "External agents are not exposed to Skills On Demand in v1 unless equivalent authenticated controls and governed materialization exist."
+      ],
+      "requirements": [
+        "Extend AgentSkillMaterializer or adapter boundary behavior for derived snapshot refresh.",
+        "Ensure runtime adapters cannot independently broaden active Skill sets.",
+        "Keep repo-authored Skill sources and local-only overlays separate from MoonMind-owned runtime projection state."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-006": "Owns safe materialization, verification, projection switch, and next-turn fallback behavior.",
+        "DESIGN-REQ-007": "Owns the managed-runtime-only v1 scope and external-agent non-goal.",
+        "DESIGN-REQ-010": "Owns projection/security limits during refresh.",
+        "DESIGN-REQ-012": "Owns enabled activation summary behavior.",
+        "DESIGN-REQ-014": "Covers materialization failure test expectations."
+      },
+      "dependencies": [
+        "STORY-003"
+      ],
+      "assumptions": [
+        "At least one managed runtime adapter can receive a compact next-turn or controlled-steer activation update in v1."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Record audit events and failure diagnostics for Skills On Demand",
+      "shortName": "skill-demand-audit",
+      "description": "As an operator, I want every Skills On Demand query and request to leave bounded audit evidence and actionable diagnostics so I can understand approvals, denials, snapshot transitions, and failures without exposing secrets or high-cardinality raw text.",
+      "why": "Makes the feature operable and reviewable, especially because agents can request additional runtime instruction bundles autonomously when enabled.",
+      "sourceReference": {
+        "path": "docs/Steps/SkillsOnDemand.md",
+        "title": "Skills On Demand",
+        "sections": [
+          "12. Failure Behavior",
+          "13. Observability and Audit",
+          "14. Security Rules",
+          "16. Test Cases"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "scope": [
+        "Emit query events with workflow/run/step/runtime/snapshot context, query hash, result count, and denial status/code.",
+        "Emit request events with requested Skill names, result, result code, derived snapshot/manifest refs, and diagnostics refs.",
+        "Ensure failure responses use the documented code set and keep detailed diagnostics in artifacts where needed.",
+        "Avoid secrets, raw long query text in metrics, and unrestricted refs in operator-visible outputs."
+      ],
+      "outOfScope": [
+        "Building UI approval controls or policy-management screens.",
+        "Persisting new database tables unless existing event/artifact mechanisms cannot satisfy the evidence requirements."
+      ],
+      "independentTest": "Run disabled, denied, activated, no-change, and materialization-failure paths and assert bounded audit events plus structured failure diagnostics without raw long query text or secret-like values.",
+      "acceptanceCriteria": [
+        "Each query records a skills_on_demand.query event with bounded fields and query_hash rather than raw high-cardinality query text in metrics.",
+        "Each request records a skills_on_demand.request event with result, result_code, requested Skill names, parent/derived snapshot identifiers where applicable, and diagnostics refs where applicable.",
+        "Failure responses use documented codes such as feature_disabled, policy_denied, snapshot_not_found, materialization_failed, and runtime_refresh_failed.",
+        "Audit and diagnostics outputs do not expose secrets, full Skill bodies, or arbitrary artifact/database access."
+      ],
+      "requirements": [
+        "Integrate Skills On Demand control paths with existing observability/audit or artifact-backed diagnostic mechanisms.",
+        "Normalize failure codes and diagnostics consistently across query, request, materialization, and refresh failures.",
+        "Include test coverage for the documented failure and observability matrix."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-008": "Owns structured failure code consistency and unchanged snapshot evidence.",
+        "DESIGN-REQ-009": "Owns query/request audit event fields.",
+        "DESIGN-REQ-010": "Owns secret/content exposure limits in audit and diagnostics.",
+        "DESIGN-REQ-014": "Covers disabled, denied, no-change, activated, and materialization-failure test verification."
+      },
+      "dependencies": [
+        "STORY-002",
+        "STORY-003",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Existing artifact or control-event mechanisms are sufficient for detailed diagnostics without adding persistent tables."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-003",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-002",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005"
+    ]
+  },
+  "outOfScope": [
+    "Per-user, per-workspace, per-skill, per-source, and per-runtime fetchability settings are future extensions; v1 uses one global feature flag.",
+    "Approval-required Skills and UI approval controls are reserved for later work; requires_approval is only a future-compatible result value.",
+    "External-agent support is out of scope until adapters provide authenticated MoonMind-mediated control calls and equivalent governed materialization/audit guarantees.",
+    "Retrieval-mode Skill serving and semantic catalog search are future extensions and should not let agents fetch Skill bodies directly."
+  ],
+  "recommendedFirstStory": "STORY-001"
+}
