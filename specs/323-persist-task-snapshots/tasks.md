@@ -7,7 +7,7 @@
 
 ## Source Traceability
 
-The original MM-629 Jira preset brief is preserved in `spec.md`. Tasks cover FR-001 through FR-009, acceptance scenarios 1-5, SC-001 through SC-006, and DESIGN-REQ-001 through DESIGN-REQ-011. Plan status summary: FR-002, FR-006, and FR-008 are partial because parameter-derived fallback currently enables edit/rerun when the authoritative snapshot is missing; the rest are implemented-unverified or traceability work for this bounded story.
+The original MM-629 Jira preset brief is preserved in `spec.md`. Tasks cover FR-001 through FR-009, acceptance scenarios 1-5, SC-001 through SC-006, and DESIGN-REQ-001 through DESIGN-REQ-011. Plan status summary: FR-002, FR-006, and FR-008 were partial before implementation because parameter-derived fallback enabled edit/rerun when the authoritative snapshot was missing; T005-T013 now record the test-first remediation and verification work for that bounded story.
 
 ## Story
 
