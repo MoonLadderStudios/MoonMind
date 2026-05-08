@@ -7,7 +7,7 @@
 
 **Organization**: Tasks cover one independently testable story: bounded Skills On Demand audit and diagnostics for `MM-616`.
 
-**Source Traceability**: `MM-616`; FR-001 through FR-018; acceptance scenarios 1 through 5; edge cases; SC-001 through SC-007; DESIGN-REQ-001 through DESIGN-REQ-007.
+**Source Traceability**: `MM-616`; original Jira coverage IDs DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, and DESIGN-REQ-014 preserved in `spec.md` input; local MoonSpec mappings DESIGN-REQ-001 through DESIGN-REQ-007; FR-001 through FR-018; acceptance scenarios 1 through 5; edge cases; SC-001 through SC-007.
 
 **Test Commands**:
 
@@ -52,7 +52,7 @@
 
 **Independent Test**: Exercise Skills On Demand query and request flows for successful results, disabled feature, invalid or missing snapshot, unavailable or denied Skills, materialization failure, and runtime refresh failure; verify each flow records the expected bounded audit event, returns stable diagnostic codes where applicable, preserves active snapshots on failure, and exposes no secrets, Skill bodies, raw long query text, or arbitrary artifact/database access.
 
-**Traceability**: FR-001 through FR-018; acceptance scenarios 1 through 5; SC-001 through SC-007; DESIGN-REQ-001 through DESIGN-REQ-007.
+**Traceability**: FR-001 through FR-018; acceptance scenarios 1 through 5; SC-001 through SC-007; local MoonSpec DESIGN-REQ-001 through DESIGN-REQ-007; original Jira coverage IDs DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, and DESIGN-REQ-014.
 
 **Test Plan**:
 
@@ -101,7 +101,7 @@
 
 ### Story Validation
 
-- [ ] T029 Validate the single story by reviewing `specs/319-audit-failure-diagnostics/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/skills-on-demand-audit-diagnostics-contract.md`, and this `tasks.md` against implemented code and focused test evidence for FR-001 through FR-018, acceptance scenarios 1 through 5, SC-001 through SC-007, and DESIGN-REQ-001 through DESIGN-REQ-007.
+- [ ] T029 Validate the single story by reviewing `specs/319-audit-failure-diagnostics/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/skills-on-demand-audit-diagnostics-contract.md`, and this `tasks.md` against implemented code and focused test evidence for FR-001 through FR-018, acceptance scenarios 1 through 5, SC-001 through SC-007, local DESIGN-REQ-001 through DESIGN-REQ-007, and original Jira coverage IDs DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, and DESIGN-REQ-014.
 
 **Checkpoint**: The story is fully functional, covered by unit and integration tests, and independently testable.
 
@@ -115,7 +115,7 @@
 - [ ] T031 [P] Review `specs/319-audit-failure-diagnostics/quickstart.md` and ensure focused and final commands match the implemented test layout. (FR-017, SC-006)
 - [ ] T032 Run `./tools/test_unit.sh` for the full unit suite via `tools/test_unit.sh` and fix regressions within the MM-616 scope.
 - [ ] T033 Run `./tools/test_integration.sh` for the required hermetic integration_ci suite via `tools/test_integration.sh` or record the exact local blocker if the environment cannot run it.
-- [ ] T034 Run `/moonspec-verify` after implementation and tests pass, validating against `specs/319-audit-failure-diagnostics/spec.md`, `plan.md`, `tasks.md`, preserved `MM-616` Jira preset brief, and unit/integration evidence. (FR-018, SC-007)
+- [ ] T034 Run `/moonspec-verify` after implementation and tests pass, validating against `specs/319-audit-failure-diagnostics/spec.md`, `plan.md`, `tasks.md`, preserved `MM-616` Jira preset brief, original Jira coverage IDs DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-014, local DESIGN-REQ-001 through DESIGN-REQ-007, and unit/integration evidence. (FR-018, SC-007)
 
 ---
 

@@ -9,6 +9,8 @@
 
 MM-616 requires every Skills On Demand query and request path to leave bounded audit evidence and safe diagnostics while preserving active snapshots on denial, materialization failure, and runtime refresh failure. Current code already has Skills On Demand request/query models, failure-code mapping, query hash metadata, snapshot-preserving denials, and materialization/refresh tests. The planned work is to add explicit audit/diagnostic event contracts, emit one bounded event per query/request outcome, attach controlled diagnostics refs where available, and expand unit plus Temporal activity-boundary integration coverage for the full observability matrix.
 
+Traceability note: The original Jira preset brief preserved in `spec.md` names source coverage IDs `DESIGN-REQ-008`, `DESIGN-REQ-009`, `DESIGN-REQ-010`, and `DESIGN-REQ-014`. This MoonSpec assigns local source design mappings `DESIGN-REQ-001` through `DESIGN-REQ-007`; downstream tasks and verification must preserve both the original Jira coverage IDs and the local MoonSpec mapping IDs.
+
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
