@@ -36,9 +36,9 @@ Tasks use the exact checklist format `- [ ] T### [P?] Description with file path
 
 **CRITICAL**: No conditional implementation work can begin until this phase confirms the current source/test files under review.
 
-- [ ] T003 Inspect existing guard implementation in `moonmind/workflows/temporal/remediation_actions.py` against `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md` for FR-001 through FR-013 and DESIGN-REQ-011, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-025
+- [ ] T003 Inspect existing guard implementation in `moonmind/workflows/temporal/remediation_actions.py` against `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md` for FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, DESIGN-REQ-011, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-025
 - [ ] T004 Inspect persistent guard state fields in `api_service/db/models.py` and `api_service/migrations/versions/f2a3b4c5d6e7_remediation_guard_state.py` for FR-002, FR-006, FR-009, and DESIGN-REQ-019
-- [ ] T005 Inspect existing unit and integration fixtures in `tests/unit/workflows/temporal/test_remediation_context.py` and `tests/integration/temporal/test_remediation_action_contracts.py` for FR-001 through FR-013, SCN-001 through SCN-006, and SC-001 through SC-004
+- [ ] T005 Inspect existing unit and integration fixtures in `tests/unit/workflows/temporal/test_remediation_context.py` and `tests/integration/temporal/test_remediation_action_contracts.py` for FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SCN-006, SC-001, SC-002, SC-003, SC-004
 
 **Checkpoint**: Existing implementation and test surfaces are identified; story verification can begin.
 
@@ -58,8 +58,8 @@ Tasks use the exact checklist format `- [ ] T### [P?] Description with file path
 
 ### Unit Tests (write/verify first)
 
-- [ ] T006 Audit existing red-first unit coverage in `tests/unit/workflows/temporal/test_remediation_context.py` for exclusive locks, lock recovery, lock loss, ledger duplicate decisions, unsafe idempotency reuse, budgets, cooldowns, nested remediation, target freshness, and redaction covering FR-001 through FR-013 and SCN-001 through SCN-006
-- [ ] T007 Run `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and confirm current unit evidence passes for FR-001 through FR-013, SC-001 through SC-004, and DESIGN-REQ-011, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-025 before touching `moonmind/workflows/temporal/remediation_actions.py`
+- [ ] T006 Audit existing red-first unit coverage in `tests/unit/workflows/temporal/test_remediation_context.py` for exclusive locks, lock recovery, lock loss, ledger duplicate decisions, unsafe idempotency reuse, budgets, cooldowns, nested remediation, target freshness, and redaction covering FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SCN-006
+- [ ] T007 Run `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and confirm current unit evidence passes for FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, SC-001, SC-002, SC-003, SC-004, DESIGN-REQ-011, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-025 before touching `moonmind/workflows/temporal/remediation_actions.py`
 
 ### Integration Tests (write/verify first)
 
@@ -73,14 +73,14 @@ Tasks use the exact checklist format `- [ ] T### [P?] Description with file path
 
 ### Conditional Implementation Tasks
 
-- [ ] T012 If T007 fails for guard decision semantics, update `moonmind/workflows/temporal/remediation_actions.py` to restore FR-001 through FR-013 behavior while preserving the v1 guard response contract in `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md`
+- [ ] T012 If T007 fails for guard decision semantics, update `moonmind/workflows/temporal/remediation_actions.py` to restore FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013 behavior while preserving the v1 guard response contract in `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md`
 - [ ] T013 If T007 exposes durable state drift, update `api_service/db/models.py` or `api_service/migrations/versions/f2a3b4c5d6e7_remediation_guard_state.py` only as needed to preserve lock and ledger durability for FR-006, FR-009, and DESIGN-REQ-019
 - [ ] T014 If T009 fails at the evidence boundary, update `moonmind/workflows/temporal/remediation_context.py` or `moonmind/workflows/temporal/remediation_tools.py` to preserve bounded context, action request/result artifacts, and verification artifacts for DESIGN-REQ-011 and DESIGN-REQ-019
 - [ ] T015 If T010 or T011 added failing tests, rerun `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and `pytest tests/integration/temporal/test_remediation_action_contracts.py -m 'integration_ci' -q --tb=short` until MM-621 behavior passes in `tests/unit/workflows/temporal/test_remediation_context.py` and `tests/integration/temporal/test_remediation_action_contracts.py`
 
 ### Story Validation
 
-- [ ] T016 Validate the independent story using `specs/321-remediation-lock-ledger-guards/quickstart.md` and record whether lock conflict, duplicate ledger, stale target, budget, cooldown, missing freshness, self-target, nested remediation, and allowed action evidence outcomes satisfy FR-001 through FR-014 and SC-001 through SC-005
+- [ ] T016 Validate the independent story using `specs/321-remediation-lock-ledger-guards/quickstart.md` and record whether lock conflict, duplicate ledger, stale target, budget, cooldown, missing freshness, self-target, nested remediation, and allowed action evidence outcomes satisfy FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-014, SC-001, SC-002, SC-003, SC-004, SC-005
 
 **Checkpoint**: The single MM-621 story is validated independently with unit and integration evidence.
 
@@ -129,7 +129,7 @@ This is a verification-first task list because `plan.md` classifies every MM-621
 
 ## Requirement Status Coverage Summary
 
-Code-and-test work: 0 planned by default. Verification-only work: FR-001 through FR-014, SCN-001 through SCN-006, SC-001 through SC-005, DESIGN-REQ-011, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-025. Conditional fallback implementation work: T012 through T014 only if focused verification fails. Already verified rows: all rows listed in `specs/321-remediation-lock-ledger-guards/plan.md`.
+Code-and-test work: 0 planned by default. Verification-only work: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-014, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SCN-006, SC-001, SC-002, SC-003, SC-004, SC-005, DESIGN-REQ-011, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-025. Conditional fallback implementation work: T012 through T014 only if focused verification fails. Already verified rows: all rows listed in `specs/321-remediation-lock-ledger-guards/plan.md`.
 
 ## Notes
 
