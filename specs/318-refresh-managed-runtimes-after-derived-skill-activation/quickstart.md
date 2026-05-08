@@ -9,7 +9,7 @@ Validate MM-615 with tests before implementation changes, then verify the final 
 Start with focused pytest iteration for the affected boundaries:
 
 ```bash
-pytest tests/unit/services/test_skill_materialization.py tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py -q
+pytest tests/unit/services/test_skill_materialization.py tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py tests/unit/workflows/adapters/test_base_external_agent_adapter.py -q
 ```
 
 Required unit coverage:

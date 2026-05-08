@@ -69,20 +69,20 @@
 
 > Write these tests FIRST. Run them, confirm they FAIL for the expected reason, then implement only enough code to make them pass.
 
-- [ ] T006 [P] Add failing unit tests for manifest and content checksum verification before activation in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/unit/services/test_skill_materialization.py` for FR-002, SC-001, SC-002, DESIGN-REQ-001, and DESIGN-REQ-003
-- [ ] T007 [P] Add failing unit tests proving partial writes and retry/same-snapshot writes do not expose partial `.agents/skills` projection in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/unit/services/test_skill_materialization.py` for FR-003, SC-002, DESIGN-REQ-001, and DESIGN-REQ-008
-- [ ] T008 [P] Add failing unit tests for compact activation timing metadata and no Skill body or unrestricted ref leakage in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py` for FR-004, FR-005, FR-008, SC-003, SC-004, DESIGN-REQ-002, and DESIGN-REQ-005
-- [ ] T009 [P] Add failing unit tests distinguishing `materialization_failed` from `runtime_refresh_failed` result diagnostics in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py` for FR-007, FR-012, SC-005, and DESIGN-REQ-007
+- [ ] T006 Add failing unit tests for manifest and content checksum verification before activation in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/unit/services/test_skill_materialization.py` for FR-002, SC-001, SC-002, DESIGN-REQ-001, and DESIGN-REQ-003
+- [ ] T007 Add failing unit tests proving partial writes and retry/same-snapshot writes do not expose partial `.agents/skills` projection in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/unit/services/test_skill_materialization.py` for FR-003, SC-002, DESIGN-REQ-001, and DESIGN-REQ-008
+- [ ] T008 Add failing unit tests for compact activation timing metadata and no Skill body or unrestricted ref leakage in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py` for FR-004, FR-005, FR-008, SC-003, SC-004, DESIGN-REQ-002, and DESIGN-REQ-005
+- [ ] T009 Add failing unit tests distinguishing `materialization_failed` from `runtime_refresh_failed` result diagnostics in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py` for FR-007, FR-012, SC-005, and DESIGN-REQ-007
 - [ ] T010 [P] Add failing unit test proving external-agent Skills On Demand activation is unavailable in v1 in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/unit/workflows/adapters/test_base_external_agent_adapter.py` for FR-009, SC-006, and DESIGN-REQ-006
-- [ ] T011 [P] Add failing unit tests proving runtime adapters cannot broaden active Skill sets or publish repo-authored `.agents/skills` projection changes in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/unit/services/test_skill_materialization.py` for FR-010, FR-011, DESIGN-REQ-001, and DESIGN-REQ-008
+- [ ] T011 Add failing unit tests proving runtime adapters cannot broaden active Skill sets or publish repo-authored `.agents/skills` projection changes in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/unit/services/test_skill_materialization.py` for FR-010, FR-011, DESIGN-REQ-001, and DESIGN-REQ-008
 
 ### Integration Tests (write first) ⚠️
 
-- [ ] T012 [P] Add failing integration test that `agent_skill.request_on_demand` returns `activated` only after real materialization and verification succeed in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/integration/temporal/test_skills_on_demand_request_activation.py` for FR-001, FR-002, FR-004, SC-001, and acceptance scenario 1
-- [ ] T013 [P] Add failing integration test for partial write or checksum verification failure preserving the current active snapshot in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/integration/temporal/test_skills_on_demand_request_activation.py` for FR-003, FR-006, SC-002, and acceptance scenario 4
-- [ ] T014 [P] Add failing integration test for non-atomic projection support returning next-turn or controlled-steer-point activation guidance in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/integration/temporal/test_skills_on_demand_request_activation.py` for FR-005, SC-003, and acceptance scenario 3
-- [ ] T015 [P] Add failing integration test for post-materialization runtime refresh failure preserving the current active snapshot and returning `runtime_refresh_failed` in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/integration/temporal/test_skills_on_demand_request_activation.py` for FR-007, FR-012, SC-005, and acceptance scenario 5
-- [ ] T016 [P] Add failing integration test proving repo-authored Skill sources and local-only overlays remain separate from runtime projection state during refresh in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/integration/temporal/test_skills_on_demand_request_activation.py` for FR-010, FR-011, DESIGN-REQ-008, and the repo/local overlay edge case
+- [ ] T012 Add failing integration test that `agent_skill.request_on_demand` returns `activated` only after real materialization and verification succeed in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/integration/temporal/test_skills_on_demand_request_activation.py` for FR-001, FR-002, FR-004, SC-001, and acceptance scenario 1
+- [ ] T013 Add failing integration test for partial write or checksum verification failure preserving the current active snapshot in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/integration/temporal/test_skills_on_demand_request_activation.py` for FR-003, FR-006, SC-002, and acceptance scenario 4
+- [ ] T014 Add failing integration test for non-atomic projection support returning next-turn or controlled-steer-point activation guidance in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/integration/temporal/test_skills_on_demand_request_activation.py` for FR-005, SC-003, and acceptance scenario 3
+- [ ] T015 Add failing integration test for post-materialization runtime refresh failure preserving the current active snapshot and returning `runtime_refresh_failed` in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/integration/temporal/test_skills_on_demand_request_activation.py` for FR-007, FR-012, SC-005, and acceptance scenario 5
+- [ ] T016 Add failing integration test proving repo-authored Skill sources and local-only overlays remain separate from runtime projection state during refresh in `/work/agent_jobs/mm:a3430c58-ca43-4dec-9edc-8f9c304abd0a/repo/tests/integration/temporal/test_skills_on_demand_request_activation.py` for FR-010, FR-011, DESIGN-REQ-008, and the repo/local overlay edge case
 
 ### Red-First Confirmation ⚠️
 
@@ -149,8 +149,8 @@
 ### Parallel Opportunities
 
 - T003-T005 can run in parallel after T001-T002.
-- T006-T011 can run in parallel after Phase 2 because they touch separate or independently scoped test files.
-- T012-T016 can run in parallel after Phase 2 because they add separate integration scenarios in the same file but do not depend on each other conceptually; coordinate edits to avoid conflicts.
+- T006-T011 should be coordinated because several tasks edit the same unit test files; only T010 is independent from the materializer and on-demand service test-file edits.
+- T012-T016 should be performed sequentially or in one coordinated edit because they all target `tests/integration/temporal/test_skills_on_demand_request_activation.py`.
 - T019-T022 can run in parallel only if their corresponding verification tests fail and file edits are coordinated.
 - T033-T035 can run in parallel after story validation.
 
@@ -164,7 +164,7 @@ Task: "T006 Add failing unit tests for manifest and content checksum verificatio
 Task: "T008 Add failing unit tests for compact activation timing metadata in tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py"
 Task: "T010 Add failing unit test for external-agent v1 exclusion in tests/unit/workflows/adapters/test_base_external_agent_adapter.py"
 
-# Launch integration scenario authoring with coordinated same-file edits:
+# Then author same-file integration scenarios in a coordinated edit:
 Task: "T012 Add successful activation-after-verification integration scenario"
 Task: "T015 Add runtime_refresh_failed integration scenario"
 ```
