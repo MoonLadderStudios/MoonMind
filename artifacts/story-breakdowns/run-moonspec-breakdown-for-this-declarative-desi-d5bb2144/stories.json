@@ -1,0 +1,472 @@
+{
+  "source": {
+    "title": "Task Architecture (Control Plane)",
+    "path": "docs/Tasks/TaskArchitecture.md",
+    "referencePath": "docs/Tasks/TaskArchitecture.md",
+    "text": "# Task Architecture (Control Plane)\n\nStatus: Active\nOwners: MoonMind Engineering\nLast updated: 2026-05-06\n\n## 1. Purpose\n\nThis document defines the high-level desired-state control-plane architecture for MoonMind tasks.\n\nIt maps how the control plane translates user intent from Mission Control — including:\n\n- task objective text\n- step-authored instructions\n- objective-scoped and step-scoped input attachments\n- runtime and publish choices\n- repository and single authored branch selection\n- agent skill selection intent\n- presets, Jira imports, and dependency declarations\n\ninto durable execution under Temporal.\n\nThis document is architectural and declarative. Detailed page behavior belongs in `docs/UI/CreatePage.md`. Detailed image-input behavior belongs in `docs/Tasks/ImageSystem.md`.\n\n---\n\n## 2. System snapshot\n\nMoonMind uses a Temporal-backed execution model in which Mission Control acts as the control plane.\n\nThe control plane already centers on these product objects:\n\n- `MoonMind.Run` as the standard task execution workflow\n- first-class artifacts for large or binary inputs and outputs\n- step-authored tasks rather than opaque queue jobs\n- reusable task presets\n- runtime and provider selection intent\n- durable execution actions such as pause, resume, cancel, approve, and rerun\n\nDesired-state additions clarified by this document:\n\n- image inputs are first-class structured task inputs\n- attachment targeting is explicit and durable\n- presets are recursively composable authoring objects resolved entirely in the control plane\n- create, edit, and rerun preserve attachment bindings through an authoritative task input snapshot\n- submitted tasks preserve authored preset metadata and flattened step provenance alongside resolved execution payloads\n- runtime preparation and prompt composition are target-aware rather than attachment-bucket-driven\n- failed-task recovery has two explicit user workflows:\n  - edit the task input and retry the whole task from the beginning\n  - press **Resume** to retry the last failed step with the work completed before that step preserved\n- failed-step resume depends on durable step ledgers, output refs, and workspace checkpoints rather than log parsing or UI reconstruction\n\n---\n\n## 3. Core architectural principles\n\n### 3.1 Task-first control plane\n\nThe user authors tasks, not workflow internals.\n\nRules:\n\n- the Create page defines user intent in task terms\n- the control plane translates that task intent into execution-plane contracts\n- the execution plane owns lifecycle progression, retries, waiting, and history\n\n### 3.2 Artifact-first binary handling\n\nRules:\n\n- binary inputs are stored as artifacts\n- binary inputs are referenced in execution contracts by lightweight refs\n- binary inputs are not embedded in workflow histories or text instructions\n\n### 3.3 Explicit target binding\n\nRules:\n\n- an input attachment must belong to an explicit target\n- the supported target kinds are:\n  - task objective target\n  - step target\n- target binding must survive create, edit, rerun, prepare, prompt composition, and detail rendering\n\n### 3.4 Durable reconstruction\n\nRules:\n\n- task input reconstruction uses an authoritative snapshot\n- text-only reconstruction is insufficient for attachment-aware tasks\n- silent loss of attachment bindings is a contract violation\n\n### 3.5 Separation of text from structured inputs\n\nRules:\n\n- instruction text remains text\n- images remain structured inputs\n- derived image context is a secondary artifact, not the instruction field itself\n\n### 3.6 Failed-step resume is not full rerun\n\nRules:\n\n- failed-task recovery has two separate workflows, and the user's chosen workflow is explicit\n- **Edit and retry whole task** loads the original task snapshot into the authoring UI, permits edits, and starts execution from the beginning\n- **Resume** does not open an authoring form; it retries the last failed step using the original task input and the durable work completed before that step\n- Resume must never silently edit instructions, steps, attachments, runtime, publish mode, branch, dependencies, or preset metadata\n- Resume is available only when the platform can identify the failed step and restore the work completed before it from durable evidence\n- if the prior work cannot be restored faithfully, Resume must be unavailable or fail explicitly with an operator-readable reason\n\n---\n\n## 4. High-level architecture\n\n```mermaid\nflowchart LR\n    U[Authenticated User] --> UI[Mission Control Create Page]\n\n    subgraph Control Plane\n        UI --> API[Executions API]\n        UI --> ART[Artifact API]\n        UI --> JIRA[Jira Browser API]\n        API --> SNAP[Authoritative Task Input Snapshot]\n        API --> PROF[Provider Profile + Runtime Defaults]\n        API --> PRESETS[Task Preset APIs]\n    end\n\n    subgraph Execution Plane\n        API -.-> RUN[MoonMind.Run]\n        RUN --> PREP[Prepare / Artifact Activities]\n        RUN --> VISION[Vision Context Activity]\n        RUN --> STEP[Planner or Step Runtime]\n        RUN --> CHILD[MoonMind.AgentRun child workflow]\n        RUN --> CKPT[Step Ledger + Resume Checkpoints]\n    end\n\n    subgraph Blob Storage\n        ART -.-> S3[(Artifact Store)]\n        PREP -.-> S3\n        VISION -.-> S3\n    end\n```\n\nKey boundary:\n\n- the control plane owns authoring intent, artifact refs, target binding, runtime choice, preset compilation, and snapshot durability\n- the execution plane owns lifecycle, step execution, step ledger state, and resume checkpoint production over already resolved payloads\n- runtime adapters own provider-specific realization details\n\n---\n\n## 5. Control-plane responsibilities\n\nThe control plane is responsible for all of the following.\n\n### 5.1 Authoring and validation\n\n- render the Create page\n- validate repository, runtime, publish mode, dependencies, and attachment policy\n- collect text fields, preset state, Jira imports, and input attachments into a coherent draft\n- render repository, Branch, and Publish Mode together in the Steps card. `Publish Mode` remains submission data; only its visual placement changes.\n\n### 5.2 Artifact upload orchestration\n\n- create upload intents through MoonMind artifact APIs\n- upload browser-selected files before execution submission\n- finalize artifact creation and reject incomplete uploads\n- submit only structured attachment refs to the execution API\n\n### 5.3 Task contract normalization\n\n- normalize the task-shaped payload\n- preserve `task.inputAttachments` and `task.steps[].inputAttachments`\n- preserve step identity and order\n- preserve runtime and publish intent\n- preserve authored preset binding metadata, flattened step provenance, manual and preset-derived step order, and fully resolved execution payloads\n- preserve Jira provenance when those contracts allow it\n\n### 5.4 Preset compilation\n\nPreset compilation is a control-plane phase that completes before execution contract finalization.\n\nRules:\n\n- presets are authoring objects, not execution-plane instructions\n- recursive preset composition is resolved in the control plane\n- preset compilation validates the include tree before producing worker-facing steps\n- compilation flattens manual and preset-derived steps into the final submitted order\n- compilation preserves provenance for preset-derived steps and detached template state\n- the resolved execution payload must remain executable without live preset catalog lookup\n\n### 5.5 Snapshot durability\n\n- persist an authoritative task input snapshot for edit and rerun\n- reconstruct from that snapshot rather than from lossy derived projections\n- preserve attachment target binding in the snapshot\n- preserve pinned preset bindings, include-tree summary, per-step provenance, detachment state, and final submitted order in the snapshot\n\n### 5.6 User-facing reads\n\n- expose previews and downloads through MoonMind APIs\n- surface attachment metadata by target in detail, edit, and rerun flows\n- expose enough diagnostics for operators to understand attachment-related failures\n\n### 5.7 Failed-task recovery orchestration\n\nThe control plane exposes distinct recovery actions instead of treating every recovery path as a generic rerun.\n\nRules:\n\n- failed task details may expose **Edit task**, **Rerun**, and **Resume** as separate actions when their capability fields are true\n- **Edit task** on a failed execution is the editable full retry path; submitting it creates a new execution from the beginning with a new authoritative task input snapshot\n- **Rerun** is the exact full retry path; it starts from the beginning using the original task input without edits\n- **Resume** is the failed-step recovery path; it starts a linked follow-up execution that imports completed prior progress and retries the last failed step\n- Resume eligibility must be computed by the backend, not inferred by the UI\n- Resume eligibility requires, at minimum:\n  - an authoritative original task input snapshot\n  - a pinned source `workflowId` and `runId`\n  - a step ledger that identifies the last failed step\n  - durable refs for all completed steps before the failed step\n  - a workspace, branch, commit, or equivalent checkpoint representing the state immediately before the failed step\n  - a plan identity or digest proving that the restored progress belongs to the same planned step graph\n- Resume requests must be rejected explicitly when any required evidence is missing, stale, unauthorized, or inconsistent\n\n---\n\n## 6. Canonical task-shaped contract\n\nRepresentative contract:\n\n```ts\ninterface TaskInputAttachmentRef {\n  artifactId: string;\n  filename: string;\n  contentType: string;\n  sizeBytes: number;\n}\n\ninterface TaskStepSource {\n  kind?: \"manual\" | \"preset-derived\" | \"preset-include\" | \"detached\";\n  presetId?: string;\n  presetSlug?: string;\n  version?: string;\n  includePath?: string[];\n  originalStepId?: string;\n}\n\ninterface AuthoredPresetBinding {\n  presetId?: string;\n  presetSlug?: string;\n  version?: string;\n  alias?: string;\n  includePath?: string[];\n  inputMapping?: Record<string, unknown>;\n  scope?: string;\n}\n\ninterface TaskStepPayload {\n  id?: string;\n  title?: string;\n  instructions?: string;\n  inputAttachments?: TaskInputAttachmentRef[];\n  source?: TaskStepSource;\n  skill?: {\n    id?: string;\n    args?: Record<string, unknown>;\n    requiredCapabilities?: string[];\n  };\n  skills?: {\n    include?: Array<{ name: string }>;\n  };\n}\n\ninterface TaskPayload {\n  instructions?: string;\n  inputAttachments?: TaskInputAttachmentRef[];\n  steps?: TaskStepPayload[];\n  authoredPresets?: AuthoredPresetBinding[];\n  runtime?: {\n    mode?: string;\n    profileId?: string;\n    model?: string;\n    effort?: string;\n  };\n  publish?: {\n    mode?: \"none\" | \"branch\" | \"pr\";\n  };\n  git?: {\n    branch?: string;\n  };\n  appliedStepTemplates?: unknown[];\n  dependsOn?: string[];\n}\n\ntype TaskRecoveryKind = \"exact_full_rerun\" | \"edited_full_retry\" | \"resume_from_failed_step\";\n\ninterface TaskRecoveryProvenance {\n  kind: TaskRecoveryKind;\n  sourceWorkflowId: string;\n  sourceRunId: string;\n  requestedBy?: string;\n  requestedAt?: string;\n}\n\ninterface ResumeFromFailedStepRef {\n  kind: \"resume_from_failed_step\";\n  sourceWorkflowId: string;\n  sourceRunId: string;\n  failedStepId: string;\n  failedStepAttempt?: number;\n  resumeCheckpointRef: string;\n  taskInputSnapshotRef: string;\n  planRef?: string;\n  planDigest?: string;\n}\n\ninterface TaskPayloadWithRecovery extends TaskPayload {\n  recovery?: TaskRecoveryProvenance;\n  resume?: ResumeFromFailedStepRef;\n}\n```\n\nRules:\n\n- `task.inputAttachments` is the objective-scoped input target\n- `task.steps[n].inputAttachments` is the step-scoped input target\n- `task.authoredPresets` preserves optional preset binding metadata used to compile the submitted task\n- `task.steps[n].source` preserves optional source provenance for manual, preset-derived, included, or detached steps\n- these fields are part of the task contract, not incidental UI metadata\n- the absence of attachments is valid\n- the presence of attachments must be preserved across create, detail, edit, and rerun\n- `task.git.branch` is the single authored branch field; new create, edit, and rerun payloads do not include `targetBranch`\n- for `publish.mode === \"pr\"`, `task.git.branch` is the selected repository branch / PR base and the PR head branch is runtime-generated or provider-managed\n- for `publish.mode === \"branch\"`, `task.git.branch` is the branch to update/push\n- `Publish Mode` remains part of task submission semantics; only its Create page placement changes\n- the execution-facing payload is resolved before workers consume it; `authoredPresets` and `source` metadata are for reconstruction, audit, diagnostics, and safe rerun semantics\n- `task.recovery.kind === \"edited_full_retry\"` or `\"exact_full_rerun\"` means the new execution starts from the beginning\n- `task.resume.kind === \"resume_from_failed_step\"` means the new execution must restore completed progress from `resumeCheckpointRef` and start at `failedStepId`\n- resume provenance must include both `sourceWorkflowId` and `sourceRunId` so a resume is pinned to the exact source run and cannot drift when the logical execution later changes\n- resume checkpoint refs are execution-state refs, not editable authoring fields\n\n---\n\n## 7. Snapshot, full retry, and Resume architecture\n\nThe original task input snapshot is the authoritative representation of the authored draft.\n\nRules:\n\n- it must preserve:\n  - task objective text\n  - objective-scoped attachment refs\n  - step text\n  - step-scoped attachment refs\n  - step order and identity\n  - runtime and publish selections\n  - repository and single authored branch selection\n  - preset application metadata\n  - pinned preset bindings\n  - include-tree summary\n  - per-step provenance\n  - detachment state\n  - final submitted order after manual and preset-derived steps are flattened\n  - dependency declarations that remain part of the editable contract\n- edit, exact full rerun, edited full retry, and Resume all depend on this snapshot for the original authored task input\n- edit and full retry derive their initial browser state from this snapshot\n- Resume reuses this snapshot without presenting it as an editable authoring surface\n- edit, rerun, full retry, and Resume must not depend on current live preset catalog correctness to reconstruct already submitted work\n- fallback evidence refs may assist diagnostics, but they are not an authoritative replacement for the snapshot\n- an attachment-aware execution without a reconstructible snapshot is degraded and must be treated as such explicitly\n\n### 7.1 Editable full retry\n\nEditable full retry is the workflow used when the user wants to change the overall instructions or any other task input and then retry the task.\n\nRules:\n\n- the Create page opens in edit-for-rerun mode from the authoritative task input snapshot\n- the user may edit instructions, steps, attachments, runtime, publish mode, branch, presets, dependencies, and other authoring fields subject to normal validation\n- submitting the form creates a new execution from the beginning\n- the edited execution gets its own authoritative task input snapshot\n- the original failed execution, its snapshot, step ledger, artifacts, and checkpoints remain immutable\n- no completed execution progress is imported into the edited full retry\n\n### 7.2 Exact full rerun\n\nExact full rerun is the workflow used when the user wants to retry the whole task with the same original task input.\n\nRules:\n\n- the original task input snapshot is reused as the execution input\n- the task starts from the beginning\n- prepare, prompt composition, planning or plan hydration, and all steps run again according to the normal execution path\n- no completed execution progress is imported from the failed source run\n\n### 7.3 Resume from failed step\n\nResume is the workflow used when the user presses **Resume** on a failed task to retry the last failed step with the completed work up to that step preserved.\n\nRules:\n\n- Resume is not an edit flow and must not allow task input changes in v1\n- Resume pins the source execution with both `sourceWorkflowId` and `sourceRunId`\n- Resume identifies the last failed step from the source run's step ledger\n- Resume creates or resolves a `resumeCheckpointRef` that records the completed steps, their output refs, the prepared input refs, and the workspace or branch state immediately before the failed step\n- the new execution imports completed prior steps as preserved progress rather than re-executing them\n- the failed step is retried as a new attempt in the new execution\n- later steps execute normally after the failed step succeeds\n- the task detail view must show preserved prior steps as reused from the source run, not freshly executed by the resumed run\n- if checkpoint restoration is incomplete, corrupted, unauthorized, or inconsistent with the original task input and plan digest, Resume must fail explicitly before executing the failed step\n\nRepresentative resume checkpoint artifact:\n\n```json\n{\n  \"schemaVersion\": \"v1\",\n  \"source\": {\n    \"workflowId\": \"mm:source\",\n    \"runId\": \"source-run-id\"\n  },\n  \"taskInputSnapshotRef\": \"art_original_task_snapshot\",\n  \"planRef\": \"art_original_plan\",\n  \"planDigest\": \"sha256:...\",\n  \"failedStep\": {\n    \"logicalStepId\": \"run-tests\",\n    \"order\": 4,\n    \"attempt\": 1,\n    \"title\": \"Run test suite\"\n  },\n  \"preservedSteps\": [\n    {\n      \"logicalStepId\": \"apply-patch\",\n      \"order\": 3,\n      \"status\": \"succeeded\",\n      \"sourceAttempt\": 1,\n      \"outputRefs\": {\n        \"outputSummary\": \"art_step_summary\",\n        \"outputPrimary\": \"art_step_output\"\n      }\n    }\n  ],\n  \"resumeWorkspace\": {\n    \"kind\": \"workspace_checkpoint\",\n    \"ref\": \"art_workspace_before_failed_step\"\n  }\n}\n```\n\n---\n\n## 8. Execution-plane responsibilities\n\nThe execution plane consumes the normalized task contract after control-plane preset compilation has produced a resolved execution payload.\n\nRules:\n\n- workers consume resolved steps and structured input refs\n- workers do not expand presets\n- workers do not read the live preset catalog to recover missing task structure\n- workers do not depend on live preset catalog correctness for already submitted work\n\n### 8.1 Workflow responsibilities\n\n`MoonMind.Run` owns:\n\n- durable state progression\n- waiting, retry, and cancel semantics\n- prepare-time attachment handling\n- image context generation orchestration\n- passing target-aware context into the relevant planner or step runtime\n- preserving step ledger state and refs required for later Resume eligibility\n\n### 8.2 Prepare responsibilities\n\nPrepare owns:\n\n- downloading objective-scoped and step-scoped attachments\n- writing a canonical attachments manifest\n- materializing raw files into stable workspace locations\n- producing target-aware image context artifacts\n- failing explicitly when attachment preparation is incomplete or invalid\n\n### 8.3 Step execution responsibilities\n\nStep execution owns:\n\n- consuming task-level objective context when relevant\n- consuming only the current step’s step-scoped image context by default\n- avoiding accidental leakage of unrelated step attachments into the wrong step execution\n\n### 8.4 Child workflow responsibilities\n\nIf a step is executed through `MoonMind.AgentRun`, the parent-child boundary must preserve target-aware prepared context.\n\nRules:\n\n- parent workflow remains the source of truth for attachment target binding\n- child workflows receive only the prepared context relevant to the child step\n- child workflow logs and diagnostics do not redefine target binding semantics\n\n### 8.5 Resume checkpoint responsibilities\n\nThe execution plane owns the durable evidence that makes Resume truthful.\n\nRules:\n\n- after prepare succeeds, the workflow must record the prepared input refs needed to avoid repeating preparation during Resume when reuse is safe\n- after each step succeeds, the workflow must record bounded step state and semantic output refs needed by downstream steps\n- before or after each step boundary, the workflow must record a workspace, branch, commit, or equivalent state checkpoint when the runtime mutates working state\n- checkpoint writes must be idempotent because activities and workflow tasks may retry\n- checkpoint refs must remain outside large inline workflow histories when they are large or binary\n- a completed step without recoverable output refs or state checkpoint evidence is not eligible for Resume preservation\n\n### 8.6 Resume execution responsibilities\n\nWhen a new execution starts with `task.resume.kind === \"resume_from_failed_step\"`, `MoonMind.Run` owns:\n\n- loading and validating the resume checkpoint\n- verifying the checkpoint source `workflowId`, `runId`, task snapshot, and plan identity\n- materializing the restored workspace state before the failed step\n- marking completed prior steps as preserved from the source run without re-executing them\n- injecting preserved outputs so the failed step and downstream steps observe the same contracts as a continuous run\n- retrying the failed step as the first newly executed step of the resumed execution\n- producing fresh ledger rows, artifacts, and checkpoints for the retried failed step and all later steps\n\nRules:\n\n- the execution plane must not silently fall back to full rerun behavior when Resume restoration fails\n- the execution plane must not re-execute preserved prior steps unless a future UI explicitly asks for that behavior\n- preserved rows must carry provenance back to the source `workflowId`, `runId`, logical step ID, and attempt\n\n---\n\n## 9. Artifact and authorization boundary\n\nThe artifact system is the binary boundary of the control plane.\n\nRules:\n\n- the browser never receives long-lived object-store credentials\n- user preview and download are authorized by execution ownership and view permissions\n- worker-side download and materialization use service credentials and execution authorization\n- artifact links are execution-scoped\n- target binding is preserved by task contract and snapshot semantics, not inferred from storage paths alone\n\nRecommended metadata may include:\n\n- target kind\n- step reference\n- original filename\n- source import path such as upload or Jira import\n\nRules:\n\n- metadata is helpful for observability\n- metadata must not be the only place where target meaning exists\n\n---\n\n## 10. Runtime and prompt boundary\n\nThe control plane does not dictate provider-native multimodal payloads.\n\nRules:\n\n- the control plane passes normalized task intent plus artifact refs\n- text-first runtimes consume generated image context through the canonical `INPUT ATTACHMENTS` contract\n- multimodal runtimes may consume raw image refs through runtime adapters without changing the control-plane task contract\n- runtime adapters must not invent new attachment targeting rules that the Create page cannot express\n\n---\n\n## 11. Invariants\n\nThe following invariants define the desired-state task system.\n\n1. **No binary payloads in Temporal history**\n   Image bytes do not belong in execution histories or inline create payload text.\n\n2. **Explicit attachment targets**\n   Every input attachment belongs either to the task objective target or to a declared step target.\n\n3. **No silent attachment loss**\n   Create, edit, rerun, and prepare must fail explicitly rather than silently dropping attachments.\n\n4. **Text remains text**\n   Instruction fields remain textual authoring surfaces. Images remain structured inputs.\n\n5. **Snapshot-based durability**\n   Attachment-aware edit and rerun require an authoritative task input snapshot.\n\n6. **Compile-time preset composition**\n   Preset composition is compile-time control-plane behavior. Submitted execution payloads must not require live preset lookup.\n\n7. **Preset provenance durability**\n   Task snapshots preserve pinned bindings, include-tree summary, per-step provenance, detachment state, and final submitted order.\n\n8. **Server-defined policy**\n   Attachment policy is defined by server configuration and enforced by both browser and API.\n\n9. **MoonMind-owned browser APIs**\n   The browser talks only to MoonMind APIs, not directly to Jira, object storage, or provider-specific file endpoints.\n\n10. **Target-aware runtime consumption**\n   By default, step execution receives only its own step-scoped attachment context plus relevant objective-scoped context.\n\n11. **No hidden retargeting**\n   Reordering steps, applying presets, or changing text must not silently retarget an existing attachment to another step.\n\n12. **Compatibility without semantic drift**\n   Compatibility aliases and migration layers may exist, but they must not change the canonical meaning of objective-scoped versus step-scoped attachments.\n\n13. **Explicit recovery intent**\n   Full rerun, edited full retry, and Resume are distinct intents. The system must not infer Resume from a generic rerun request.\n\n14. **Resume preserves original inputs**\n   Resume uses the original task input snapshot unchanged. Any user edit to instructions, steps, attachments, runtime, publish mode, branch, presets, or dependencies requires edited full retry instead.\n\n15. **Resume requires checkpointed progress**\n   Resume may be offered only when completed work before the failed step is recoverable from durable step refs and workspace or branch checkpoints.\n\n16. **No silent re-execution of preserved steps**\n   Resume must display and treat prior completed steps as preserved from the source run. Re-executing them without explicit user intent is a contract violation.\n\n17. **Pinned resume source**\n   Resume must pin both source `workflowId` and source `runId` so recovery cannot drift to a later run of the same logical execution.\n\n---\n\n## 12. Workload-specific behavior\n\n### 12.1 `MoonMind.Run`\n\nThis is the canonical attachment-aware task workflow.\n\nRules:\n\n- attachment-aware task authoring is defined against `MoonMind.Run`\n- create, edit, rerun, and detail flows for attachment-aware tasks are all modeled in task-shaped `MoonMind.Run` terms\n- `MoonMind.Run` is the canonical workflow that produces step ledger state and resume checkpoints for failed-step Resume\n- `MoonMind.Run` may start from the beginning for full retry or start at a failed step when given a validated resume checkpoint\n- checkpoint durability remains a parent `MoonMind.Run` responsibility even when an individual step delegates work to `MoonMind.AgentRun`\n\n### 12.2 `MoonMind.AgentRun`\n\nThis child workflow may execute a specific step.\n\nRules:\n\n- when used, it consumes prepared context for the step it represents\n- it must not redefine or broaden its attachment scope beyond what the parent workflow prepared\n\n### 12.3 Other workflow types\n\nOther workflow types may reuse artifact infrastructure, but they do not redefine the Create-page attachment contract.\n\n---\n\n## 13. Observability and operator surfaces\n\nThe architecture must support operator understanding without requiring raw history parsing.\n\nRules:\n\n- task detail should expose attachment metadata by target\n- diagnostics should expose manifest and generated context refs where appropriate\n- attachment failures should identify:\n  - which target failed\n  - whether the failure happened during upload, validation, materialization, or context generation\n- step-aware surfaces should identify the current step’s attachment context separately from unrelated step inputs\n- task detail should identify resumed executions and show preserved prior steps as reused from the source run\n- diagnostics for failed Resume attempts should identify whether the failure happened during checkpoint validation, workspace restoration, preserved-output injection, or failed-step execution\n\n---\n\n## 14. Boundary with page-level and subsystem docs\n\nUse this document to understand the architectural contract.\n\nUse the related docs for detailed behavior:\n\n- `docs/UI/CreatePage.md` for page sections, field behavior, Jira targeting, edit/rerun UX, and validation copy\n- `docs/UI/TaskDetailsPage.md` for failed-task action presentation, including **Resume**\n- `docs/Tasks/ImageSystem.md` for image-input upload, artifact storage, materialization, context generation, and preview/download behavior\n- `docs/Tasks/AgentSkillSystem.md` for skill selection and resolution\n- `docs/Temporal/TemporalArchitecture.md` for workflow lifecycle and worker topology\n- `docs/Temporal/RunHistoryAndRerunSemantics.md` for Workflow ID, Run ID, full rerun, and Resume identity semantics\n- `docs/Temporal/StepLedgerAndProgressModel.md` for step ledger, preserved-step, and resume checkpoint semantics\n\n---\n\n## 15. Summary\n\nMoonMind’s control plane is task-first, artifact-first, and target-aware.\n\nFor image inputs that means:\n\n- the user authors text and image inputs in one draft\n- the control plane uploads and binds images to explicit targets\n- the task contract and authoritative snapshot preserve those bindings\n- the execution plane prepares and injects target-aware context\n- detail, edit, and rerun surfaces can round-trip the same authored intent without semantic loss\n- failed-task **Resume** can retry the last failed step only when durable checkpoints can restore the work completed before that step\n\nThat is the desired-state task architecture contract.\n"
+  },
+  "extractedAt": "2026-05-08T21:35:22Z",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {"id": "DESIGN-REQ-001", "title": "Task-first control plane translates user intent into execution-plane contracts", "type": "requirement", "source_section": "3.1 Task-first control plane", "explanation": "Create page authors tasks, control plane translates intent, execution plane owns lifecycle."},
+    {"id": "DESIGN-REQ-002", "title": "Artifact-first binary handling: refs not bytes in workflow history", "type": "constraint", "source_section": "3.2 Artifact-first binary handling; Invariant 1", "explanation": "Binary inputs are stored as artifacts and referenced by lightweight refs; never embedded in histories or text instructions."},
+    {"id": "DESIGN-REQ-003", "title": "Explicit attachment target binding (objective vs step) survives full lifecycle", "type": "requirement", "source_section": "3.3 Explicit target binding; Invariant 2", "explanation": "Every attachment belongs to a declared target kind (task objective or step) and binding survives create/edit/rerun/prepare/prompt/detail."},
+    {"id": "DESIGN-REQ-004", "title": "Durable snapshot-based reconstruction; no silent attachment loss", "type": "requirement", "source_section": "3.4 Durable reconstruction; Invariant 3, 5", "explanation": "Reconstruction uses an authoritative snapshot; text-only is insufficient; silent loss is a contract violation."},
+    {"id": "DESIGN-REQ-005", "title": "Text remains text; images remain structured inputs", "type": "constraint", "source_section": "3.5; Invariant 4", "explanation": "Instruction text is textual authoring; images are structured inputs; derived image context is a secondary artifact."},
+    {"id": "DESIGN-REQ-006", "title": "Failed-step Resume is distinct from full rerun", "type": "requirement", "source_section": "3.6; Invariant 13", "explanation": "Two explicit recovery workflows: edited full retry and Resume; users explicitly choose; Resume must not silently mutate task input."},
+    {"id": "DESIGN-REQ-007", "title": "Authoring & validation incl. Steps card placement of Branch/Publish Mode", "type": "requirement", "source_section": "5.1 Authoring and validation", "explanation": "Create page renders, validates repository/runtime/publish/dependencies/attachment policy; repository/Branch/Publish Mode rendered together in Steps card."},
+    {"id": "DESIGN-REQ-008", "title": "Browser artifact upload orchestration submits only structured refs", "type": "requirement", "source_section": "5.2 Artifact upload orchestration", "explanation": "Browser uploads via MoonMind artifact APIs before submission; rejects incomplete uploads; only structured refs reach the execution API."},
+    {"id": "DESIGN-REQ-009", "title": "Task contract normalization preserves attachments, step identity/order, runtime/publish, preset/Jira metadata", "type": "requirement", "source_section": "5.3 Task contract normalization", "explanation": "Server normalizes task-shaped payload preserving objective and step attachments, step identity/order, runtime/publish intent, authored preset bindings, flattened step provenance, and resolved execution payload."},
+    {"id": "DESIGN-REQ-010", "title": "Compile-time preset composition; no live preset catalog lookup at execution", "type": "requirement", "source_section": "5.4 Preset compilation; Invariant 6", "explanation": "Recursive presets are resolved in control plane before submission; resolved payload remains executable without live preset lookup; provenance preserved."},
+    {"id": "DESIGN-REQ-011", "title": "Authoritative task input snapshot durability with full preset provenance", "type": "requirement", "source_section": "5.5 Snapshot durability; Section 7; Invariant 5, 7", "explanation": "Snapshot persists objective text, step text/order/identity, attachment refs by target, runtime/publish, repository/single branch, preset metadata, pinned bindings, include-tree summary, per-step provenance, detachment state, final submitted order, dependencies."},
+    {"id": "DESIGN-REQ-012", "title": "User-facing reads expose previews/downloads and per-target attachment metadata", "type": "requirement", "source_section": "5.6 User-facing reads", "explanation": "Previews/downloads via MoonMind APIs; attachment metadata surfaced by target in detail/edit/rerun; operator diagnostics exposed."},
+    {"id": "DESIGN-REQ-013", "title": "Distinct failed-task recovery actions Edit / Rerun / Resume with backend eligibility", "type": "requirement", "source_section": "5.7 Failed-task recovery orchestration; Invariant 13", "explanation": "Failed task details may expose Edit, Rerun, Resume as separate actions; Resume eligibility computed by backend with required evidence: snapshot, source workflow/run, ledger, completed-step refs, workspace checkpoint, plan identity."},
+    {"id": "DESIGN-REQ-014", "title": "Single authored branch field task.git.branch (no targetBranch)", "type": "constraint", "source_section": "Section 6 contract rules", "explanation": "Create/edit/rerun payloads use task.git.branch only; semantics differ for publish.mode === 'pr' vs 'branch'."},
+    {"id": "DESIGN-REQ-015", "title": "TaskRecoveryProvenance and ResumeFromFailedStepRef contracts", "type": "artifact", "source_section": "Section 6 (TaskRecoveryKind, TaskRecoveryProvenance, ResumeFromFailedStepRef)", "explanation": "Recovery payload carries kind exact_full_rerun | edited_full_retry | resume_from_failed_step plus pinned source workflowId/runId; resume payload carries failedStepId, attempt, resumeCheckpointRef, taskInputSnapshotRef, planRef/planDigest."},
+    {"id": "DESIGN-REQ-016", "title": "Editable full retry workflow", "type": "state-model", "source_section": "7.1 Editable full retry", "explanation": "Create page opens in edit-for-rerun mode from the snapshot; user may edit any authoring fields; new execution starts from the beginning with its own new snapshot; original execution remains immutable; no progress imported."},
+    {"id": "DESIGN-REQ-017", "title": "Exact full rerun workflow", "type": "state-model", "source_section": "7.2 Exact full rerun", "explanation": "Original task input snapshot is reused unchanged; execution starts from the beginning; no progress imported from the failed source run."},
+    {"id": "DESIGN-REQ-018", "title": "Resume from failed step workflow with resume checkpoint artifact", "type": "state-model", "source_section": "7.3 Resume from failed step; Invariant 14, 15, 17", "explanation": "Resume pins source workflowId+runId, identifies last failed step, resolves resumeCheckpointRef containing preserved steps + outputRefs + workspace state; new execution imports preserved steps and retries failed step; explicit failure when restoration is incomplete/inconsistent."},
+    {"id": "DESIGN-REQ-019", "title": "MoonMind.Run owns durable progression, retries, ledger preservation, and Resume eligibility refs", "type": "requirement", "source_section": "8.1 Workflow responsibilities; 12.1 MoonMind.Run", "explanation": "Workflow owns durable state progression, waiting/retry/cancel, prepare-time attachment handling, image context orchestration, target-aware context dispatch, and step ledger refs required for Resume eligibility."},
+    {"id": "DESIGN-REQ-020", "title": "Prepare activity downloads, manifests, and target-aware materialization with explicit failure", "type": "requirement", "source_section": "8.2 Prepare responsibilities", "explanation": "Prepare downloads objective/step attachments, writes a canonical attachments manifest, materializes raw files, produces target-aware image context, and fails explicitly when invalid/incomplete."},
+    {"id": "DESIGN-REQ-021", "title": "Target-aware step execution: each step receives only its own step-scoped context plus objective context", "type": "requirement", "source_section": "8.3 Step execution responsibilities; Invariant 10", "explanation": "Step execution consumes objective context when relevant and only its own step-scoped image context by default; no cross-step leakage."},
+    {"id": "DESIGN-REQ-022", "title": "MoonMind.AgentRun child workflow inherits parent target binding without redefinition", "type": "requirement", "source_section": "8.4 Child workflow responsibilities; 12.2 AgentRun", "explanation": "Parent workflow remains source of truth; child receives only prepared context relevant to its step; child logs/diagnostics do not redefine target binding semantics."},
+    {"id": "DESIGN-REQ-023", "title": "Resume checkpoint durable evidence: prepared input refs, step state, output refs, workspace checkpoints; idempotent writes", "type": "requirement", "source_section": "8.5 Resume checkpoint responsibilities", "explanation": "After prepare and after each step, workflow records prepared input refs, bounded step state with semantic output refs, workspace/branch/commit checkpoints; writes are idempotent; refs stay outside large workflow histories; steps without recoverable evidence are not Resume-eligible."},
+    {"id": "DESIGN-REQ-024", "title": "Resume execution semantics: validated checkpoint, preserved prior steps, retried failed step, no silent fallback", "type": "state-model", "source_section": "8.6 Resume execution responsibilities; Invariant 16", "explanation": "MoonMind.Run loads/validates checkpoint, verifies source identity/snapshot/plan, materializes workspace, marks preserved steps without re-executing, injects preserved outputs, retries failed step as first new step; explicit failure on inconsistency; preserved rows carry source provenance."},
+    {"id": "DESIGN-REQ-025", "title": "Artifact + authorization boundary: no long-lived browser creds; execution-scoped links", "type": "security", "source_section": "Section 9", "explanation": "Browser never receives object-store creds; preview/download authorized by execution ownership; workers use service creds; artifact links are execution-scoped; storage paths do not define target meaning."},
+    {"id": "DESIGN-REQ-026", "title": "Runtime/prompt boundary: text-first vs multimodal adapters consume normalized intent", "type": "integration", "source_section": "Section 10", "explanation": "Control plane passes normalized task intent + artifact refs; text-first runtimes consume INPUT ATTACHMENTS contract; multimodal adapters consume raw refs; adapters cannot invent new targeting rules."},
+    {"id": "DESIGN-REQ-027", "title": "Server-defined attachment policy enforced by both browser and API", "type": "security", "source_section": "Invariant 8", "explanation": "Attachment policy is defined by server configuration; both browser and API enforce it."},
+    {"id": "DESIGN-REQ-028", "title": "Browser talks only to MoonMind APIs (no direct Jira/object store/provider endpoints)", "type": "security", "source_section": "Invariant 9", "explanation": "Browser is restricted to MoonMind-owned APIs; never accesses Jira, object storage, or provider-specific file endpoints directly."},
+    {"id": "DESIGN-REQ-029", "title": "No hidden retargeting from reorder/preset apply/text edits", "type": "constraint", "source_section": "Invariant 11", "explanation": "Step reorder, preset apply, or text edits must not silently retarget an existing attachment to another step."},
+    {"id": "DESIGN-REQ-030", "title": "Compatibility shims preserved without semantic drift between objective and step targets", "type": "constraint", "source_section": "Invariant 12", "explanation": "Compatibility aliases/migration layers may exist but cannot change the canonical meaning of objective-scoped vs step-scoped attachments."},
+    {"id": "DESIGN-REQ-031", "title": "Operator-facing observability for attachments, recovery, and Resume diagnostics", "type": "observability", "source_section": "Section 13 Observability and operator surfaces", "explanation": "Task detail exposes attachment metadata by target; diagnostics expose manifest/context refs; failures identify target + phase (upload/validation/materialization/context); resumed executions identified with preserved prior steps; Resume failure diagnostics identify failing phase."}
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Define canonical task-shaped contract & server-side normalization",
+      "description": "As a control-plane engineer, I want the canonical task-shaped contract (TaskPayload, TaskStepPayload, TaskInputAttachmentRef, TaskStepSource, AuthoredPresetBinding, runtime/publish/git, recovery/resume types) and a server normalizer so that every create/edit/rerun submission is reduced to a single durable shape that preserves attachments by target, step identity/order, runtime/publish intent, authored preset metadata, flattened step provenance, the single authored branch field, and Jira provenance, without silent loss.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["3.3 Explicit target binding", "3.5 Separation of text from structured inputs", "5.3 Task contract normalization", "6 Canonical task-shaped contract"],
+        "coverageIds": ["DESIGN-REQ-001", "DESIGN-REQ-003", "DESIGN-REQ-005", "DESIGN-REQ-009", "DESIGN-REQ-014"]
+      },
+      "independentTest": "Round-trip a representative create payload (objective + step text, objective and step attachments, presets, runtime, publish.mode in {none,branch,pr}, git.branch, dependsOn, Jira provenance) through the normalizer and assert: attachments remain bound to their original targets, step identity/order preserved, no targetBranch field accepted, authoredPresets and steps[].source preserved, recovery/resume kinds round-trip exactly. Reject payloads that embed binary bytes inline.",
+      "acceptanceCriteria": [
+        "Pydantic/TS schemas exist for TaskPayload, TaskStepPayload, TaskInputAttachmentRef, TaskStepSource, AuthoredPresetBinding, TaskRecoveryProvenance, ResumeFromFailedStepRef matching Section 6 verbatim.",
+        "Normalizer rejects payloads carrying targetBranch and accepts only task.git.branch as the authored branch field.",
+        "Normalizer preserves task.inputAttachments and task.steps[].inputAttachments separately and never moves attachments between targets.",
+        "Normalizer preserves task.authoredPresets, task.steps[].source, dependsOn, runtime, and publish exactly as authored.",
+        "Normalizer enforces text-vs-structured separation: instruction strings stay text; attachments stay structured refs.",
+        "Workflow histories never contain raw attachment bytes; only TaskInputAttachmentRef refs."
+      ],
+      "requirements": "Implement contract types, normalizer, and contract-level rejection of targetBranch and inline binary payloads. Ensure publish.mode semantics map correctly for pr/branch/none against task.git.branch.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the control-plane translation contract from Mission Control intent into a normalized task-shaped payload.",
+        "DESIGN-REQ-003": "Normalizer preserves objective vs step attachment target binding through every payload transition.",
+        "DESIGN-REQ-005": "Contract enforces that text fields stay textual and attachments are structured refs.",
+        "DESIGN-REQ-009": "Owns full task contract normalization rules in 5.3.",
+        "DESIGN-REQ-014": "Owns the single authored branch field rule and rejection of targetBranch."
+      },
+      "dependencies": [],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Authoritative task input snapshot durability for edit/rerun/resume",
+      "description": "As a platform owner, I want every submitted task to persist an authoritative task input snapshot (objective text, step text/order/identity, attachment refs by target, runtime/publish, repository + single authored branch, preset application metadata, pinned preset bindings, include-tree summary, per-step provenance, detachment state, final submitted order, dependencies) so that edit, exact full rerun, edited full retry, and Resume can reconstruct the original authored task input without depending on the live preset catalog or lossy projections.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["3.4 Durable reconstruction", "5.5 Snapshot durability", "7 Snapshot, full retry, and Resume architecture"],
+        "coverageIds": ["DESIGN-REQ-004", "DESIGN-REQ-011"]
+      },
+      "independentTest": "Submit a task with objective + step attachments, recursive presets, dependencies, runtime/publish settings, and a chosen branch. Mutate the live preset catalog (rename/delete a preset). Reconstruct edit/rerun browser state from the snapshot and assert: attachment bindings, step provenance/order, pinned preset bindings, include-tree summary, detachment state, repo/branch and runtime/publish are restored verbatim and reconstruction does not query the live catalog.",
+      "acceptanceCriteria": [
+        "Each submitted execution writes one authoritative task input snapshot artifact whose schema covers every field listed in Section 7.",
+        "Snapshot reconstruction is independent of the live preset catalog state.",
+        "Attachment-aware executions without a reconstructible snapshot are flagged as degraded explicitly.",
+        "Snapshot identity is referenced from the execution and re-used unchanged for exact full rerun and Resume.",
+        "Editing the snapshot during Resume is rejected; only edited full retry produces a new snapshot."
+      ],
+      "requirements": "Persist snapshot via artifact store with schema versioning; expose lookup by execution; expose degraded-state flag in execution metadata.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-004": "Owns durable reconstruction via authoritative snapshot and explicit degraded handling.",
+        "DESIGN-REQ-011": "Owns full set of snapshot fields including preset provenance, include-tree, detachment state, final submitted order, and dependencies."
+      },
+      "dependencies": ["STORY-001"],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Browser artifact upload orchestration & MoonMind-only API boundary",
+      "description": "As a Mission Control user, I want to attach files in the browser through MoonMind artifact APIs so that uploads complete (or are rejected) before execution submission, only structured TaskInputAttachmentRef values reach the execution API, my browser never holds long-lived object-store credentials, and my browser never talks directly to Jira, S3, or provider-specific file endpoints.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["5.2 Artifact upload orchestration", "9 Artifact and authorization boundary", "Invariant 8", "Invariant 9"],
+        "coverageIds": ["DESIGN-REQ-008", "DESIGN-REQ-025", "DESIGN-REQ-027", "DESIGN-REQ-028"]
+      },
+      "independentTest": "Drive the Create page through a browser test that selects multiple files, observes upload-intent/finalize calls go to MoonMind APIs (not S3/Jira/provider endpoints), and confirms submission only carries structured refs. Inject a partial upload failure and assert submission is blocked. Inspect network traces for absence of long-lived object-store credentials. Server-side reject submissions whose attachment refs violate configured policy.",
+      "acceptanceCriteria": [
+        "Upload intent + finalize endpoints exist and are the only path used by the browser to upload attachments.",
+        "Submission is blocked when any selected attachment has not finalized.",
+        "Submitted payload carries only artifactId/filename/contentType/sizeBytes refs; no binary bytes.",
+        "Attachment policy is enforced both client-side and server-side from server configuration.",
+        "Browser-issued requests never carry long-lived object-store credentials and never target Jira, object storage, or provider file endpoints directly.",
+        "Preview and download flow through MoonMind APIs gated by execution ownership/view permissions."
+      ],
+      "requirements": "Implement artifact upload-intent/finalize APIs, browser orchestration, server policy enforcement, and authorization for preview/download by execution scope.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-008": "Owns browser artifact upload orchestration with structured refs at submission.",
+        "DESIGN-REQ-025": "Owns the artifact + authorization boundary including execution-scoped links and absence of long-lived browser credentials.",
+        "DESIGN-REQ-027": "Owns server-defined attachment policy enforced on both browser and API.",
+        "DESIGN-REQ-028": "Owns the MoonMind-only browser API boundary."
+      },
+      "dependencies": ["STORY-001"],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Create page authoring & validation with Steps-card branch/publish placement",
+      "description": "As a Mission Control user, I want the Create page to gather and validate my draft (text fields, preset state, Jira imports, attachments, runtime/publish, repository, single authored branch, dependencies) and to render Repository, Branch, and Publish Mode together inside the Steps card so that I author tasks in task terms while my submission remains a coherent, validated task-shaped payload.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["3.1 Task-first control plane", "5.1 Authoring and validation"],
+        "coverageIds": ["DESIGN-REQ-001", "DESIGN-REQ-007"]
+      },
+      "independentTest": "Render the Create page in tests, confirm Repository/Branch/Publish Mode controls live within the Steps card, exercise validation: missing repository, invalid runtime, conflicting publish mode, attachments violating server policy, and a malformed dependency. Submit a valid draft and assert the resulting payload conforms to the canonical task contract.",
+      "acceptanceCriteria": [
+        "Repository, Branch, and Publish Mode controls are visually rendered together inside the Steps card.",
+        "Publish Mode remains submission data; only its visual placement changes.",
+        "Validation rejects invalid repository, runtime, publish-mode/branch combinations, and attachment-policy violations before submission.",
+        "Valid drafts produce a canonical TaskPayload with task.git.branch (no targetBranch).",
+        "User authoring intent (text, presets, Jira imports, attachments, dependencies) round-trips into the normalized payload."
+      ],
+      "requirements": "Implement Create page layout/validation; route validated drafts through the canonical contract from STORY-001.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Operationalizes task-first authoring with task-term inputs in the UI.",
+        "DESIGN-REQ-007": "Owns Create page validation and Steps-card placement of Repository/Branch/Publish Mode."
+      },
+      "dependencies": ["STORY-001"],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Compile-time preset composition with provenance preservation",
+      "description": "As a control-plane engineer, I want a control-plane preset compiler that resolves recursive preset composition before execution submission, validates the include tree, flattens manual + preset-derived steps into the final submitted order with provenance, and produces a resolved execution payload that does not require live preset catalog lookup at execution time.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["5.4 Preset compilation", "Invariant 6", "Invariant 7"],
+        "coverageIds": ["DESIGN-REQ-010", "DESIGN-REQ-011"]
+      },
+      "independentTest": "Author a task using nested presets with detached overrides, compile, then mutate or remove the preset in the catalog, and verify the resolved execution payload still executes against worker contracts. Confirm authoredPresets and steps[].source provenance are preserved and that the include-tree validation rejects cycles and missing includes at compile time.",
+      "acceptanceCriteria": [
+        "Recursive preset composition is fully resolved before submission.",
+        "Compiler validates the include tree (cycles, missing references, version mismatch) and surfaces explicit errors.",
+        "Manual and preset-derived steps are flattened in their final submitted order with stable identity.",
+        "authoredPresets bindings and steps[].source provenance (kind, presetId/slug, version, includePath, originalStepId) are preserved on the submitted contract.",
+        "Resolved execution payload runs without reading the live preset catalog.",
+        "Detached templates are represented in step source provenance."
+      ],
+      "requirements": "Implement preset compiler that produces both the resolved worker-facing payload and the authored binding metadata used by snapshot reconstruction.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-010": "Owns compile-time preset composition and execution-without-live-catalog rule.",
+        "DESIGN-REQ-011": "Contributes preset-provenance fields persisted in the snapshot."
+      },
+      "dependencies": ["STORY-001"],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Distinct failed-task recovery actions with backend-computed Resume eligibility",
+      "description": "As a Mission Control user, I want failed-task details to expose Edit task, Rerun, and Resume as separate actions whose availability is computed by the backend so that I can select the correct recovery intent (edited full retry, exact full rerun, or resume from failed step) without the platform inferring Resume from a generic rerun.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["3.6 Failed-step resume is not full rerun", "5.7 Failed-task recovery orchestration", "Invariant 13"],
+        "coverageIds": ["DESIGN-REQ-006", "DESIGN-REQ-013", "DESIGN-REQ-015"]
+      },
+      "independentTest": "Compose three failed executions: (a) all Resume evidence present, (b) missing workspace checkpoint, (c) plan digest mismatch. Hit the recovery capability endpoint and assert: (a) exposes all three actions, (b) and (c) hide Resume with explicit operator-readable reasons. Verify each action submits the correct recovery/resume payload (kind=edited_full_retry | exact_full_rerun | resume_from_failed_step) including pinned sourceWorkflowId and sourceRunId.",
+      "acceptanceCriteria": [
+        "Backend exposes per-execution capability fields for editTask/rerun/resume.",
+        "Resume eligibility requires snapshot, sourceWorkflowId, sourceRunId, ledger-identified failed step, completed-step refs, workspace checkpoint, and matching plan identity/digest.",
+        "Missing/stale/unauthorized/inconsistent evidence produces an explicit rejection with operator-readable reason.",
+        "UI never offers Resume from inferred state; capability flag governs availability.",
+        "Recovery submissions carry TaskRecoveryProvenance with kind and pinned source workflow/run ids; Resume submissions also carry ResumeFromFailedStepRef.",
+        "Generic rerun requests cannot be reinterpreted as Resume."
+      ],
+      "requirements": "Implement recovery capability endpoint, contract validation for recovery/resume payloads, and explicit rejection paths.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-006": "Owns the user-visible distinction between edited full retry and Resume.",
+        "DESIGN-REQ-013": "Owns backend-computed Resume eligibility and the three recovery actions.",
+        "DESIGN-REQ-015": "Owns TaskRecoveryProvenance and ResumeFromFailedStepRef payload semantics including pinned source ids."
+      },
+      "dependencies": ["STORY-001", "STORY-002"],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Editable full retry workflow",
+      "description": "As a Mission Control user, I want to choose Edit task on a failed execution to open the Create page in edit-for-rerun mode hydrated from the authoritative snapshot, change any authoring fields under normal validation, and submit a new execution that starts from the beginning with its own new snapshot, leaving the original failed execution and its artifacts immutable.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["7.1 Editable full retry"],
+        "coverageIds": ["DESIGN-REQ-016"]
+      },
+      "independentTest": "From a failed execution, choose Edit task. Verify Create page hydrates from snapshot (instructions, steps, attachments, runtime, publish, branch, presets, dependencies). Modify a step, attachment, and runtime; submit. Assert: a new execution starts from the beginning, has its own new snapshot, and the original execution's snapshot/ledger/artifacts/checkpoints remain unchanged. No completed progress is imported.",
+      "acceptanceCriteria": [
+        "Edit task hydrates Create page from the original snapshot.",
+        "User can edit any authoring field subject to standard validation.",
+        "Submission carries TaskRecoveryProvenance kind=edited_full_retry with pinned source workflow/run ids.",
+        "New execution starts from the beginning and writes its own new snapshot.",
+        "Original failed execution's snapshot, ledger, artifacts, and checkpoints remain immutable.",
+        "No completed progress is imported into the edited full retry."
+      ],
+      "requirements": "Implement edit-for-rerun page mode and edited-full-retry submission path.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-016": "Owns editable full retry semantics end-to-end."
+      },
+      "dependencies": ["STORY-002", "STORY-006"],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-008",
+      "summary": "Exact full rerun workflow",
+      "description": "As a Mission Control user, I want to choose Rerun on a failed execution to start a new execution from the beginning that reuses the original task input snapshot unchanged so that I can re-execute the exact same task without editing anything and without importing prior progress.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["7.2 Exact full rerun"],
+        "coverageIds": ["DESIGN-REQ-017"]
+      },
+      "independentTest": "From a failed execution, choose Rerun. Confirm no edit form is presented and the new execution is submitted with TaskRecoveryProvenance kind=exact_full_rerun pinned to the source workflow/run ids. Verify the new run reuses the original snapshot, runs prepare, prompt composition, planning/plan hydration, and all steps from the beginning, and imports no completed progress from the source run.",
+      "acceptanceCriteria": [
+        "Rerun never opens an authoring form.",
+        "Submission reuses the original snapshot reference unchanged.",
+        "Submission carries TaskRecoveryProvenance kind=exact_full_rerun with pinned source workflow/run ids.",
+        "New execution runs the full pipeline (prepare, prompt composition, planning/plan hydration, all steps).",
+        "No completed progress from the source run is imported."
+      ],
+      "requirements": "Implement exact full rerun submission path and ensure snapshot reuse without mutation.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-017": "Owns exact full rerun semantics."
+      },
+      "dependencies": ["STORY-002", "STORY-006"],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-009",
+      "summary": "Step ledger & resume checkpoint durability in MoonMind.Run",
+      "description": "As an execution-plane engineer, I want MoonMind.Run to durably record prepared input refs, per-step semantic output refs, and workspace/branch/commit checkpoints around step boundaries (idempotently and outside large inline workflow histories) so that Resume eligibility for any failed step is provable from durable evidence.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["8.1 Workflow responsibilities", "8.5 Resume checkpoint responsibilities", "12.1 MoonMind.Run", "Invariant 15"],
+        "coverageIds": ["DESIGN-REQ-019", "DESIGN-REQ-023"]
+      },
+      "independentTest": "Run a multi-step MoonMind.Run with retries injected at activity boundaries. Inspect that prepared input refs are written once after prepare succeeds, that each succeeding step writes bounded state + semantic output refs, and that workspace/branch/commit checkpoints are written around mutating steps. Replay activities to confirm idempotency. Confirm large/binary refs are stored as artifact refs, not embedded in workflow history. Verify a step lacking recoverable evidence is marked Resume-ineligible.",
+      "acceptanceCriteria": [
+        "After prepare succeeds, prepared input refs are recorded so prepare can be skipped on safe Resume.",
+        "After each step succeeds, bounded step state + semantic output refs are recorded.",
+        "Workspace/branch/commit checkpoints are recorded around step boundaries when runtime mutates state.",
+        "Checkpoint writes are idempotent under activity/workflow-task retries.",
+        "Large or binary checkpoint payloads stay outside inline workflow histories (artifact refs).",
+        "Steps without recoverable output refs or state checkpoints are marked Resume-ineligible at the ledger level."
+      ],
+      "requirements": "Implement step ledger persistence, prepared-input ref recording, and idempotent checkpoint emission inside MoonMind.Run activities.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-019": "Owns MoonMind.Run lifecycle ownership including step ledger preservation.",
+        "DESIGN-REQ-023": "Owns durable evidence requirements for Resume."
+      },
+      "dependencies": ["STORY-001"],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-010",
+      "summary": "Resume execution semantics in MoonMind.Run",
+      "description": "As an execution-plane engineer, I want MoonMind.Run, when started with task.resume.kind=resume_from_failed_step, to load and validate the resume checkpoint (source workflow/run ids, snapshot, plan identity), materialize the workspace state before the failed step, mark prior completed steps as preserved (with source provenance) without re-executing them, inject preserved outputs into downstream steps, retry the failed step as the first newly executed step, and fail explicitly when restoration is incomplete instead of silently falling back to full rerun.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["7.3 Resume from failed step", "8.6 Resume execution responsibilities", "Invariant 14", "Invariant 16", "Invariant 17"],
+        "coverageIds": ["DESIGN-REQ-018", "DESIGN-REQ-024"]
+      },
+      "independentTest": "Trigger Resume on a failed run with a valid checkpoint and assert: prior steps appear as preserved with source workflowId/runId/logicalStepId/attempt provenance and never re-execute; workspace is restored before the failed step; the failed step is retried as the first new step; later steps run normally. Then trigger Resume with a stale plan digest, an unauthorized user, a missing workspace checkpoint, and a tampered snapshot ref; each must produce an explicit failure (no silent fallback to full rerun) and never start the failed step.",
+      "acceptanceCriteria": [
+        "Resume validates source workflowId/runId, snapshot ref, and plan identity/digest before executing the failed step.",
+        "Workspace state is materialized to the pre-failed-step checkpoint before retry.",
+        "Preserved prior steps are marked preserved with provenance (source workflowId/runId/logicalStepId/attempt) and not re-executed.",
+        "Preserved outputs are injected so failed and downstream steps see the same contracts as a continuous run.",
+        "Failed step is retried as a new attempt and produces fresh ledger rows/artifacts/checkpoints.",
+        "Resume never silently falls back to full rerun on restoration failure; failures are explicit and operator-readable.",
+        "Resume rejects user-edited task input in v1; only edited full retry permits edits."
+      ],
+      "requirements": "Implement Resume entry path in MoonMind.Run, checkpoint validator, preserved-step marker, output injector, and explicit failure behaviors.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-018": "Owns Resume from failed step workflow including pinned source ids and explicit failure semantics.",
+        "DESIGN-REQ-024": "Owns Resume execution rules including no-silent-fallback and no re-execution of preserved steps."
+      },
+      "dependencies": ["STORY-002", "STORY-006", "STORY-009"],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-011",
+      "summary": "Prepare-time target-aware attachment materialization without retargeting",
+      "description": "As an execution-plane engineer, I want the prepare activity to download objective-scoped and step-scoped attachments, write a canonical attachments manifest, materialize raw files into stable workspace locations, produce target-aware image context artifacts, fail explicitly on incomplete/invalid preparation, and never silently retarget an attachment when steps are reordered, presets applied, or text edited.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["3.2 Artifact-first binary handling", "8.2 Prepare responsibilities", "Invariant 1", "Invariant 3", "Invariant 11"],
+        "coverageIds": ["DESIGN-REQ-002", "DESIGN-REQ-020", "DESIGN-REQ-029"]
+      },
+      "independentTest": "Run prepare against a task with objective and step attachments. Assert: each attachment downloads to the workspace under the correct target's stable location, the manifest correctly distinguishes objective vs step attachments, and target-aware image context artifacts are produced per target. Inject a missing artifact and assert prepare fails explicitly. In a separate scenario, reorder steps and reapply a preset prior to submission and assert no attachment silently moves to a different step's target. Confirm Temporal history contains no raw bytes.",
+      "acceptanceCriteria": [
+        "Objective and step attachments download to distinct, stable workspace locations.",
+        "A canonical attachments manifest is written that names target kind and step reference for every attachment.",
+        "Target-aware image context artifacts are produced per target.",
+        "Prepare fails explicitly on missing/invalid attachments rather than silently dropping them.",
+        "Step reorder, preset apply, and text edits never silently retarget an existing attachment.",
+        "No binary attachment bytes appear in workflow history."
+      ],
+      "requirements": "Implement prepare activity behaviors, manifest writer, target-aware context generation, and contract-level guards against retargeting at the snapshot/normalizer boundary.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-002": "Owns artifact-first behavior at prepare time and avoidance of binary bytes in history.",
+        "DESIGN-REQ-020": "Owns prepare-time download/manifest/materialization/context-generation responsibilities and explicit failure.",
+        "DESIGN-REQ-029": "Owns guard against silent retargeting on reorder/preset/text-edit transitions."
+      },
+      "dependencies": ["STORY-001", "STORY-003"],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-012",
+      "summary": "Target-aware step execution & AgentRun child-workflow scope inheritance",
+      "description": "As an execution-plane engineer, I want each step to consume task-level objective context plus only its own step-scoped image context (no cross-step leakage) and want MoonMind.AgentRun child workflows to receive only the prepared context for the step they execute, never redefining or broadening attachment scope or target-binding semantics.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["8.3 Step execution responsibilities", "8.4 Child workflow responsibilities", "12.2 MoonMind.AgentRun", "Invariant 10"],
+        "coverageIds": ["DESIGN-REQ-021", "DESIGN-REQ-022"]
+      },
+      "independentTest": "Run a task with two steps, each with distinct attachments. Verify step A's execution receives objective context + step A attachments only; step B's execution receives objective context + step B attachments only. Repeat with step B executed via MoonMind.AgentRun and assert the child workflow input carries only step B's prepared context and that child logs/diagnostics do not redefine attachment target semantics.",
+      "acceptanceCriteria": [
+        "Step execution receives only objective context plus its own step-scoped attachment context by default.",
+        "No cross-step attachment leakage occurs even when prepare materialized all attachments in one workspace.",
+        "MoonMind.AgentRun children receive only prepared context relevant to the assigned step.",
+        "Parent MoonMind.Run remains the source of truth for attachment target binding.",
+        "Child workflow logs/diagnostics do not redefine target binding semantics."
+      ],
+      "requirements": "Implement step-context dispatcher in workflow code that filters prepared context by target, and AgentRun child-input scoping.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-021": "Owns target-aware step execution with no cross-step leakage.",
+        "DESIGN-REQ-022": "Owns AgentRun child-workflow scope inheritance from the parent's prepared context."
+      },
+      "dependencies": ["STORY-011"],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-013",
+      "summary": "Runtime/prompt boundary for text-first vs multimodal adapters",
+      "description": "As a runtime-adapter engineer, I want the control plane to pass normalized task intent plus artifact refs to runtimes so that text-first runtimes consume generated image context through the canonical INPUT ATTACHMENTS contract while multimodal runtimes may consume raw image refs directly through their adapters, without any adapter inventing new attachment-targeting rules outside what the Create page can express.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["10 Runtime and prompt boundary"],
+        "coverageIds": ["DESIGN-REQ-026"]
+      },
+      "independentTest": "Drive the same task through a text-first runtime and a multimodal runtime: text-first must receive INPUT ATTACHMENTS-formatted generated image context; multimodal must receive raw image refs through the adapter. Assert no adapter introduces a new target kind or attachment routing rule outside the canonical contract from STORY-001.",
+      "acceptanceCriteria": [
+        "Text-first runtimes consume image context through the canonical INPUT ATTACHMENTS contract.",
+        "Multimodal runtimes consume raw image refs through runtime adapters without changing the control-plane task contract.",
+        "Adapters cannot introduce new attachment target kinds or targeting rules.",
+        "Adapter selection does not require changes to the canonical task contract."
+      ],
+      "requirements": "Implement adapter contract surface and a guardrail (test-level or schema-level) preventing adapter-introduced target kinds.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-026": "Owns the runtime/prompt boundary including text-first and multimodal adapter rules."
+      },
+      "dependencies": ["STORY-001", "STORY-011"],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-014",
+      "summary": "Operator observability for attachments, recovery, and Resume diagnostics",
+      "description": "As an operator, I want Mission Control to expose attachment metadata by target on task detail, surface manifest/context refs in diagnostics, identify failure phases (upload/validation/materialization/context generation) and the failing target on attachment failures, identify resumed executions with preserved prior steps shown as reused from the source run, and identify Resume failure phases (checkpoint validation, workspace restoration, preserved-output injection, failed-step execution) so that I can diagnose attachment- and Resume-related issues without parsing raw workflow history, while compatibility shims do not drift the canonical objective vs step-target meaning.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskArchitecture.md",
+        "title": "Task Architecture (Control Plane)",
+        "sections": ["5.6 User-facing reads", "13 Observability and operator surfaces", "Invariant 12"],
+        "coverageIds": ["DESIGN-REQ-012", "DESIGN-REQ-030", "DESIGN-REQ-031"]
+      },
+      "independentTest": "Open task detail for a failed attachment-aware execution and assert: attachments are grouped by target with metadata; diagnostics expose manifest and generated context refs; failed target and failure phase are clearly identified. Open a resumed execution and assert preserved prior steps render as reused from the source run with provenance, and that a failed Resume identifies its failing phase. Run a compatibility test that loads pre-canonical-target metadata and assert the canonical objective vs step semantics are preserved without drift.",
+      "acceptanceCriteria": [
+        "Task detail surfaces attachment metadata grouped by target (objective vs step).",
+        "Diagnostics expose manifest and generated context refs where appropriate.",
+        "Attachment failures identify both the failing target and the failing phase (upload, validation, materialization, context generation).",
+        "Step-aware surfaces show each step's attachment context separately from unrelated step inputs.",
+        "Resumed executions are clearly identified and preserved prior steps render as reused from the source run with provenance.",
+        "Resume failure diagnostics identify the failing phase (checkpoint validation, workspace restoration, preserved-output injection, failed-step execution).",
+        "Compatibility shims preserve canonical objective vs step target meaning without drift."
+      ],
+      "requirements": "Implement task-detail attachment surfaces, diagnostics surfaces for prepare and Resume, and explicit guardrails ensuring compatibility-layer mappings do not change canonical target meaning.",
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-012": "Owns user-facing attachment reads by target and operator diagnostics surfaces.",
+        "DESIGN-REQ-030": "Owns the no-semantic-drift rule for compatibility aliases on attachment targets.",
+        "DESIGN-REQ-031": "Owns operator-facing observability for attachments, recovery, and Resume diagnostics."
+      },
+      "dependencies": ["STORY-002", "STORY-009", "STORY-010", "STORY-011"],
+      "assumptions": [],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": ["STORY-001", "STORY-004"],
+    "DESIGN-REQ-002": ["STORY-001", "STORY-011"],
+    "DESIGN-REQ-003": ["STORY-001", "STORY-011", "STORY-012"],
+    "DESIGN-REQ-004": ["STORY-002"],
+    "DESIGN-REQ-005": ["STORY-001", "STORY-013"],
+    "DESIGN-REQ-006": ["STORY-006", "STORY-010"],
+    "DESIGN-REQ-007": ["STORY-004"],
+    "DESIGN-REQ-008": ["STORY-003"],
+    "DESIGN-REQ-009": ["STORY-001"],
+    "DESIGN-REQ-010": ["STORY-005"],
+    "DESIGN-REQ-011": ["STORY-002", "STORY-005"],
+    "DESIGN-REQ-012": ["STORY-014"],
+    "DESIGN-REQ-013": ["STORY-006"],
+    "DESIGN-REQ-014": ["STORY-001", "STORY-004"],
+    "DESIGN-REQ-015": ["STORY-006"],
+    "DESIGN-REQ-016": ["STORY-007"],
+    "DESIGN-REQ-017": ["STORY-008"],
+    "DESIGN-REQ-018": ["STORY-010"],
+    "DESIGN-REQ-019": ["STORY-009"],
+    "DESIGN-REQ-020": ["STORY-011"],
+    "DESIGN-REQ-021": ["STORY-012"],
+    "DESIGN-REQ-022": ["STORY-012"],
+    "DESIGN-REQ-023": ["STORY-009"],
+    "DESIGN-REQ-024": ["STORY-010"],
+    "DESIGN-REQ-025": ["STORY-003"],
+    "DESIGN-REQ-026": ["STORY-013"],
+    "DESIGN-REQ-027": ["STORY-003"],
+    "DESIGN-REQ-028": ["STORY-003"],
+    "DESIGN-REQ-029": ["STORY-011"],
+    "DESIGN-REQ-030": ["STORY-014"],
+    "DESIGN-REQ-031": ["STORY-014"]
+  },
+  "outputMode": "jira"
+}
