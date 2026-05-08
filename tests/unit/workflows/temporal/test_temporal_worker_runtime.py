@@ -491,6 +491,13 @@ def test_deployment_update_executor_is_enabled_only_with_project_mount(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.delenv("MOONMIND_DEPLOYMENT_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", raising=False)
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", raising=False)
+    # Point the local mount at a path that doesn't exist so auto-detection
+    # cleanly returns None when no override is set.
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(tmp_path / "missing-mount")
+    )
 
     assert _build_deployment_update_executor() is None
 
@@ -503,9 +510,132 @@ def test_deployment_update_executor_is_enabled_only_with_project_mount(
     executor = _build_deployment_update_executor()
 
     assert executor is not None
+    # Explicit project_dir + matching local path collapses to legacy behavior.
     assert executor.runner.project_dir == str(tmp_path)
+    assert executor.runner.local_project_dir is None
     assert executor.runner.compose_file == str(compose_file)
     assert executor.runner.project_name == "moonmind-test"
+
+
+def test_deployment_update_executor_auto_detects_host_path(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """When the local mount exists and the env var is unset, the worker
+    introspects its own container to discover the host path."""
+
+    local_mount = tmp_path / "host_project"
+    local_mount.mkdir()
+    (local_mount / "docker-compose.yaml").write_text("services: {}\n", encoding="utf-8")
+
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", raising=False)
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", raising=False)
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(local_mount))
+
+    detected: list[str] = []
+
+    def _fake_detect(path: str) -> str:
+        detected.append(path)
+        return "/host/abs/MoonMind"
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.worker_runtime._detect_host_project_dir",
+        _fake_detect,
+    )
+
+    executor = _build_deployment_update_executor()
+
+    assert executor is not None
+    assert detected == [str(local_mount)]
+    assert executor.runner.project_dir == "/host/abs/MoonMind"
+    assert executor.runner.local_project_dir == str(local_mount)
+    assert executor.runner.compose_file is None
+
+
+def test_deployment_update_executor_returns_none_when_detection_fails(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    local_mount = tmp_path / "host_project"
+    local_mount.mkdir()
+
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_PROJECT_DIR", raising=False)
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(local_mount))
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.worker_runtime._detect_host_project_dir",
+        lambda _: None,
+    )
+
+    assert _build_deployment_update_executor() is None
+
+
+def test_detect_host_project_dir_retries_transient_failures(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A transient ``docker inspect`` failure must retry before disabling."""
+
+    import subprocess
+
+    from moonmind.workflows.temporal import worker_runtime
+
+    monkeypatch.setattr(
+        worker_runtime,
+        "_read_self_container_id",
+        lambda: "abc123",
+    )
+    import time as _time
+
+    monkeypatch.setattr(_time, "sleep", lambda _seconds: None)
+
+    attempts = {"count": 0}
+
+    def _fake_run(*args, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise subprocess.TimeoutExpired(cmd=args[0] if args else "docker", timeout=10)
+        mounts = json.dumps(
+            [
+                {
+                    "Source": "/host/repo",
+                    "Destination": "/workspace/host_project",
+                }
+            ]
+        )
+        return SimpleNamespace(stdout=mounts, stderr="", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    detected = worker_runtime._detect_host_project_dir("/workspace/host_project")
+    assert detected == "/host/repo"
+    assert attempts["count"] == 2
+
+
+def test_detect_host_project_dir_returns_none_after_exhausting_retries(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import subprocess
+
+    from moonmind.workflows.temporal import worker_runtime
+
+    monkeypatch.setattr(
+        worker_runtime,
+        "_read_self_container_id",
+        lambda: "abc123",
+    )
+    import time as _time
+
+    monkeypatch.setattr(_time, "sleep", lambda _seconds: None)
+
+    calls = {"count": 0}
+
+    def _always_fail(*args, **kwargs):
+        calls["count"] += 1
+        raise FileNotFoundError("docker missing")
+
+    monkeypatch.setattr(subprocess, "run", _always_fail)
+
+    detected = worker_runtime._detect_host_project_dir("/workspace/host_project")
+    assert detected is None
+    assert calls["count"] == worker_runtime._DETECT_HOST_PROJECT_DIR_RETRIES
 
 
 @pytest.mark.parametrize(

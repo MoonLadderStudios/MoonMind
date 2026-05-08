@@ -4236,6 +4236,7 @@ export interface components {
             resume?: components["schemas"]["ExecutionResumeSummaryModel"] | null;
             /** Relatedruns */
             relatedRuns?: components["schemas"]["ExecutionRelatedRunModel"][];
+            targetDiagnostics?: components["schemas"]["ExecutionTargetDiagnosticsModel"] | null;
             /** Proposalsummary */
             proposalSummary?: {
                 [key: string]: unknown;
@@ -4576,6 +4577,121 @@ export interface components {
             contentRef?: string | null;
             /** Contentdigest */
             contentDigest?: string | null;
+        };
+        /**
+         * ExecutionTargetDiagnosticAttachmentModel
+         * @description Attachment bound to the objective or a single executable step.
+         */
+        ExecutionTargetDiagnosticAttachmentModel: {
+            /** Artifactref */
+            artifactRef?: string | null;
+            /** Filename */
+            filename?: string | null;
+            /** Contenttype */
+            contentType?: string | null;
+            /** Sizebytes */
+            sizeBytes?: number | null;
+            /**
+             * Previewavailable
+             * @default false
+             */
+            previewAvailable: boolean;
+        };
+        /**
+         * ExecutionTargetDiagnosticFailureModel
+         * @description Failure evidence for upload, validation, materialization, or context build.
+         */
+        ExecutionTargetDiagnosticFailureModel: {
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "upload" | "validation" | "materialization" | "context_generation" | "degraded";
+            /** Message */
+            message: string;
+            /** Evidenceref */
+            evidenceRef?: string | null;
+        };
+        /**
+         * ExecutionTargetDiagnosticRefModel
+         * @description Semantic evidence ref associated with target preparation.
+         */
+        ExecutionTargetDiagnosticRefModel: {
+            /** Refkind */
+            refKind: string;
+            /** Artifactref */
+            artifactRef?: string | null;
+            /** Path */
+            path?: string | null;
+        };
+        /**
+         * ExecutionTargetDiagnosticTargetModel
+         * @description Diagnostics for one target scope: objective or individual step.
+         */
+        ExecutionTargetDiagnosticTargetModel: {
+            /**
+             * Targetkind
+             * @enum {string}
+             */
+            targetKind: "objective" | "step";
+            /** Stepid */
+            stepId?: string | null;
+            /** Label */
+            label: string;
+            /** Attachments */
+            attachments?: components["schemas"]["ExecutionTargetDiagnosticAttachmentModel"][];
+            /** Refs */
+            refs?: components["schemas"]["ExecutionTargetDiagnosticRefModel"][];
+            /** Failures */
+            failures?: components["schemas"]["ExecutionTargetDiagnosticFailureModel"][];
+        };
+        /**
+         * ExecutionTargetDiagnosticsModel
+         * @description Target-aware task diagnostics surfaced on execution detail.
+         */
+        ExecutionTargetDiagnosticsModel: {
+            /** Targets */
+            targets?: components["schemas"]["ExecutionTargetDiagnosticTargetModel"][];
+            recovery?: components["schemas"]["ExecutionTargetDiagnosticsRecoveryModel"] | null;
+            /** Degradedreason */
+            degradedReason?: string | null;
+        };
+        /**
+         * ExecutionTargetDiagnosticsPreservedStepModel
+         * @description Source provenance for a step output preserved into a resumed run.
+         */
+        ExecutionTargetDiagnosticsPreservedStepModel: {
+            /** Logicalstepid */
+            logicalStepId: string;
+            /** Title */
+            title?: string | null;
+            /** Sourceattempt */
+            sourceAttempt?: number | null;
+            /** Sourceworkflowid */
+            sourceWorkflowId?: string | null;
+            /** Sourcerunid */
+            sourceRunId?: string | null;
+        };
+        /**
+         * ExecutionTargetDiagnosticsRecoveryModel
+         * @description Failed-step Resume provenance and degraded recovery diagnostics.
+         */
+        ExecutionTargetDiagnosticsRecoveryModel: {
+            /**
+             * Resumed
+             * @default false
+             */
+            resumed: boolean;
+            /** Sourceworkflowid */
+            sourceWorkflowId?: string | null;
+            /** Sourcerunid */
+            sourceRunId?: string | null;
+            /** Checkpointref */
+            checkpointRef?: string | null;
+            /** Preservedsteps */
+            preservedSteps?: components["schemas"]["ExecutionTargetDiagnosticsPreservedStepModel"][];
+            /** Failedresumephase */
+            failedResumePhase?: ("checkpoint_validation" | "workspace_restoration" | "preserved_output_injection" | "failed_step_execution") | null;
         };
         /**
          * GitHubCredentialStatus

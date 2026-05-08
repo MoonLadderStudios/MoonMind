@@ -6382,6 +6382,157 @@ def test_describe_execution_exposes_failed_step_resume_distinct_from_lifecycle_r
     assert body["resume"]["sourceRunId"] == "run-2"
 
 
+def test_describe_execution_exposes_target_attachment_and_recovery_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.parameters = {
+        "task": {
+            "instructions": "Review the screenshot.",
+            "attachmentRefs": [
+                {
+                    "artifactRef": "artifact://input/objective-image",
+                    "filename": "objective.png",
+                    "contentType": "image/png",
+                    "sizeBytes": 12345,
+                }
+            ],
+            "steps": [
+                {
+                    "id": "inspect",
+                    "title": "Inspect screenshot",
+                    "attachmentRefs": [
+                        {
+                            "artifactRef": "artifact://input/step-image",
+                            "filename": "step.png",
+                            "contentType": "image/png",
+                        }
+                    ],
+                }
+            ],
+        },
+        "targetDiagnostics": {
+            "targets": [
+                {
+                    "targetKind": "objective",
+                    "refs": [
+                        {
+                            "refKind": "attachment_manifest",
+                            "artifactRef": "artifact://diagnostics/input-manifest",
+                        }
+                    ],
+                },
+                {
+                    "targetKind": "step",
+                    "stepId": "inspect",
+                    "failures": [
+                        {
+                            "phase": "materialization",
+                            "message": "Attachment download failed before step execution.",
+                            "evidenceRef": "artifact://diagnostics/prepare",
+                        },
+                        {
+                            "phase": "unknown-provider-phase",
+                            "message": "Provider returned an unrecognized phase.",
+                        }
+                    ],
+                },
+            ],
+            "degradedReason": "step_attachment_missing",
+        },
+        "resumeSource": {
+            "sourceWorkflowId": "mm:source",
+            "sourceRunId": "run-source",
+            "preservedSteps": [
+                {
+                    "logicalStepId": "prepare",
+                    "title": "Prepare context",
+                    "sourceAttempt": 1,
+                    "sourceWorkflowId": "mm:source",
+                    "sourceRunId": "run-source",
+                }
+            ],
+        },
+    }
+    record.memo = {
+        **record.memo,
+        "resume_checkpoint_ref": "artifact://resume/checkpoint",
+        "resume_failed_step_id": "inspect",
+        "resume_workspace_checkpoint_ref": "artifact://workspace/checkpoint",
+        "resume_plan_digest": "sha256:plan",
+        "resume_completed_step_refs": ["artifact://completed/prepare"],
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    diagnostics = response.json()["targetDiagnostics"]
+    assert diagnostics["degradedReason"] == "step_attachment_missing"
+    objective = diagnostics["targets"][0]
+    assert objective["targetKind"] == "objective"
+    assert objective["label"] == "Task objective"
+    assert objective["attachments"][0]["artifactRef"] == "artifact://input/objective-image"
+    assert objective["refs"][0]["artifactRef"] == "artifact://diagnostics/input-manifest"
+    step = diagnostics["targets"][1]
+    assert step["targetKind"] == "step"
+    assert step["stepId"] == "inspect"
+    assert step["label"] == "Inspect screenshot"
+    assert step["attachments"][0]["filename"] == "step.png"
+    assert step["failures"][0]["phase"] == "materialization"
+    assert step["failures"][1]["phase"] == "degraded"
+    assert diagnostics["recovery"]["resumed"] is True
+    assert diagnostics["recovery"]["sourceWorkflowId"] == "mm:source"
+    assert diagnostics["recovery"]["sourceRunId"] == "run-source"
+    assert diagnostics["recovery"]["checkpointRef"] == "artifact://resume/checkpoint"
+    assert diagnostics["recovery"]["preservedSteps"][0]["logicalStepId"] == "prepare"
+
+
+def test_describe_execution_omits_recovery_for_routine_resume_action_gating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = {
+        "task": {
+            "instructions": "Review the screenshot.",
+            "attachmentRefs": [
+                {
+                    "artifactRef": "artifact://input/objective-image",
+                    "filename": "objective.png",
+                    "contentType": "image/png",
+                }
+            ],
+        }
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resume"]["disabledReason"] == "state_not_eligible"
+    assert body["targetDiagnostics"]["targets"][0]["targetKind"] == "objective"
+    assert body["targetDiagnostics"]["recovery"] is None
+
+
 @pytest.mark.parametrize(
     ("memo_updates", "expected_reason"),
     [

@@ -270,6 +270,96 @@ const ProposalSummarySchema = z
   })
   .passthrough();
 
+const TargetDiagnosticsSchema = z
+  .object({
+    targets: z
+      .array(
+        z
+          .object({
+            targetKind: z.enum(['objective', 'step']),
+            stepId: z.string().nullable().optional(),
+            label: z.string(),
+            attachments: z
+              .array(
+                z
+                  .object({
+                    artifactRef: z.string().nullable().optional(),
+                    filename: z.string().nullable().optional(),
+                    contentType: z.string().nullable().optional(),
+                    sizeBytes: z.number().nullable().optional(),
+                    previewAvailable: z.boolean().optional(),
+                  })
+                  .passthrough(),
+              )
+              .default([]),
+            refs: z
+              .array(
+                z
+                  .object({
+                    refKind: z.string(),
+                    artifactRef: z.string().nullable().optional(),
+                    path: z.string().nullable().optional(),
+                  })
+                  .passthrough(),
+              )
+              .default([]),
+            failures: z
+              .array(
+                z
+                  .object({
+                    phase: z.enum([
+                      'upload',
+                      'validation',
+                      'materialization',
+                      'context_generation',
+                      'degraded',
+                    ]),
+                    message: z.string(),
+                    evidenceRef: z.string().nullable().optional(),
+                  })
+                  .passthrough(),
+              )
+              .default([]),
+          })
+          .passthrough(),
+      )
+      .default([]),
+    recovery: z
+      .object({
+        resumed: z.boolean().optional(),
+        sourceWorkflowId: z.string().nullable().optional(),
+        sourceRunId: z.string().nullable().optional(),
+        checkpointRef: z.string().nullable().optional(),
+        preservedSteps: z
+          .array(
+            z
+              .object({
+                logicalStepId: z.string(),
+                title: z.string().nullable().optional(),
+                sourceAttempt: z.number().nullable().optional(),
+                sourceWorkflowId: z.string().nullable().optional(),
+                sourceRunId: z.string().nullable().optional(),
+              })
+              .passthrough(),
+          )
+          .default([]),
+        failedResumePhase: z
+          .enum([
+            'checkpoint_validation',
+            'workspace_restoration',
+            'preserved_output_injection',
+            'failed_step_execution',
+          ])
+          .nullable()
+          .optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+    degradedReason: z.string().nullable().optional(),
+  })
+  .passthrough();
+
 const ExecutionDetailSchema = z
   .object({
     taskId: z.string(),
@@ -386,6 +476,7 @@ const ExecutionDetailSchema = z
       )
       .default([])
       .optional(),
+    targetDiagnostics: TargetDiagnosticsSchema.nullable().optional(),
     interventionAudit: z
       .array(
         z
@@ -3038,6 +3129,127 @@ function DiagnosticsPanel({
   );
 }
 
+function TargetDiagnosticsPanel({
+  diagnostics,
+}: {
+  diagnostics: z.infer<typeof TargetDiagnosticsSchema> | null | undefined;
+}) {
+  if (!diagnostics) return null;
+  const hasTargets = diagnostics.targets.length > 0;
+  const recovery = diagnostics.recovery;
+
+  if (!hasTargets && !recovery && !diagnostics.degradedReason) return null;
+
+  return (
+    <section className="stack td-evidence-region">
+      <h3>Target Diagnostics</h3>
+      {diagnostics.degradedReason ? (
+        <p className="small">Degraded: {formatStatusLabel(diagnostics.degradedReason)}</p>
+      ) : null}
+      {hasTargets ? (
+        <div className="grid-2">
+          {diagnostics.targets.map((target, index) => (
+            <div
+              className="card"
+              key={`${target.targetKind}-${target.stepId || index}`}
+            >
+              <h4>{target.label}</h4>
+              <p className="small">
+                {target.targetKind === 'objective' ? 'Task objective' : `Step ${formatOptionalValue(target.stepId)}`}
+              </p>
+              {target.attachments.length > 0 ? (
+                <ul className="step-detail-list">
+                  {target.attachments.map((attachment, attachmentIndex) => (
+                    <li key={`${attachment.artifactRef || attachment.filename || attachmentIndex}`}>
+                      <strong>{attachment.filename || 'Attachment'}</strong>
+                      {attachment.contentType ? <span className="small"> {attachment.contentType}</span> : null}
+                      {attachment.artifactRef ? (
+                        <>
+                          {' '}
+                          <code className="text-xs break-all">{attachment.artifactRef}</code>
+                        </>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="small">No attachments recorded for this target.</p>
+              )}
+              {target.refs.length > 0 ? (
+                <div>
+                  <h5>Evidence</h5>
+                  <ul className="step-detail-list">
+                    {target.refs.map((ref, refIndex) => (
+                      <li key={`${ref.refKind}-${ref.artifactRef || ref.path || refIndex}`}>
+                        <span>{formatStatusLabel(ref.refKind)}</span>{' '}
+                        <code className="text-xs break-all">{ref.artifactRef || ref.path}</code>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {target.failures.length > 0 ? (
+                <div>
+                  <h5>Failures</h5>
+                  <ul className="step-detail-list">
+                    {target.failures.map((failure, failureIndex) => (
+                      <li key={`${failure.phase}-${failureIndex}`}>
+                        <strong>{formatStatusLabel(failure.phase)}:</strong> {failure.message}
+                        {failure.evidenceRef ? (
+                          <>
+                            {' '}
+                            <code className="text-xs break-all">{failure.evidenceRef}</code>
+                          </>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="small">No target diagnostics were recorded.</p>
+      )}
+      {recovery ? (
+        <div>
+          <h4>Recovery</h4>
+          {recovery.resumed && recovery.sourceWorkflowId ? (
+            <p>Resumed from {recovery.sourceWorkflowId}</p>
+          ) : recovery.resumed ? (
+            <p>Resumed from a previous run.</p>
+          ) : null}
+          <ul className="step-detail-list">
+            {recovery.sourceRunId ? (
+              <li><strong>Source run:</strong> <code className="text-xs break-all">{recovery.sourceRunId}</code></li>
+            ) : null}
+            {recovery.checkpointRef ? (
+              <li><strong>Checkpoint:</strong> <code className="text-xs break-all">{recovery.checkpointRef}</code></li>
+            ) : null}
+            {recovery.failedResumePhase ? (
+              <li><strong>Failed phase:</strong> {formatStatusLabel(recovery.failedResumePhase)}</li>
+            ) : null}
+          </ul>
+          {recovery.preservedSteps.length > 0 ? (
+            <div>
+              <h5>Preserved Steps</h5>
+              <ul className="step-detail-list">
+                {recovery.preservedSteps.map((step) => (
+                  <li key={`${step.logicalStepId}-${step.sourceRunId || ''}`}>
+                    <strong>{step.title || step.logicalStepId}</strong>
+                    {step.sourceAttempt ? <span className="small"> attempt {step.sourceAttempt}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function SessionContinuityPanel({
   apiBase,
   taskRunId,
@@ -4628,6 +4840,8 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               onSendMessage={onSendMessage}
             />
           ) : null}
+
+          <TargetDiagnosticsPanel diagnostics={execution.targetDiagnostics} />
 
           {resolvedTaskRunId ? (
             <SessionContinuityPanel
