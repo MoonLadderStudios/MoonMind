@@ -1980,6 +1980,31 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
             assert "agent_skill.resolve" in bound_types
             assert "agent_skill.materialize" in bound_types
             assert "agent_skill.build_prompt_index" in bound_types
+            assert "agent_skill.query_on_demand" in bound_types
+            assert "agent_skill.request_on_demand" in bound_types
+
+
+async def test_prepare_managed_codex_turn_text_hides_on_demand_command_names_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "skills_on_demand_enabled", False)
+
+    result = TemporalAgentRuntimeActivities._prepare_managed_codex_turn_text(
+        "Use the selected skill.",
+        parameters={
+            "metadata": {
+                "moonmind": {
+                    "selectedSkill": "moonspec-implement",
+                }
+            }
+        },
+        skill_materialization_metadata=None,
+    )
+
+    assert "Skills On Demand is disabled for this run." in result
+    assert "moonmind.skills.query" not in result
+    assert "moonmind.skills.request" not in result
+
 
 async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
     tmp_path: Path,

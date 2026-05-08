@@ -2768,6 +2768,47 @@ async def test_agent_runtime_prepare_turn_instructions_can_skip_skill_materializ
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_warns_skills_on_demand_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        activity_runtime_module.settings.workflow,
+        "skills_on_demand_enabled",
+        False,
+    )
+    workspace = tmp_path / "agent_jobs" / "job-1" / "repo"
+    workspace.mkdir(parents=True)
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "parameters": {
+                    "instructions": "Use the active skill only.",
+                    "metadata": {
+                        "moonmind": {
+                            "selectedSkill": "moonspec-implement",
+                        },
+                    },
+                },
+            },
+            "workspacePath": str(workspace),
+            "includePreparedRequestMetadata": True,
+            "skipSkillMaterialization": True,
+        }
+    )
+
+    instructions = result["instructions"]
+    assert "Skills On Demand is disabled for this run." in instructions
+    assert "Use only the active Skills already available" in instructions
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_fails_before_launch_when_projection_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
