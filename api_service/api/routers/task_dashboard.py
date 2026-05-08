@@ -36,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.base import get_async_session
 from api_service.api.routers.task_dashboard_view_model import (
     build_repository_branch_options,
-    build_runtime_config,
+    resolve_dashboard_runtime_config,
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
@@ -286,13 +286,15 @@ def _vite_assets_or_error(page: str) -> HTMLResponse | str:
     except MissionControlUIAssetsError as exc:
         return _mission_control_ui_error_response(page, str(exc))
 
-def _render_react_page(
+async def _render_react_page(
     request: Request,
     page: str,
     current_path: str,
     initial_data: dict | None = None,
     *,
     data_wide_panel: bool = False,
+    session: AsyncSession | None = None,
+    user: User | None = None,
 ) -> HTMLResponse:
     boot_initial_data = dict(initial_data or {})
     boot_layout = dict(boot_initial_data.get("layout") or {})
@@ -300,7 +302,9 @@ def _render_react_page(
     boot_initial_data["layout"] = boot_layout
     dashboard_config = dict(boot_initial_data.get("dashboardConfig") or {})
     if not dashboard_config:
-        dashboard_config = build_runtime_config(current_path)
+        dashboard_config = await resolve_dashboard_runtime_config(
+            current_path, session=session, user=user
+        )
         boot_initial_data["dashboardConfig"] = dashboard_config
 
     boot_payload = generate_boot_payload(page, initial_data=boot_initial_data)
@@ -628,26 +632,40 @@ async def task_dashboard_root(
 @router.get("/tasks/proposals", response_class=HTMLResponse)
 async def task_proposals_route(
     request: Request,
+    session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered proposals page."""
-    return _render_react_page(request, "proposals", "/tasks/proposals", data_wide_panel=True)
+    return await _render_react_page(
+        request,
+        "proposals",
+        "/tasks/proposals",
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
 
 @router.get("/tasks/schedules", response_class=HTMLResponse)
 async def task_schedules_route(
     request: Request,
+    session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered schedules page."""
-    return _render_react_page(request, "schedules", "/tasks/schedules")
+    return await _render_react_page(
+        request, "schedules", "/tasks/schedules", session=session, user=_user
+    )
 
 @router.get("/tasks/manifests", response_class=HTMLResponse)
 async def task_manifests_route(
     request: Request,
+    session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered manifests page."""
-    return _render_react_page(request, "manifests", "/tasks/manifests")
+    return await _render_react_page(
+        request, "manifests", "/tasks/manifests", session=session, user=_user
+    )
 
 @router.get("/tasks/manifests/new", status_code=307, response_class=RedirectResponse)
 async def task_manifest_submit_route(
@@ -660,16 +678,22 @@ async def task_manifest_submit_route(
 @router.get("/tasks/list", response_class=HTMLResponse)
 async def task_list_route(
     request: Request,
+    session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered tasks list page."""
     list_path = "/tasks/list"
-    return _render_react_page(
+    dashboard_config = await resolve_dashboard_runtime_config(
+        list_path, session=session, user=_user
+    )
+    return await _render_react_page(
         request,
         "tasks-list",
         list_path,
-        initial_data={"dashboardConfig": build_runtime_config(list_path)},
+        initial_data={"dashboardConfig": dashboard_config},
         data_wide_panel=True,
+        session=session,
+        user=_user,
     )
 
 @router.get("/tasks/tasks-list")
@@ -691,10 +715,13 @@ async def task_workers_route(
 @router.get("/tasks/settings", response_class=HTMLResponse)
 async def task_settings_route(
     request: Request,
+    session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered settings page."""
-    runtime_config = build_runtime_config("/tasks/settings")
+    runtime_config = await resolve_dashboard_runtime_config(
+        "/tasks/settings", session=session, user=_user
+    )
     initial_data = {
         "workerPause": {
             "get": "/api/system/worker-pause",
@@ -702,41 +729,52 @@ async def task_settings_route(
         },
         "runtimeConfig": runtime_config,
     }
-    return _render_react_page(
+    return await _render_react_page(
         request,
         "settings",
         "/tasks/settings",
         initial_data=initial_data,
+        session=session,
+        user=_user,
     )
 
 @router.get("/oauth-terminal", response_class=HTMLResponse)
 async def oauth_terminal_route(
     request: Request,
     session_id: str = Query("", alias="session_id"),
+    session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the OAuth terminal shell launched from Settings."""
     current_path = "/oauth-terminal"
-    return _render_react_page(
+    return await _render_react_page(
         request,
         "oauth-terminal",
         current_path,
         initial_data={"sessionId": session_id},
         data_wide_panel=True,
+        session=session,
+        user=_user,
     )
 
 @router.get("/tasks/new", response_class=HTMLResponse)
 async def task_create_route(
     request: Request,
+    session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered task create page."""
     current_path = "/tasks/new"
-    return _render_react_page(
+    dashboard_config = await resolve_dashboard_runtime_config(
+        current_path, session=session, user=_user
+    )
+    return await _render_react_page(
         request,
         "task-create",
         current_path,
-        initial_data={"dashboardConfig": build_runtime_config(current_path)},
+        initial_data={"dashboardConfig": dashboard_config},
+        session=session,
+        user=_user,
     )
 
 @router.get("/tasks/create")
@@ -750,15 +788,19 @@ async def task_create_alias_route(
 @router.get("/tasks/skills", response_class=HTMLResponse)
 async def task_skills_route(
     request: Request,
+    session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered skills page."""
-    return _render_react_page(request, "skills", "/tasks/skills")
+    return await _render_react_page(
+        request, "skills", "/tasks/skills", session=session, user=_user
+    )
 
 @router.get("/tasks/{dashboard_path:path}", response_class=HTMLResponse)
 async def task_dashboard_route(
     request: Request,
     dashboard_path: str,
+    session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve dashboard sub-routes from one HTML shell."""
@@ -768,11 +810,16 @@ async def task_dashboard_route(
         _raise_dashboard_route_not_found()
 
     detail_path = f"/tasks/{normalized}"
-    return _render_react_page(
+    dashboard_config = await resolve_dashboard_runtime_config(
+        detail_path, session=session, user=_user
+    )
+    return await _render_react_page(
         request,
         "task-detail",
         detail_path,
-        initial_data={"dashboardConfig": build_runtime_config(detail_path)},
+        initial_data={"dashboardConfig": dashboard_config},
+        session=session,
+        user=_user,
     )
 
 @router.get("/api/tasks/skills", response_model=DashboardSkillListResponse)

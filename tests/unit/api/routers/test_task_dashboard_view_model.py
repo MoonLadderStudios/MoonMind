@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import patch
+from uuid import UUID
+
 import pytest
 
 import api_service.api.routers.task_dashboard_view_model as dashboard_view_model
+from api_service.services.settings_catalog import (
+    EffectiveSettingValue,
+    SettingDiagnostic,
+)
 from moonmind.config.settings import settings
 
 def test_normalize_status_maps_temporal_awaiting_external_to_action() -> None:
@@ -879,3 +888,163 @@ def test_normalize_status_maps_temporal_awaiting_slot_to_queued() -> None:
 def test_normalize_status_maps_temporal_waiting_on_dependencies_to_waiting() -> None:
     """waiting_on_dependencies should map to waiting on the dashboard."""
     assert dashboard_view_model.normalize_status("temporal", "waiting_on_dependencies") == "waiting"
+
+
+def test_build_runtime_config_runtime_override_wins_over_settings(monkeypatch) -> None:
+    """An effective workflow.default_task_runtime override should win over settings."""
+
+    monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex_cli")
+
+    config = dashboard_view_model.build_runtime_config(
+        "/tasks/new",
+        default_task_runtime_override="claude_code",
+    )
+
+    assert config["system"]["defaultTaskRuntime"] == "claude_code"
+
+
+def test_build_runtime_config_runtime_override_ignored_when_unsupported(
+    monkeypatch,
+) -> None:
+    """Unsupported runtime overrides fall back to env/settings resolution."""
+
+    monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex_cli")
+
+    config = dashboard_view_model.build_runtime_config(
+        "/tasks/new",
+        default_task_runtime_override="not_a_real_runtime",
+    )
+
+    assert config["system"]["defaultTaskRuntime"] == "codex_cli"
+
+
+def test_build_runtime_config_includes_provider_profile_ref_when_set() -> None:
+    """A non-empty provider profile ref appears under system.providerProfiles."""
+
+    config = dashboard_view_model.build_runtime_config(
+        "/tasks/new",
+        default_provider_profile_ref="claude-anthropic",
+    )
+
+    assert (
+        config["system"]["providerProfiles"]["defaultProfileRef"]
+        == "claude-anthropic"
+    )
+
+
+def test_build_runtime_config_omits_provider_profile_ref_when_blank() -> None:
+    """Blank/whitespace refs are omitted so the frontend keeps its is_default fallback."""
+
+    config = dashboard_view_model.build_runtime_config(
+        "/tasks/new",
+        default_provider_profile_ref="   ",
+    )
+
+    assert "defaultProfileRef" not in config["system"]["providerProfiles"]
+
+
+def _effective(value: Any, *, diagnostics: list[SettingDiagnostic] | None = None) -> EffectiveSettingValue:
+    return EffectiveSettingValue(
+        key="workflow.default_provider_profile_ref",
+        scope="user",
+        value=value,
+        source="user_override",
+        source_explanation="user override",
+        apply_mode="next_launch",
+        activation_state="pending_next_boundary",
+        active=False,
+        diagnostics=diagnostics or [],
+    )
+
+
+def _runtime_effective(value: Any) -> EffectiveSettingValue:
+    return EffectiveSettingValue(
+        key="workflow.default_task_runtime",
+        scope="workspace",
+        value=value,
+        source="workspace_override",
+        source_explanation="workspace override",
+        apply_mode="next_task",
+        activation_state="pending_next_boundary",
+        active=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_dashboard_runtime_config_propagates_overrides() -> None:
+    """Effective settings flow into build_runtime_config for the route layer."""
+
+    user = SimpleNamespace(
+        id=UUID("11111111-1111-1111-1111-111111111111"),
+        workspace_id=UUID("22222222-2222-2222-2222-222222222222"),
+    )
+    fake_session = object()
+
+    async def fake_effective_value_async(self, key, *, scope):
+        if key == "workflow.default_task_runtime":
+            return _runtime_effective("claude_code")
+        if key == "workflow.default_provider_profile_ref":
+            return _effective("claude-anthropic")
+        raise AssertionError(f"unexpected key: {key}")
+
+    with patch(
+        "api_service.services.settings_catalog.SettingsCatalogService.effective_value_async",
+        new=fake_effective_value_async,
+    ):
+        config = await dashboard_view_model.resolve_dashboard_runtime_config(
+            "/tasks/new", session=fake_session, user=user
+        )
+
+    assert config["system"]["defaultTaskRuntime"] == "claude_code"
+    assert (
+        config["system"]["providerProfiles"]["defaultProfileRef"]
+        == "claude-anthropic"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_dashboard_runtime_config_drops_invalid_profile_ref() -> None:
+    """Provider profile diagnostics flag missing/disabled refs; we omit them."""
+
+    user = SimpleNamespace(id=None, workspace_id=None)
+    fake_session = object()
+
+    async def fake_effective_value_async(self, key, *, scope):
+        if key == "workflow.default_task_runtime":
+            return _runtime_effective(None)
+        if key == "workflow.default_provider_profile_ref":
+            return _effective(
+                "stale-profile",
+                diagnostics=[
+                    SettingDiagnostic(
+                        code="provider_profile_not_found",
+                        message="missing",
+                        severity="error",
+                    )
+                ],
+            )
+        raise AssertionError(f"unexpected key: {key}")
+
+    with patch(
+        "api_service.services.settings_catalog.SettingsCatalogService.effective_value_async",
+        new=fake_effective_value_async,
+    ):
+        config = await dashboard_view_model.resolve_dashboard_runtime_config(
+            "/tasks/new", session=fake_session, user=user
+        )
+
+    assert "defaultProfileRef" not in config["system"]["providerProfiles"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_dashboard_runtime_config_no_session_falls_back() -> None:
+    """Without a session, the resolver returns the legacy build_runtime_config result."""
+
+    config = await dashboard_view_model.resolve_dashboard_runtime_config(
+        "/tasks/new", session=None
+    )
+
+    # Default config still has providerProfiles but no defaultProfileRef.
+    assert "defaultProfileRef" not in config["system"]["providerProfiles"]

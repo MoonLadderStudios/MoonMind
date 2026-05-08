@@ -22,6 +22,7 @@ import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
   LIQUID_GL_OPTIONS,
   preferredTemplate,
+  resolveDefaultProviderProfileId,
   resolveObjectiveInstructions,
   TaskCreatePage,
 } from "./task-create";
@@ -14770,5 +14771,40 @@ describe("Task Create governed Tool authoring", () => {
     });
     expect((within(step).getByLabelText("Tool ID") as HTMLInputElement).value)
       .toBe("jira.get_issue");
+  });
+});
+
+describe("resolveDefaultProviderProfileId", () => {
+  const profiles = [
+    { profile_id: "claude-anthropic", is_default: false, enabled: true },
+    { profile_id: "codex", is_default: true, enabled: true },
+  ];
+
+  it("prefers the configured default ref over the is_default flag", () => {
+    expect(
+      resolveDefaultProviderProfileId(profiles, "claude-anthropic"),
+    ).toBe("claude-anthropic");
+  });
+
+  it("falls back to is_default when the configured ref does not match", () => {
+    expect(
+      resolveDefaultProviderProfileId(profiles, "missing-profile"),
+    ).toBe("codex");
+  });
+
+  it("falls back to is_default when the configured ref is blank", () => {
+    expect(resolveDefaultProviderProfileId(profiles, "   ")).toBe("codex");
+    expect(resolveDefaultProviderProfileId(profiles, null)).toBe("codex");
+    expect(resolveDefaultProviderProfileId(profiles, undefined)).toBe("codex");
+  });
+
+  it("falls back to is_default when the configured profile is disabled", () => {
+    const disabled = [
+      { profile_id: "claude-anthropic", is_default: false, enabled: false },
+      { profile_id: "codex", is_default: true, enabled: true },
+    ];
+    expect(
+      resolveDefaultProviderProfileId(disabled, "claude-anthropic"),
+    ).toBe("codex");
   });
 });

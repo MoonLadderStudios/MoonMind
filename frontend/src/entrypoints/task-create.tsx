@@ -224,6 +224,7 @@ interface DashboardConfig {
     };
     providerProfiles?: {
       list?: string;
+      defaultProfileRef?: string | null;
     };
     taskTemplateCatalog?: {
       enabled?: boolean;
@@ -363,6 +364,7 @@ interface ProviderProfile {
   account_label?: string | null;
   default_model?: string | null;
   is_default?: boolean;
+  enabled?: boolean;
 }
 
 interface BranchOption {
@@ -381,9 +383,19 @@ interface BranchListResponse {
   defaultBranch?: string | null;
 }
 
-function resolveDefaultProviderProfileId(
+export function resolveDefaultProviderProfileId(
   profiles: ProviderProfile[],
+  configuredDefaultRef?: string | null,
 ): string {
+  const trimmedRef = configuredDefaultRef?.trim?.() || "";
+  if (trimmedRef) {
+    const configured = profiles.find(
+      (profile) => profile.profile_id === trimmedRef && profile.enabled !== false,
+    );
+    if (configured) {
+      return configured.profile_id;
+    }
+  }
   const explicitDefault = profiles.find((profile) => profile.is_default);
   if (explicitDefault) {
     return explicitDefault.profile_id;
@@ -3380,6 +3392,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.providerProfiles?.list ||
       "/api/v1/provider-profiles",
   );
+  const configuredDefaultProviderProfileRef =
+    dashboardConfig.system?.providerProfiles?.defaultProfileRef ?? null;
   const taskTemplateCatalog = dashboardConfig.system?.taskTemplateCatalog;
   const taskTemplateCatalogEnabled = Boolean(taskTemplateCatalog?.enabled);
   const taskTemplateSaveEnabled = Boolean(
@@ -3771,7 +3785,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
 
-    const defaultProfileId = resolveDefaultProviderProfileId(profiles);
+    const defaultProfileId = resolveDefaultProviderProfileId(
+      profiles,
+      configuredDefaultProviderProfileRef,
+    );
     if (defaultProfileId && providerProfile !== defaultProfileId) {
       setProviderProfile(defaultProfileId);
     }
@@ -3781,6 +3798,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     providerProfilesQuery.data,
     providerProfilesQuery.isFetching,
     providerProfilesQuery.isLoading,
+    configuredDefaultProviderProfileRef,
   ]);
 
   useEffect(() => {
