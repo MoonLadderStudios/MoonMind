@@ -3494,7 +3494,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(screen.getByRole("button", { name: "Rerun Task" })).toBeTruthy();
   });
 
-  it("submits exact terminal rerun without task or input mutation fields", async () => {
+  it("submits edited terminal rerun with task mutation fields", async () => {
     window.history.pushState(
       {},
       "Task Rerun",
@@ -3528,8 +3528,14 @@ describe.skip("Task Create Entrypoint", () => {
       ([url, init]) => String(url) === "/api/artifacts" && init?.method === "POST",
     );
     expect(artifactCreateCall).toBeUndefined();
-    expect(request).toEqual({
+    expect(request).toMatchObject({
       updateName: "RequestRerun",
+      parametersPatch: {
+        repository: "MoonLadderStudios/MoonMind",
+        task: {
+          instructions: "Rerun with reviewed Temporal inputs.",
+        },
+      },
     });
     expect(
       fetchSpy.mock.calls.some(
@@ -3544,6 +3550,38 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
     ).toBe("Rerun was requested and the latest execution view is ready.");
+  });
+
+  it("submits exact terminal rerun without task or input mutation fields when unchanged", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Arerun-123",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Rerun from artifact-backed instructions.");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Rerun Task" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Arerun-123/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions/mm%3Arerun-123/update")
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+    expect(request).toEqual({
+      updateName: "RequestRerun",
+    });
   });
 
   it("preserves authoritative snapshot details when requesting a complex rerun", async () => {

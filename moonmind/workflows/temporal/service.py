@@ -2754,8 +2754,6 @@ class TemporalExecutionService:
         params = dict(record.parameters or {})
         for key in TASK_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
-        for key in FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS:
-            params.pop(key, None)
         record.parameters = params
         record.closed_at = None
         record.close_status = None

@@ -3271,7 +3271,12 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
             plan_artifact_ref="artifact://plan/original",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters={
+                "resumeSource": {"workflowId": "mm:source", "runId": "run-old"},
+                "resumeCheckpointRef": "artifact://checkpoint/old",
+                "preservedSteps": [{"id": "step-1"}],
+                "completedSteps": [{"id": "step-0"}],
+            },
             idempotency_key=None,
         )
 
@@ -3297,6 +3302,16 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
         assert refreshed.search_attributes["mm_continue_as_new_cause"] == (
             "major_reconfiguration"
         )
+        assert refreshed.parameters["resumeSource"] == {
+            "workflowId": "mm:source",
+            "runId": "run-old",
+        }
+        assert refreshed.parameters["resumeCheckpointRef"] == (
+            "artifact://checkpoint/old"
+        )
+        assert refreshed.parameters["preservedSteps"] == [{"id": "step-1"}]
+        assert refreshed.parameters["completedSteps"] == [{"id": "step-0"}]
+
 
 @pytest.mark.asyncio
 async def test_record_progress_triggers_continue_as_new_for_run_threshold(tmp_path):
