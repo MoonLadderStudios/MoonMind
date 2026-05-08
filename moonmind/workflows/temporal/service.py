@@ -73,9 +73,60 @@ TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.CANCELED,
 }
 CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
+FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
+    {
+        "resumeSource",
+        "resume_source",
+        "resumeCheckpointRef",
+        "resume_checkpoint_ref",
+        "preservedSteps",
+        "preserved_steps",
+        "completedSteps",
+        "completed_steps",
+    }
+)
 ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
+
+
+def _first_nonempty_text(*values: Any) -> str | None:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple, set)):
+            nested = _first_nonempty_text(*value)
+            if nested:
+                return nested
+            continue
+        candidate = str(value).strip()
+        if candidate:
+            return candidate
+    return None
+
+
+def _resume_source_block_from_record(record: TemporalExecutionRecord) -> Mapping[str, Any]:
+    parameters = getattr(record, "parameters", None)
+    if not isinstance(parameters, Mapping):
+        return {}
+    resume_source = parameters.get("resumeSource") or parameters.get("resume_source")
+    if isinstance(resume_source, Mapping):
+        return resume_source
+    return {}
+
+
+def _resume_plan_digest_from_record(record: TemporalExecutionRecord) -> str | None:
+    memo = dict(getattr(record, "memo", None) or {})
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
+    resume_block = _resume_source_block_from_record(record)
+    return _first_nonempty_text(
+        memo.get("resume_plan_digest"),
+        memo.get("resumePlanDigest"),
+        memo.get("plan_digest"),
+        search_attributes.get("mm_resume_plan_digest"),
+        resume_block.get("sourcePlanDigest"),
+        resume_block.get("source_plan_digest"),
+    )
 ALLOWED_REMEDIATION_ACTION_POLICY_REFS = frozenset({"admin_healer_default"})
 PENDING_REMEDIATION_APPROVAL_STATUSES = frozenset(
     {"awaiting_approval", "approval_required"}
@@ -2459,7 +2510,9 @@ class TemporalExecutionService:
         if parameters_patch:
             params = dict(record.parameters or {})
             params.update(parameters_patch)
-            record.parameters = params
+            record.parameters = self._full_rerun_parameters(params)
+        else:
+            record.parameters = self._full_rerun_parameters(record.parameters)
         self._continue_as_new(
             record,
             summary="Rerun requested via Continue-As-New.",
@@ -2484,8 +2537,7 @@ class TemporalExecutionService:
         params = dict(record.parameters or {})
         if parameters_patch:
             params.update(parameters_patch)
-        for key in TASK_RUN_ID_PARAM_KEYS:
-            params.pop(key, None)
+        params = self._full_rerun_parameters(params)
 
         rerun_source = {
             "workflowId": record.workflow_id,
@@ -2529,6 +2581,17 @@ class TemporalExecutionService:
             "continue_as_new_cause": "manual_rerun",
             "workflow_id": created.workflow_id,
         }
+
+    @staticmethod
+    def _full_rerun_parameters(
+        parameters: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        params = dict(parameters or {})
+        for key in TASK_RUN_ID_PARAM_KEYS:
+            params.pop(key, None)
+        for key in FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS:
+            params.pop(key, None)
+        return params
 
     async def create_failed_step_resume_execution(
         self,
@@ -2602,6 +2665,18 @@ class TemporalExecutionService:
             raise TemporalExecutionResumeCheckpointError(
                 "Resume checkpoint task input snapshot does not match source execution."
             )
+        source_plan_ref = str(record.plan_ref or "").strip() or None
+        if checkpoint.plan_ref is not None and source_plan_ref is not None:
+            if checkpoint.plan_ref != source_plan_ref:
+                raise TemporalExecutionResumeCheckpointError(
+                    "Resume checkpoint plan identity does not match source execution."
+                )
+        source_plan_digest = _resume_plan_digest_from_record(record)
+        if checkpoint.plan_digest is not None and source_plan_digest is not None:
+            if checkpoint.plan_digest != source_plan_digest:
+                raise TemporalExecutionResumeCheckpointError(
+                    "Resume checkpoint plan identity does not match source execution."
+                )
         failed_step_id = checkpoint.failed_step.logical_step_id
         failed_step_attempt = checkpoint.failed_step.attempt
         if not failed_step_id:
@@ -2616,8 +2691,8 @@ class TemporalExecutionService:
             sourceWorkflowId=record.workflow_id,
             sourceRunId=source_run_id,
             sourceTaskInputSnapshotRef=source_snapshot_ref,
-            sourcePlanRef=record.plan_ref,
-            sourcePlanDigest=(checkpoint.plan_digest if checkpoint else None),
+            sourcePlanRef=checkpoint.plan_ref or source_plan_ref,
+            sourcePlanDigest=checkpoint.plan_digest,
             failedStepId=failed_step_id,
             failedStepAttempt=failed_step_attempt,
             resumeCheckpointRef=checkpoint_ref,

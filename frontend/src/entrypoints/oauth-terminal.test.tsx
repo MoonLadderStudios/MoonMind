@@ -247,6 +247,7 @@ describe('OAuthTerminalPage clipboard behavior', () => {
 
     expect(await screen.findByText('Codex Team')).toBeTruthy();
     expect((await screen.findAllByText('Succeeded')).length).toBeGreaterThan(0);
+    expect(await screen.findByText('Provider profile registered successfully.')).toBeTruthy();
     expect(storageSetItem).toHaveBeenCalledWith(
       'moonmind:provider-profile-updated',
       expect.stringContaining('codex-oauth'),

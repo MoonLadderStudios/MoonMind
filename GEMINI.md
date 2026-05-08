@@ -229,6 +229,10 @@ Key diagnostics:
 - Existing `execution_remediation_links`, Temporal execution source records, Temporal artifact metadata/content store, and existing remediation lock/ledger state; no new persistent database tables planned (322-remediation-lifecycle-repair-prevention)
 - Python 3.12; TypeScript/React for Mission Control + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Zod, generated OpenAPI types (324-remediation-mission-control-panels)
 - Existing Temporal execution records, `execution_remediation_links`, Temporal artifact metadata/content store, and existing audit/control-event data; no new persistent table planned (324-remediation-mission-control-panels)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind artifact and vision services (325-prepare-target-aware-inputs)
+- Existing artifact store plus workspace-local prepared files/manifest refs; no new persistent database tables planned (325-prepare-target-aware-inputs)
+- Python 3.12; TypeScript/React for Mission Control UI where availability display is affected + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, Zod, Vitest, pytest (327-gate-resume-checkpoint-evidence)
+- Existing Temporal execution records, memo/search attributes, Temporal artifact metadata/content store, task input snapshot artifacts, step ledger/checkpoint artifacts; no new persistent database table planned (327-gate-resume-checkpoint-evidence)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

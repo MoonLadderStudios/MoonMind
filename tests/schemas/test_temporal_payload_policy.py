@@ -8,7 +8,10 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionState,
     CodexManagedSessionTurnResponse,
 )
-from moonmind.schemas.temporal_models import IntegrationCallbackRequest
+from moonmind.schemas.temporal_models import (
+    IntegrationCallbackRequest,
+    ResumeCheckpointModel,
+)
 from moonmind.schemas.temporal_payload_policy import (
     MAX_TEMPORAL_METADATA_STRING_CHARS,
     compact_temporal_ref_metadata,
@@ -79,3 +82,25 @@ def test_external_event_provider_summary_accepts_compact_refs() -> None:
     )
 
     assert signal.provider_summary == {"resultRef": "art-result", "status": "done"}
+
+
+def test_resume_checkpoint_rejects_large_inline_workspace_content() -> None:
+    with pytest.raises(ValidationError, match="store large payloads in artifacts"):
+        ResumeCheckpointModel.model_validate(
+            {
+                "schemaVersion": "v1",
+                "source": {"workflowId": "mm:source", "runId": "run-source"},
+                "taskInputSnapshotRef": "artifact://snapshot",
+                "planDigest": "sha256:plan",
+                "failedStep": {
+                    "logicalStepId": "implement",
+                    "order": 2,
+                    "attempt": 1,
+                },
+                "resumeWorkspace": {
+                    "branch": "feature",
+                    "commit": "abc123",
+                    "inlineDiff": "x" * (MAX_TEMPORAL_METADATA_STRING_CHARS + 1),
+                },
+            }
+        )

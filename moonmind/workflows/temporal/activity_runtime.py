@@ -49,6 +49,11 @@ from moonmind.schemas.temporal_activity_models import (
 )
 from moonmind.workflows.report_output import report_output_display_name
 from moonmind.workflows.tasks.routing import _coerce_bool
+from moonmind.workflows.tasks.prepared_context import (
+    PreparedContextFailure,
+    build_prepared_input_manifest,
+    select_step_prepared_context,
+)
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
@@ -206,6 +211,33 @@ _GITHUB_PULL_REQUEST_URL_PATTERN = re.compile(
 )
 _GEMINI_ERROR_REPORT_DIR = Path("/tmp")
 _GEMINI_ERROR_REPORT_GLOB = "gemini-client-error-*.json"
+
+
+def build_target_aware_prepared_context_payload(
+    task_payload: Mapping[str, Any],
+    *,
+    logical_step_id: str,
+) -> dict[str, Any]:
+    """Return compact prepared context payload or bounded prepare failure."""
+
+    try:
+        manifest = build_prepared_input_manifest(task_payload)
+        context = select_step_prepared_context(
+            manifest,
+            logical_step_id=logical_step_id,
+        )
+        return {
+            "ok": True,
+            "manifestRef": manifest.manifest_ref,
+            "context": context.to_metadata(),
+        }
+    except Exception as exc:
+        failure = PreparedContextFailure.from_exception(
+            exc,
+            logical_step_id=logical_step_id,
+        )
+        return {"ok": False, "failure": failure.model_dump(by_alias=True)}
+
 
 def _managed_session_telemetry_context(
     payload: Mapping[str, Any] | BaseModel | None,

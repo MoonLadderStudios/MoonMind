@@ -752,6 +752,7 @@ async def test_default_skill_registry_payload_uses_curated_deployment_tool_defin
         "selector": {"mode": "by_capability"},
     }
     assert definition["requirements"]["capabilities"] == [
+        "docker_workload",
         "deployment_control",
         "docker_admin",
     ]
@@ -767,6 +768,7 @@ async def test_default_skill_registry_payload_uses_curated_deployment_tool_defin
         (DEPLOYMENT_UPDATE_TOOL_NAME, DEPLOYMENT_UPDATE_TOOL_VERSION)
     ]
     assert parsed[0].required_capabilities == (
+        "docker_workload",
         "deployment_control",
         "docker_admin",
     )

@@ -20,6 +20,7 @@ from api_service.api.routers.executions import (
     _get_service,
     _artifact_id_from_ref,
     _merge_task_preserving_artifact_instructions,
+    _resume_not_available_reason,
     get_temporal_client,
     _serialize_execution,
     router,
@@ -38,6 +39,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionValidationError,
 )
+from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
 from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
@@ -2800,6 +2802,156 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
             "instructions": "Restore presets and multi-step submission.",
         },
     ]
+
+def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "task": {
+                    "title": "Compile recursive presets",
+                    "instructions": "Run the compiled task.",
+                    "runtime": {"mode": "codex_cli"},
+                    "publish": {"mode": "pr"},
+                    "jira": {"issueKey": "MM-630"},
+                    "authoredPresets": [
+                        {
+                            "presetSlug": "root-preset",
+                            "presetVersion": "1.0.0",
+                            "includePath": ["root-preset@1.0.0"],
+                        },
+                        {
+                            "presetSlug": "child-preset",
+                            "presetVersion": "1.0.0",
+                            "alias": "checks",
+                            "inputMapping": {"target": "recursive presets"},
+                            "includePath": [
+                                "root-preset@1.0.0",
+                                "checks:child-preset@1.0.0",
+                            ],
+                        },
+                    ],
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "root-preset",
+                            "version": "1.0.0",
+                            "stepIds": [
+                                "tpl:root-preset:1.0.0:01",
+                                "tpl:child-preset:1.0.0:01",
+                            ],
+                            "composition": {
+                                "slug": "root-preset",
+                                "version": "1.0.0",
+                                "path": ["root-preset@1.0.0"],
+                                "stepIds": [
+                                    "tpl:root-preset:1.0.0:01",
+                                    "tpl:child-preset:1.0.0:01",
+                                ],
+                                "includes": [
+                                    {
+                                        "slug": "child-preset",
+                                        "version": "1.0.0",
+                                        "alias": "checks",
+                                        "path": [
+                                            "root-preset@1.0.0",
+                                            "checks:child-preset@1.0.0",
+                                        ],
+                                        "stepIds": ["tpl:child-preset:1.0.0:01"],
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                    "steps": [
+                        {
+                            "id": "tpl:root-preset:1.0.0:01",
+                            "title": "Prepare task",
+                            "instructions": "Prepare the task context.",
+                            "source": {
+                                "kind": "preset-derived",
+                                "presetSlug": "root-preset",
+                                "presetVersion": "1.0.0",
+                                "includePath": ["root-preset@1.0.0"],
+                            },
+                        },
+                        {
+                            "id": "tpl:child-preset:1.0.0:01",
+                            "title": "Run checks",
+                            "instructions": "Run recursive preset checks.",
+                            "source": {
+                                "kind": "preset-derived",
+                                "presetSlug": "child-preset",
+                                "presetVersion": "1.0.0",
+                                "includePath": [
+                                    "root-preset@1.0.0",
+                                    "checks:child-preset@1.0.0",
+                                ],
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    assert task["steps"][0]["source"]["presetSlug"] == "root-preset"
+    assert task["steps"][1]["source"]["includePath"] == [
+        "root-preset@1.0.0",
+        "checks:child-preset@1.0.0",
+    ]
+    assert [preset["presetSlug"] for preset in task["authoredPresets"]] == [
+        "root-preset",
+        "child-preset",
+    ]
+    assert task["authoredPresets"][1]["inputMapping"] == {
+        "target": "recursive presets"
+    }
+    assert task["appliedStepTemplates"][0]["composition"]["includes"][0]["alias"] == (
+        "checks"
+    )
+    assert task["runtime"] == {"mode": "codex_cli"}
+    assert task["publish"] == {"mode": "pr"}
+
+def test_create_task_shaped_execution_does_not_fabricate_manual_preset_metadata(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "title": "Manual task",
+                    "instructions": "Run one manual step.",
+                    "steps": [
+                        {
+                            "id": "manual-1",
+                            "title": "Manual step",
+                            "instructions": "Do the manual work.",
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    assert "authoredPresets" not in task
+    assert "appliedStepTemplates" not in task
+    assert "source" not in task["steps"][0]
 
 def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_instructions(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -6203,6 +6355,9 @@ def test_describe_execution_exposes_failed_step_resume_distinct_from_lifecycle_r
         **record.memo,
         "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
         "resume_failed_step_id": "implement",
+        "resume_completed_step_refs": ["artifact://completed/plan"],
+        "resume_workspace_checkpoint_ref": "artifact://workspace/before-implement",
+        "resume_plan_digest": "sha256:resume-plan",
     }
     mock_service.describe_execution.return_value = record
     app.dependency_overrides[_get_service] = lambda: mock_service
@@ -6225,6 +6380,83 @@ def test_describe_execution_exposes_failed_step_resume_distinct_from_lifecycle_r
     )
     assert body["resume"]["failedStepId"] == "implement"
     assert body["resume"]["sourceRunId"] == "run-2"
+
+
+@pytest.mark.parametrize(
+    ("memo_updates", "expected_reason"),
+    [
+        (
+            {
+                "resume_failed_step_id": "implement",
+                "resume_completed_step_refs": ["artifact://completed/plan"],
+                "resume_workspace_checkpoint_ref": "artifact://workspace/before-implement",
+                "resume_plan_digest": "sha256:resume-plan",
+            },
+            "resume_checkpoint_missing",
+        ),
+        (
+            {
+                "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+                "resume_completed_step_refs": ["artifact://completed/plan"],
+                "resume_workspace_checkpoint_ref": "artifact://workspace/before-implement",
+                "resume_plan_digest": "sha256:resume-plan",
+            },
+            "failed_step_identity_missing",
+        ),
+        (
+            {
+                "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+                "resume_failed_step_id": "implement",
+                "resume_workspace_checkpoint_ref": "artifact://workspace/before-implement",
+                "resume_plan_digest": "sha256:resume-plan",
+            },
+            "completed_step_refs_missing",
+        ),
+        (
+            {
+                "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+                "resume_failed_step_id": "implement",
+                "resume_completed_step_refs": ["artifact://completed/plan"],
+                "resume_plan_digest": "sha256:resume-plan",
+            },
+            "workspace_checkpoint_missing",
+        ),
+        (
+            {
+                "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+                "resume_failed_step_id": "implement",
+                "resume_completed_step_refs": ["artifact://completed/plan"],
+                "resume_workspace_checkpoint_ref": "artifact://workspace/before-implement",
+            },
+            "plan_identity_missing",
+        ),
+    ],
+)
+def test_describe_execution_requires_complete_resume_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    memo_updates: dict[str, object],
+    expected_reason: str,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.memo = {**record.memo, **memo_updates}
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["actions"]["canResumeFromFailedStep"] is False
+    assert body["resume"]["available"] is False
+    assert body["resume"]["disabledReason"] == expected_reason
 
 def test_failed_step_resume_request_rejects_edited_task_payload_fields() -> None:
     app = FastAPI()
@@ -6283,10 +6515,27 @@ def test_failed_step_resume_hydrates_checkpoint_artifact(
         "schemaVersion": "v1",
         "source": {"workflowId": canonical.workflow_id, "runId": canonical.run_id},
         "taskInputSnapshotRef": "artifact://snapshot/source",
+        "planRef": "artifact://plan/source",
+        "planDigest": "sha256:resume-plan",
         "failedStep": {
             "logicalStepId": "implement",
             "order": 2,
             "attempt": 1,
+        },
+        "preservedSteps": [
+            {
+                "logicalStepId": "plan",
+                "order": 1,
+                "status": "succeeded",
+                "sourceAttempt": 1,
+                "artifacts": {"summary": "artifact://completed/plan"},
+                "stateCheckpointRef": "artifact://workspace/before-implement",
+            }
+        ],
+        "resumeWorkspace": {
+            "branch": "feature/resume",
+            "commit": "abc123",
+            "checkpointRef": "artifact://workspace/before-implement",
         },
     }
     artifact_service = SimpleNamespace(
@@ -6321,6 +6570,57 @@ def test_failed_step_resume_hydrates_checkpoint_artifact(
     call_kwargs = mock_service.create_failed_step_resume_execution.await_args.kwargs
     assert call_kwargs["checkpoint_payload"] == checkpoint_payload
     assert call_kwargs["resume_checkpoint_ref"] is None
+
+
+def test_failed_step_resume_reports_checkpoint_authorization_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.memo = {
+        **canonical.memo,
+        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "task_input_snapshot_ref": "artifact://snapshot/source",
+    }
+    mock_service.describe_execution.return_value = canonical
+    artifact_service = SimpleNamespace(
+        read=AsyncMock(side_effect=TemporalArtifactAuthorizationError("denied"))
+    )
+
+    class Session:
+        async def get(self, model, key):
+            return canonical
+
+        async def commit(self):
+            return None
+
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: Session()
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/resume-from-failed-step",
+            json={"idempotencyKey": "resume-1"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "checkpoint_unauthorized"
+    mock_service.create_failed_step_resume_execution.assert_not_awaited()
+
+
+def test_resume_not_available_reason_prioritizes_mismatch_over_missing_plan() -> None:
+    reason = _resume_not_available_reason(
+        ValueError("Resume checkpoint plan identity does not match source execution.")
+    )
+
+    assert reason == "checkpoint_inconsistent"
 
 def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
     monkeypatch: pytest.MonkeyPatch,
@@ -6380,7 +6680,7 @@ def test_temporal_task_editing_actions_require_original_snapshot(
     )
 
 
-def test_terminal_task_editing_actions_allow_parameter_fallback_without_snapshot(
+def test_terminal_task_editing_actions_reject_parameter_fallback_without_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
@@ -6412,10 +6712,16 @@ def test_terminal_task_editing_actions_allow_parameter_fallback_without_snapshot
         actions.disabled_reasons["canUpdateInputs"]
         == "original_task_input_snapshot_missing"
     )
-    assert actions.can_edit_for_rerun is True
-    assert actions.can_rerun is True
-    assert "canEditForRerun" not in actions.disabled_reasons
-    assert "canRerun" not in actions.disabled_reasons
+    assert actions.can_edit_for_rerun is False
+    assert actions.can_rerun is False
+    assert (
+        actions.disabled_reasons["canEditForRerun"]
+        == "original_task_input_snapshot_missing"
+    )
+    assert (
+        actions.disabled_reasons["canRerun"]
+        == "original_task_input_snapshot_missing"
+    )
 
 
 def test_terminal_task_editing_actions_reject_title_only_parameter_fallback(

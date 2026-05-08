@@ -95,7 +95,10 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
-from moonmind.workflows.temporal.artifacts import build_artifact_ref
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactAuthorizationError,
+    build_artifact_ref,
+)
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
@@ -1977,6 +1980,119 @@ def _resume_failed_step_id_from_record(record) -> str | None:
             return candidate
     return None
 
+def _resume_source_block_from_record(record) -> Mapping[str, Any]:
+    params = dict(getattr(record, "parameters", None) or {})
+    resume_block = params.get("resumeSource")
+    if not isinstance(resume_block, Mapping):
+        resume_block = params.get("resume_source")
+    if not isinstance(resume_block, Mapping):
+        return {}
+    return resume_block
+
+def _first_nonempty_text(*values: Any) -> str | None:
+    for value in values:
+        candidate = str(value or "").strip()
+        if candidate:
+            return candidate
+    return None
+
+def _resume_completed_step_refs_from_record(record) -> list[str]:
+    memo = dict(getattr(record, "memo", None) or {})
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
+    resume_block = _resume_source_block_from_record(record)
+    candidates = (
+        memo.get("resume_completed_step_refs"),
+        memo.get("resumeCompletedStepRefs"),
+        memo.get("resume_preserved_step_refs"),
+        memo.get("resumePreservedStepRefs"),
+        search_attributes.get("mm_resume_completed_step_refs"),
+        resume_block.get("completedStepRefs"),
+        resume_block.get("completed_step_refs"),
+    )
+    refs: list[str] = []
+    for value in candidates:
+        if isinstance(value, str):
+            parts = [item.strip() for item in value.split(",")]
+        elif isinstance(value, list):
+            parts = [str(item or "").strip() for item in value]
+        else:
+            parts = []
+        refs.extend(part for part in parts if part)
+    if refs:
+        return refs
+    preserved_steps = resume_block.get("preservedSteps") or resume_block.get(
+        "preserved_steps"
+    )
+    if not isinstance(preserved_steps, list):
+        return []
+    for step in preserved_steps:
+        if not isinstance(step, Mapping):
+            continue
+        artifacts = step.get("artifacts")
+        if isinstance(artifacts, Mapping):
+            refs.extend(
+                str(value or "").strip()
+                for value in artifacts.values()
+                if str(value or "").strip()
+            )
+    return refs
+
+def _resume_workspace_checkpoint_ref_from_record(record) -> str | None:
+    memo = dict(getattr(record, "memo", None) or {})
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
+    resume_block = _resume_source_block_from_record(record)
+    workspace = resume_block.get("resumeWorkspace") or resume_block.get(
+        "resume_workspace"
+    )
+    if not isinstance(workspace, Mapping):
+        workspace = {}
+    return _first_nonempty_text(
+        memo.get("resume_workspace_checkpoint_ref"),
+        memo.get("resumeWorkspaceCheckpointRef"),
+        memo.get("resume_workspace_ref"),
+        memo.get("resumeWorkspaceRef"),
+        search_attributes.get("mm_resume_workspace_checkpoint_ref"),
+        search_attributes.get("mm_resume_workspace_ref"),
+        resume_block.get("resumeWorkspaceCheckpointRef"),
+        resume_block.get("resume_workspace_checkpoint_ref"),
+        workspace.get("checkpointRef"),
+        workspace.get("checkpoint_ref"),
+        workspace.get("ref"),
+    )
+
+def _resume_plan_identity_from_record(record) -> str | None:
+    memo = dict(getattr(record, "memo", None) or {})
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
+    resume_block = _resume_source_block_from_record(record)
+    return _first_nonempty_text(
+        getattr(record, "plan_ref", None),
+        memo.get("resume_plan_ref"),
+        memo.get("resumePlanRef"),
+        memo.get("resume_plan_digest"),
+        memo.get("resumePlanDigest"),
+        memo.get("plan_ref"),
+        memo.get("plan_digest"),
+        search_attributes.get("mm_resume_plan_ref"),
+        search_attributes.get("mm_resume_plan_digest"),
+        resume_block.get("sourcePlanRef"),
+        resume_block.get("source_plan_ref"),
+        resume_block.get("sourcePlanDigest"),
+        resume_block.get("source_plan_digest"),
+    )
+
+def _resume_evidence_disabled_reason(record) -> str | None:
+    if not _resume_checkpoint_ref_from_record(record):
+        return "resume_checkpoint_missing"
+    if not _resume_failed_step_id_from_record(record):
+        return "failed_step_identity_missing"
+    if not _resume_completed_step_refs_from_record(record):
+        return "completed_step_refs_missing"
+    if not _resume_workspace_checkpoint_ref_from_record(record):
+        return "workspace_checkpoint_missing"
+    if not _resume_plan_identity_from_record(record):
+        return "plan_identity_missing"
+    return None
+
 def _build_resume_summary(
     record,
     *,
@@ -2513,27 +2629,6 @@ async def _load_execution_step_ledger(
         ) from exc
 
 
-def _has_reconstructable_task_parameters(record) -> bool:
-    parameters = dict(getattr(record, "parameters", None) or {})
-    task_payload = parameters.get("task")
-    if not isinstance(task_payload, Mapping):
-        return False
-    instructions = str(task_payload.get("instructions") or "").strip()
-    if instructions:
-        return True
-    steps = task_payload.get("steps")
-    if isinstance(steps, list) and any(
-        isinstance(item, Mapping)
-        and str(item.get("instructions") or "").strip()
-        for item in steps
-    ):
-        return True
-    return any(
-        task_payload.get(key)
-        for key in ("tool", "skill", "skills", "inputArtifactRef")
-    )
-
-
 def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     raw_state = str(record.state.value).strip().lower()
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
@@ -2602,20 +2697,19 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     has_task_input_snapshot = bool(
         _task_input_snapshot_ref_from_memo(dict(getattr(record, "memo", None) or {}))
     )
-    has_resume_checkpoint = bool(_resume_checkpoint_ref_from_record(record))
-    has_task_parameter_fallback = _has_reconstructable_task_parameters(record)
-    if workflow_type_value != "MoonMind.Run" or not temporal_task_editing_enabled:
+    resume_evidence_disabled_reason = _resume_evidence_disabled_reason(record)
+    if (
+        workflow_type_value != "MoonMind.Run"
+        or not temporal_task_editing_enabled
+        or not has_task_input_snapshot
+    ):
         enabled = enabled - {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}
-    elif not has_task_input_snapshot:
-        enabled = enabled - {"can_update_inputs"}
-        if not has_task_parameter_fallback:
-            enabled = enabled - {"can_edit_for_rerun", "can_rerun"}
     if (
         workflow_type_value == "MoonMind.Run"
         and temporal_task_editing_enabled
         and raw_state == "failed"
         and has_task_input_snapshot
-        and has_resume_checkpoint
+        and resume_evidence_disabled_reason is None
     ):
         enabled = enabled | {"can_resume_from_failed_step"}
     capability_values = {
@@ -2655,14 +2749,14 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                 if not has_task_input_snapshot:
                     disabled_reasons[alias] = "original_task_input_snapshot_missing"
                     continue
-                if not has_resume_checkpoint:
-                    disabled_reasons[alias] = "resume_checkpoint_missing"
+                if resume_evidence_disabled_reason is not None:
+                    disabled_reasons[alias] = resume_evidence_disabled_reason
                     continue
             if field_name == "can_update_inputs" and not has_task_input_snapshot:
                 disabled_reasons[alias] = "original_task_input_snapshot_missing"
                 continue
             if field_name in {"can_edit_for_rerun", "can_rerun"}:
-                if not has_task_input_snapshot and not has_task_parameter_fallback:
+                if not has_task_input_snapshot:
                     disabled_reasons[alias] = "original_task_input_snapshot_missing"
                     continue
         disabled_reasons[alias] = "state_not_eligible"
@@ -3713,6 +3807,34 @@ async def _hydrate_resume_checkpoint_payload(
             allow_restricted_raw=True,
         )
         decoded = json.loads(body.decode("utf-8"))
+    except (PermissionError, TemporalArtifactAuthorizationError) as exc:
+        logger.warning(
+            "Failed to hydrate Resume checkpoint artifact %s: %s",
+            artifact_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Failed-step Resume is not available for this execution.",
+                "reason": "checkpoint_unauthorized",
+            },
+        ) from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "Failed to hydrate Resume checkpoint artifact %s: %s",
+            artifact_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Failed-step Resume is not available for this execution.",
+                "reason": "checkpoint_corrupted",
+            },
+        ) from exc
     except Exception as exc:
         logger.warning(
             "Failed to hydrate Resume checkpoint artifact %s: %s",
@@ -3737,6 +3859,25 @@ async def _hydrate_resume_checkpoint_payload(
             },
         )
     return decoded
+
+
+def _resume_not_available_reason(exc: Exception) -> str:
+    message = str(exc).lower()
+    if "does not match" in message:
+        return "checkpoint_inconsistent"
+    if "plan" in message:
+        return "plan_identity_missing"
+    if "workspace" in message:
+        return "workspace_checkpoint_missing"
+    if "preserved step" in message or "completed" in message:
+        return "completed_step_refs_missing"
+    if "failed step" in message:
+        return "failed_step_identity_missing"
+    if "snapshot" in message:
+        return "original_task_input_snapshot_missing"
+    if "payload" in message or "invalid" in message:
+        return "checkpoint_corrupted"
+    return "resume_checkpoint_missing"
 
 
 def _snapshot_task_from_artifact_payload(
@@ -6255,7 +6396,7 @@ async def resume_execution_from_failed_step(
             detail={
                 "code": "resume_not_available",
                 "message": "Failed-step Resume is not available for this execution.",
-                "reason": "resume_checkpoint_missing",
+                "reason": _resume_not_available_reason(exc),
             },
         ) from exc
     except TemporalExecutionValidationError as exc:

@@ -1084,6 +1084,11 @@ class TaskStepSpec(BaseModel):
         if not isinstance(value, Mapping):
             return value
         payload = dict(value)
+        raw_kind = _clean_optional_str(payload.get("kind"))
+        if raw_kind is not None and raw_kind.lower() == "include":
+            raise TaskContractError(
+                "task.steps entries must not contain unresolved preset include work"
+            )
         raw_type = _clean_optional_str(payload.get("type"))
         if raw_type is not None:
             step_type = raw_type.lower()

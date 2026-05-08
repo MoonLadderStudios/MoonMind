@@ -253,18 +253,28 @@ async def _expand_task_template_for_child_run(
         )
 
     applied_template = _coerce_mapping(expanded.get("appliedTemplate"))
+    applied_template_payload: dict[str, Any] = {
+        "slug": str(applied_template.get("slug") or template_slug),
+        "version": str(applied_template.get("version") or template_version),
+        "inputs": _coerce_mapping(applied_template.get("inputs"))
+        or template_inputs,
+        "stepIds": list(applied_template.get("stepIds") or []),
+        "appliedAt": str(applied_template.get("appliedAt") or ""),
+        "capabilities": list(expanded.get("capabilities") or []),
+    }
+    composition = applied_template.get("composition") or expanded.get("composition")
+    if isinstance(composition, Mapping):
+        applied_template_payload["composition"] = dict(composition)
+    authored_presets = applied_template.get("authoredPresets") or expanded.get(
+        "authoredPresets"
+    )
+    if isinstance(authored_presets, list):
+        task_payload["authoredPresets"] = [
+            dict(item) if isinstance(item, Mapping) else item
+            for item in authored_presets
+        ]
     task_payload["steps"] = list(expanded_steps)
-    task_payload["appliedStepTemplates"] = [
-        {
-            "slug": str(applied_template.get("slug") or template_slug),
-            "version": str(applied_template.get("version") or template_version),
-            "inputs": _coerce_mapping(applied_template.get("inputs"))
-            or template_inputs,
-            "stepIds": list(applied_template.get("stepIds") or []),
-            "appliedAt": str(applied_template.get("appliedAt") or ""),
-            "capabilities": list(expanded.get("capabilities") or []),
-        }
-    ]
+    task_payload["appliedStepTemplates"] = [applied_template_payload]
     task_payload["taskTemplate"] = {
         **template_payload,
         "slug": str(applied_template.get("slug") or template_slug),

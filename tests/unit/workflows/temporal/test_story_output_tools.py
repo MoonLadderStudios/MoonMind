@@ -1496,6 +1496,22 @@ async def test_discover_documents_returns_workspace_relative_paths(tmp_path, mon
 
 
 @pytest.mark.asyncio
+async def test_discover_documents_accepts_windows_style_relative_directory(
+    tmp_path, monkeypatch
+):
+    docs = tmp_path / "docs" / "Artifacts"
+    docs.mkdir(parents=True)
+    (docs / "ReportArtifacts.md").write_text("# report")
+
+    monkeypatch.chdir(tmp_path)
+
+    result = await discover_documents({"directory": "docs\\Artifacts"})
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["documentPaths"] == ["docs/Artifacts/ReportArtifacts.md"]
+
+
+@pytest.mark.asyncio
 async def test_discover_documents_missing_directory():
     result = await discover_documents({"directory": "/nonexistent/path"})
 

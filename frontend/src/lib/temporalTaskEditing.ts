@@ -163,7 +163,7 @@ export type TemporalTaskEditingTelemetryPayload = {
 export type TemporalArtifactEditUpdatePayload = {
   updateName: TemporalTaskEditUpdateName;
   inputArtifactRef?: string;
-  parametersPatch: Record<string, unknown>;
+  parametersPatch?: Record<string, unknown>;
 };
 
 export function buildTemporalArtifactEditUpdatePayload({
@@ -173,7 +173,7 @@ export function buildTemporalArtifactEditUpdatePayload({
 }: {
   updateName: TemporalTaskEditUpdateName;
   inputArtifactRef?: string | null;
-  parametersPatch: Record<string, unknown>;
+  parametersPatch?: Record<string, unknown> | null;
 }): TemporalArtifactEditUpdatePayload {
   const normalizedArtifactRef = String(inputArtifactRef || '').trim();
   return {
@@ -181,7 +181,7 @@ export function buildTemporalArtifactEditUpdatePayload({
     ...(normalizedArtifactRef
       ? { inputArtifactRef: normalizedArtifactRef }
       : {}),
-    parametersPatch,
+    ...(parametersPatch ? { parametersPatch } : {}),
   };
 }
 

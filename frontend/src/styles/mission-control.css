@@ -3712,6 +3712,25 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 8px;
 }
 
+.oauth-terminal-finalize-result {
+  border-radius: 6px;
+  font-size: 0.9rem;
+  margin: 0;
+  padding: 10px 14px;
+}
+
+.oauth-terminal-finalize-result--success {
+  background: rgb(var(--mm-ok) / 0.12);
+  border: 1px solid rgb(var(--mm-ok) / 0.5);
+  color: rgb(var(--mm-ok));
+}
+
+.oauth-terminal-finalize-result--error {
+  background: rgb(var(--mm-danger) / 0.12);
+  border: 1px solid rgb(var(--mm-danger) / 0.5);
+  color: rgb(var(--mm-danger));
+}
+
 .oauth-terminal-paste-box {
   background: rgb(var(--mm-panel, 255 255 255));
   border: 1px solid rgb(var(--mm-border, 203 213 225));

@@ -31,6 +31,7 @@ def test_materialize_preserved_steps_marks_source_provenance_without_new_attempt
                 "status": "succeeded",
                 "sourceAttempt": 2,
                 "artifacts": {"outputSummary": "artifact://summary"},
+                "stateCheckpointRef": "artifact://workspace/before-plan",
             }
         ],
         updated_at=now,
@@ -46,4 +47,5 @@ def test_materialize_preserved_steps_marks_source_provenance_without_new_attempt
         "attempt": 2,
     }
     assert rows[0]["artifacts"]["outputSummary"] == "artifact://summary"
+    assert rows[0]["stateCheckpointRef"] == "artifact://workspace/before-plan"
     assert rows[1]["status"] == "ready"

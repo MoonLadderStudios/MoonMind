@@ -38,6 +38,11 @@ with workflow.unsafe.imports_passed_through():
         is_jules_agent_runtime_node,
     )
     from moonmind.workflows.tasks.routing import _coerce_bool
+    from moonmind.workflows.tasks.prepared_context import (
+        build_prepared_input_manifest,
+        merge_prepared_input_refs,
+        select_step_prepared_context,
+    )
     from moonmind.workflows.agent_skills.selection import selected_agent_skill
     from moonmind.config.settings import settings
     from moonmind.utils.logging import scrub_github_tokens
@@ -4869,6 +4874,38 @@ class MoonMindRunWorkflow:
             metadata_payload["moonmind"] = moonmind_payload
             parameters["metadata"] = metadata_payload
 
+        input_refs = node_inputs.get("inputRefs") or []
+        if isinstance(workflow_parameters, Mapping):
+            task_payload = workflow_parameters.get("task")
+            if isinstance(task_payload, Mapping):
+                prepared_manifest = build_prepared_input_manifest(task_payload)
+                if prepared_manifest.has_entries:
+                    prepared_context = select_step_prepared_context(
+                        prepared_manifest,
+                        logical_step_id=node_id,
+                    )
+                    if prepared_context.input_refs:
+                        if agent_kind != "managed":
+                            input_refs = merge_prepared_input_refs(
+                                input_refs,
+                                prepared_context,
+                            )
+                        metadata_payload = (
+                            parameters.get("metadata")
+                            if isinstance(parameters.get("metadata"), dict)
+                            else {}
+                        )
+                        moonmind_payload = (
+                            metadata_payload.get("moonmind")
+                            if isinstance(metadata_payload.get("moonmind"), dict)
+                            else {}
+                        )
+                        moonmind_payload["preparedContext"] = (
+                            prepared_context.to_metadata()
+                        )
+                        metadata_payload["moonmind"] = moonmind_payload
+                        parameters["metadata"] = metadata_payload
+
         return AgentExecutionRequest(
             agent_kind=agent_kind,
             agent_id=agent_id,
@@ -4878,7 +4915,7 @@ class MoonMindRunWorkflow:
             instruction_ref=node_inputs.get("instructions")
             or node_inputs.get("instructionRef"),
             resolved_skillset_ref=resolved_skillset_ref,
-            input_refs=node_inputs.get("inputRefs") or [],
+            input_refs=input_refs,
             workspace_spec=workspace_spec,
             parameters=parameters,
             timeout_policy=node_inputs.get("timeoutPolicy") or {},
