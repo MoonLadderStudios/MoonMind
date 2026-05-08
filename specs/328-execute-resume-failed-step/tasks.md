@@ -26,9 +26,9 @@
 
 **Purpose**: Confirm active artifacts and test targets before writing red-first tests.
 
-- [ ] T001 Confirm `specs/328-execute-resume-failed-step/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/resume-execution.md`, and `quickstart.md` are present and preserve MM-634 traceability. (FR-013, SC-008)
-- [ ] T002 Confirm `specs/328-execute-resume-failed-step/spec.md` has exactly one `## User Story` section and no `[NEEDS CLARIFICATION]` markers. (FR-013, SC-008)
-- [ ] T003 Identify current focused test targets and fixtures in `tests/unit/workflows/temporal/test_temporal_service.py`, `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py`, `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py`, `tests/unit/api/routers/test_executions.py`, and `frontend/src/entrypoints/task-detail.test.tsx`. (FR-001 through FR-012)
+- [X] T001 Confirm `specs/328-execute-resume-failed-step/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/resume-execution.md`, and `quickstart.md` are present and preserve MM-634 traceability. (FR-013, SC-008)
+- [X] T002 Confirm `specs/328-execute-resume-failed-step/spec.md` has exactly one `## User Story` section and no `[NEEDS CLARIFICATION]` markers. (FR-013, SC-008)
+- [X] T003 Identify current focused test targets and fixtures in `tests/unit/workflows/temporal/test_temporal_service.py`, `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py`, `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py`, `tests/unit/api/routers/test_executions.py`, and `frontend/src/entrypoints/task-detail.test.tsx`. (FR-001 through FR-012)
 
 ---
 
@@ -38,9 +38,9 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete.
 
-- [ ] T004 [P] Extend Resume checkpoint fixture builders in `tests/unit/workflows/temporal/test_temporal_service.py` with complete resume workspace evidence, plan identity, preserved outputs, and invalid restoration cases. (FR-002, FR-003, FR-004, FR-007, FR-010)
-- [ ] T005 [P] Extend preserved-step ledger fixtures in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` for source logical step provenance, preserved output refs, and skipped re-execution assertions. (FR-005, FR-006, FR-007, FR-011)
-- [ ] T006 [P] Extend hermetic integration fixtures in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` for a three-step graph where the first step is preserved, the second step is retried, and the third step runs downstream. (FR-004, FR-008, FR-009, DESIGN-REQ-003)
+- [X] T004 [P] Extend Resume checkpoint fixture builders in `tests/unit/workflows/temporal/test_temporal_service.py` with complete resume workspace evidence, plan identity, preserved outputs, and invalid restoration cases. (FR-002, FR-003, FR-004, FR-007, FR-010)
+- [X] T005 [P] Extend preserved-step ledger fixtures in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` for source logical step provenance, preserved output refs, and skipped re-execution assertions. (FR-005, FR-006, FR-007, FR-011)
+- [X] T006 [P] Extend hermetic integration fixtures in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` for a three-step graph where the first step is preserved, the second step is retried, and the third step runs downstream. (FR-004, FR-008, FR-009, DESIGN-REQ-003)
 - [ ] T007 [P] Extend Task Detail UI mock payload helpers in `frontend/src/entrypoints/task-detail.test.tsx` only if preserved provenance shape changes. (FR-012)
 
 **Checkpoint**: Test fixtures are ready; story tests and implementation work can now begin.
@@ -72,17 +72,17 @@
 
 > Write these tests FIRST. Run them and confirm they fail for the expected reason before production implementation.
 
-- [ ] T008 [P] Add failing service tests in `tests/unit/workflows/temporal/test_temporal_service.py` proving Resume validates source workflow ID, source run ID, snapshot identity, and plan identity before creating a resumed execution. (FR-002, FR-003, SC-002, DESIGN-REQ-002)
-- [ ] T009 [P] Add failing service tests in `tests/unit/workflows/temporal/test_temporal_service.py` proving invalid restoration evidence creates no resumed execution and cannot call any full-rerun path. (FR-003, FR-010, SC-007, DESIGN-REQ-001, DESIGN-REQ-004)
-- [ ] T010 [P] Add failing step ledger unit tests in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` requiring `preservedFrom.logicalStepId` in addition to source workflow ID, run ID, and attempt. (FR-006, SC-004, DESIGN-REQ-003)
-- [ ] T011 [P] Add failing unit tests in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` proving preserved artifact refs and state checkpoint refs remain on preserved rows for downstream consumption. (FR-005, FR-007, SC-005, DESIGN-REQ-002)
+- [X] T008 [P] Add failing service tests in `tests/unit/workflows/temporal/test_temporal_service.py` proving Resume validates source workflow ID, source run ID, snapshot identity, and plan identity before creating a resumed execution. (FR-002, FR-003, SC-002, DESIGN-REQ-002)
+- [X] T009 [P] Add failing service tests in `tests/unit/workflows/temporal/test_temporal_service.py` proving invalid restoration evidence creates no resumed execution and cannot call any full-rerun path. (FR-003, FR-010, SC-007, DESIGN-REQ-001, DESIGN-REQ-004)
+- [X] T010 [P] Add failing step ledger unit tests in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` requiring `preservedFrom.logicalStepId` in addition to source workflow ID, run ID, and attempt. (FR-006, SC-004, DESIGN-REQ-003)
+- [X] T011 [P] Add failing unit tests in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` proving preserved artifact refs and state checkpoint refs remain on preserved rows for downstream consumption. (FR-005, FR-007, SC-005, DESIGN-REQ-002)
 - [ ] T012 [P] Add failing Task Detail UI test in `frontend/src/entrypoints/task-detail.test.tsx` if `preservedFrom.logicalStepId` changes the rendered contract or parsing schema. (FR-012)
-- [ ] T013 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_service.py tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` and confirm T008-T011 fail for the expected MM-634 reasons before production changes. (FR-001 through FR-012)
+- [X] T013 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_service.py tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` and confirm T008-T011 fail for the expected MM-634 reasons before production changes. (FR-001 through FR-012)
 - [ ] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx` and confirm T012 fails only if UI work is needed. (FR-012)
 
 ### Integration Tests (write first)
 
-- [ ] T015 [P] Add failing hermetic integration test in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` proving preserved prior steps are not executed and the failed step is the first newly executable step. (FR-005, FR-008, FR-011, SC-006, DESIGN-REQ-002, DESIGN-REQ-003)
+- [X] T015 [P] Add failing hermetic integration test in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` proving preserved prior steps are not executed and the failed step is the first newly executable step. (FR-005, FR-008, FR-011, SC-006, DESIGN-REQ-002, DESIGN-REQ-003)
 - [ ] T016 [P] Add failing hermetic integration test in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` proving workspace, branch, commit, or equivalent `resumeWorkspace` evidence is applied before the failed step starts. (FR-004, SC-003, DESIGN-REQ-003, DESIGN-REQ-005)
 - [ ] T017 [P] Add failing hermetic integration test in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` proving invalid restoration fails before execution without full-rerun fallback or preserved-step re-execution. (FR-003, FR-010, FR-011, SC-007, DESIGN-REQ-001, DESIGN-REQ-004)
 - [ ] T018 [P] Add failing hermetic integration test in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` proving downstream steps execute normally after the retried failed step succeeds and produce fresh resumed-run evidence. (FR-007, FR-009, SC-005, DESIGN-REQ-002)
@@ -90,35 +90,50 @@
 
 ### Red-First Confirmation
 
-- [ ] T020 Record expected failing unit test names and failure reasons in `specs/328-execute-resume-failed-step/tasks.md` before changing production code. (FR-001 through FR-012)
+- [X] T020 Record expected failing unit test names and failure reasons in `specs/328-execute-resume-failed-step/tasks.md` before changing production code. (FR-001 through FR-012)
 - [ ] T021 Record expected failing integration test names and failure reasons in `specs/328-execute-resume-failed-step/tasks.md` before changing production code. (FR-004 through FR-011)
+
+**Red-first evidence captured before production edits**:
+
+- Unit command: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_service.py tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py`
+- Unit failures observed: `test_failed_step_resume_creates_linked_execution_with_source_identity` failed because `resumeSource.resumeWorkspace` was absent; `test_materialize_preserved_steps_marks_source_provenance_without_new_attempt` and `test_materialize_preserved_steps_keeps_outputs_for_downstream_steps` failed because `preservedFrom.logicalStepId` was absent.
+- Integration command: `pytest tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py -q --tb=short`
+- Integration failures observed: `test_failed_step_resume_preserves_prior_steps_and_unblocks_failed_step` and `test_failed_step_resume_preserves_only_prior_steps_before_downstream_work` failed because preserved provenance did not include `logicalStepId`.
+- Conditional evidence: existing service tests already rejected invalid checkpoint payloads, checkpoint ref mismatches, source run mismatches, plan ref mismatches, and plan digest mismatches before creating a resumed execution. No Task Detail rendered-contract test was required because the display did not change; the parsing schema now accepts optional `preservedFrom.logicalStepId`.
 
 ### Conditional Verification Tasks for Implemented-Unverified Rows
 
-- [ ] T022 If T008 proves current identity validation already satisfies FR-002, preserve the evidence and skip redundant service implementation; otherwise keep T026 in scope. (FR-002)
-- [ ] T023 If T009 proves invalid restoration already creates no execution and no full-rerun fallback, preserve the evidence and skip redundant no-fallback implementation; otherwise keep T030 in scope. (FR-003, FR-010)
-- [ ] T024 If T012 is unnecessary because the UI schema already renders the existing provenance shape without contract changes, record that no UI implementation is required; otherwise keep T031 in scope. (FR-012)
+- [X] T022 If T008 proves current identity validation already satisfies FR-002, preserve the evidence and skip redundant service implementation; otherwise keep T026 in scope. (FR-002)
+- [X] T023 If T009 proves invalid restoration already creates no execution and no full-rerun fallback, preserve the evidence and skip redundant no-fallback implementation; otherwise keep T030 in scope. (FR-003, FR-010)
+- [X] T024 If T012 is unnecessary because the UI schema already renders the existing provenance shape without contract changes, record that no UI implementation is required; otherwise keep T031 in scope. (FR-012)
 
 ### Implementation
 
-- [ ] T025 Update preserved-step provenance in `moonmind/workflows/temporal/step_ledger.py` and `moonmind/schemas/temporal_models.py` so preserved rows carry source workflow ID, source run ID, logical step ID, and source attempt. (FR-006, SC-004, DESIGN-REQ-003)
-- [ ] T026 Update `TemporalExecutionService.create_failed_step_resume_execution()` in `moonmind/workflows/temporal/service.py` to keep validation before resumed execution creation and cover any missing identity/restoration preconditions exposed by T008-T009. (FR-002, FR-003, FR-010, DESIGN-REQ-001, DESIGN-REQ-002)
+- [X] T025 Update preserved-step provenance in `moonmind/workflows/temporal/step_ledger.py` and `moonmind/schemas/temporal_models.py` so preserved rows carry source workflow ID, source run ID, logical step ID, and source attempt. (FR-006, SC-004, DESIGN-REQ-003)
+- [X] T026 Update `TemporalExecutionService.create_failed_step_resume_execution()` in `moonmind/workflows/temporal/service.py` to keep validation before resumed execution creation and cover any missing identity/restoration preconditions exposed by T008-T009. (FR-002, FR-003, FR-010, DESIGN-REQ-001, DESIGN-REQ-002)
 - [ ] T027 Implement or expose workspace, branch, commit, or equivalent restoration from `resumeWorkspace` before the failed step in `moonmind/workflows/temporal/workflows/run.py` or the selected runtime restoration boundary. (FR-004, SC-003, DESIGN-REQ-003, DESIGN-REQ-005)
-- [ ] T028 Update preserved output propagation in `moonmind/workflows/temporal/step_ledger.py`, `moonmind/workflows/temporal/workflows/run.py`, or the selected context generation boundary so failed and downstream steps receive preserved outputs as continuous-run inputs. (FR-007, SC-005, DESIGN-REQ-002)
+- [X] T028 Update preserved output propagation in `moonmind/workflows/temporal/step_ledger.py`, `moonmind/workflows/temporal/workflows/run.py`, or the selected context generation boundary so failed and downstream steps receive preserved outputs as continuous-run inputs. (FR-007, SC-005, DESIGN-REQ-002)
 - [ ] T029 Update resumed-run step progression in `moonmind/workflows/temporal/workflows/run.py` so preserved prior steps are skipped, the failed step is first newly executed, and downstream steps produce fresh resumed-run ledger rows, artifacts, and checkpoints. (FR-005, FR-008, FR-009, FR-011, DESIGN-REQ-002, DESIGN-REQ-003)
 - [ ] T030 Add explicit no-fallback/no-reexecution guardrails in `moonmind/workflows/temporal/service.py` or `moonmind/workflows/temporal/workflows/run.py` for restoration failures that occur after checkpoint validation but before the failed step starts. (FR-003, FR-010, FR-011, DESIGN-REQ-001, DESIGN-REQ-004)
-- [ ] T031 Update `frontend/src/entrypoints/task-detail.tsx` and `frontend/src/generated/openapi.ts` only if provenance schema or display behavior changes require UI contract updates. (FR-012)
+- [X] T031 Update `frontend/src/entrypoints/task-detail.tsx` and `frontend/src/generated/openapi.ts` only if provenance schema or display behavior changes require UI contract updates. (FR-012)
 
 ### Story Validation
 
-- [ ] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_service.py tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` and make T008-T011 pass. (FR-001 through FR-012)
+- [X] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_service.py tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` and make T008-T011 pass. (FR-001 through FR-012)
 - [ ] T033 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx` and make T012 pass if UI work was needed. (FR-012)
 - [ ] T034 Run `pytest tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py -q --tb=short` and make T015-T018 pass. (FR-004 through FR-011)
-- [ ] T035 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full unit verification after focused tests pass. (FR-001 through FR-013)
-- [ ] T036 Run `./tools/test_integration.sh` for required hermetic integration verification or record the exact Docker/environment blocker. (FR-001 through FR-013)
+- [X] T035 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full unit verification after focused tests pass. (FR-001 through FR-013)
+- [X] T036 Run `./tools/test_integration.sh` for required hermetic integration verification or record the exact Docker/environment blocker. (FR-001 through FR-013)
 - [ ] T037 Validate the story against `specs/328-execute-resume-failed-step/quickstart.md`, confirming original input reuse, checkpoint validation, workspace restoration, preserved progress, failed-step-first execution, downstream progression, and no fallback. (FR-001 through FR-013, SC-001 through SC-008)
 
 **Checkpoint**: The story is functionally complete, covered by unit and integration tests, and independently testable.
+
+**Implementation validation evidence**:
+
+- Focused unit verification passed: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_service.py tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` completed with 101 Python tests passed, followed by 20 frontend test files passed.
+- Focused integration verification passed: `pytest tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py -q --tb=short` completed with 3 tests passed.
+- Full unit verification passed: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` completed with 4601 Python tests passed, 1 xpassed, 16 subtests passed, and 20 frontend test files passed.
+- Required hermetic integration script blocker: `./tools/test_integration.sh` created `.env` from `.env-template`, then Docker compose failed before pytest execution with `Docker Compose requires buildx plugin to be installed` and daemon response `403 Forbidden: Request forbidden by administrative rules`.
 
 ---
 

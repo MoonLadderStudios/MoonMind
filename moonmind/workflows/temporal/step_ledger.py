@@ -147,6 +147,7 @@ def materialize_preserved_steps(
         row["preservedFrom"] = {
             "workflowId": source_workflow_id,
             "runId": source_run_id,
+            "logicalStepId": logical_step_id,
             "attempt": source_attempt,
         }
         row["updatedAt"] = updated_at.isoformat()

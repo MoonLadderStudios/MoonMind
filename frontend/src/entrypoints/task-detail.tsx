@@ -745,6 +745,7 @@ const StepLedgerRowSchema = z
       .object({
         workflowId: z.string(),
         runId: z.string(),
+        logicalStepId: z.string().optional(),
         attempt: z.number(),
       })
       .passthrough()

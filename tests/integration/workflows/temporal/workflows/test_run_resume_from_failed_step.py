@@ -42,9 +42,55 @@ def test_failed_step_resume_preserves_prior_steps_and_unblocks_failed_step() -> 
     refresh_ready_steps(rows, updated_at=now)
 
     assert rows[0]["preservedFrom"]["workflowId"] == "mm:source"
+    assert rows[0]["preservedFrom"]["logicalStepId"] == "prepare"
     assert rows[0]["artifacts"]["outputSummary"] == "artifact://prepare-summary"
     assert rows[0]["stateCheckpointRef"] == "artifact://workspace/prepare"
     assert rows[1]["status"] == "ready"
+
+
+@pytest.mark.integration
+@pytest.mark.integration_ci
+def test_failed_step_resume_preserves_only_prior_steps_before_downstream_work() -> None:
+    now = datetime.now(UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "prepare", "title": "Prepare"},
+            {"id": "implement", "title": "Implement"},
+            {"id": "verify", "title": "Verify"},
+        ],
+        dependency_map={"implement": ["prepare"], "verify": ["implement"]},
+        updated_at=now,
+    )
+
+    materialize_preserved_steps(
+        rows,
+        source_workflow_id="mm:source",
+        source_run_id="run-source",
+        preserved_steps=[
+            {
+                "logicalStepId": "prepare",
+                "status": "succeeded",
+                "sourceAttempt": 1,
+                "artifacts": {"outputSummary": "artifact://prepare-summary"},
+                "stateCheckpointRef": "artifact://workspace/prepare",
+            }
+        ],
+        updated_at=now,
+    )
+    refresh_ready_steps(rows, updated_at=now)
+
+    assert rows[0]["attempt"] == 0
+    assert rows[0]["preservedFrom"] == {
+        "workflowId": "mm:source",
+        "runId": "run-source",
+        "logicalStepId": "prepare",
+        "attempt": 1,
+    }
+    assert rows[1]["logicalStepId"] == "implement"
+    assert rows[1]["status"] == "ready"
+    assert "preservedFrom" not in rows[1]
+    assert rows[2]["logicalStepId"] == "verify"
+    assert rows[2]["status"] == "pending"
 
 
 @pytest.mark.integration
