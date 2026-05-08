@@ -2687,6 +2687,156 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
         },
     ]
 
+def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "task": {
+                    "title": "Compile recursive presets",
+                    "instructions": "Run the compiled task.",
+                    "runtime": {"mode": "codex_cli"},
+                    "publish": {"mode": "pr"},
+                    "jira": {"issueKey": "MM-630"},
+                    "authoredPresets": [
+                        {
+                            "presetSlug": "root-preset",
+                            "presetVersion": "1.0.0",
+                            "includePath": ["root-preset@1.0.0"],
+                        },
+                        {
+                            "presetSlug": "child-preset",
+                            "presetVersion": "1.0.0",
+                            "alias": "checks",
+                            "inputMapping": {"target": "recursive presets"},
+                            "includePath": [
+                                "root-preset@1.0.0",
+                                "checks:child-preset@1.0.0",
+                            ],
+                        },
+                    ],
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "root-preset",
+                            "version": "1.0.0",
+                            "stepIds": [
+                                "tpl:root-preset:1.0.0:01",
+                                "tpl:child-preset:1.0.0:01",
+                            ],
+                            "composition": {
+                                "slug": "root-preset",
+                                "version": "1.0.0",
+                                "path": ["root-preset@1.0.0"],
+                                "stepIds": [
+                                    "tpl:root-preset:1.0.0:01",
+                                    "tpl:child-preset:1.0.0:01",
+                                ],
+                                "includes": [
+                                    {
+                                        "slug": "child-preset",
+                                        "version": "1.0.0",
+                                        "alias": "checks",
+                                        "path": [
+                                            "root-preset@1.0.0",
+                                            "checks:child-preset@1.0.0",
+                                        ],
+                                        "stepIds": ["tpl:child-preset:1.0.0:01"],
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                    "steps": [
+                        {
+                            "id": "tpl:root-preset:1.0.0:01",
+                            "title": "Prepare task",
+                            "instructions": "Prepare the task context.",
+                            "source": {
+                                "kind": "preset-derived",
+                                "presetSlug": "root-preset",
+                                "presetVersion": "1.0.0",
+                                "includePath": ["root-preset@1.0.0"],
+                            },
+                        },
+                        {
+                            "id": "tpl:child-preset:1.0.0:01",
+                            "title": "Run checks",
+                            "instructions": "Run recursive preset checks.",
+                            "source": {
+                                "kind": "preset-derived",
+                                "presetSlug": "child-preset",
+                                "presetVersion": "1.0.0",
+                                "includePath": [
+                                    "root-preset@1.0.0",
+                                    "checks:child-preset@1.0.0",
+                                ],
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    assert task["steps"][0]["source"]["presetSlug"] == "root-preset"
+    assert task["steps"][1]["source"]["includePath"] == [
+        "root-preset@1.0.0",
+        "checks:child-preset@1.0.0",
+    ]
+    assert [preset["presetSlug"] for preset in task["authoredPresets"]] == [
+        "root-preset",
+        "child-preset",
+    ]
+    assert task["authoredPresets"][1]["inputMapping"] == {
+        "target": "recursive presets"
+    }
+    assert task["appliedStepTemplates"][0]["composition"]["includes"][0]["alias"] == (
+        "checks"
+    )
+    assert task["runtime"] == {"mode": "codex_cli"}
+    assert task["publish"] == {"mode": "pr"}
+
+def test_create_task_shaped_execution_does_not_fabricate_manual_preset_metadata(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "title": "Manual task",
+                    "instructions": "Run one manual step.",
+                    "steps": [
+                        {
+                            "id": "manual-1",
+                            "title": "Manual step",
+                            "instructions": "Do the manual work.",
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    assert "authoredPresets" not in task
+    assert "appliedStepTemplates" not in task
+    assert "source" not in task["steps"][0]
+
 def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_instructions(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

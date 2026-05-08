@@ -503,6 +503,7 @@ interface ExpandedStepPayload {
   tool?: TaskTemplateStepSkill;
   type?: string;
   source?: Record<string, unknown>;
+  presetProvenance?: Record<string, unknown>;
   inputAttachments?: StepAttachmentRef[];
   attachments?: StepAttachmentRef[];
   storyOutput?: Record<string, unknown>;
@@ -519,7 +520,10 @@ interface TaskTemplateExpandResponse {
     inputs?: Record<string, unknown>;
     stepIds?: string[];
     appliedAt?: string;
+    composition?: Record<string, unknown>;
+    authoredPresets?: Array<Record<string, unknown>>;
   };
+  authoredPresets?: Array<Record<string, unknown>>;
   capabilities?: string[];
   warnings?: string[];
 }
@@ -654,6 +658,8 @@ interface AppliedTemplateState {
   stepIds: string[];
   appliedAt: string;
   capabilities: string[];
+  composition?: Record<string, unknown>;
+  authoredPresets?: Array<Record<string, unknown>>;
 }
 
 function readDashboardConfig(payload: BootPayload): DashboardConfig {
@@ -756,6 +762,25 @@ function recordValue(value: unknown): Record<string, unknown> {
 function nonEmptyRecordValue(value: unknown): Record<string, unknown> | undefined {
   const record = recordValue(value);
   return Object.keys(record).length > 0 ? record : undefined;
+}
+
+function compactSourceFromPresetProvenance(
+  provenance: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!provenance) {
+    return undefined;
+  }
+  const source = recordValue(provenance.source);
+  const path = Array.isArray(provenance.path)
+    ? provenance.path.map((entry) => String(entry).trim()).filter(Boolean)
+    : [];
+  const presetSlug = String(source.slug || "").trim();
+  const presetVersion = String(source.version || "").trim();
+  const compact: Record<string, unknown> = { kind: "preset-derived" };
+  if (presetSlug) compact.presetSlug = presetSlug;
+  if (presetVersion) compact.presetVersion = presetVersion;
+  if (path.length > 0) compact.includePath = path;
+  return Object.keys(compact).length > 1 ? compact : undefined;
 }
 
 function cloneJsonRecord(value: Record<string, unknown>): Record<string, unknown> {
@@ -1412,6 +1437,14 @@ function activeAppliedTemplatesForSteps(
       stepIds.some((stepId) => activeStepIds.has(stepId))
     );
   });
+}
+
+function authoredPresetsFromAppliedTemplates(
+  appliedTemplates: AppliedTemplateState[],
+): Array<Record<string, unknown>> {
+  return appliedTemplates.flatMap((template) =>
+    Array.isArray(template.authoredPresets) ? template.authoredPresets : [],
+  );
 }
 
 function parseCapabilitiesCsv(value: string): string[] {
@@ -2083,7 +2116,9 @@ function mapExpandedStepToState(
   const jiraOrchestration =
     nonEmptyRecordValue(step.jiraOrchestration) ||
     nonEmptyRecordValue(step.jira_orchestration);
-  const source = nonEmptyRecordValue(step.source);
+  const source =
+    nonEmptyRecordValue(step.source) ||
+    compactSourceFromPresetProvenance(nonEmptyRecordValue(step.presetProvenance));
   const normalizedSource = source
     ? {
         ...source,
@@ -5922,6 +5957,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         String(appliedTemplate.appliedAt || "").trim() ||
         new Date().toISOString(),
       capabilities: expansion.capabilities,
+      ...(appliedTemplate.composition &&
+      typeof appliedTemplate.composition === "object"
+        ? { composition: appliedTemplate.composition }
+        : {}),
+      ...(Array.isArray(appliedTemplate.authoredPresets)
+        ? { authoredPresets: appliedTemplate.authoredPresets }
+        : {}),
     };
   }
 
@@ -7306,6 +7348,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       submissionAppliedTemplates.length > 0
         ? { include: [{ name: effectiveSubmissionSkillId }] }
         : undefined;
+    const submissionAuthoredPresets =
+      authoredPresetsFromAppliedTemplates(submissionAppliedTemplates);
 
     // Address: Gemini r3034477068 — keep tool/skill objects in sync with effectiveSkillId
     const resolvedTool = effectiveSubmissionSkillId !== primarySkillId
@@ -7365,6 +7409,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       ...(normalizedSteps.length > 0 ? { steps: normalizedSteps } : {}),
       ...(submissionAppliedTemplates.length > 0
         ? { appliedStepTemplates: submissionAppliedTemplates }
+        : {}),
+      ...(submissionAuthoredPresets.length > 0
+        ? { authoredPresets: submissionAuthoredPresets }
         : {}),
       ...(selectedDependencies.length > 0
         ? { dependsOn: selectedDependencies }
