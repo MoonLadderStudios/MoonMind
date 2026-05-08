@@ -219,6 +219,8 @@ Key diagnostics:
 - Python 3.12 + Pydantic v2, Pydantic Settings, Temporal Python SDK activity boundaries, existing MoonMind agent-skill resolver/materializer services, pytest (315-disabled-skills-on-demand-controls)
 - No new persistent storage; disabled on-demand results and activation metadata are deterministic runtime outputs only (315-disabled-skills-on-demand-controls)
 - Existing SQLAlchemy/Alembic database with `execution_remediation_links` and existing Temporal execution source records (317-canonical-remediation-submissions)
+- Python 3.12; TypeScript/React for Mission Control create/edit/rerun UI + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Vitest/Testing Library, pytest (320-normalize-task-shaped-submissions)
+- Existing Temporal execution records, artifact-backed original task input snapshots, Temporal artifact metadata/content store; no new persistent tables planned (320-normalize-task-shaped-submissions)
 - Python 3.12 + Pydantic v2, SQLAlchemy async ORM, FastAPI service models where exposed, Temporal Python SDK activity/service boundaries, pytest (320-remediation-action-contracts)
 - Existing `execution_remediation_links`, Temporal execution source records, Temporal artifact metadata/content store, and in-memory guard/ledger state in the current service; no new persistent database tables planned (320-remediation-action-contracts)
 

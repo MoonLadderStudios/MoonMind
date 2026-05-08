@@ -7,7 +7,7 @@ import base64
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Iterator
+from typing import Any, Iterator
 from unittest.mock import AsyncMock, Mock, call, patch
 from uuid import uuid4
 
@@ -57,6 +57,9 @@ class _ExecuteResult:
 
     def scalars(self) -> _ScalarRows:
         return _ScalarRows(self._rows)
+
+def _artifact_session(rows: list[SimpleNamespace]) -> SimpleNamespace:
+    return SimpleNamespace(execute=AsyncMock(return_value=_ExecuteResult(rows)))
 
 class _QueryHandle:
     def __init__(
@@ -2093,7 +2096,7 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
                     },
                     "git": {
                         "startingBranch": "feature/resolve-pr",
-                        "targetBranch": "codex/pr-resolver",
+                        "branch": "codex/pr-resolver",
                     },
                 },
             },
@@ -2118,7 +2121,7 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     }
     assert initial_parameters["task"]["git"] == {
         "startingBranch": "feature/resolve-pr",
-        "targetBranch": "codex/pr-resolver",
+        "branch": "codex/pr-resolver",
     }
 
 def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
@@ -2909,6 +2912,274 @@ def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
         }
     ]
     assert "input_attachments" not in step_payload
+
+def test_create_task_shaped_execution_preserves_canonical_mm627_task_shape(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id="art_01MM627OBJECTIVE000000000",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=10,
+            ),
+            SimpleNamespace(
+                artifact_id="art_01MM627STEP00000000000000",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=20,
+            ),
+        ]
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "title": "MM-627 canonical task payload",
+                    "instructions": "Preserve the submitted task exactly.",
+                    "dependsOn": ["mm:dep-1"],
+                    "runtime": {
+                        "mode": "codex",
+                        "model": "gpt-5-codex",
+                        "effort": "high",
+                    },
+                    "publish": {"mode": "pr", "baseBranch": "main"},
+                    "git": {"branch": "feature/mm-627"},
+                    "inputAttachments": [
+                        {
+                            "artifactId": "art_01MM627OBJECTIVE000000000",
+                            "filename": "objective.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 10,
+                        }
+                    ],
+                    "steps": [
+                        {
+                            "id": "step-1",
+                            "title": "Inspect step",
+                            "instructions": "Inspect the step screenshot.",
+                            "source": {
+                                "kind": "jira",
+                                "issueKey": "MM-627",
+                            },
+                            "storyOutput": {"mode": "jira"},
+                            "jiraOrchestration": {
+                                "issueKey": "MM-627",
+                                "preset": "jira-orchestrate",
+                            },
+                            "inputAttachments": [
+                                {
+                                    "artifactId": "art_01MM627STEP00000000000000",
+                                    "filename": "step.png",
+                                    "contentType": "image/png",
+                                    "sizeBytes": 20,
+                                }
+                            ],
+                        }
+                    ],
+                    "storyOutput": {"mode": "jira"},
+                    "authoredPresets": [
+                        {"slug": "jira-orchestrate", "version": "2026-05-08"}
+                    ],
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "jira-implementation",
+                            "version": "2026-05-08",
+                            "stepIds": ["step-1"],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    task = initial_parameters["task"]
+    assert task["git"] == {"branch": "feature/mm-627"}
+    assert task["runtime"] == {
+        "mode": "codex_cli",
+        "model": "gpt-5-codex",
+        "effort": "high",
+    }
+    assert task["publish"]["mode"] == "pr"
+    assert task["dependsOn"] == ["mm:dep-1"]
+    assert task["storyOutput"] == {"mode": "jira"}
+    assert task["authoredPresets"] == [
+        {"slug": "jira-orchestrate", "version": "2026-05-08"}
+    ]
+    assert task["appliedStepTemplates"] == [
+        {
+            "slug": "jira-implementation",
+            "version": "2026-05-08",
+            "stepIds": ["step-1"],
+        }
+    ]
+    assert task["inputAttachments"][0]["artifactId"] == "art_01MM627OBJECTIVE000000000"
+    assert task["steps"][0]["id"] == "step-1"
+    assert task["steps"][0]["source"] == {"kind": "jira", "issueKey": "MM-627"}
+    assert task["steps"][0]["inputAttachments"][0]["artifactId"] == (
+        "art_01MM627STEP00000000000000"
+    )
+
+@pytest.mark.parametrize(
+    "task_payload",
+    [
+        {"instructions": "Run task.", "git": {"targetBranch": "feature/legacy"}},
+        {"instructions": "Run task.", "targetBranch": "feature/legacy"},
+    ],
+)
+def test_create_task_shaped_execution_rejects_legacy_target_branch_aliases(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    task_payload: dict[str, Any],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": task_payload,
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "targetBranch" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+def test_create_task_shaped_execution_rejects_non_string_repository(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": {"owner": "Moon", "name": "Mind"},
+                "targetRuntime": "codex",
+                "task": {"instructions": "Run task."},
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "repository" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+def test_create_task_shaped_execution_rejects_attachment_declared_for_multiple_targets(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id="art_01MM627DUPLICATE00000000",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=10,
+            )
+        ]
+    )
+
+    attachment = {
+        "artifactId": "art_01MM627DUPLICATE00000000",
+        "filename": "same.png",
+        "contentType": "image/png",
+        "sizeBytes": 10,
+    }
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Run task.",
+                    "inputAttachments": [attachment],
+                    "steps": [
+                        {
+                            "id": "step-1",
+                            "instructions": "Run step.",
+                            "inputAttachments": [attachment],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "declared more than once" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_duplicate_attachment_declaration_for_same_target(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id="art_01MM627DUPLICATE00000001",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=10,
+            )
+        ]
+    )
+
+    attachment = {
+        "artifactId": "art_01MM627DUPLICATE00000001",
+        "filename": "same.png",
+        "contentType": "image/png",
+        "sizeBytes": 10,
+    }
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Run task.",
+                    "inputAttachments": [attachment, attachment],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "declared more than once" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
 
 def test_create_task_shaped_execution_rejects_embedded_attachment_data(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
