@@ -238,6 +238,8 @@ Key diagnostics:
 - Existing SQLAlchemy/Alembic database with `execution_remediation_links` and existing Temporal execution source records (317-canonical-remediation-submissions)
 - Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind skill resolver/materializer services (318-refresh-managed-runtimes-after-derived-skill-activation)
 - Existing artifact-backed Skill content, resolved skillset manifests, runtime workspace/cache filesystem paths; no new persistent tables planned (318-refresh-managed-runtimes-after-derived-skill-activation)
+- Python 3.12; TypeScript/React for Mission Control create/edit/rerun UI + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Vitest/Testing Library, pytest (320-normalize-task-shaped-submissions)
+- Existing Temporal execution records, artifact-backed original task input snapshots, Temporal artifact metadata/content store; no new persistent tables planned (320-normalize-task-shaped-submissions)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
