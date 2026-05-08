@@ -534,11 +534,29 @@ class ResumeCheckpointPreservedStepModel(BaseModel):
     status: Literal["succeeded", "skipped"] = Field(..., alias="status")
     source_attempt: int = Field(..., alias="sourceAttempt", ge=1)
     artifacts: dict[str, Any] = Field(default_factory=dict, alias="artifacts")
+    state_checkpoint_ref: Optional[str] = Field(None, alias="stateCheckpointRef")
+
+    @field_validator("artifacts", mode="before")
+    @classmethod
+    def _validate_compact_artifacts(cls, value: Any) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value, field_name="preservedStep.artifacts"
+        )
+
+    @field_validator("state_checkpoint_ref", mode="before")
+    @classmethod
+    def _normalize_state_checkpoint_ref(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
 
     @model_validator(mode="after")
-    def _require_output_refs(self) -> "ResumeCheckpointPreservedStepModel":
+    def _require_resume_evidence(self) -> "ResumeCheckpointPreservedStepModel":
         if not any(value for value in self.artifacts.values()):
             raise ValueError("preserved step requires at least one artifact ref")
+        if self.state_checkpoint_ref is None:
+            raise ValueError("preserved step requires a state checkpoint ref")
         return self
 
 class ResumeCheckpointModel(BaseModel):
@@ -560,10 +578,33 @@ class ResumeCheckpointModel(BaseModel):
     )
     resume_workspace: dict[str, Any] = Field(default_factory=dict, alias="resumeWorkspace")
 
+    @field_validator("plan_ref", "plan_digest", mode="before")
+    @classmethod
+    def _normalize_optional_ref(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("resume_workspace", mode="before")
+    @classmethod
+    def _validate_compact_resume_workspace(cls, value: Any) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value, field_name="resumeWorkspace"
+        )
+
     @field_validator("prepared_artifact_refs")
     @classmethod
     def _normalize_prepared_refs(cls, value: list[str]) -> list[str]:
         return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+    @model_validator(mode="after")
+    def _require_resume_evidence(self) -> "ResumeCheckpointModel":
+        if self.plan_ref is None and self.plan_digest is None:
+            raise ValueError("resume checkpoint requires plan identity or digest")
+        if not any(value for value in self.resume_workspace.values()):
+            raise ValueError("resume checkpoint requires workspace checkpoint evidence")
+        return self
 
 class ResumeSourceModel(BaseModel):
     """Compact source provenance carried by a resumed execution."""

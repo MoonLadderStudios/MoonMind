@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -2041,29 +2042,93 @@ def _valid_resume_checkpoint_payload(
                 "status": "succeeded",
                 "sourceAttempt": 1,
                 "artifacts": {"outputSummary": "artifact://summary"},
+                "stateCheckpointRef": "artifact://workspace/before-plan",
             }
         ],
         "preparedArtifactRefs": ["artifact://prepared"],
         "resumeWorkspace": {"branch": "feature", "commit": "abc123"},
     }
 
-def test_resume_checkpoint_model_allows_empty_optional_resume_sections() -> None:
+def test_resume_checkpoint_model_requires_plan_identity() -> None:
+    with pytest.raises(ValidationError, match="plan identity"):
+        ResumeCheckpointModel.model_validate(
+            {
+                "schemaVersion": "v1",
+                "source": {"workflowId": "mm:source", "runId": "run-source"},
+                "taskInputSnapshotRef": "artifact://snapshot",
+                "failedStep": {
+                    "logicalStepId": "implement",
+                    "order": 2,
+                    "attempt": 1,
+                },
+                "resumeWorkspace": {"branch": "feature", "commit": "abc123"},
+            }
+        )
+
+
+def test_resume_checkpoint_model_requires_workspace_checkpoint() -> None:
+    with pytest.raises(ValidationError, match="workspace"):
+        ResumeCheckpointModel.model_validate(
+            {
+                "schemaVersion": "v1",
+                "source": {"workflowId": "mm:source", "runId": "run-source"},
+                "taskInputSnapshotRef": "artifact://snapshot",
+                "planDigest": "sha256:plan",
+                "failedStep": {
+                    "logicalStepId": "implement",
+                    "order": 2,
+                    "attempt": 1,
+                },
+            }
+        )
+
+
+def test_resume_checkpoint_model_requires_preserved_step_state_checkpoint() -> None:
+    with pytest.raises(ValidationError, match="state checkpoint"):
+        ResumeCheckpointModel.model_validate(
+            {
+                "schemaVersion": "v1",
+                "source": {"workflowId": "mm:source", "runId": "run-source"},
+                "taskInputSnapshotRef": "artifact://snapshot",
+                "planDigest": "sha256:plan",
+                "failedStep": {
+                    "logicalStepId": "implement",
+                    "order": 2,
+                    "attempt": 1,
+                },
+                "preservedSteps": [
+                    {
+                        "logicalStepId": "plan",
+                        "order": 1,
+                        "status": "succeeded",
+                        "sourceAttempt": 1,
+                        "artifacts": {"outputSummary": "artifact://summary"},
+                    }
+                ],
+                "resumeWorkspace": {"branch": "feature", "commit": "abc123"},
+            }
+        )
+
+
+def test_resume_checkpoint_model_accepts_complete_evidence() -> None:
     checkpoint = ResumeCheckpointModel.model_validate(
         {
             "schemaVersion": "v1",
             "source": {"workflowId": "mm:source", "runId": "run-source"},
             "taskInputSnapshotRef": "artifact://snapshot",
+            "planDigest": "sha256:plan",
             "failedStep": {
                 "logicalStepId": "implement",
                 "order": 2,
                 "attempt": 1,
             },
+            "resumeWorkspace": {"branch": "feature", "commit": "abc123"},
         }
     )
 
     assert checkpoint.preserved_steps == []
     assert checkpoint.prepared_artifact_refs == []
-    assert checkpoint.resume_workspace == {}
+    assert checkpoint.resume_workspace == {"branch": "feature", "commit": "abc123"}
 
 
 @pytest.mark.asyncio
@@ -2158,6 +2223,56 @@ async def test_failed_step_resume_requires_hydrated_checkpoint_payload(
 
 
 @pytest.mark.asyncio
+async def test_failed_step_resume_invalid_evidence_does_not_create_execution(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="resume source",
+            input_artifact_ref="artifact://input/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "resume_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+
+        invalid_payload = _valid_resume_checkpoint_payload(
+            workflow_id=created.workflow_id,
+            run_id=created.run_id,
+            snapshot_ref="artifact://snapshot/source",
+        )
+        invalid_payload.pop("planDigest")
+        create_execution = AsyncMock(
+            side_effect=AssertionError("create_execution must not be called")
+        )
+        monkeypatch.setattr(service, "create_execution", create_execution)
+
+        with pytest.raises(TemporalExecutionResumeCheckpointError, match="invalid"):
+            await service.create_failed_step_resume_execution(
+                created,
+                resume_checkpoint_ref=None,
+                idempotency_key="resume-1",
+                checkpoint_payload=invalid_payload,
+            )
+
+        create_execution.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_failed_step_resume_rejects_noncanonical_checkpoint_ref(
     tmp_path, mock_client_adapter
 ):
@@ -2236,6 +2351,93 @@ async def test_failed_step_resume_rejects_checkpoint_run_mismatch(
                 checkpoint_payload=_valid_resume_checkpoint_payload(
                     workflow_id=created.workflow_id,
                     run_id="stale-run-id",
+                    snapshot_ref="artifact://snapshot/source",
+                ),
+            )
+
+
+@pytest.mark.asyncio
+async def test_failed_step_resume_rejects_checkpoint_plan_mismatch(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="resume source",
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "resume_checkpoint_ref": "artifact://checkpoint/source",
+        }
+        await session.commit()
+
+        payload = _valid_resume_checkpoint_payload(
+            workflow_id=created.workflow_id,
+            run_id=created.run_id,
+            snapshot_ref="artifact://snapshot/source",
+        )
+        payload["planRef"] = "artifact://plan/stale"
+
+        with pytest.raises(TemporalExecutionResumeCheckpointError, match="plan"):
+            await service.create_failed_step_resume_execution(
+                created,
+                resume_checkpoint_ref=None,
+                idempotency_key="resume-1",
+                checkpoint_payload=payload,
+            )
+
+
+@pytest.mark.asyncio
+async def test_failed_step_resume_rejects_checkpoint_plan_digest_mismatch(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="resume source",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.FAILED
+        created.close_status = TemporalExecutionCloseStatus.FAILED
+        created.memo = {
+            **created.memo,
+            "task_input_snapshot_ref": "artifact://snapshot/source",
+            "resume_checkpoint_ref": "artifact://checkpoint/source",
+            "resume_plan_digest": "sha256:source-plan",
+        }
+        await session.commit()
+
+        with pytest.raises(
+            TemporalExecutionResumeCheckpointError,
+            match="plan identity does not match",
+        ):
+            await service.create_failed_step_resume_execution(
+                created,
+                resume_checkpoint_ref=None,
+                idempotency_key="resume-1",
+                checkpoint_payload=_valid_resume_checkpoint_payload(
+                    workflow_id=created.workflow_id,
+                    run_id=created.run_id,
                     snapshot_ref="artifact://snapshot/source",
                 ),
             )

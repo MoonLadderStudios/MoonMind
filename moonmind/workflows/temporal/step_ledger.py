@@ -122,6 +122,15 @@ def materialize_preserved_steps(
             for key, value in raw_artifacts.items():
                 if key in artifacts:
                     artifacts[key] = value
+        state_checkpoint_ref = str(
+            preserved.get("stateCheckpointRef")
+            or preserved.get("state_checkpoint_ref")
+            or ""
+        ).strip()
+        if not state_checkpoint_ref:
+            raise ValueError(
+                f"preserved step {logical_step_id} requires a state checkpoint ref"
+            )
         try:
             source_attempt = int(
                 preserved.get("sourceAttempt") or preserved.get("source_attempt") or 1
@@ -134,6 +143,7 @@ def materialize_preserved_steps(
         row["waitingReason"] = None
         row["attentionRequired"] = False
         row["artifacts"] = artifacts
+        row["stateCheckpointRef"] = state_checkpoint_ref
         row["preservedFrom"] = {
             "workflowId": source_workflow_id,
             "runId": source_run_id,
