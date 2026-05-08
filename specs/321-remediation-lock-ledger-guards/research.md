@@ -90,7 +90,7 @@ Test implications: unit tests are the primary validation path.
 
 ## Integration Test Strategy
 
-Decision: Use `./tools/test_integration.sh` for required hermetic integration coverage, with focused evidence in `tests/integration/temporal/test_remediation_action_contracts.py`.
+Decision: Use `./tools/test_integration.sh` for required hermetic integration coverage, including the focused action-contract coverage in `tests/integration/temporal/test_remediation_action_contracts.py`.
 Evidence: The integration test exercises context build, authority decision, mutation guard result, action evidence publication, result artifact, and verification artifact. It is marked `integration_ci`.
 Rationale: The integration suite verifies the service boundary and artifact contract without requiring external credentials.
 Alternatives considered: Provider verification tests were rejected because MM-621 is local control-plane behavior and does not require third-party provider credentials.
@@ -99,7 +99,7 @@ Test implications: integration verification remains explicit and credential-free
 ## Implementation Verification Evidence
 
 Decision: No new red-first tests or production code edits were required during `moonspec-implement`.
-Evidence: Focused unit verification passed with `41 passed` for `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`; the wrapper UI phase also passed with `20` files and `324` tests passed. Focused hermetic integration verification passed with `2 passed` for `pytest tests/integration/temporal/test_remediation_action_contracts.py -m 'integration_ci' -q --tb=short`.
+Evidence: Focused unit verification passed with `41 passed` for `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`; the wrapper UI phase also passed with `20` files and `324` tests passed. Local focused integration verification of the action-contract test passed with `2 passed`, but representative hermetic integration evidence is the compose-backed `./tools/test_integration.sh` wrapper.
 Rationale: The existing implemented-verified unit and integration evidence already covers MM-621 guard behavior and the action evidence boundary, so adding artificial failing tests would duplicate current coverage instead of improving TDD confidence.
 Alternatives considered: Adding new duplicate red-first tests was rejected because the plan classified all rows as implemented-verified and focused verification passed.
 Test implications: Run the full unit suite and required hermetic integration wrapper as final implementation validation.

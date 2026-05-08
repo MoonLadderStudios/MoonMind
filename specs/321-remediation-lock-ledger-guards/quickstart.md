@@ -42,13 +42,15 @@ Before closing the implementation workflow, run the full required unit suite:
 
 ## Integration Test Strategy
 
-Run the focused hermetic integration coverage when iterating on the action evidence boundary:
+Run the hermetic integration wrapper when validating the action evidence boundary:
 
 ```bash
-pytest tests/integration/temporal/test_remediation_action_contracts.py -m 'integration_ci' -q --tb=short
+./tools/test_integration.sh
 ```
 
-Before final closure, run the required hermetic integration wrapper:
+This wrapper builds the compose pytest service, prepares the test environment, and runs the required `integration_ci` suite that includes `tests/integration/temporal/test_remediation_action_contracts.py`.
+
+Before final closure, rerun the required hermetic integration wrapper after any related change:
 
 ```bash
 ./tools/test_integration.sh

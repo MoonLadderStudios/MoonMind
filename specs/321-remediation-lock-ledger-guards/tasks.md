@@ -12,7 +12,7 @@
 **Test Commands**:
 
 Unit tests: `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`
-Integration tests: `pytest tests/integration/temporal/test_remediation_action_contracts.py -m 'integration_ci' -q --tb=short`
+Integration tests: `./tools/test_integration.sh`
 Final unit suite: `./tools/test_unit.sh`
 Final integration suite: `./tools/test_integration.sh`
 Final verification: `/moonspec-verify`
@@ -64,7 +64,7 @@ Tasks use the exact checklist format `- [ ] T### [P?] Description with file path
 ### Integration Tests (write/verify first)
 
 - [X] T008 Audit existing integration coverage in `tests/integration/temporal/test_remediation_action_contracts.py` for remediation context, authority decision, mutation guard decision, action request/result artifacts, verification artifacts, and raw action rejection covering DESIGN-REQ-011 and DESIGN-REQ-019
-- [X] T009 Run `pytest tests/integration/temporal/test_remediation_action_contracts.py -m 'integration_ci' -q --tb=short` and confirm the action evidence boundary passes before touching `moonmind/workflows/temporal/remediation_tools.py` or `moonmind/workflows/temporal/remediation_context.py`
+- [X] T009 Run `./tools/test_integration.sh` and confirm the action evidence boundary passes through the compose-backed `integration_ci` suite before touching `moonmind/workflows/temporal/remediation_tools.py` or `moonmind/workflows/temporal/remediation_context.py`
 
 ### Red-First Confirmation
 
@@ -76,7 +76,7 @@ Tasks use the exact checklist format `- [ ] T### [P?] Description with file path
 - [X] T012 If T007 fails for guard decision semantics, update `moonmind/workflows/temporal/remediation_actions.py` to restore FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013 behavior while preserving the v1 guard response contract in `specs/321-remediation-lock-ledger-guards/contracts/remediation-mutation-guard.md`
 - [X] T013 If T007 exposes durable state drift, update `api_service/db/models.py` or `api_service/migrations/versions/f2a3b4c5d6e7_remediation_guard_state.py` only as needed to preserve lock and ledger durability for FR-006, FR-009, and DESIGN-REQ-019
 - [X] T014 If T009 fails at the evidence boundary, update `moonmind/workflows/temporal/remediation_context.py` or `moonmind/workflows/temporal/remediation_tools.py` to preserve bounded context, action request/result artifacts, and verification artifacts for DESIGN-REQ-011 and DESIGN-REQ-019
-- [X] T015 If T010 or T011 added failing tests, rerun `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and `pytest tests/integration/temporal/test_remediation_action_contracts.py -m 'integration_ci' -q --tb=short` until MM-621 behavior passes in `tests/unit/workflows/temporal/test_remediation_context.py` and `tests/integration/temporal/test_remediation_action_contracts.py`
+- [X] T015 If T010 or T011 added failing tests, rerun `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and `./tools/test_integration.sh` until MM-621 behavior passes in `tests/unit/workflows/temporal/test_remediation_context.py` and the compose-backed `integration_ci` suite including `tests/integration/temporal/test_remediation_action_contracts.py`
 
 ### Story Validation
 
