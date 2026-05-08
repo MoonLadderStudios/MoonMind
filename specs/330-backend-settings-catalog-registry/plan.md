@@ -19,7 +19,7 @@ Spec 267 (MM-537) delivered the read-side settings catalog and effective-value c
 **Targeted refactoring** of `api_service/services/settings_catalog.py`:
 
 - Extract a `SettingsRegistry` class that wraps `_REGISTRY` entries and adds:
-  - Key format validation (`^[a-z][a-z0-9]*(\.[a-z][a-z0-9_]*)*$`)
+  - Key format validation (`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
   - Duplicate key detection
   - Migration gate against `_CATALOG_KEY_LEDGER`
   - `from_pydantic_model()` class method
@@ -35,7 +35,7 @@ Spec 267 (MM-537) delivered the read-side settings catalog and effective-value c
 | File | Change |
 |---|---|
 | `api_service/services/settings_catalog.py` | Add `SettingsRegistry`, `SettingsCatalogBuilder`, `_CATALOG_KEY_LEDGER`; update `SettingsCatalogService` |
-| `moonmind/config/settings.py` | Add `moonmind.expose` metadata to 7 `WorkflowSettings` fields |
+| `moonmind/config/settings.py` | Add `moonmind.expose` metadata to 5 `WorkflowSettings` fields (`workflow.default_task_runtime`, `workflow.default_publish_mode`, `skills.policy_mode`, `skills.canary_percent`, `live_sessions.default_enabled`); the remaining 2 keys (`workflow.default_provider_profile_ref`, `integrations.github.token_ref`) are registered via `_REGISTRY` entries directly |
 | `tests/unit/services/test_settings_catalog_snapshot.py` | New snapshot test |
 | `tests/unit/services/snapshots/settings_catalog_snapshot.json` | Committed catalog snapshot |
 | `tests/unit/services/test_settings_catalog.py` | Add tests for `SettingsRegistry` and `SettingsCatalogBuilder` |
@@ -67,7 +67,7 @@ No cross-cutting changes. `SettingsCatalogService.__init__` signature is backwar
 ### SettingsRegistry class
 
 ```python
-_SETTING_KEY_RE = re.compile(r"^[a-z][a-z0-9]*(\.[a-z][a-z0-9_]*)*$")
+_SETTING_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
 
 _CATALOG_KEY_LEDGER: frozenset[str] = frozenset({
     "workflow.default_task_runtime",
@@ -125,8 +125,9 @@ class SettingsCatalogBuilder:
         self,
         section: SettingSection | None = None,
         scope: SettingScope | None = None,
-        descriptor_fn: Callable[[SettingRegistryEntry], SettingDescriptor] = ...,
+        descriptor_fn: Callable[[SettingRegistryEntry], SettingDescriptor] | None = None,
     ) -> SettingsCatalogResponse:
+        # descriptor_fn is required; raises ValueError if None
         categories: dict[str, list[SettingDescriptor]] = {}
         for entry in sorted(self._registry.entries, key=lambda e: e.order):
             if section is not None and entry.section != section:
@@ -140,7 +141,7 @@ class SettingsCatalogBuilder:
 
 ### moonmind.expose metadata on AppSettings
 
-For each of the 7 currently registered fields in `WorkflowSettings`, add:
+For 5 of the 7 registered fields — those belonging to `WorkflowSettings` — add `moonmind.expose` metadata. The remaining 2 keys (`workflow.default_provider_profile_ref` and `integrations.github.token_ref`) are registered via hardcoded `_REGISTRY` entries because their source fields are not in `WorkflowSettings`. Example for one field:
 ```python
 default_task_runtime: str = Field(
     ...,

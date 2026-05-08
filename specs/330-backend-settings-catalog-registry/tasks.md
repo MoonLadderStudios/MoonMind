@@ -2,7 +2,7 @@
 
 **Input**: `specs/330-backend-settings-catalog-registry/spec.md`, `specs/330-backend-settings-catalog-registry/plan.md`
 **Unit Test Command**: `./tools/test_unit.sh`
-**Source Traceability**: `MM-652`; FR-001 through FR-008; SC-001 through SC-006; S5.1, S5.9, S7.1, S7.2, S8.1–S8.4, S26.SettingsRegistry, S26.SettingsCatalogBuilder
+**Source Traceability**: `MM-652`; FR-001 through FR-008; SC-001 through SC-006; S5.1, S5.9, S7.1, S7.2, S8.1–S8.4, S22.4, S22.5, S25.1, S25.20, S26.SettingsRegistry, S26.SettingsCatalogBuilder, S29.1
 
 ## Phase 1: Setup
 
@@ -11,7 +11,7 @@
 ## Phase 2: Foundational
 
 - [X] T002 Add `_SETTING_KEY_RE`, `_CATALOG_KEY_LEDGER`, `SettingsRegistry`, and `SettingsCatalogBuilder` to `api_service/services/settings_catalog.py`. (FR-001, FR-002, FR-004, FR-005, FR-007)
-- [X] T003 Add `moonmind.expose` metadata to the 7 relevant fields in `moonmind/config/settings.py` `WorkflowSettings`. (FR-003, S8.3)
+- [X] T003 Add `moonmind.expose` metadata to the 5 `WorkflowSettings` fields in `moonmind/config/settings.py` (`workflow.default_task_runtime`, `workflow.default_publish_mode`, `skills.policy_mode`, `skills.canary_percent`, `live_sessions.default_enabled`). The remaining 2 keys (`workflow.default_provider_profile_ref`, `integrations.github.token_ref`) are registered via hardcoded `_REGISTRY` entries; their source fields are outside `WorkflowSettings`. (FR-003, S8.3)
 - [X] T004 Update `SettingsCatalogService` to internally construct a `SettingsRegistry` from its `registry` param and use `SettingsCatalogBuilder` in `catalog()` and `catalog_async()`. (FR-001, FR-004)
 
 ## Phase 3: Story Tests
@@ -25,7 +25,7 @@
 ## Phase 4: Validation
 
 - [X] T010 Run `./tools/test_unit.sh` and confirm all existing and new tests pass. 52 settings-catalog tests pass; 29 pre-existing failures on main are unrelated to MM-652. (SC-001 through SC-005)
-- [X] T011 Verify traceability: `MM-652` and S-prefixed IDs present in spec artifacts. Confirmed in spec.md — S5.1, S5.9, S7.1, S7.2, S8.1–S8.4, S26.SettingsRegistry, S26.SettingsCatalogBuilder, S29.1. (FR-008, SC-006)
+- [X] T011 Verify traceability: `MM-652` and S-prefixed IDs present in spec artifacts. Confirmed in spec.md — S5.1, S5.9, S7.1, S7.2, S8.1–S8.4, S22.4, S22.5, S25.1, S25.20, S26.SettingsRegistry, S26.SettingsCatalogBuilder, S29.1. (FR-008, SC-006)
 
 ## Dependencies
 

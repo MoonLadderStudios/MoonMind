@@ -102,19 +102,19 @@ flows, and documentation generators.
 
 7. **Given** a registry entry is added, removed, or its `type` / `scopes` changed without updating the snapshot file, **When** the catalog snapshot test runs, **Then** it fails with a descriptive diff showing the exact drift.
 
-8. **Given** MoonSpec artifacts and downstream evidence reference this work, **When** traceability is reviewed, **Then** the Jira issue key `MM-652` and coverage IDs S5.1, S5.9, S7.1, S7.2, S8.1–S8.4, S26.SettingsRegistry, S26.SettingsCatalogBuilder are present.
+8. **Given** MoonSpec artifacts and downstream evidence reference this work, **When** traceability is reviewed, **Then** the Jira issue key `MM-652` and all coverage IDs from the source brief are present: S5.1, S5.9, S7.1, S7.2, S8.1–S8.4, S22.4, S22.5, S25.1, S25.20, S26.SettingsRegistry, S26.SettingsCatalogBuilder, S29.1.
 
 ### Edge Cases
 
 - A key that is `"secret"` or matches a sensitive-name heuristic token in `_UNSAFE_FIELD_TOKENS` must be rejected by the registry unless the entry explicitly marks `sensitive=True` and `ui="secret_ref_picker"` or `ui="readonly"`.
 - `from_pydantic_model()` skips nested sub-models — only top-level fields with `moonmind.expose` are extracted.
-- A valid dotted key must match `^[a-z][a-z0-9]*(\.[a-z][a-z0-9_]*)*$`; the registry rejects any entry with a key that does not match.
+- A valid dotted key must match `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`; the registry rejects any entry with a key that does not match.
 - Duplicate keys within the same registry raise `ValueError` immediately.
 
 ## Assumptions
 
 - The existing `_REGISTRY` tuple and `SettingsCatalogService` from MM-537 remain the runtime source of truth for the 7 currently exposed settings; MM-652 wraps them in named components without removing existing test coverage.
-- `moonmind.expose` metadata on AppSettings fields is additive; no existing field currently carries it, so MM-652 must add it to the fields corresponding to the 7 current registry entries.
+- `moonmind.expose` metadata on AppSettings fields is additive; no existing field currently carries it. MM-652 adds it to the 5 `WorkflowSettings` fields that map to `workflow.default_task_runtime`, `workflow.default_publish_mode`, `skills.policy_mode`, `skills.canary_percent`, and `live_sessions.default_enabled`. The remaining 2 keys (`workflow.default_provider_profile_ref` and `integrations.github.token_ref`) are registered via `_REGISTRY` entries directly rather than Pydantic field annotations, because their source fields reside in settings classes not in scope for annotation in this story.
 - The stable-key ledger is committed as a Python constant `_CATALOG_KEY_LEDGER: frozenset[str]` in `settings_catalog.py`; it starts with the 7 current keys.
 - Snapshot file is committed under `tests/unit/services/snapshots/settings_catalog_snapshot.json` and the snapshot test lives in `tests/unit/services/test_settings_catalog_snapshot.py`.
 
@@ -132,6 +132,11 @@ flows, and documentation generators.
 | S8.4 | SettingsSystem.md §8.4 | The catalog is a durable API contract; changes require migration rules and snapshot updates. | In scope — migration gate + snapshot test |
 | S26.SettingsRegistry | SettingsSystem.md §26 | `SettingsRegistry` owns descriptor registration and eligibility filtering. | In scope |
 | S26.SettingsCatalogBuilder | SettingsSystem.md §26 | `SettingsCatalogBuilder` builds catalog responses. | In scope |
+| S22.4 | SettingsSystem.md §22.4 | The backend is authoritative for catalog generation, eligibility, validation, and authorization. | In scope |
+| S22.5 | SettingsSystem.md §22.5 | Unknown setting keys are rejected. | In scope — key format validation rejects invalid/unknown keys |
+| S25.1 | SettingsSystem.md §25.1 | Catalog generation includes all explicitly exposed eligible settings. | In scope — `moonmind.expose` gate |
+| S25.20 | SettingsSystem.md §25.20 | Snapshot tests detect accidental catalog drift. | In scope — snapshot test |
+| S29.1 | SettingsSystem.md §29.1 | A setting cannot be edited unless the backend catalog explicitly exposes it. | In scope — eligibility filtering |
 
 ## Functional Requirements
 
@@ -139,10 +144,10 @@ flows, and documentation generators.
 - **FR-002**: `SettingsRegistry` MUST accept a committed `stable_key_ledger` and fail with `catalog_integrity_error` if any ledger key is absent from the current entries without a covering `SettingMigrationRule`.
 - **FR-003**: `SettingsRegistry` MUST expose a `from_pydantic_model()` class method that extracts `SettingRegistryEntry` objects from Pydantic model fields with `json_schema_extra.moonmind.expose == True`.
 - **FR-004**: A `SettingsCatalogBuilder` class MUST own catalog-response construction from a `SettingsRegistry`, supporting section and scope filters and category ordering.
-- **FR-005**: Setting keys MUST match `^[a-z][a-z0-9]*(\.[a-z][a-z0-9_]*)*$`; invalid keys MUST be rejected at registry construction.
+- **FR-005**: Setting keys MUST match `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`; invalid keys MUST be rejected at registry construction.
 - **FR-006**: A snapshot test MUST detect accidental drift in key set, scopes, or types of the default catalog.
 - **FR-007**: The `_CATALOG_KEY_LEDGER` constant MUST start with the 7 keys currently registered in `_REGISTRY` and MUST be updated when new keys are added.
-- **FR-008**: MoonSpec artifacts MUST preserve `MM-652` and the S-prefixed coverage IDs listed above.
+- **FR-008**: MoonSpec artifacts MUST preserve `MM-652` and all S-prefixed coverage IDs from the source brief: S5.1, S5.9, S7.1, S7.2, S8.1–S8.4, S22.4, S22.5, S25.1, S25.20, S26.SettingsRegistry, S26.SettingsCatalogBuilder, S29.1.
 
 ## Success Criteria
 
