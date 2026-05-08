@@ -245,12 +245,21 @@ class DisabledComposeRunner:
 
 @dataclass(frozen=True, slots=True)
 class HostDockerComposeRunner:
-    """Docker Compose runner for a trusted deployment-control worker."""
+    """Docker Compose runner for a trusted deployment-control worker.
+
+    ``project_dir`` is the **host** filesystem path of the checkout, used as
+    ``--project-directory`` so Compose resolves relative bind mounts to paths
+    the host Docker daemon can see. ``local_project_dir`` is where the same
+    checkout is mounted **inside** the worker container; the worker reads the
+    compose file and runs the subprocess from there. When unset they collapse
+    to a single value (legacy behavior used by tests on the host).
+    """
 
     project_dir: str
     compose_file: str | None = None
     project_name: str = "moonmind"
     command_timeout_seconds: int = 900
+    local_project_dir: str | None = None
 
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         services = await self._run_compose_json(("ps", "--format", "json"))
@@ -356,33 +365,48 @@ class HostDockerComposeRunner:
             details=details,
         )
 
+    def _local_dir(self) -> Path:
+        return Path(self.local_project_dir or self.project_dir).expanduser()
+
+    def _host_dir(self) -> Path:
+        return Path(self.project_dir).expanduser()
+
     def _compose_base_command(self) -> list[str]:
-        project_dir = Path(self.project_dir).expanduser()
-        if not project_dir.is_absolute():
+        host_dir = self._host_dir()
+        if not host_dir.is_absolute():
             raise ToolFailure(
                 error_code="POLICY_VIOLATION",
                 message="Deployment compose project directory must be absolute.",
                 retryable=False,
                 details={
-                    "project_dir": str(project_dir),
+                    "project_dir": str(host_dir),
                     "failureClass": "policy_violation",
                 },
             )
-        if not project_dir.exists():
+        local_dir = self._local_dir()
+        if not local_dir.exists():
             raise ToolFailure(
                 error_code="POLICY_VIOLATION",
                 message="Deployment compose project directory is not mounted.",
                 retryable=False,
                 details={
-                    "project_dir": str(project_dir),
+                    "project_dir": str(local_dir),
                     "failureClass": "policy_violation",
                 },
             )
-        compose_file = Path(self.compose_file).expanduser() if self.compose_file else (
-            project_dir / "docker-compose.yaml"
-        )
-        if not compose_file.is_absolute():
-            compose_file = project_dir / compose_file
+        if self.compose_file:
+            compose_file = Path(self.compose_file).expanduser()
+            if compose_file.is_absolute() and not compose_file.exists():
+                # Treat absolute paths that don't exist locally as host-side
+                # paths and fall back to resolving the basename inside the
+                # local mount so the worker can still read the file.
+                candidate = local_dir / compose_file.name
+                if candidate.exists():
+                    compose_file = candidate
+            elif not compose_file.is_absolute():
+                compose_file = local_dir / compose_file
+        else:
+            compose_file = local_dir / "docker-compose.yaml"
         if not compose_file.exists():
             raise ToolFailure(
                 error_code="POLICY_VIOLATION",
@@ -399,7 +423,7 @@ class HostDockerComposeRunner:
             "--project-name",
             self.project_name,
             "--project-directory",
-            str(project_dir),
+            str(host_dir),
             "-f",
             str(compose_file),
         ]
@@ -431,7 +455,7 @@ class HostDockerComposeRunner:
             env["MOONMIND_IMAGE"] = requested_image
         process = await asyncio.create_subprocess_exec(
             *resolved,
-            cwd=str(Path(self.project_dir).expanduser()),
+            cwd=str(self._local_dir()),
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
