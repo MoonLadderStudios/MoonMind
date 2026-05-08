@@ -3449,7 +3449,7 @@ function RemediationRelationshipsPanel({
                   <Card label="Selected Steps">{remediationListValue(item.selectedSteps)}</Card>
                   <Card label="Current Target">{item.currentTargetState || '—'}</Card>
                   <Card label="Allowed Actions">{remediationListValue(item.allowedActions)}</Card>
-                  <Card label="Lock">{item.activeLockScope || item.lockOutcome?.state || 'None'}</Card>
+                  <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   <Card label="Lock Holder">{item.activeLockHolder || item.lockOutcome?.holder || '—'}</Card>
                   <Card label="Lock Outcome">{item.lockOutcome?.state || '—'}</Card>
                 </div>

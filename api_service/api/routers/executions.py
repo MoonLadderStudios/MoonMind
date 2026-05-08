@@ -4810,7 +4810,7 @@ def _bounded_live_observation(value: Any) -> RemediationLiveObservationModel | N
         "epoch",
         "fallbackReason",
     }
-    bounded = {key: value.get(key) for key in allowed if value.get(key) is not None}
+    bounded = {key: val for key in allowed if (val := value.get(key)) is not None}
     return RemediationLiveObservationModel.model_validate(bounded) if bounded else None
 
 def _bounded_lock_outcome(value: Any) -> RemediationLockOutcomeModel | None:
