@@ -1,0 +1,61 @@
+slug: document-update-orchestrate
+title: Document Update Orchestrate
+description: Scan a document directory for .md, .txt, and .tex files, then create a document-update task for each discovered document.
+scope: global
+version: 1.0.0
+tags:
+  - documentation
+  - document-update
+  - orchestration
+requiredCapabilities:
+  - git
+annotations:
+  sourceSkill: document-update-orchestrate
+  output: document-update-tasks
+inputs:
+  - name: document_directory
+    label: Document Directory
+    type: text
+    required: true
+    default: ""
+  - name: publish_mode
+    label: Publish Mode
+    type: enum
+    required: true
+    default: pr_with_merge_automation
+    options:
+      - pr
+      - pr_with_merge_automation
+steps:
+  - title: Discover documents
+    type: tool
+    instructions: |-
+      Run a python script to discover all .md, .txt, and .tex files in the document directory:
+      {{ inputs.document_directory }}
+
+      Return the discovered file paths as a structured list.
+    tool:
+      id: document.discover
+      args:
+        directory: "{{ inputs.document_directory }}"
+  - title: Create document update tasks
+    type: tool
+    instructions: |-
+      Create one document-update task for each document discovered in the previous step.
+      Each task must use the document-update skill and target the specific document path.
+      Preserve the document order from the discovery step.
+      Report created tasks, skipped documents, dependency edges, and any partial failures honestly.
+    documentUpdateOrchestration:
+      task:
+        repository: "{{ context.repository }}"
+        runtime:
+          mode: "{{ context.targetRuntime }}"
+        publish:
+          mode: "pr"
+          mergeAutomation:
+            enabled: "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
+      traceability:
+        sourceDirectory: "{{ inputs.document_directory }}"
+    tool:
+      id: story.create_document_update_tasks
+      args: {}

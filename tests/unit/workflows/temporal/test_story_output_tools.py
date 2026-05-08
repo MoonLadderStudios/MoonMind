@@ -7,8 +7,10 @@ import pytest
 
 from moonmind.workflows.temporal.story_output_tools import (
     check_jira_blockers,
+    create_document_update_tasks_from_paths,
     create_jira_issues_from_stories,
     create_jira_orchestrate_tasks_from_issue_mappings,
+    discover_documents,
 )
 
 class _FakeJiraService:
@@ -1437,3 +1439,198 @@ async def test_create_jira_orchestrate_tasks_reports_missing_issue_key_and_parti
     assert orchestration["dependencyCount"] == 0
     assert orchestration["failures"][0]["storyId"] == "STORY-002"
     assert orchestration["failures"][0]["errorCode"] == "task_creation_failed"
+
+
+@pytest.mark.asyncio
+async def test_discover_documents_finds_matching_files(tmp_path):
+    (tmp_path / "readme.md").write_text("# readme")
+    (tmp_path / "notes.txt").write_text("notes")
+    (tmp_path / "paper.tex").write_text("\\documentclass")
+    (tmp_path / "script.py").write_text("print()")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "deep.md").write_text("deep")
+
+    result = await discover_documents({"directory": str(tmp_path)})
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["documentCount"] == 4
+    paths = result.outputs["documentPaths"]
+    assert "readme.md" in paths
+    assert "notes.txt" in paths
+    assert "paper.tex" in paths
+    assert "sub/deep.md" in paths
+    assert "script.py" not in paths
+
+
+@pytest.mark.asyncio
+async def test_discover_documents_respects_custom_extensions(tmp_path):
+    (tmp_path / "a.md").write_text("a")
+    (tmp_path / "b.rst").write_text("b")
+    (tmp_path / "c.txt").write_text("c")
+
+    result = await discover_documents(
+        {"directory": str(tmp_path), "extensions": [".rst"]}
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["documentCount"] == 1
+    assert result.outputs["documentPaths"] == ["b.rst"]
+
+
+@pytest.mark.asyncio
+async def test_discover_documents_returns_workspace_relative_paths(tmp_path, monkeypatch):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "guide.md").write_text("# guide")
+    nested = docs / "nested"
+    nested.mkdir()
+    (nested / "notes.txt").write_text("notes")
+
+    monkeypatch.chdir(tmp_path)
+
+    result = await discover_documents({"directory": str(docs)})
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["documentPaths"] == ["docs/guide.md", "docs/nested/notes.txt"]
+
+
+@pytest.mark.asyncio
+async def test_discover_documents_missing_directory():
+    result = await discover_documents({"directory": "/nonexistent/path"})
+
+    assert result.status == "FAILED"
+    assert result.outputs["documentPaths"] == []
+    assert "does not exist" in result.outputs["error"]
+
+
+@pytest.mark.asyncio
+async def test_discover_documents_missing_input():
+    result = await discover_documents({})
+
+    assert result.status == "FAILED"
+    assert result.outputs["documentPaths"] == []
+    assert "Missing required input" in result.outputs["error"]
+
+
+@pytest.mark.asyncio
+async def test_create_document_update_tasks_from_inline_paths():
+    creator = _FakeExecutionCreator()
+
+    result = await create_document_update_tasks_from_paths(
+        {
+            "documentPaths": [
+                "/docs/readme.md",
+                "/docs/architecture.tex",
+            ],
+            "documentUpdateOrchestration": {
+                "task": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "runtime": {"mode": "codex_cli"},
+                    "publish": {
+                        "mode": "pr",
+                        "mergeAutomation": {"enabled": True},
+                    },
+                },
+                "traceability": {"sourceDirectory": "/docs"},
+            },
+        },
+        execution_creator=creator,
+    )
+
+    assert result.status == "COMPLETED"
+    orchestration = result.outputs["documentUpdateOrchestration"]
+    assert orchestration["status"] == "completed"
+    assert orchestration["documentCount"] == 2
+    assert orchestration["createdTaskCount"] == 2
+    assert orchestration["dependencyCount"] == 1
+
+    first = orchestration["tasks"][0]
+    assert first["documentPath"] == "/docs/readme.md"
+    assert first["dependsOn"] == []
+
+    second = orchestration["tasks"][1]
+    assert second["documentPath"] == "/docs/architecture.tex"
+    assert second["dependsOn"] == [first["workflowId"]]
+
+    first_task = creator.requests[0]["initial_parameters"]["task"]
+    assert first_task["taskTemplate"]["slug"] == "document-update"
+    assert first_task["publish"]["mode"] == "pr"
+    assert first_task["publish"]["mergeAutomation"]["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_document_update_tasks_from_previous_outputs():
+    creator = _FakeExecutionCreator()
+
+    result = await create_document_update_tasks_from_paths(
+        {
+            "documentUpdateOrchestration": {
+                "task": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "runtime": {"mode": "codex_cli"},
+                    "publish": {"mode": "pr", "mergeAutomation": {"enabled": False}},
+                },
+                "traceability": {"sourceDirectory": "/docs"},
+            }
+        },
+        {
+            "previousOutputs": {
+                "documentPaths": ["/docs/guide.md"],
+            }
+        },
+        execution_creator=creator,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["documentUpdateOrchestration"]["createdTaskCount"] == 1
+    assert creator.requests[0]["initial_parameters"]["task"]["inputs"]["document_path"] == "/docs/guide.md"
+
+
+@pytest.mark.asyncio
+async def test_create_document_update_tasks_handles_empty_paths():
+    result = await create_document_update_tasks_from_paths(
+        {"documentPaths": []},
+        execution_creator=_FakeExecutionCreator(),
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["documentUpdateOrchestration"]["status"] == "no_downstream_tasks"
+    assert result.outputs["documentUpdateOrchestration"]["createdTaskCount"] == 0
+
+
+@pytest.mark.asyncio
+async def test_create_document_update_tasks_reports_partial_failures():
+    creator = _FakeExecutionCreator(fail_at=2)
+
+    result = await create_document_update_tasks_from_paths(
+        {
+            "documentPaths": [
+                "/docs/a.md",
+                "/docs/b.md",
+                "/docs/c.md",
+            ],
+            "documentUpdateOrchestration": {
+                "task": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "runtime": {"mode": "codex_cli"},
+                    "publish": {"mode": "pr"},
+                },
+                "traceability": {"sourceDirectory": "/docs"},
+            },
+        },
+        execution_creator=creator,
+    )
+
+    orchestration = result.outputs["documentUpdateOrchestration"]
+    assert orchestration["status"] == "partial"
+    assert orchestration["createdTaskCount"] == 1
+    assert orchestration["dependencyCount"] == 0
+    assert orchestration["failures"][0]["documentPath"] == "/docs/b.md"
+    assert orchestration["failures"][0]["errorCode"] == "task_creation_failed"
+
+
+@pytest.mark.asyncio
+async def test_create_document_update_tasks_requires_execution_creator():
+    with pytest.raises(ValueError, match="execution_creator is required"):
+        await create_document_update_tasks_from_paths({"documentPaths": ["/docs/a.md"]})
