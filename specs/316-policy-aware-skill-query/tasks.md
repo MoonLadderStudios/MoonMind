@@ -4,7 +4,7 @@
 **Prerequisites**: Existing Skills On Demand settings, service, schema, resolver, and activity registrations.
 **Unit Test Command**: `./tools/test_unit.sh tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py tests/unit/services/test_skill_resolution.py`
 **Integration Test Command**: `./tools/test_unit.sh tests/unit/workflows/agent_skills/test_skills_on_demand_controls.py::test_enabled_activity_query_returns_typed_result`
-**Final Verification**: `/speckit.verify`
+**Final Verification**: `/moonspec-verify`
 
 ## Source Traceability Summary
 
@@ -60,7 +60,7 @@
 
 - [X] T018 Review query result serialization for unsafe fields using tests and code inspection in moonmind/schemas/agent_skill_models.py and moonmind/services/skills_on_demand.py (FR-004, SC-001, DESIGN-REQ-014)
 - [X] T019 Run full unit verification with `./tools/test_unit.sh` and record result in specs/316-policy-aware-skill-query/verification.md (FR-001 through FR-011)
-- [X] T020 Run `/speckit.verify` equivalent and write specs/316-policy-aware-skill-query/verification.md with MM-613, acceptance scenario coverage, DESIGN-REQ coverage, test evidence, and final verdict (FR-011, SC-006)
+- [X] T020 Run `/moonspec-verify` equivalent and write specs/316-policy-aware-skill-query/verification.md with MM-613, acceptance scenario coverage, DESIGN-REQ coverage, test evidence, and final verdict (FR-011, SC-006)
 
 ## Dependencies And Execution Order
 

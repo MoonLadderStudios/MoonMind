@@ -22,7 +22,7 @@ MM-613 is implemented for the selected single story. Managed-runtime Skills On D
 | FR-007 | VERIFIED | Ineligible local matches return `eligible=false` and a compact safe diagnostic. |
 | FR-008 | VERIFIED | Activity-boundary test patches materializer and asserts query does not materialize. |
 | FR-009 | VERIFIED | Query result count honors accepted `max_results`; metadata reports result count. |
-| FR-010 | VERIFIED | Query result includes compact metadata with result count and denial state. |
+| FR-010 | VERIFIED | Query result includes compact metadata with result count, denial state, and normalized query hash. |
 | FR-011 | VERIFIED | `MM-613` and canonical Jira preset brief are preserved in spec, plan, tasks, and this verification report. |
 
 ## Source Design Coverage
