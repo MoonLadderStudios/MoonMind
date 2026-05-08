@@ -1963,17 +1963,15 @@ def _document_update_task_payload(
     runtime = _mapping(task_payload.get("runtime"))
     publish = _mapping(task_payload.get("publish"))
     repository = _string(task_payload.get("repository") or task_payload.get("repo"))
+    task_inputs = {
+        "document_path": document_path,
+        "source_directory": source_directory,
+    }
     task: dict[str, Any] = {
         "title": f"Document update: {Path(document_path).name}",
         "instructions": instructions,
-        "inputs": {
-            "document_path": document_path,
-            "source_directory": source_directory,
-        },
-        "taskTemplate": {
-            "slug": "document-update",
-            "version": "1.0.0",
-        },
+        "inputs": dict(task_inputs),
+        "skill": {"id": "document-update", "args": dict(task_inputs)},
     }
     if runtime:
         task["runtime"] = runtime
