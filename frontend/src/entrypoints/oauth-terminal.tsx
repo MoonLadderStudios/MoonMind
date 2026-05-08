@@ -231,6 +231,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const [session, setSession] = useState<OAuthSessionResponse | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState<string | null>(null);
+  const [finalizeSuccess, setFinalizeSuccess] = useState(false);
   const [pastedInput, setPastedInput] = useState('');
   const [contextMenu, setContextMenu] = useState<TerminalContextMenuState | null>(null);
   const terminalElementRef = useRef<HTMLDivElement | null>(null);
@@ -313,6 +314,9 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           return;
         }
         refreshSessionFromResponse(payload);
+        if (action === 'finalize' && payload.status === 'succeeded') {
+          setFinalizeSuccess(true);
+        }
       } else if (action === 'cancel') {
         setSession((current) =>
           current ? { ...current, status: 'cancelled' } : current,
@@ -591,6 +595,34 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           <span className="oauth-terminal-status">{formatStatusLabel(status)}</span>
         </div>
       </header>
+      <section className="oauth-terminal-paste-box">
+        <label className="oauth-terminal-paste-label" htmlFor="oauth-terminal-paste-input">
+          Paste authentication code
+        </label>
+        <div className="oauth-terminal-paste-controls">
+          <textarea
+            id="oauth-terminal-paste-input"
+            ref={pastedInputRef}
+            className="oauth-terminal-paste-input"
+            rows={3}
+            placeholder="Paste the returned authentication code here, then send it to the terminal."
+            value={pastedInput}
+            onChange={(event) => setPastedInput(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                event.preventDefault();
+                sendPastedInput();
+              }
+            }}
+          />
+          <button type="button" className="primary" onClick={sendPastedInput}>
+            Send to terminal
+          </button>
+        </div>
+      </section>
+      <section className="oauth-terminal-surface" aria-label="OAuth terminal output">
+        <div ref={terminalElementRef} className="oauth-terminal-xterm" />
+      </section>
       {session ? (
         <section className="oauth-terminal-session-panel" aria-label="OAuth session details">
           <dl>
@@ -672,37 +704,18 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
               </button>
             ) : null}
           </div>
-          {actionError ? <p role="alert">{actionError}</p> : null}
+          {finalizeSuccess ? (
+            <p role="status" className="oauth-terminal-finalize-result oauth-terminal-finalize-result--success">
+              Provider profile registered successfully.
+            </p>
+          ) : null}
+          {actionError ? (
+            <p role="alert" className="oauth-terminal-finalize-result oauth-terminal-finalize-result--error">
+              {actionError}
+            </p>
+          ) : null}
         </section>
       ) : null}
-      <section className="oauth-terminal-paste-box">
-        <label className="oauth-terminal-paste-label" htmlFor="oauth-terminal-paste-input">
-          Paste authentication code
-        </label>
-        <div className="oauth-terminal-paste-controls">
-          <textarea
-            id="oauth-terminal-paste-input"
-            ref={pastedInputRef}
-            className="oauth-terminal-paste-input"
-            rows={3}
-            placeholder="Paste the returned authentication code here, then send it to the terminal."
-            value={pastedInput}
-            onChange={(event) => setPastedInput(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-                event.preventDefault();
-                sendPastedInput();
-              }
-            }}
-          />
-          <button type="button" className="primary" onClick={sendPastedInput}>
-            Send to terminal
-          </button>
-        </div>
-      </section>
-      <section className="oauth-terminal-surface" aria-label="OAuth terminal output">
-        <div ref={terminalElementRef} className="oauth-terminal-xterm" />
-      </section>
       {contextMenu ? (
         <div
           className="oauth-terminal-context-menu"
