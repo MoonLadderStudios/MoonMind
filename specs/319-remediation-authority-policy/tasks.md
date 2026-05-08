@@ -9,6 +9,13 @@
 
 **Source Traceability**: `MM-619`; FR-001 through FR-016; SCN-001 through SCN-007; SC-001 through SC-005; DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-017.
 
+**Traceability Inventory**:
+
+- Functional requirements: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-014, FR-015, FR-016.
+- Acceptance scenarios: SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SCN-006, SCN-007.
+- Success criteria: SC-001, SC-002, SC-003, SC-004, SC-005.
+- Source design requirements: DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-017.
+
 **Test Commands**:
 
 - Unit tests: `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/test_temporal_service.py tests/unit/api/routers/test_executions.py`
