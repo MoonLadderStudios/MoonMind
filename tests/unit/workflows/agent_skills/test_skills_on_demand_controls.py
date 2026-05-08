@@ -13,8 +13,10 @@ from moonmind.schemas.agent_skill_models import (
     RuntimeMaterializationMode,
     RuntimeSkillMaterialization,
     SkillCatalogSearchResult,
+    SkillsOnDemandFailureDiagnostic,
     SkillsOnDemandQueryRequest,
     SkillsOnDemandRequest,
+    SkillsOnDemandRequestResult,
     SkillsOnDemandRequestedSkill,
 )
 from moonmind.services.skills_on_demand import (
@@ -124,6 +126,34 @@ async def test_enabled_query_returns_metadata_only_results() -> None:
     assert "/hidden/SKILL.md" not in str(serialized)
 
 
+async def test_query_result_records_single_bounded_audit_event() -> None:
+    query_text = "jira"
+
+    result = await SkillsOnDemandService(
+        enabled=True,
+        catalog_entries=[_entry("jira-issue-updater")],
+    ).query(
+        SkillsOnDemandQueryRequest(
+            query=query_text,
+            runtime_id="codex",
+            current_snapshot_ref="skillset-active",
+            max_results=5,
+        )
+    )
+
+    assert len(result.audit_events) == 1
+    event = result.audit_events[0]
+    assert event.event_type == "skills_on_demand.query"
+    assert event.runtime_id == "codex"
+    assert event.current_snapshot_id == "skillset-active"
+    assert event.query_hash == result.metadata["query_hash"]
+    assert event.result_count == 1
+    assert event.denied is False
+    serialized = event.model_dump(mode="json")
+    assert query_text not in str(serialized)
+    assert "jira-issue-updater" not in str(serialized)
+
+
 async def test_enabled_query_validates_blank_query() -> None:
     result = await SkillsOnDemandService(
         enabled=True,
@@ -134,6 +164,9 @@ async def test_enabled_query_validates_blank_query() -> None:
     assert result.code == "invalid_request"
     assert result.results == []
     assert result.metadata["denied"] is True
+    assert result.audit_events[0].event_type == "skills_on_demand.query"
+    assert result.audit_events[0].denied is True
+    assert result.audit_events[0].denial_code == "invalid_request"
 
 
 async def test_enabled_query_validates_blank_context_values() -> None:
@@ -234,6 +267,17 @@ async def test_enabled_request_returns_structured_not_implemented_result() -> No
     assert result.active_snapshot_id == "skillset-active"
     assert result.snapshot_id is None
     assert result.resolved_skillset_ref is None
+    assert result.failure_diagnostic == SkillsOnDemandFailureDiagnostic(
+        status="denied",
+        code=SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_CODE,
+        message=result.message,
+        current_snapshot_ref="skillset-active",
+    )
+    assert len(result.audit_events) == 1
+    assert result.audit_events[0].event_type == "skills_on_demand.request"
+    assert result.audit_events[0].result == "denied"
+    assert result.audit_events[0].result_code == SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_CODE
+    assert result.audit_events[0].parent_snapshot_id == "skillset-active"
 
 
 async def test_enabled_request_validates_required_snapshot_and_requested_skills() -> None:
@@ -297,6 +341,11 @@ async def test_enabled_request_returns_no_change_for_already_active_skills() -> 
     assert result.snapshot_id is None
     assert result.resolved_skillset_ref == "manifest-active"
     assert result.metadata["activated_skills"] == []
+    assert len(result.audit_events) == 1
+    assert result.audit_events[0].event_type == "skills_on_demand.request"
+    assert result.audit_events[0].result == "no_change"
+    assert result.audit_events[0].result_code == "already_active"
+    assert result.audit_events[0].requested_skills == ["jira-issue-updater"]
 
 
 async def test_enabled_request_builds_activated_result_with_compact_lineage() -> None:
@@ -363,6 +412,25 @@ async def test_enabled_request_builds_activated_result_with_compact_lineage() ->
     serialized = result.model_dump(mode="json")
     assert "requested-body-ref" not in str(serialized)
     assert "active-body-ref" not in str(serialized)
+    assert len(result.audit_events) == 1
+    event = result.audit_events[0]
+    assert event.event_type == "skills_on_demand.request"
+    assert event.result == "activated"
+    assert event.parent_snapshot_id == "skillset-active"
+    assert event.derived_snapshot_id == "skillset-derived"
+    assert event.manifest_ref == "manifest-derived"
+    assert event.requested_skills == ["jira-issue-updater"]
+    assert "requested-body-ref" not in str(event.model_dump(mode="json"))
+    assert "active-body-ref" not in str(event.model_dump(mode="json"))
+
+
+async def test_request_result_accepts_reserved_requires_approval_event_value() -> None:
+    result = SkillsOnDemandRequestResult(
+        status="requires_approval",
+        message="Approval is required before activation.",
+    )
+
+    assert result.status == "requires_approval"
 
 
 async def test_enabled_request_denial_preserves_active_snapshot() -> None:
@@ -388,6 +456,11 @@ async def test_enabled_request_denial_preserves_active_snapshot() -> None:
     assert result.parent_snapshot_ref == "skillset-active"
     assert result.snapshot_id is None
     assert result.resolved_skillset_ref is None
+    assert result.failure_diagnostic is not None
+    assert result.failure_diagnostic.code == "skill_not_found"
+    assert result.failure_diagnostic.current_snapshot_ref == "skillset-active"
+    assert result.audit_events[0].result == "denied"
+    assert result.audit_events[0].diagnostics_ref is None
 
 
 async def test_runtime_failure_code_classifies_checksum_as_materialization_failure() -> None:

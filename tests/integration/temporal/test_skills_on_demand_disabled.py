@@ -51,4 +51,11 @@ async def test_disabled_on_demand_activity_preserves_active_snapshot_without_res
     assert result.code == SKILLS_ON_DEMAND_DISABLED_CODE
     assert result.active_snapshot_id == "skillset-existing"
     assert result.snapshot_id is None
+    assert len(result.audit_events) == 1
+    assert result.audit_events[0].event_type == "skills_on_demand.request"
+    assert result.audit_events[0].result == "denied"
+    assert result.audit_events[0].result_code == SKILLS_ON_DEMAND_DISABLED_CODE
+    assert result.audit_events[0].parent_snapshot_id == "skillset-existing"
+    assert result.failure_diagnostic is not None
+    assert result.failure_diagnostic.current_snapshot_ref == "skillset-existing"
     mock_resolve.assert_not_called()

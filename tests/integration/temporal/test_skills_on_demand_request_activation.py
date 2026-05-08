@@ -134,6 +134,12 @@ async def test_enabled_on_demand_request_resolves_and_materializes_derived_snaps
     assert result.metadata["requested_skills"] == ["jira-issue-updater"]
     assert result.metadata["activated_skills"] == ["jira-issue-updater"]
     assert "requested-body-ref" not in str(result.model_dump(mode="json"))
+    assert len(result.audit_events) == 1
+    assert result.audit_events[0].event_type == "skills_on_demand.request"
+    assert result.audit_events[0].result == "activated"
+    assert result.audit_events[0].parent_snapshot_id == "skillset-active"
+    assert result.audit_events[0].derived_snapshot_id == result.snapshot_id
+    assert "requested-body-ref" not in str(result.audit_events[0].model_dump(mode="json"))
     mock_resolve.assert_awaited_once()
     mock_materialize.assert_awaited_once()
 
@@ -257,6 +263,11 @@ async def test_enabled_on_demand_request_preserves_snapshot_on_materialization_f
     assert result.parent_snapshot_ref == "skillset-active"
     assert result.snapshot_id is None
     assert result.resolved_skillset_ref is None
+    assert result.failure_diagnostic is not None
+    assert result.failure_diagnostic.code == "materialization_failed"
+    assert result.audit_events[0].event_type == "skills_on_demand.request"
+    assert result.audit_events[0].result == "denied"
+    assert result.audit_events[0].result_code == "materialization_failed"
 
 
 async def test_enabled_on_demand_request_preserves_snapshot_on_checksum_failure(
@@ -324,6 +335,7 @@ async def test_enabled_on_demand_request_preserves_snapshot_on_checksum_failure(
 
     assert result.status == "denied"
     assert result.code == "materialization_failed"
+    assert result.audit_events[0].result_code == "materialization_failed"
     assert alias.is_symlink()
     assert alias.resolve() == old_active_dir.resolve()
     assert old_skill.read_text(encoding="utf-8") == "old active skill\n"
@@ -391,6 +403,8 @@ async def test_enabled_on_demand_request_returns_next_turn_when_repo_skills_pres
     assert result.status == "activated"
     assert result.metadata["activation_timing"] == "next_turn"
     assert result.metadata["materialization_verified"] is True
+    assert "repo-authored source" not in str(result.audit_events[0].model_dump(mode="json"))
+    assert ".agents/skills/repo-skill" not in str(result.audit_events[0].model_dump(mode="json"))
     assert repo_skill.read_text(encoding="utf-8") == "repo-authored source\n"
     assert (tmp_path / ".agents" / "skills").is_dir()
     assert not (tmp_path / ".agents" / "skills").is_symlink()
@@ -455,3 +469,7 @@ async def test_enabled_on_demand_request_reports_runtime_refresh_failure(
     assert result.code == "runtime_refresh_failed"
     assert result.active_snapshot_id == "skillset-active"
     assert result.snapshot_id is None
+    assert result.failure_diagnostic is not None
+    assert result.failure_diagnostic.code == "runtime_refresh_failed"
+    assert result.audit_events[0].event_type == "skills_on_demand.request"
+    assert result.audit_events[0].result_code == "runtime_refresh_failed"

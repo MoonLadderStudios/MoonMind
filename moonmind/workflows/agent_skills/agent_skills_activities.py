@@ -225,7 +225,8 @@ class AgentSkillsActivities:
             enabled=settings.workflow.skills_on_demand_enabled,
             catalog_entries=catalog_entries,
         )
-        return await service.query(request)
+        result = await service.query(request)
+        return self._with_activity_audit_context(result)
 
     @activity.defn(name="agent_skill.request_on_demand")
     async def request_on_demand(
@@ -242,12 +243,12 @@ class AgentSkillsActivities:
             initial_result.status != "denied"
             or initial_result.code != "enabled_mode_not_implemented"
         ):
-            return initial_result
+            return self._with_activity_audit_context(initial_result)
 
         requested = service.normalized_requested_skills(request)
         active_snapshot = request.active_snapshot
         if active_snapshot is None:
-            return initial_result
+            return self._with_activity_audit_context(initial_result)
 
         try:
             info = activity.info()
@@ -300,10 +301,12 @@ class AgentSkillsActivities:
                     materialization.metadata.get("runtimeRefreshMessage")
                     or "Skills On Demand runtime refresh failed."
                 )
-                return service.denied_request_result(
-                    request,
-                    code="runtime_refresh_failed",
-                    message=self._safe_skills_on_demand_message(str(message)),
+                return self._with_activity_audit_context(
+                    service.denied_request_result(
+                        request,
+                        code="runtime_refresh_failed",
+                        message=self._safe_skills_on_demand_message(str(message)),
+                    )
                 )
             if self._artifact_service:
                 derived_set = await self._persist_resolved_skillset_manifest(
@@ -312,23 +315,48 @@ class AgentSkillsActivities:
                     activity_info=info,
                 )
         except ValueError as exc:
-            return service.denied_request_result(
-                request,
-                code=self._skills_on_demand_resolution_code(str(exc)),
-                message=self._safe_skills_on_demand_message(str(exc)),
+            return self._with_activity_audit_context(
+                service.denied_request_result(
+                    request,
+                    code=self._skills_on_demand_resolution_code(str(exc)),
+                    message=self._safe_skills_on_demand_message(str(exc)),
+                )
             )
         except RuntimeError as exc:
-            return service.denied_request_result(
-                request,
-                code=self._skills_on_demand_runtime_code(str(exc)),
-                message=self._safe_skills_on_demand_message(str(exc)),
+            return self._with_activity_audit_context(
+                service.denied_request_result(
+                    request,
+                    code=self._skills_on_demand_runtime_code(str(exc)),
+                    message=self._safe_skills_on_demand_message(str(exc)),
+                )
             )
 
-        return await service.request(
+        result = await service.request(
             request,
             resolved_skillset=derived_set,
             materialization=materialization,
         )
+        return self._with_activity_audit_context(result)
+
+    def _with_activity_audit_context(self, result):
+        if not getattr(result, "audit_events", None):
+            return result
+        try:
+            info = activity.info()
+        except Exception:
+            return result
+        workflow_id = getattr(info, "workflow_id", None)
+        run_id = getattr(info, "workflow_run_id", None)
+        enriched = [
+            event.model_copy(
+                update={
+                    "workflow_id": workflow_id,
+                    "run_id": run_id,
+                }
+            )
+            for event in result.audit_events
+        ]
+        return result.model_copy(update={"audit_events": enriched})
 
     def _build_on_demand_derived_skillset(
         self,
