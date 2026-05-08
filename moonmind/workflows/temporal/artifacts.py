@@ -861,13 +861,17 @@ class TemporalArtifactRepository:
             db_models.TemporalExecutionRecord.owner_type
             == db_models.TemporalExecutionOwnerType.USER,
         )
-        stmt = select(db_models.TemporalArtifactLink.id).where(
-            db_models.TemporalArtifactLink.artifact_id == artifact_id,
-            db_models.TemporalArtifactLink.link_type == "input.attachment",
-            or_(canonical_match, projection_match),
+        stmt = (
+            select(db_models.TemporalArtifactLink.id)
+            .where(
+                db_models.TemporalArtifactLink.artifact_id == artifact_id,
+                db_models.TemporalArtifactLink.link_type == "input.attachment",
+                or_(canonical_match, projection_match),
+            )
+            .limit(1)
         )
         result = await self._session.execute(stmt)
-        return result.scalar_one_or_none() is not None
+        return result.scalar() is not None
 
     async def list_for_execution(
         self,

@@ -1358,8 +1358,7 @@ class QueueApiClient:
         headers: dict[str, str] = {"Accept": "application/json"}
         if worker_token:
             headers["X-MoonMind-Worker-Token"] = worker_token
-        if client is not None:
-            client.headers.update(headers)
+        self._request_headers = headers
         self._client = client or httpx.AsyncClient(
             base_url=base_url,
             timeout=timeout_seconds,
@@ -1661,7 +1660,7 @@ class QueueApiClient:
 
         try:
             path = f"/api/task-runs/{job_id}/live-session/worker"
-            response = await self._client.get(path)
+            response = await self._client.get(path, headers=self._request_headers)
             if response.status_code == 404:
                 return None
             response.raise_for_status()
@@ -1700,6 +1699,7 @@ class QueueApiClient:
                     f"/api/queue/jobs/{job_id}/artifacts/upload",
                     data=data,
                     files=files,
+                    headers=self._request_headers,
                 )
                 response.raise_for_status()
             except httpx.HTTPError as exc:
@@ -1710,7 +1710,7 @@ class QueueApiClient:
     async def download_artifact(self, *, artifact_id: str) -> bytes:
         path = f"/api/artifacts/{artifact_id}/download"
         try:
-            response = await self._client.get(path)
+            response = await self._client.get(path, headers=self._request_headers)
             response.raise_for_status()
             return bytes(response.content)
         except httpx.HTTPError as exc:
@@ -1720,7 +1720,9 @@ class QueueApiClient:
 
     async def _post_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
         try:
-            response = await self._client.post(path, json=json)
+            response = await self._client.post(
+                path, json=json, headers=self._request_headers
+            )
             response.raise_for_status()
             return dict(response.json()) if response.content else {}
         except httpx.HTTPError as exc:

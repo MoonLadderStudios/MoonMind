@@ -2957,7 +2957,7 @@ async def _validate_and_collect_task_input_attachments(
                 settings.oidc.AUTH_PROVIDER != "disabled"
                 and owner
                 and owner != principal
-                and not owner.startswith("service:")
+                and not principal.startswith("service:")
             ):
                 raise _invalid_task_request(
                     f"input attachment artifact is not authorized for this execution: {ref['artifactId']}."

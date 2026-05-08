@@ -266,6 +266,7 @@ async def test_queue_artifact_download_uses_worker_service_authorization() -> No
     assert len(captured) == 1
     assert captured[0].url.path == "/api/artifacts/art_objective/download"
     assert captured[0].headers["X-MoonMind-Worker-Token"] == "worker-secret"
+    assert "X-MoonMind-Worker-Token" not in client.headers
 
 @pytest.mark.asyncio
 async def test_materialize_input_attachments_records_failed_step_diagnostics(

@@ -1499,6 +1499,22 @@ async def test_execution_owner_can_read_linked_input_attachment_from_other_princ
                     parameters={},
                 )
             )
+            session.add(
+                TemporalExecutionCanonicalRecord(
+                    namespace="moonmind",
+                    workflow_id="wf-mm-628-second",
+                    run_id="run-mm-628-second",
+                    workflow_type=TemporalWorkflowType.RUN,
+                    owner_id=execution_owner,
+                    owner_type=TemporalExecutionOwnerType.USER,
+                    state=MoonMindWorkflowState.EXECUTING,
+                    entry="run",
+                    search_attributes={},
+                    memo={},
+                    artifact_refs=[artifact.artifact_id],
+                    parameters={},
+                )
+            )
             await session.flush()
             await service.link_artifact(
                 artifact_id=artifact.artifact_id,
@@ -1507,6 +1523,16 @@ async def test_execution_owner_can_read_linked_input_attachment_from_other_princ
                     namespace="moonmind",
                     workflow_id="wf-mm-628",
                     run_id="run-mm-628",
+                    link_type="input.attachment",
+                ),
+            )
+            await service.link_artifact(
+                artifact_id=artifact.artifact_id,
+                principal="service:execution-linker",
+                execution_ref=ExecutionRef(
+                    namespace="moonmind",
+                    workflow_id="wf-mm-628-second",
+                    run_id="run-mm-628-second",
                     link_type="input.attachment",
                 ),
             )

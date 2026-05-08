@@ -3336,6 +3336,52 @@ def test_create_task_shaped_execution_rejects_other_users_completed_input_attach
     service.create_execution.assert_not_awaited()
 
 
+def test_create_task_shaped_execution_rejects_service_owned_attachment_for_user(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MM-628: service ownership does not make an artifact attachable by any user."""
+
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    artifact_id = "art_01MM628SERVICEOWNER0000"
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        [
+            _completed_attachment_artifact(
+                artifact_id,
+                created_by_principal="service:artifact-generator",
+            )
+        ]
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Review binary input.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": artifact_id,
+                            "filename": "input.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 10,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "not authorized" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_rejects_embedded_attachment_data(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
