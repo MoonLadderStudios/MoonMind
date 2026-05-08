@@ -47,10 +47,18 @@ _RAW_ACCESS_ACTION_KINDS = frozenset(
         "host_shell",
         "docker_daemon",
         "raw_docker",
+        "raw_volume_mount",
+        "volume_mount",
+        "raw_network_egress",
+        "network_egress_change",
         "sql_database",
         "raw_sql",
+        "secret_read",
+        "secret_reading",
+        "raw_secret_read",
         "storage_key_read",
         "raw_storage",
+        "redaction_bypass",
     }
 )
 _COMMON_REASON_INPUT = {
@@ -469,7 +477,8 @@ class RemediationActionAuthorityService:
 
     def __init__(self, *, session: AsyncSession) -> None:
         self._session = session
-        self._decisions: dict[tuple[str, str], RemediationActionAuthorityResult] = {}
+        self._decisions: dict[tuple[str, str, str], RemediationActionAuthorityResult] = {}
+        self._request_shapes: dict[tuple[str, str], str] = {}
 
     def list_allowed_actions(
         self,
@@ -525,7 +534,12 @@ class RemediationActionAuthorityService:
         workflow_id = str(remediation_workflow_id or "").strip()
         idem = str(idempotency_key or "").strip()
         normalized_action = str(action_kind or "").strip()
-        cache_key = (workflow_id, idem, normalized_action, dry_run)
+        request_shape_hash = _authority_request_shape_hash(
+            action_kind=normalized_action,
+            parameters=parameters,
+            dry_run=dry_run,
+        )
+        cache_key = (workflow_id, idem, request_shape_hash)
         if workflow_id and idem and cache_key in self._decisions:
             return self._decisions[cache_key]
 
@@ -582,6 +596,23 @@ class RemediationActionAuthorityService:
             )
             self._decisions[cache_key] = result
             return result
+        shape_key = (workflow_id, idem)
+        previous_shape = self._request_shapes.get(shape_key)
+        if previous_shape is not None and previous_shape != request_shape_hash:
+            result = self._linked_result(
+                link=link,
+                action_kind=normalized_action,
+                risk=None,
+                decision="denied",
+                reason="idempotency_key_reused_with_different_request",
+                idempotency_key=idem,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
+            self._decisions[cache_key] = result
+            return result
 
         result = self._evaluate_with_link(
             link=link,
@@ -594,6 +625,7 @@ class RemediationActionAuthorityService:
             security_profile=security_profile,
             approval_ref=approval_ref,
         )
+        self._request_shapes.setdefault(shape_key, request_shape_hash)
         self._decisions[cache_key] = result
         return result
 
@@ -645,6 +677,23 @@ class RemediationActionAuthorityService:
                 risk=risk,
                 decision="denied",
                 reason="unsupported_action_kind",
+                idempotency_key=idempotency_key,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
+        parameter_error = _action_parameter_error(
+            action_info=action_info,
+            parameters=parameters,
+        )
+        if parameter_error is not None:
+            return self._linked_result(
+                link=link,
+                action_kind=action_kind,
+                risk=risk,
+                decision="denied",
+                reason=parameter_error,
                 idempotency_key=idempotency_key,
                 requesting_principal=requesting_principal,
                 security_profile=security_profile,
@@ -1956,6 +2005,39 @@ def _redact_payload(value: Mapping[str, Any]) -> Mapping[str, Any]:
     if isinstance(redacted, Mapping):
         return _scrub_paths(redacted)
     return {}
+
+def _authority_request_shape_hash(
+    *,
+    action_kind: str,
+    parameters: Mapping[str, Any] | None,
+    dry_run: bool,
+) -> str:
+    payload = {
+        "actionKind": action_kind,
+        "dryRun": bool(dry_run),
+        "parameters": parameters or {},
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+def _action_parameter_error(
+    *,
+    action_info: Mapping[str, Any],
+    parameters: Mapping[str, Any] | None,
+) -> str | None:
+    if not parameters:
+        return None
+    input_metadata = action_info.get("input_metadata")
+    metadata = input_metadata if isinstance(input_metadata, Mapping) else {}
+    allowed = {str(key) for key in metadata}
+    supplied = {str(key) for key in parameters}
+    if unknown := supplied - allowed:
+        return "unsupported_action_parameter"
+    for key, config in metadata.items():
+        config_mapping = config if isinstance(config, Mapping) else {}
+        if config_mapping.get("required") is True and key not in parameters:
+            return "required_action_parameter_missing"
+    return None
 
 def _scrub_paths(value: Any) -> Any:
     if isinstance(value, str):

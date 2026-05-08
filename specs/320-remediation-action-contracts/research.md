@@ -18,35 +18,35 @@ Test implications: rerun focused unit tests; no new implementation expected.
 
 ## FR-003 Request Evaluation Inputs And Preconditions
 
-Decision: Status `partial`; plan tests first, then implementation if gaps are confirmed.
-Evidence: `RemediationActionAuthorityService.evaluate_action_request()` validates action kind, authority mode, permissions, security profile, approval, risk, dry-run, and idempotency key. `RemediationMutationGuardService.evaluate()` covers lock, ledger, budgets, nested remediation, and target freshness. `RemediationEvidenceToolService.prepare_action_request()` rereads target health before execution. Existing tests cover many of these paths, including prepared action context and mutation guard behavior.
-Rationale: The decision chain exists, but the repo evidence does not prove action-specific parameters are validated against the registry `inputMetadata` before authorization.
+Decision: Status `implemented_verified`; preserve action input and idempotency-shape validation.
+Evidence: `RemediationActionAuthorityService.evaluate_action_request()` validates action kind, authority mode, permissions, security profile, approval, risk, dry-run, idempotency key, action-specific `inputMetadata`, and duplicate idempotency key request shape. `RemediationMutationGuardService.evaluate()` covers lock, ledger, budgets, nested remediation, and target freshness. `RemediationEvidenceToolService.prepare_action_request()` rereads target health before execution. `test_remediation_action_authority_validates_action_inputs`, `test_remediation_action_authority_cache_keys_include_request_shape`, and `test_remediation_action_authority_uses_prepared_action_context` verify these paths.
+Rationale: The decision chain now rejects unsupported action parameters and denies reused idempotency keys with different request shapes before authorization.
 Alternatives considered: Treating guard evaluation as complete input validation was rejected because guard checks do not cover every declared input shape.
-Test implications: add unit tests for required/unknown/invalid action inputs and integration proof that request evaluation consumes fresh target evidence before execution.
+Test implications: rerun focused unit tests and integration artifact-boundary tests.
 
 ## FR-004 V1 Action Request Evidence
 
-Decision: Status `implemented_unverified`; add contract tests for the published artifact payload.
-Evidence: `RemediationActionAuthorityResult.to_dict()` produces a v1 `request` object with `schemaVersion`, `actionId`, `actionKind`, requester, target, risk tier, dry-run flag, idempotency key, and params. `RemediationEvidenceToolService.execute_action()` publishes a `remediation.action_request` artifact. Existing tests assert artifact links are created but do not fully inspect the artifact payload shape.
-Rationale: Code appears aligned, but the artifact boundary is the durable contract and needs direct verification.
+Decision: Status `implemented_verified`; preserve v1 request artifact publication.
+Evidence: `RemediationActionAuthorityResult.to_dict()` produces a v1 `request` object with `schemaVersion`, `actionId`, `actionKind`, requester, target, risk tier, dry-run flag, idempotency key, and params. `RemediationEvidenceToolService.execute_action()` publishes a redacted `remediation.action_request` artifact whose top-level payload is the v1 request contract plus authority and guard evidence. `test_remediation_execute_action_publishes_v1_request_and_result_artifacts` and `test_remediation_action_contract_publishes_request_result_and_verification` read the published artifact payload directly.
+Rationale: The durable artifact boundary is now directly verified.
 Alternatives considered: Relying on `to_dict()` tests alone was rejected because final verification must prove the published evidence artifact, not just an in-memory object.
-Test implications: add unit/integration tests that read the published action request artifact and assert required fields plus redaction.
+Test implications: rerun focused unit tests and integration artifact-boundary tests.
 
 ## FR-005 V1 Action Result Evidence
 
-Decision: Status `partial`; complete the result artifact contract.
-Evidence: `RemediationEvidenceToolService.execute_action()` publishes a `remediation.action_result` artifact with `schemaVersion`, `actionKind`, `actionId`, `status`, before/after refs, and side effects. The spec requires status, user-safe message, applied timestamp when applicable, before/after refs, verification requirement, verification hint, and redacted side-effect summary. Current published result payload does not include `message`, `appliedAt`, `verificationRequired`, or `verificationHint`.
-Rationale: The durable artifact exists, but it is not complete against the v1 contract.
+Decision: Status `implemented_verified`; preserve the completed result artifact contract.
+Evidence: `RemediationEvidenceToolService.execute_action()` publishes a `remediation.action_result` artifact with `schemaVersion`, `actionKind`, `actionId`, allowed `status`, user-safe `message`, `appliedAt` when applicable, before/after refs, `verificationRequired`, `verificationHint`, and redacted `sideEffects`. `test_remediation_execute_action_publishes_v1_request_and_result_artifacts` and `test_remediation_action_contract_publishes_request_result_and_verification` read and verify the published result artifact.
+Rationale: The durable result artifact now matches the v1 contract and stays linked to verification evidence.
 Alternatives considered: Keeping verification details only in a separate `remediation.verification` artifact was rejected because the result evidence contract must still indicate whether verification is required and how to perform it.
-Test implications: write failing tests for full v1 result artifact shape before implementation.
+Test implications: rerun focused unit tests and integration artifact-boundary tests.
 
 ## FR-006 Status Enumeration
 
-Decision: Status `partial`; add fail-fast status normalization/validation.
-Evidence: `RemediationActionAuthorityResult.to_dict()` maps decisions to result statuses for authority outcomes. `RemediationEvidenceToolService.execute_action()` accepts executor `status` through `_required_string()` but does not appear to validate against the allowed status set.
-Rationale: Unsupported runtime result statuses can drift into durable artifacts unless validation is explicit.
+Decision: Status `implemented_verified`; preserve fail-fast status normalization/validation.
+Evidence: `RemediationActionAuthorityResult.to_dict()` maps decisions to result statuses for authority outcomes. `RemediationEvidenceToolService.execute_action()` validates executor `status` against `applied`, `no_op`, `rejected`, `precondition_failed`, `approval_required`, `timed_out`, and `failed` before publishing result artifacts. `test_remediation_execute_action_rejects_unsupported_result_status` verifies unsupported statuses fail closed.
+Rationale: Unsupported runtime result statuses cannot drift into durable artifacts.
 Alternatives considered: Allowing arbitrary executor statuses was rejected by the compatibility policy and the spec's explicit status set.
-Test implications: add unit tests for `applied`, `no_op`, `rejected`, `precondition_failed`, `approval_required`, `timed_out`, `failed`, plus an unsupported status failure case.
+Test implications: rerun focused unit tests.
 
 ## FR-007 High-Risk Actions
 
@@ -58,11 +58,11 @@ Test implications: rerun focused unit tests.
 
 ## FR-008 Unsupported Raw Operations
 
-Decision: Status `implemented_unverified`; expand explicit cases.
-Evidence: `_RAW_ACCESS_ACTION_KINDS` and raw-prefix checks deny known raw action kinds, and tests cover no-advertise behavior plus `raw_host_shell`. The spec also names arbitrary volume, network, secret-reading, and redaction-bypass operations.
-Rationale: Unknown actions are denied, but explicit proof for every spec-listed class reduces risk that a future catalog addition accidentally exposes raw access.
+Decision: Status `implemented_verified`; preserve explicit raw-operation denial coverage.
+Evidence: `_RAW_ACCESS_ACTION_KINDS` and raw-prefix checks deny host shell, database, Docker, volume mount, network egress, secret-reading, storage-key, and redaction-bypass classes before side effects. `test_remediation_action_authority_denies_raw_access_and_unknown_targets` covers the explicit unit cases, and `test_remediation_raw_action_rejection_does_not_publish_side_effect_artifacts` verifies no side-effect artifacts are published for a raw action attempt.
+Rationale: Explicit proof for every spec-listed class reduces risk that a future catalog addition accidentally exposes raw access.
 Alternatives considered: Treating generic `unsupported_action_kind` as enough was rejected because the spec requires rejection by kind before side effect for sensitive raw operation classes.
-Test implications: add explicit unit cases for host, database, Docker, volume, network, secret-reading, and redaction-bypass variants.
+Test implications: rerun focused unit tests and integration artifact-boundary tests.
 
 ## FR-009 Unsupported V1 Action Availability
 

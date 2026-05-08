@@ -24,8 +24,8 @@
 
 **Purpose**: Confirm the active feature and existing tooling before writing tests.
 
-- [ ] T001 Verify `.specify/feature.json` points to `specs/320-remediation-action-contracts` and that `specs/320-remediation-action-contracts/spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/remediation-action-contracts.md` exist for MM-620.
-- [ ] T002 Verify unit and integration command availability in `tools/test_unit.sh`, `tools/test_integration.sh`, and `specs/320-remediation-action-contracts/quickstart.md` before adding tests.
+- [X] T001 Verify `.specify/feature.json` points to `specs/320-remediation-action-contracts` and that `specs/320-remediation-action-contracts/spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/remediation-action-contracts.md` exist for MM-620.
+- [X] T002 Verify unit and integration command availability in `tools/test_unit.sh`, `tools/test_integration.sh`, and `specs/320-remediation-action-contracts/quickstart.md` before adding tests.
 
 ---
 
@@ -35,8 +35,8 @@
 
 **Critical**: No production implementation work can begin until foundational tasks and red-first tests are complete.
 
-- [ ] T003 Add or extend reusable unit-test helpers for reading and decoding remediation lifecycle artifacts in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-004, FR-005, SCN-002, and SCN-004.
-- [ ] T004 Create the hermetic integration test module scaffold with `integration` and `integration_ci` markers in `tests/integration/temporal/test_remediation_action_contracts.py` for DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
+- [X] T003 Add or extend reusable unit-test helpers for reading and decoding remediation lifecycle artifacts in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-004, FR-005, SCN-002, and SCN-004.
+- [X] T004 Create the hermetic integration test module scaffold with `integration` and `integration_ci` markers in `tests/integration/temporal/test_remediation_action_contracts.py` for DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
 
 **Checkpoint**: Test scaffolding is ready; story tests can now be written.
 
@@ -67,36 +67,36 @@
 
 ### Unit Tests (write first)
 
-- [ ] T005 Add failing unit tests for action-specific input metadata validation, idempotency shape reuse, and fresh target evidence gating in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-003, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
-- [ ] T006 Add failing unit tests that read the published `remediation.action_request` artifact and assert the full v1 request evidence contract plus redaction in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-004, SCN-002, SC-002, and DESIGN-REQ-016.
-- [ ] T007 Add failing unit tests that read the published `remediation.action_result` artifact and assert `message`, `appliedAt`, `verificationRequired`, `verificationHint`, status, before/after refs, and redacted side effects in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-005, SCN-004, SC-003, and DESIGN-REQ-016.
-- [ ] T008 Add failing unit tests for allowed status validation and unsupported status rejection in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-006 and SC-003.
-- [ ] T009 Add explicit unit tests for unsupported raw host, database, Docker, volume, network, secret-reading, and redaction-bypass action classes in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-008, SCN-005, SC-005, and DESIGN-REQ-015.
-- [ ] T010 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/test_temporal_service.py -q` and confirm T005 through T009 fail for the expected red-first reasons before production implementation.
+- [X] T005 Add failing unit tests for action-specific input metadata validation, idempotency shape reuse, and fresh target evidence gating in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-003, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
+- [X] T006 Add failing unit tests that read the published `remediation.action_request` artifact and assert the full v1 request evidence contract plus redaction in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-004, SCN-002, SC-002, and DESIGN-REQ-016.
+- [X] T007 Add failing unit tests that read the published `remediation.action_result` artifact and assert `message`, `appliedAt`, `verificationRequired`, `verificationHint`, status, before/after refs, and redacted side effects in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-005, SCN-004, SC-003, and DESIGN-REQ-016.
+- [X] T008 Add failing unit tests for allowed status validation and unsupported status rejection in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-006 and SC-003.
+- [X] T009 Add explicit unit tests for unsupported raw host, database, Docker, volume, network, secret-reading, and redaction-bypass action classes in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-008, SCN-005, SC-005, and DESIGN-REQ-015.
+- [X] T010 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/test_temporal_service.py -q` and confirm T005 through T009 fail for the expected red-first reasons before production implementation.
 
 ### Integration Tests (write first)
 
-- [ ] T011 Add a failing hermetic integration test for one executable remediation action that verifies list, authority, guard, execute, request artifact, result artifact, verification artifact, and link update behavior in `tests/integration/temporal/test_remediation_action_contracts.py` for SCN-002, SCN-004, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
-- [ ] T012 Add a failing hermetic integration test proving unsupported raw actions are rejected and do not publish side-effect request/result artifacts in `tests/integration/temporal/test_remediation_action_contracts.py` for SCN-005, FR-008, SC-005, and DESIGN-REQ-015.
-- [ ] T013 Run `./tools/test_integration.sh` and confirm T011 through T012 fail for the expected red-first reasons before production implementation.
-- [ ] T014 Record the red-first unit and integration failure evidence in `specs/320-remediation-action-contracts/implementation-notes.md` for FR-003, FR-004, FR-005, FR-006, FR-008, SCN-002, SCN-004, SCN-005, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
+- [X] T011 Add a failing hermetic integration test for one executable remediation action that verifies list, authority, guard, execute, request artifact, result artifact, verification artifact, and link update behavior in `tests/integration/temporal/test_remediation_action_contracts.py` for SCN-002, SCN-004, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
+- [X] T012 Add a failing hermetic integration test proving unsupported raw actions are rejected and do not publish side-effect request/result artifacts in `tests/integration/temporal/test_remediation_action_contracts.py` for SCN-005, FR-008, SC-005, and DESIGN-REQ-015.
+- [X] T013 Run `./tools/test_integration.sh` and confirm T011 through T012 fail for the expected red-first reasons before production implementation. Direct pytest was used for red-first confirmation because the managed Docker wrapper is blocked by daemon policy.
+- [X] T014 Record the red-first unit and integration failure evidence in `specs/320-remediation-action-contracts/implementation-notes.md` for FR-003, FR-004, FR-005, FR-006, FR-008, SCN-002, SCN-004, SCN-005, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
 
 ### Implementation
 
-- [ ] T015 Implement action parameter/input metadata validation and idempotency shape safeguards in `moonmind/workflows/temporal/remediation_actions.py` for FR-003, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
-- [ ] T016 Conditional fallback if T006 or T011 exposes a request artifact gap: update action request artifact publication in `moonmind/workflows/temporal/remediation_tools.py` for FR-004, SCN-002, SC-002, and DESIGN-REQ-016.
-- [ ] T017 Implement allowed result status validation and fail-fast unsupported status handling in `moonmind/workflows/temporal/remediation_tools.py` for FR-006 and SC-003.
-- [ ] T018 Complete the v1 action result artifact payload in `moonmind/workflows/temporal/remediation_tools.py` with `message`, `appliedAt`, `verificationRequired`, `verificationHint`, before/after refs, and redacted side effects for FR-005, SCN-004, SC-003, and DESIGN-REQ-016.
-- [ ] T019 Conditional fallback if T009 or T012 exposes a raw-operation proof gap: expand raw operation deny-listing and explicit denial reasons in `moonmind/workflows/temporal/remediation_actions.py` for FR-008, SCN-005, SC-005, and DESIGN-REQ-015.
-- [ ] T020 Ensure request/result/verification artifact payloads remain bounded and secret-safe in `moonmind/workflows/temporal/remediation_tools.py` for FR-004, FR-005, DESIGN-REQ-015, DESIGN-REQ-016, and SC-002.
-- [ ] T021 Update integration fixture wiring only as needed in `tests/integration/temporal/test_remediation_action_contracts.py` so the hermetic tests exercise the real artifact service boundary for DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
+- [X] T015 Implement action parameter/input metadata validation and idempotency shape safeguards in `moonmind/workflows/temporal/remediation_actions.py` for FR-003, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
+- [X] T016 Conditional fallback if T006 or T011 exposes a request artifact gap: update action request artifact publication in `moonmind/workflows/temporal/remediation_tools.py` for FR-004, SCN-002, SC-002, and DESIGN-REQ-016.
+- [X] T017 Implement allowed result status validation and fail-fast unsupported status handling in `moonmind/workflows/temporal/remediation_tools.py` for FR-006 and SC-003.
+- [X] T018 Complete the v1 action result artifact payload in `moonmind/workflows/temporal/remediation_tools.py` with `message`, `appliedAt`, `verificationRequired`, `verificationHint`, before/after refs, and redacted side effects for FR-005, SCN-004, SC-003, and DESIGN-REQ-016.
+- [X] T019 Conditional fallback if T009 or T012 exposes a raw-operation proof gap: expand raw operation deny-listing and explicit denial reasons in `moonmind/workflows/temporal/remediation_actions.py` for FR-008, SCN-005, SC-005, and DESIGN-REQ-015.
+- [X] T020 Ensure request/result/verification artifact payloads remain bounded and secret-safe in `moonmind/workflows/temporal/remediation_tools.py` for FR-004, FR-005, DESIGN-REQ-015, DESIGN-REQ-016, and SC-002.
+- [X] T021 Update integration fixture wiring only as needed in `tests/integration/temporal/test_remediation_action_contracts.py` so the hermetic tests exercise the real artifact service boundary for DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-017, and DESIGN-REQ-026.
 
 ### Story Validation
 
-- [ ] T022 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/test_temporal_service.py -q` and verify all unit coverage for FR-001 through FR-010, SCN-001 through SCN-006, and SC-001 through SC-006 passes.
-- [ ] T023 Run `./tools/test_integration.sh` and verify hermetic integration coverage for DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-017, DESIGN-REQ-026, SCN-002, SCN-004, and SCN-005 passes.
-- [ ] T024 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and verify the full required unit suite passes before final verification.
-- [ ] T025 Validate the independent story flow in `specs/320-remediation-action-contracts/quickstart.md` and record the result in `specs/320-remediation-action-contracts/implementation-notes.md` for MM-620 traceability.
+- [X] T022 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/test_temporal_service.py -q` and verify all unit coverage for FR-001 through FR-010, SCN-001 through SCN-006, and SC-001 through SC-006 passes.
+- [ ] T023 Run `./tools/test_integration.sh` and verify hermetic integration coverage for DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-017, DESIGN-REQ-026, SCN-002, SCN-004, and SCN-005 passes. BLOCKED in this managed runtime by Docker daemon `403 Forbidden`; direct `pytest tests/integration/temporal/test_remediation_action_contracts.py -q` passes.
+- [X] T024 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and verify the full required unit suite passes before final verification.
+- [X] T025 Validate the independent story flow in `specs/320-remediation-action-contracts/quickstart.md` and record the result in `specs/320-remediation-action-contracts/implementation-notes.md` for MM-620 traceability.
 
 **Checkpoint**: The single story is fully functional, covered by unit and integration tests, and independently validated.
 
@@ -106,11 +106,11 @@
 
 **Purpose**: Strengthen the completed story without adding scope.
 
-- [ ] T026 [P] Update `specs/320-remediation-action-contracts/contracts/remediation-action-contracts.md` if implementation changes the final v1 request/result contract wording for FR-004, FR-005, and FR-006.
-- [ ] T027 [P] Update `specs/320-remediation-action-contracts/data-model.md` if implementation changes action request/result fields or state transitions for FR-004, FR-005, and FR-006.
-- [ ] T028 [P] Update `specs/320-remediation-action-contracts/research.md` if implementation evidence changes any requirement status classification for FR-003, FR-004, FR-005, FR-006, or FR-008.
-- [ ] T029 Re-run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/test_temporal_service.py -q` after polish changes to guard against drift in `tests/unit/workflows/temporal/test_remediation_context.py`.
-- [ ] T030 Re-run `./tools/test_integration.sh` after polish changes when `tests/integration/temporal/test_remediation_action_contracts.py` exists or integration wiring changed.
+- [X] T026 [P] Update `specs/320-remediation-action-contracts/contracts/remediation-action-contracts.md` if implementation changes the final v1 request/result contract wording for FR-004, FR-005, and FR-006.
+- [X] T027 [P] Update `specs/320-remediation-action-contracts/data-model.md` if implementation changes action request/result fields or state transitions for FR-004, FR-005, and FR-006.
+- [X] T028 [P] Update `specs/320-remediation-action-contracts/research.md` if implementation evidence changes any requirement status classification for FR-003, FR-004, FR-005, FR-006, or FR-008.
+- [X] T029 Re-run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/test_temporal_service.py -q` after polish changes to guard against drift in `tests/unit/workflows/temporal/test_remediation_context.py`.
+- [ ] T030 Re-run `./tools/test_integration.sh` after polish changes when `tests/integration/temporal/test_remediation_action_contracts.py` exists or integration wiring changed. BLOCKED in this managed runtime by Docker daemon `403 Forbidden`; direct `pytest tests/integration/temporal/test_remediation_action_contracts.py -q` passes.
 - [ ] T031 Run `/moonspec-verify` against `specs/320-remediation-action-contracts/spec.md`, `plan.md`, `tasks.md`, source design mappings, preserved MM-620 Jira preset brief, and test evidence after implementation and tests pass.
 
 ---

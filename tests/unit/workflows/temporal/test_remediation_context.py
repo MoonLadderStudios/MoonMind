@@ -1341,6 +1341,33 @@ class RecordingActionExecutor:
             },
         }
 
+class StatusOnlyActionExecutor:
+    def __init__(self, status: str) -> None:
+        self.status = status
+        self.calls = []
+
+    async def execute_action(self, *, action_request, guard_result, target_health):
+        self.calls.append(
+            {
+                "action_request": action_request,
+                "guard_result": guard_result,
+                "target_health": target_health,
+            }
+        )
+        return {
+            "status": self.status,
+            "message": f"returned {self.status}",
+            "sideEffects": [],
+            "verification": {"status": "not_verified"},
+        }
+
+async def _read_artifact_json(artifact_service, artifact_id: str):
+    _artifact, payload = await artifact_service.read(
+        artifact_id=artifact_id,
+        principal="service:test",
+    )
+    return json.loads(payload.decode("utf-8"))
+
 @pytest.mark.asyncio
 async def test_remediation_evidence_tools_read_only_context_declared_evidence(
     tmp_path, mock_client_adapter
@@ -1791,6 +1818,154 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
         assert link.outcome == "applied"
 
 @pytest.mark.asyncio
+async def test_remediation_execute_action_publishes_v1_request_and_result_artifacts(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        action_kind = "workload.restart_helper_container"
+        action_id = "execute-action-v1"
+        authority = await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind=action_kind,
+            parameters={"reason": "Authorization: Bearer raw-secret-token"},
+            dry_run=False,
+            idempotency_key=action_id,
+            requesting_principal="workflow:remediator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
+        )
+        guard = await RemediationMutationGuardService(session=session).evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind=action_kind,
+            idempotency_key=action_id,
+            parameters={"reason": "restart helper"},
+            policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+            now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+        )
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=RecordingActionExecutor(),
+        )
+
+        result = await tools.execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority.to_dict(),
+            guard_result=guard.to_dict(),
+            principal="service:test",
+        )
+
+        request_payload = await _read_artifact_json(
+            artifact_service, result["artifactRefs"]["actionRequest"]
+        )
+        result_payload = await _read_artifact_json(
+            artifact_service, result["artifactRefs"]["actionResult"]
+        )
+
+        assert request_payload["schemaVersion"] == "v1"
+        assert request_payload["actionId"] == action_id
+        assert request_payload["actionKind"] == action_kind
+        assert request_payload["requester"] == "workflow:remediator"
+        assert request_payload["target"] == {
+            "workflowId": target.workflow_id,
+            "resourceKind": "workload_container",
+        }
+        assert request_payload["riskTier"] == "medium"
+        assert request_payload["dryRun"] is False
+        assert request_payload["idempotencyKey"] == action_id
+        assert "raw-secret-token" not in json.dumps(request_payload, sort_keys=True)
+
+        assert result_payload["schemaVersion"] == "v1"
+        assert result_payload["actionId"] == action_id
+        assert result_payload["actionKind"] == action_kind
+        assert result_payload["status"] == "applied"
+        assert result_payload["message"]
+        assert result_payload["appliedAt"]
+        assert result_payload["beforeStateRef"] == "artifact://before-state"
+        assert result_payload["afterStateRef"] == "artifact://after-state"
+        assert result_payload["verificationRequired"] is True
+        assert result_payload["verificationHint"]
+        assert result_payload["sideEffects"] == [
+            {"kind": "subsystem_call", "status": "accepted"}
+        ]
+
+@pytest.mark.asyncio
+async def test_remediation_execute_action_rejects_unsupported_result_status(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+
+        action_kind = "workload.restart_helper_container"
+        authority = await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind=action_kind,
+            parameters={"reason": "restart helper"},
+            dry_run=False,
+            idempotency_key="unsupported-status",
+            requesting_principal="workflow:remediator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
+        )
+        guard = await RemediationMutationGuardService(session=session).evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind=action_kind,
+            idempotency_key="unsupported-status",
+            parameters={"reason": "restart helper"},
+            policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+            now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+        )
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=StatusOnlyActionExecutor("mystery_status"),
+        )
+
+        with pytest.raises(RemediationEvidenceToolError, match="Unsupported action result status"):
+            await tools.execute_action(
+                remediation_workflow_id=remediation.workflow_id,
+                authority_result=authority.to_dict(),
+                guard_result=guard.to_dict(),
+                principal="service:test",
+            )
+
+@pytest.mark.asyncio
 async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_context(
     tmp_path, mock_client_adapter
 ):
@@ -2164,15 +2339,10 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
         )
 
         assert allowed.decision == "allowed"
-        assert high_risk.decision == "approval_required"
-        assert high_risk.reason == "high_risk_requires_approval"
-        assert dry_run.decision == "allowed"
-        assert dry_run is not allowed
-        dry_run_payload = dry_run.to_dict()
-        assert dry_run_payload["request"]["dryRun"] is True
-        assert dry_run_payload["result"]["status"] == "no_op"
-        assert dry_run_payload["result"]["verificationRequired"] is False
-        assert dry_run_payload["result"]["verificationHint"] is None
+        assert high_risk.decision == "denied"
+        assert high_risk.reason == "idempotency_key_reused_with_different_request"
+        assert dry_run.decision == "denied"
+        assert dry_run.reason == "idempotency_key_reused_with_different_request"
 
 @pytest.mark.asyncio
 async def test_remediation_action_authority_redacts_audits_and_deduplicates(
@@ -2211,7 +2381,9 @@ async def test_remediation_action_authority_redacts_audits_and_deduplicates(
             security_profile=_admin_profile(),
         )
 
-        assert duplicate is result
+        assert duplicate is not result
+        assert duplicate.decision == "denied"
+        assert duplicate.reason == "idempotency_key_reused_with_different_request"
         serialized = json.dumps(result.to_dict(), sort_keys=True)
         assert "raw-secret-token" not in serialized
         assert "/work/agent_jobs" not in serialized
@@ -2243,18 +2415,29 @@ async def test_remediation_action_authority_denies_raw_access_and_unknown_target
         )
         service = RemediationActionAuthorityService(session=session)
 
-        raw_access = await service.evaluate_action_request(
-            remediation_workflow_id=remediation.workflow_id,
-            action_kind="raw_host_shell",
-            parameters={"command": "docker ps"},
-            dry_run=False,
-            idempotency_key="raw-shell",
-            requesting_principal="user:operator",
-            permissions=_admin_permissions(),
-            security_profile=_admin_profile(),
+        raw_action_kinds = (
+            "raw_host_shell",
+            "raw_sql",
+            "raw_docker",
+            "raw_volume_mount",
+            "raw_network_egress",
+            "secret_read",
+            "redaction_bypass",
         )
-        assert raw_access.decision == "denied"
-        assert raw_access.reason == "raw_access_action_denied"
+        for index, action_kind in enumerate(raw_action_kinds):
+            raw_access = await service.evaluate_action_request(
+                remediation_workflow_id=remediation.workflow_id,
+                action_kind=action_kind,
+                parameters={"command": "docker ps", "token": "raw-secret-token"},
+                dry_run=False,
+                idempotency_key=f"raw-action-{index}",
+                requesting_principal="user:operator",
+                permissions=_admin_permissions(),
+                security_profile=_admin_profile(),
+            )
+            assert raw_access.decision == "denied"
+            assert raw_access.reason == "raw_access_action_denied"
+            assert raw_access.executable is False
 
         missing = await service.evaluate_action_request(
             remediation_workflow_id="mm:missing-remediation",
@@ -2302,7 +2485,7 @@ async def test_remediation_action_authority_uses_prepared_action_context(
         decision = await service.evaluate_action_request(
             remediation_workflow_id=preparation.remediation_workflow_id,
             action_kind=preparation.action_kind,
-            parameters={"targetState": preparation.target.state},
+            parameters={"reason": f"target state was {preparation.target.state}"},
             dry_run=False,
             idempotency_key="prepared-action",
             requesting_principal="workflow:remediator",
@@ -2313,6 +2496,33 @@ async def test_remediation_action_authority_uses_prepared_action_context(
         assert preparation.target.workflow_id == target.workflow_id
         assert decision.decision == "allowed"
         assert decision.target_workflow_id == target.workflow_id
+
+@pytest.mark.asyncio
+async def test_remediation_action_authority_validates_action_inputs(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        _target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        service = RemediationActionAuthorityService(session=session)
+
+        invalid = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="workload.restart_helper_container",
+            parameters={"unknown": "value"},
+            dry_run=False,
+            idempotency_key="invalid-inputs",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+
+        assert invalid.decision == "denied"
+        assert invalid.reason == "unsupported_action_parameter"
+        assert invalid.executable is False
 
 @pytest.mark.asyncio
 async def test_remediation_mutation_guard_enforces_exclusive_locks_and_recovery(
