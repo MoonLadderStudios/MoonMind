@@ -46,7 +46,7 @@ No new hermetic integration test is required for the scoped code change because 
 ## Final Phase: Polish And Verification
 
 - [X] T012 Run full unit suite `./tools/test_unit.sh` before final verification (SC-005)
-- [X] T013 Run `/speckit.verify` equivalent and write `specs/323-persist-task-snapshots/verification.md` with verdict, evidence, and MM-629 traceability (FR-009, SC-006)
+- [X] T013 Run `/moonspec-verify` equivalent and write `specs/323-persist-task-snapshots/verification.md` with verdict, evidence, and MM-629 traceability (FR-009, SC-006)
 
 ## Dependencies And Execution Order
 
