@@ -58,16 +58,23 @@
 - Unit: authority-mode validation, observe-only side-effect denial, approval-gated decisioning, admin profile permission checks, high-risk approval handling, raw-operation denial, idempotency shape isolation, and redaction.
 - Integration-style API/UI: remediation creation payload preservation, bounded approval-state serialization, and Mission Control remediation authority/action policy submission.
 
+### Red-First Confirmation
+
+> `plan.md` marks FR-001 through FR-016, SCN-001 through SCN-007, SC-001 through SC-005, and DESIGN-REQ-013/014/017 as `implemented_verified`. No new failing tests are generated for this task list. If any row is later downgraded to `missing`, `partial`, or `implemented_unverified`, add and run failing unit and/or integration tests before fallback implementation.
+
+- [X] T008 Confirm no `missing`, `partial`, or `implemented_unverified` rows remain in `specs/319-remediation-authority-policy/plan.md`, so no new red-first unit tests are required before implementation. (FR-001 through FR-016, SC-001)
+- [X] T009 Confirm no acceptance scenario or public boundary lacks implemented-verified evidence in `specs/319-remediation-authority-policy/plan.md`, so no new red-first integration tests are required before implementation. (SCN-001 through SCN-007, SC-002)
+
 ### Verification Tests
 
-- [X] T008 Run focused remediation authority unit tests with `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`. (FR-001 through FR-015, SCN-001 through SCN-007, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-017)
-- [X] T009 Run focused Temporal service and API tests with `./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_service.py tests/unit/api/routers/test_executions.py`. (FR-001, FR-002, FR-004, FR-008, FR-013, SCN-002, SCN-005)
-- [X] T010 Run focused Mission Control UI test with `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx`. (FR-001, FR-008, SCN-005)
-- [X] T011 Run traceability check `rg -n "MM-619|DESIGN-REQ-013|DESIGN-REQ-014|DESIGN-REQ-017" specs/319-remediation-authority-policy`. (FR-016, SC-005)
+- [X] T010 Run focused remediation authority unit tests with `./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`. (FR-001 through FR-015, SCN-001 through SCN-007, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-017)
+- [X] T011 Run focused Temporal service and API tests with `./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_service.py tests/unit/api/routers/test_executions.py`. (FR-001, FR-002, FR-004, FR-008, FR-013, SCN-002, SCN-005)
+- [X] T012 Run focused Mission Control UI test with `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx`. (FR-001, FR-008, SCN-005)
+- [X] T013 Run traceability check `rg -n "MM-619|DESIGN-REQ-013|DESIGN-REQ-014|DESIGN-REQ-017" specs/319-remediation-authority-policy`. (FR-016, SC-005)
 
 ### Implementation
 
-- [X] T012 Confirm no production implementation changes are required because `plan.md` marks FR-001 through FR-015 as `implemented_verified` with existing code and tests. (FR-001 through FR-015)
+- [X] T014 Confirm no production implementation changes are required because `plan.md` marks FR-001 through FR-016 as `implemented_verified` with existing code and tests. (FR-001 through FR-016)
 
 **Checkpoint**: The MM-619 story is validated against existing implementation and remains traceable.
 
@@ -77,8 +84,8 @@
 
 **Purpose**: Finish validation without broadening scope.
 
-- [X] T013 Run `./tools/test_unit.sh` for the full required unit suite, or record the exact blocker if it cannot complete. (SC-001 through SC-005)
-- [X] T014 Run `/moonspec-verify` equivalent for `specs/319-remediation-authority-policy/` and write `specs/319-remediation-authority-policy/verification.md`. (FR-016, SC-005)
+- [X] T015 Run `./tools/test_unit.sh` for the full required unit suite, or record the exact blocker if it cannot complete. (SC-001 through SC-005)
+- [X] T016 Run `/moonspec-verify` equivalent for `specs/319-remediation-authority-policy/` and write `specs/319-remediation-authority-policy/verification.md`. (FR-016, SC-005)
 
 ---
 
@@ -100,7 +107,7 @@
 ### Parallel Opportunities
 
 - T004 through T007 can be inspected in parallel.
-- T008 through T010 can be run independently if the test runner supports separate invocations.
+- T008 through T012 can be run independently if the test runner supports separate invocations.
 
 ---
 
