@@ -9,8 +9,11 @@ from moonmind.workflows.skills.deployment_execution import (
     ComposeVerification,
     DeploymentUpdateExecutor,
     DeploymentUpdateLockManager,
+    HostDockerComposeRunner,
     InMemoryDesiredStateStore,
     _ensure_command_succeeded,
+    _is_host_absolute_path,
+    _remap_host_compose_path,
     build_compose_command_plan,
     build_deployment_update_handler,
 )
@@ -721,3 +724,97 @@ async def test_progress_contains_lifecycle_states_without_command_output() -> No
     serialized = json.dumps(progress)
     assert "exitCode" not in serialized
     assert "docker" not in serialized
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("/host/repo", True),
+        ("relative/path", False),
+        ("", False),
+        ("C:\\repo", True),
+        ("c:/repo", True),
+        ("\\\\server\\share", True),
+    ],
+)
+def test_is_host_absolute_path_handles_windows_paths(value: str, expected: bool):
+    from pathlib import PurePosixPath
+
+    assert _is_host_absolute_path(value) is expected
+    # Path-like values should also work
+    if value:
+        assert _is_host_absolute_path(PurePosixPath(value)) is _is_host_absolute_path(value)
+
+
+def test_remap_host_compose_path_preserves_subpath_under_host_dir(tmp_path):
+    from pathlib import Path
+
+    host_dir = Path("/host/repo")
+    local_dir = tmp_path / "host_project"
+    local_dir.mkdir()
+    nested = local_dir / "deploy"
+    nested.mkdir()
+    compose = nested / "docker-compose.prod.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+
+    remapped = _remap_host_compose_path(
+        Path("/host/repo/deploy/docker-compose.prod.yaml"),
+        host_dir,
+        local_dir,
+    )
+    assert remapped == compose
+
+
+def test_remap_host_compose_path_falls_back_to_basename_when_unrelated(tmp_path):
+    from pathlib import Path
+
+    host_dir = Path("/host/repo")
+    local_dir = tmp_path / "host_project"
+    local_dir.mkdir()
+
+    remapped = _remap_host_compose_path(
+        Path("/elsewhere/docker-compose.yaml"),
+        host_dir,
+        local_dir,
+    )
+    assert remapped == local_dir / "docker-compose.yaml"
+
+
+def test_compose_base_command_remaps_subpath_for_host_compose_file(tmp_path):
+    """Absolute host compose paths must resolve into the local mount with subpath intact."""
+
+    local_dir = tmp_path / "host_project"
+    nested = local_dir / "deploy"
+    nested.mkdir(parents=True)
+    compose = nested / "docker-compose.prod.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+
+    runner = HostDockerComposeRunner(
+        project_dir="/host/repo",
+        compose_file="/host/repo/deploy/docker-compose.prod.yaml",
+        project_name="moonmind",
+        local_project_dir=str(local_dir),
+    )
+    command = runner._compose_base_command()
+    assert command[-2] == "-f"
+    assert command[-1] == str(compose)
+    assert command[5] == "/host/repo"
+
+
+def test_compose_base_command_accepts_windows_host_paths(tmp_path):
+    """Worker on Linux must treat Windows drive-letter host paths as absolute."""
+
+    local_dir = tmp_path / "host_project"
+    local_dir.mkdir()
+    compose = local_dir / "docker-compose.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+
+    runner = HostDockerComposeRunner(
+        project_dir="C:\\Users\\dev\\MoonMind",
+        compose_file="C:\\Users\\dev\\MoonMind\\docker-compose.yaml",
+        project_name="moonmind",
+        local_project_dir=str(local_dir),
+    )
+    command = runner._compose_base_command()
+    assert command[5] == "C:\\Users\\dev\\MoonMind"
+    assert command[-1] == str(compose)

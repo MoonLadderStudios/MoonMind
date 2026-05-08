@@ -507,8 +507,116 @@ _CODEX_CONFIG_FLEETS = frozenset({SANDBOX_FLEET, AGENT_RUNTIME_FLEET})
 _TOOLS_WITH_AUTO_PR_CREATION = frozenset({"jules", "jules_api"})
 
 
+_DEFAULT_DEPLOYMENT_LOCAL_PROJECT_DIR = "/workspace/host_project"
+
+
+def _read_self_container_id() -> str | None:
+    hostname = os.environ.get("HOSTNAME") or os.environ.get("CONTAINER_ID")
+    if hostname:
+        return hostname.strip() or None
+    try:
+        return Path("/etc/hostname").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+_DETECT_HOST_PROJECT_DIR_RETRIES = 3
+_DETECT_HOST_PROJECT_DIR_BACKOFF_SECONDS = 2.0
+
+
+def _detect_host_project_dir(local_mount: str) -> str | None:
+    """Resolve ``local_mount`` to its host filesystem path via ``docker inspect``.
+
+    The worker reaches the host daemon through ``docker-proxy`` (DOCKER_HOST),
+    which exposes the ``CONTAINERS`` API. Inspecting our own container yields
+    the ``Mounts`` array; the entry whose ``Destination`` matches the local
+    bind-mount has ``Source`` set to the host path.
+
+    Retries a small number of times with linear backoff so transient bootstrap
+    races (e.g. ``docker-proxy`` is still coming up) don't permanently disable
+    deployment updates. Returns ``None`` when detection still fails after the
+    final attempt so the caller can fall back to explicit configuration.
+    """
+
+    container_id = _read_self_container_id()
+    if not container_id:
+        return None
+    import subprocess  # local import — only needed at worker bootstrap.
+    import time
+
+    last_error: Exception | None = None
+    for attempt in range(_DETECT_HOST_PROJECT_DIR_RETRIES):
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{json .Mounts}}",
+                    container_id,
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+        except (
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            OSError,
+        ) as exc:
+            last_error = exc
+            if attempt + 1 < _DETECT_HOST_PROJECT_DIR_RETRIES:
+                time.sleep(_DETECT_HOST_PROJECT_DIR_BACKOFF_SECONDS * (attempt + 1))
+            continue
+        try:
+            mounts = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(mounts, list):
+            return None
+        target = local_mount.rstrip("/") or "/"
+        for mount in mounts:
+            if not isinstance(mount, Mapping):
+                continue
+            destination = str(mount.get("Destination") or "").rstrip("/") or "/"
+            if destination != target:
+                continue
+            source = str(mount.get("Source") or "").strip()
+            if source:
+                return source
+        return None
+    if last_error is not None:
+        logger.debug(
+            "Failed to detect host project dir after %d attempts: %s",
+            _DETECT_HOST_PROJECT_DIR_RETRIES,
+            last_error,
+        )
+    return None
+
+
 def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
-    project_dir = str(os.environ.get("MOONMIND_DEPLOYMENT_PROJECT_DIR") or "").strip()
+    explicit_project_dir = str(
+        os.environ.get("MOONMIND_DEPLOYMENT_PROJECT_DIR") or ""
+    ).strip()
+    local_project_dir = (
+        str(os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR") or "").strip()
+        or _DEFAULT_DEPLOYMENT_LOCAL_PROJECT_DIR
+    )
+    if not Path(local_project_dir).exists():
+        # The worker isn't running with the project bind-mounted, so the
+        # deployment-update tool can't read the compose file. Disable.
+        if not explicit_project_dir:
+            return None
+        # Tests / non-container callers may set MOONMIND_DEPLOYMENT_PROJECT_DIR
+        # directly to a path that exists locally; fall back to legacy single-
+        # path behavior in that case.
+        if Path(explicit_project_dir).exists():
+            local_project_dir = explicit_project_dir
+        else:
+            return None
+    project_dir = explicit_project_dir or _detect_host_project_dir(local_project_dir)
     if not project_dir:
         return None
     compose_file = (
@@ -525,6 +633,9 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
         timeout_seconds = int(timeout_raw) if timeout_raw else 900
     except ValueError:
         timeout_seconds = 900
+    runner_local = (
+        local_project_dir if local_project_dir != project_dir else None
+    )
     return DeploymentUpdateExecutor(
         lock_manager=DeploymentUpdateLockManager(),
         desired_state_store=InMemoryDesiredStateStore(),
@@ -534,6 +645,7 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
             compose_file=compose_file,
             project_name=project_name,
             command_timeout_seconds=timeout_seconds,
+            local_project_dir=runner_local,
         ),
     )
 
