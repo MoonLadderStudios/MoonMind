@@ -579,3 +579,126 @@ def test_merged_memo_with_empty_temporal_memo_returns_canonical_memo():
     merged = merged_memo_for_projection(payload, canonical)
     assert merged["taskRunId"] == "abc"
     assert merged["title"] == "task"
+
+# --- mm_started_at semantic timestamp tests ---
+
+def _make_running_desc(
+    *,
+    workflow_id: str,
+    start_time: datetime,
+    search_attributes: dict[str, "object"],
+    memo_data: dict[str, "object"] | None = None,
+) -> Mock:
+    desc = Mock(spec=WorkflowExecutionDescription)
+    desc.id = workflow_id
+    desc.run_id = f"run-{workflow_id}"
+    desc.namespace = "moonmind"
+    desc.workflow_type = "MoonMind.Run"
+    desc.status = WorkflowExecutionStatus.RUNNING
+    desc.start_time = start_time
+    desc.execution_time = start_time
+    desc.close_time = None
+    desc.search_attributes = search_attributes
+
+    payload = memo_data or {"entry": "run", "owner_id": "owner-1", "owner_type": "user"}
+
+    async def _memo() -> dict[str, object]:
+        return payload
+
+    desc.memo = _memo
+    return desc
+
+def test_started_at_is_none_for_awaiting_slot_without_mm_started_at():
+    """Running Temporal workflow with mm_state=awaiting_slot must not surface
+    a started_at: Temporal's start_time fires when the workflow is created,
+    even while it is still waiting for a provider profile slot."""
+    start_time = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+    desc = _make_running_desc(
+        workflow_id="mm:awaiting-slot",
+        start_time=start_time,
+        search_attributes={
+            "mm_state": "awaiting_slot",
+            "mm_entry": "run",
+        },
+    )
+
+    result = asyncio.run(map_temporal_state_to_projection(desc))
+
+    assert result["state"] == MoonMindWorkflowState.AWAITING_SLOT
+    assert result["started_at"] is None
+
+def test_started_at_uses_mm_started_at_when_present():
+    """When the workflow has stamped mm_started_at, the projection prefers
+    it over Temporal's lifecycle timestamps."""
+    start_time = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+    semantic_started_at = datetime(2026, 5, 1, 12, 7, tzinfo=UTC)
+    desc = _make_running_desc(
+        workflow_id="mm:executing-with-mm-started",
+        start_time=start_time,
+        search_attributes={
+            "mm_state": "executing",
+            "mm_entry": "run",
+            "mm_started_at": semantic_started_at.isoformat(),
+        },
+    )
+
+    result = asyncio.run(map_temporal_state_to_projection(desc))
+
+    assert result["state"] == MoonMindWorkflowState.EXECUTING
+    assert _as_utc(result["started_at"]) == semantic_started_at
+
+def test_started_at_legacy_fallback_for_executing_without_mm_started_at():
+    """In-flight workflows that pre-date mm_started_at must keep working:
+    when the workflow is in a real-work state but no semantic timestamp is
+    available, fall back to the Temporal lifecycle timestamp."""
+    start_time = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+    desc = _make_running_desc(
+        workflow_id="mm:executing-legacy",
+        start_time=start_time,
+        search_attributes={
+            "mm_state": "executing",
+            "mm_entry": "run",
+        },
+    )
+
+    result = asyncio.run(map_temporal_state_to_projection(desc))
+
+    assert result["state"] == MoonMindWorkflowState.EXECUTING
+    assert _as_utc(result["started_at"]) == start_time
+
+def test_started_at_none_for_planning_state():
+    """PLANNING is a pre-work state; no started_at without mm_started_at."""
+    start_time = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+    desc = _make_running_desc(
+        workflow_id="mm:planning",
+        start_time=start_time,
+        search_attributes={
+            "mm_state": "planning",
+            "mm_entry": "run",
+        },
+    )
+
+    result = asyncio.run(map_temporal_state_to_projection(desc))
+
+    assert result["state"] == MoonMindWorkflowState.PLANNING
+    assert result["started_at"] is None
+
+def test_started_at_persists_through_awaiting_slot_after_work_began():
+    """Cooldown / requeue can return the workflow to awaiting_slot after work
+    has already begun. Once mm_started_at is stamped, it must keep winning."""
+    start_time = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+    semantic_started_at = datetime(2026, 5, 1, 12, 5, tzinfo=UTC)
+    desc = _make_running_desc(
+        workflow_id="mm:cooldown-requeue",
+        start_time=start_time,
+        search_attributes={
+            "mm_state": "awaiting_slot",
+            "mm_entry": "run",
+            "mm_started_at": semantic_started_at.isoformat(),
+        },
+    )
+
+    result = asyncio.run(map_temporal_state_to_projection(desc))
+
+    assert result["state"] == MoonMindWorkflowState.AWAITING_SLOT
+    assert _as_utc(result["started_at"]) == semantic_started_at

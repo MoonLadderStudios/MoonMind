@@ -16,6 +16,7 @@ REQUIRED_SEARCH_ATTRIBUTES = {
     "mm_owner_type": "Keyword",
     "mm_state": "Keyword",
     "mm_updated_at": "Datetime",
+    "mm_started_at": "Datetime",
     "mm_repo": "Keyword",
     "mm_integration": "Keyword",
     "mm_scheduled_for": "Datetime",
@@ -34,6 +35,7 @@ LEGACY_SEARCH_ATTRIBUTES = {
     if (
         not key.startswith("mm_dependency_")
         and key != "mm_has_dependencies"
+        and key != "mm_started_at"
         and key
         not in {
             "TaskRunId",
@@ -329,9 +331,10 @@ def test_namespace_bootstrap_registers_missing_search_attributes_on_upgrade(
     assert "SessionEpoch" in result.stdout
     assert "SessionStatus" in result.stdout
     assert "IsDegraded" in result.stdout
+    assert "mm_started_at" in result.stdout
 
     calls = (state_dir / "calls.log").read_text(encoding="utf-8")
-    assert calls.count("search-attribute create") == 8
+    assert calls.count("search-attribute create") == 9
 
     registered = (state_dir / "search-attributes.txt").read_text(encoding="utf-8")
     for name, attr_type in REQUIRED_SEARCH_ATTRIBUTES.items():

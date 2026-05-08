@@ -190,6 +190,7 @@ mm_owner_id:Keyword
 mm_owner_type:Keyword
 mm_state:Keyword
 mm_updated_at:Datetime
+mm_started_at:Datetime
 mm_repo:Keyword
 mm_integration:Keyword
 mm_scheduled_for:Datetime
