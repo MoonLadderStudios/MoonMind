@@ -698,6 +698,54 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             {"id": "step-2", "instructions": "Do part B"}
         ])
 
+    def test_build_agent_execution_request_propagates_story_output_handoff(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        story_output = {
+            "mode": "jira",
+            "handoff": "artifact",
+            "requiresStoryBreakdownArtifactRef": True,
+            "storyBreakdownPath": "artifacts/story-breakdowns/demo/stories.json",
+            "storyBreakdownMarkdownPath": (
+                "artifacts/story-breakdowns/demo/stories.md"
+            ),
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {"mode": "codex_cli"},
+                    "storyOutput": story_output,
+                    "storyBreakdownPath": (
+                        "artifacts/story-breakdowns/demo/stories.json"
+                    ),
+                    "storyBreakdownMarkdownPath": (
+                        "artifacts/story-breakdowns/demo/stories.md"
+                    ),
+                },
+                node_id="node-story-output",
+                tool_name="moonspec-breakdown",
+            )
+
+        self.assertEqual(request.parameters["storyOutput"], story_output)
+        self.assertEqual(
+            request.parameters["storyBreakdownPath"],
+            "artifacts/story-breakdowns/demo/stories.json",
+        )
+        self.assertEqual(
+            request.parameters["storyBreakdownMarkdownPath"],
+            "artifacts/story-breakdowns/demo/stories.md",
+        )
+
     def test_build_agent_execution_request_marks_hyphenated_codex_runtime_managed(self) -> None:
         from unittest.mock import patch
 
