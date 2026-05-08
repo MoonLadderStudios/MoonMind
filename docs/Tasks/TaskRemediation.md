@@ -1,9 +1,9 @@
 # Task Remediation
 
-**Status:** Desired-state design  
-**Owners:** MoonMind Platform + Mission Control  
-**Last Updated:** 2026-04-21  
-**Related:** `docs/Tasks/TaskDependencies.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/TaskRunsApi.md`, `docs/Tasks/TaskProposalSystem.md`, `docs/ManagedAgents/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Temporal/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
+**Status:** Desired-state design
+**Owners:** MoonMind Platform + Mission Control
+**Last Updated:** 2026-05-07
+**Related:** `docs/Tasks/TaskDependencies.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/TaskRunsApi.md`, `docs/Tasks/TaskProposalSystem.md`, `docs/ManagedAgents/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Temporal/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/SkillSystem.md`
 
 ---
 
@@ -19,11 +19,13 @@ In this document:
 - a **remediation task** is the follow-up task doing the investigation or repair,
 - **troubleshooting** means evidence collection and diagnosis,
 - **remediation** means diagnosis plus allowed intervention actions,
+- **immediate repair** means a bounded attempt to get the target task unstuck or completed now, using fresh target evidence and allowed actions when a plausible safe fix is available,
+- **long-term prevention** means a separately reviewable change to MoonMind, a reusable Agent Skill, or associated instructions that reduces the chance of the same failure recurring,
 - **self-healing** means automated or operator-triggered creation of remediation tasks under policy.
 
 The core design goal is:
 
-> MoonMind should let a task investigate another task **without turning logs into the source of truth and without turning the agent into an unaudited root shell**.
+> MoonMind should let a task investigate another task, attempt a safe immediate repair when one is plausible, and produce a durable prevention fix when a systemic MoonMind or Skill improvement is found **without turning logs into the source of truth and without turning the agent into an unaudited root shell**.
 
 ---
 
@@ -87,6 +89,11 @@ Task Remediation must satisfy all of the following:
    - Historical runs with only merged logs or partial artifact coverage must still be troubleshootable.
    - Missing evidence should degrade the remediation task, not deadlock it.
 
+10. **Immediate repair plus prevention**
+    - After diagnosis, a remediation task should first attempt the smallest safe repair that can unblock the target task now, such as resuming or retrying the failed step with corrected remediation context when policy, step replayability, and checkpoint evidence allow it.
+    - After the immediate repair succeeds, fails, or is ruled unsafe, the remediation task should look for a long-term fix in MoonMind code, configuration, presets, or Agent Skill instructions.
+    - When a long-term fix is identified and repository write authority is available, the remediation task should create a pull request instead of only writing a diagnosis.
+
 ---
 
 ## 4. Non-goals
@@ -99,6 +106,8 @@ This design does **not** attempt to provide:
 - silent import of another task’s entire workflow history into `initialParameters`,
 - cross-task managed-session reuse,
 - a rule that every failed task automatically spawns an admin healer,
+- a guarantee that every failed task can be resumed, retried, or repaired in place,
+- automatic merge or self-application of MoonMind or Agent Skill prevention changes without review,
 - a guarantee that historical runs always have full structured event history,
 - a bypass around the Secrets System or artifact redaction rules,
 - a claim that Live Logs itself is the source of truth.
@@ -141,40 +150,40 @@ Task Remediation is layered on top of those contracts; it does not redefine them
 
 The following invariants are fixed:
 
-1. **A remediation task is explicitly marked.**  
+1. **A remediation task is explicitly marked.**
    The canonical marker is `payload.task.remediation`.
 
-2. **A remediation task targets one logical execution and one pinned run snapshot.**  
+2. **A remediation task targets one logical execution and one pinned run snapshot.**
    `target.workflowId` is required. `target.runId` is resolved and persisted at create time even if the user omitted it.
 
-3. **Remediation is non-transitive by default.**  
+3. **Remediation is non-transitive by default.**
    If B remediates A and C remediates B, C does not automatically gain authority over A unless explicitly configured.
 
-4. **Remediation does not import unbounded upstream data into workflow history.**  
+4. **Remediation does not import unbounded upstream data into workflow history.**
    Large logs, diagnostics, provider snapshots, and evidence bodies remain behind artifact refs or observability APIs.
 
-5. **All evidence access is server-mediated.**  
+5. **All evidence access is server-mediated.**
    Artifact refs are identifiers, not access grants. The remediation task never receives presigned URLs, raw storage keys, or raw local filesystem paths as durable context.
 
-6. **Administrative actions are typed and allowlisted.**  
+6. **Administrative actions are typed and allowlisted.**
    Remediation never implies “run any command the model suggests.”
 
-7. **Every side-effecting action is idempotent or safely keyed.**  
+7. **Every side-effecting action is idempotent or safely keyed.**
    Replays, retries, and duplicate requests must not create duplicate destructive actions.
 
-8. **Exclusive locking is required for acting on shared targets.**  
+8. **Exclusive locking is required for acting on shared targets.**
    Diagnosis may be parallelized later; mutation may not.
 
-9. **Secrets remain redacted.**  
+9. **Secrets remain redacted.**
    Stronger task authority does not override redaction, audit, or secret-reference rules.
 
-10. **Nested remediation is off by default.**  
+10. **Nested remediation is off by default.**
     Automatic remediation of remediation tasks is disabled unless explicitly allowed by policy.
 
-11. **Force termination stays high-risk.**  
+11. **Force termination stays high-risk.**
     Even for admin remediation, forced termination is treated as an ops-grade action, not a casual fallback.
 
-12. **Failure to resolve evidence never becomes infinite wait.**  
+12. **Failure to resolve evidence never becomes infinite wait.**
     The remediation task must degrade, escalate, or fail with a bounded reason.
 
 ---
@@ -193,7 +202,7 @@ Representative request:
   "payload": {
     "repository": "MoonLadderStudios/MoonMind",
     "task": {
-      "instructions": "Investigate the target task, gather evidence, and apply allowed remediation actions if justified.",
+      "instructions": "Investigate the target task, gather evidence, attempt the smallest safe immediate repair if one seems possible, verify the target outcome, then create a reviewable long-term MoonMind or Agent Skill fix if a recurrence-prevention change is identified.",
       "runtime": { "mode": "codex" },
       "remediation": {
         "target": {
@@ -537,25 +546,25 @@ The context artifact must stay **bounded**. It may include small excerpts or sum
 
 The remediation runtime should not scrape Mission Control pages. It should receive a MoonMind-owned tool surface such as:
 
-- `remediation.get_context()`  
+- `remediation.get_context()`
   Return the parsed `remediation.context` bundle.
 
-- `remediation.read_target_artifact(artifactRef, readMode?)`  
+- `remediation.read_target_artifact(artifactRef, readMode?)`
   Read a referenced artifact through normal artifact policy.
 
-- `remediation.read_target_logs(taskRunId, stream, cursor?, tailLines?)`  
+- `remediation.read_target_logs(taskRunId, stream, cursor?, tailLines?)`
   Read or tail target logs through the `/api/task-runs` observability surfaces.
 
-- `remediation.follow_target_logs(taskRunId, fromSequence?)`  
+- `remediation.follow_target_logs(taskRunId, fromSequence?)`
   Live follow when supported.
 
-- `remediation.list_allowed_actions()`  
+- `remediation.list_allowed_actions()`
   Return action kinds allowed by `actionPolicyRef`.
 
-- `remediation.execute_action(actionKind, params, dryRun?)`  
+- `remediation.execute_action(actionKind, params, dryRun?)`
   Request a typed intervention.
 
-- `remediation.verify_target(checks...)`  
+- `remediation.verify_target(checks...)`
   Re-read target health after an action.
 
 The exact transport may be internal API calls, activities, or MCP tools, but the capability boundary must be MoonMind-owned and typed.
@@ -582,6 +591,27 @@ Rules:
 ### 9.7 Evidence freshness before action
 
 Before executing a side-effecting action, the remediation task must re-read the target’s current bounded health view. The agent is allowed to start from a pinned snapshot, but it must not act on stale assumptions without a fresh precondition check.
+
+### 9.8 Immediate repair and prevention workflow
+
+Remediation is a two-track workflow:
+
+1. **Repair the current target if safe.** The remediation task must use the evidence bundle, fresh target health, allowed action list, and lock state to decide whether a bounded immediate repair is plausible. Examples include retrying a failed publish step with clarified remediation context, interrupting a stuck managed turn, clearing a stale session, evicting an orphaned slot lease, or requesting a targeted rerun/resume action. The repair attempt must be the smallest action likely to unblock the target and must not silently broaden into a full rerun or destructive action.
+2. **Verify the target outcome.** After an immediate repair action, the remediation task must call the verification surface and publish the result. Verification should distinguish `repaired`, `still_failed`, `not_attempted`, `unsafe`, `approval_required`, and `escalated` outcomes.
+3. **Prevent recurrence.** Regardless of whether the target was repaired, the remediation task should identify whether the failure points to a reusable MoonMind, preset, prompt, or Agent Skill defect. If it does, the task should prepare the smallest reviewable code, configuration, documentation, or Skill change and create a pull request when repository write authority and policy allow it.
+
+Immediate repair is not a substitute for long-term prevention. A successful target repair still requires a recurrence analysis, and a failed or unsafe repair can still produce a prevention pull request.
+
+Corrected-instruction retries are remediation interventions, not ordinary failed-step Resume. If the platform has a distinct Resume-from-failed-step action that preserves the original task input snapshot unchanged, remediation must not overload that action with edited instructions. Any corrected instructions must be recorded as remediation repair context or a follow-up retry override with explicit provenance, not as a mutation of the original task input.
+
+The remediation decision log must record:
+
+- the immediate repair candidate considered,
+- why it was attempted, skipped, denied, or escalated,
+- the action request/result and verification refs when attempted,
+- the root-cause category selected for long-term prevention,
+- the prevention branch, commit, and pull request URL when created,
+- the reason no prevention PR was created when the task only reports findings.
 
 ---
 
@@ -707,6 +737,7 @@ The initial registry should include at least the following action families.
 #### Execution lifecycle actions
 - `execution.pause`
 - `execution.resume`
+- `execution.retry_failed_step_with_remediation_context`
 - `execution.request_rerun_same_workflow`
 - `execution.start_fresh_rerun`
 - `execution.cancel`
@@ -739,6 +770,20 @@ The registry may later grow, but every new action kind must declare:
 
 #### `execution.pause` / `execution.resume`
 Backed by the ordinary execution signal surface. Use these when the target should stop progressing while evidence is reviewed or operator work occurs.
+
+#### `execution.retry_failed_step_with_remediation_context`
+A targeted immediate-repair action for a failed step when fresh evidence indicates the step may succeed with bounded corrective context. Example: a publish step failed because the task instructions were ambiguous, and remediation can provide clarified publish instructions for that retry.
+
+This action must:
+- pin the source `workflowId`, source `runId`, failed step identity, and attempt,
+- preserve completed prior-step outputs by refs when resuming a linked follow-up execution,
+- record corrective context separately from the original task input snapshot,
+- require step replayability, checkpoint availability, authorization, and policy approval before execution,
+- fail explicitly when checkpoint validation or restoration fails,
+- avoid silent fallback to a full rerun,
+- avoid retrying non-idempotent or externally side-effecting work unless policy and approval explicitly allow it.
+
+This action is distinct from an operator-facing failed-step Resume path that preserves original inputs unchanged. It is a remediation-specific intervention and must leave action, provenance, and verification artifacts.
 
 #### `execution.request_rerun_same_workflow`
 Represents Continue-As-New style rerun of the same logical execution where supported and accepted.
@@ -832,6 +877,7 @@ Every side-effecting action must declare:
 
 Examples:
 - `provider_profile.evict_stale_lease` — verify lease age, owner liveness, and slot state afterward.
+- `execution.retry_failed_step_with_remediation_context` — verify the retried step started from the intended checkpoint, preserved prior-step refs were reused rather than re-executed, corrected remediation context was recorded, and the target reached the expected repaired or still-failed state.
 - `session.restart_container` — verify new session identity fields and new continuity boundary artifact.
 - `execution.request_rerun_same_workflow` — verify target run state changes and runId rollover if applicable.
 
@@ -1041,25 +1087,25 @@ If the remediation task continues as new, it must preserve:
 
 At minimum, a remediation task should produce:
 
-- `reports/remediation_context.json`  
+- `reports/remediation_context.json`
   `artifact_type = remediation.context`
 
-- `reports/remediation_plan.json`  
+- `reports/remediation_plan.json`
   `artifact_type = remediation.plan`
 
-- `logs/remediation_decision_log.ndjson`  
+- `logs/remediation_decision_log.ndjson`
   `artifact_type = remediation.decision_log`
 
-- `reports/remediation_action_request-<n>.json`  
+- `reports/remediation_action_request-<n>.json`
   `artifact_type = remediation.action_request`
 
-- `reports/remediation_action_result-<n>.json`  
+- `reports/remediation_action_result-<n>.json`
   `artifact_type = remediation.action_result`
 
-- `reports/remediation_verification-<n>.json`  
+- `reports/remediation_verification-<n>.json`
   `artifact_type = remediation.verification`
 
-- `reports/remediation_summary.json`  
+- `reports/remediation_summary.json`
   `artifact_type = remediation.summary`
 
 These artifacts must obey the normal artifact presentation contract:
@@ -1288,6 +1334,7 @@ A practical v1 should ship with the following constraints:
 6. **Small action registry**
    - `execution.pause`
    - `execution.resume`
+   - `execution.retry_failed_step_with_remediation_context`
    - `execution.request_rerun_same_workflow`
    - `session.interrupt_turn`
    - `session.clear`
@@ -1340,6 +1387,8 @@ This document is complete enough to guide implementation when all of the followi
 10. Mission Control can show forward and reverse remediation links.
 11. The system degrades safely when only partial historical evidence is available.
 12. Automatic self-healing, when later added, is policy-driven and bounded.
+13. Remediation tasks attempt the smallest safe immediate repair when one is plausible.
+14. Remediation tasks create a reviewable long-term MoonMind, preset, prompt, or Agent Skill prevention PR when recurrence analysis identifies an actionable systemic fix and repository write policy allows it.
 
 ---
 
@@ -1351,6 +1400,7 @@ RemediationActionPolicy:
   allowed_actions:
     - execution.pause
     - execution.resume
+    - execution.retry_failed_step_with_remediation_context
     - execution.request_rerun_same_workflow
     - session.interrupt_turn
     - session.clear
@@ -1361,8 +1411,10 @@ RemediationActionPolicy:
     always_require_approval:
       - execution.force_terminate
       - session.restart_container
+      - execution.retry_failed_step_with_remediation_context
   verification_rules:
     require_verification_for:
+      - execution.retry_failed_step_with_remediation_context
       - execution.request_rerun_same_workflow
       - session.clear
       - provider_profile.evict_stale_lease
@@ -1400,6 +1452,16 @@ RemediationActionPolicy:
         "status": "applied"
       }
     ],
+    "immediateRepair": {
+      "status": "repaired",
+      "actionKind": "provider_profile.evict_stale_lease",
+      "verificationRef": { "artifact_id": "art_repair_verification" }
+    },
+    "prevention": {
+      "status": "pull_request_created",
+      "rootCauseCategory": "provider_profile_lease_recovery_gap",
+      "pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/1234"
+    },
     "resolution": "resolved_after_action",
     "evidenceDegraded": false,
     "escalated": false
@@ -1421,3 +1483,5 @@ Keep these rules stable even as implementation evolves:
 8. **Secrets stay redacted even for admin remediation.**
 9. **Loop prevention is required.**
 10. **Mission Control must make the relationship visible in both directions.**
+11. **Immediate repair and long-term prevention are separate outputs; a remediator may do either or both, but it must record its decision.**
+12. **Corrected-instruction retries must be recorded as remediation context, not as silent mutation of the original task input.**
