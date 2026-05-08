@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 import boto3
 from botocore.exceptions import ClientError
-from sqlalchemy import Select, delete, exists, select
+from sqlalchemy import Select, delete, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
@@ -836,6 +836,39 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def principal_owns_linked_execution(
+        self, *, artifact_id: str, principal: str
+    ) -> bool:
+        canonical_match = exists().where(
+            db_models.TemporalExecutionCanonicalRecord.namespace
+            == db_models.TemporalArtifactLink.namespace,
+            db_models.TemporalExecutionCanonicalRecord.workflow_id
+            == db_models.TemporalArtifactLink.workflow_id,
+            db_models.TemporalExecutionCanonicalRecord.run_id
+            == db_models.TemporalArtifactLink.run_id,
+            db_models.TemporalExecutionCanonicalRecord.owner_id == principal,
+            db_models.TemporalExecutionCanonicalRecord.owner_type
+            == db_models.TemporalExecutionOwnerType.USER,
+        )
+        projection_match = exists().where(
+            db_models.TemporalExecutionRecord.namespace
+            == db_models.TemporalArtifactLink.namespace,
+            db_models.TemporalExecutionRecord.workflow_id
+            == db_models.TemporalArtifactLink.workflow_id,
+            db_models.TemporalExecutionRecord.run_id
+            == db_models.TemporalArtifactLink.run_id,
+            db_models.TemporalExecutionRecord.owner_id == principal,
+            db_models.TemporalExecutionRecord.owner_type
+            == db_models.TemporalExecutionOwnerType.USER,
+        )
+        stmt = select(db_models.TemporalArtifactLink.id).where(
+            db_models.TemporalArtifactLink.artifact_id == artifact_id,
+            db_models.TemporalArtifactLink.link_type == "input.attachment",
+            or_(canonical_match, projection_match),
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
     async def list_for_execution(
         self,
         *,
@@ -1092,6 +1125,26 @@ class TemporalArtifactService:
                 f"principal '{principal}' cannot read artifact {artifact.artifact_id}"
             )
 
+    async def _assert_artifact_read_access(
+        self,
+        artifact: db_models.TemporalArtifact,
+        *,
+        principal: str,
+    ) -> None:
+        try:
+            self._assert_read_access(artifact, principal=principal)
+            return
+        except TemporalArtifactAuthorizationError:
+            pass
+        if await self._repository.principal_owns_linked_execution(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+        ):
+            return
+        raise TemporalArtifactAuthorizationError(
+            f"principal '{principal}' cannot read artifact {artifact.artifact_id}"
+        )
+
     def _assert_mutation_access(
         self,
         artifact: db_models.TemporalArtifact,
@@ -1134,6 +1187,36 @@ class TemporalArtifactService:
             return
         raise TemporalArtifactAuthorizationError(
             f"principal '{principal}' cannot access restricted raw artifact {artifact.artifact_id}"
+        )
+
+    async def _assert_artifact_raw_access(
+        self,
+        artifact: db_models.TemporalArtifact,
+        *,
+        principal: str,
+    ) -> None:
+        if self._raw_access_allowed(artifact, principal=principal):
+            return
+        if await self._repository.principal_owns_linked_execution(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+        ):
+            return
+        raise TemporalArtifactAuthorizationError(
+            f"principal '{principal}' cannot access restricted raw artifact {artifact.artifact_id}"
+        )
+
+    async def _artifact_raw_access_allowed(
+        self,
+        artifact: db_models.TemporalArtifact,
+        *,
+        principal: str,
+    ) -> bool:
+        if self._raw_access_allowed(artifact, principal=principal):
+            return True
+        return await self._repository.principal_owns_linked_execution(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
         )
 
     @staticmethod
@@ -1588,11 +1671,11 @@ class TemporalArtifactService:
         allow_restricted_raw: bool = False,
     ) -> tuple[db_models.TemporalArtifact, bytes]:
         artifact = await self._repository.get_artifact(artifact_id)
-        self._assert_read_access(artifact, principal=principal)
+        await self._assert_artifact_read_access(artifact, principal=principal)
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
         if not allow_restricted_raw:
-            self._assert_raw_access(artifact, principal=principal)
+            await self._assert_artifact_raw_access(artifact, principal=principal)
         try:
             data = await asyncio.get_running_loop().run_in_executor(
                 None, self._store.read_bytes, artifact.storage_key
@@ -1615,11 +1698,11 @@ class TemporalArtifactService:
         chunk_size: int = _STREAM_CHUNK_BYTES,
     ) -> tuple[db_models.TemporalArtifact, Iterable[bytes]]:
         artifact = await self._repository.get_artifact(artifact_id)
-        self._assert_read_access(artifact, principal=principal)
+        await self._assert_artifact_read_access(artifact, principal=principal)
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
         if not allow_restricted_raw:
-            self._assert_raw_access(artifact, principal=principal)
+            await self._assert_artifact_raw_access(artifact, principal=principal)
         return artifact, self._store.read_chunks(
             artifact.storage_key, chunk_size=chunk_size
         )
@@ -1632,11 +1715,11 @@ class TemporalArtifactService:
         allow_restricted_raw: bool = False,
     ) -> tuple[db_models.TemporalArtifact, Path]:
         artifact = await self._repository.get_artifact(artifact_id)
-        self._assert_read_access(artifact, principal=principal)
+        await self._assert_artifact_read_access(artifact, principal=principal)
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
         if not allow_restricted_raw:
-            self._assert_raw_access(artifact, principal=principal)
+            await self._assert_artifact_raw_access(artifact, principal=principal)
         try:
             path = await asyncio.get_running_loop().run_in_executor(
                 None, self._store.read_path, artifact.storage_key
@@ -1668,7 +1751,9 @@ class TemporalArtifactService:
             if preview_artifact is not None:
                 preview_ref = build_artifact_ref(preview_artifact)
 
-        raw_access_allowed = self._raw_access_allowed(artifact, principal=principal)
+        raw_access_allowed = await self._artifact_raw_access_allowed(
+            artifact, principal=principal
+        )
         default_read_ref = (
             preview_ref
             if preview_ref is not None and not raw_access_allowed
@@ -1692,7 +1777,7 @@ class TemporalArtifactService:
         ArtifactReadPolicy,
     ]:
         artifact = await self._repository.get_artifact(artifact_id)
-        self._assert_read_access(artifact, principal=principal)
+        await self._assert_artifact_read_access(artifact, principal=principal)
         links = await self._repository.list_links(artifact.artifact_id)
         pinned = await self._repository.get_pin(artifact.artifact_id)
         read_policy = await self.get_read_policy(artifact=artifact, principal=principal)
@@ -1705,10 +1790,10 @@ class TemporalArtifactService:
         principal: str,
     ) -> tuple[db_models.TemporalArtifact, datetime, str]:
         artifact = await self._repository.get_artifact(artifact_id)
-        self._assert_read_access(artifact, principal=principal)
+        await self._assert_artifact_read_access(artifact, principal=principal)
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
-        self._assert_raw_access(artifact, principal=principal)
+        await self._assert_artifact_raw_access(artifact, principal=principal)
 
         expires_at = datetime.now(UTC) + timedelta(seconds=self._presign_ttl_seconds)
         if artifact.storage_backend is db_models.TemporalArtifactStorageBackend.S3:
@@ -1953,7 +2038,7 @@ class TemporalArtifactService:
         policy: str | None = None,
     ) -> ArtifactRef:
         artifact = await self._repository.get_artifact(artifact_id)
-        self._assert_read_access(artifact, principal=principal)
+        await self._assert_artifact_read_access(artifact, principal=principal)
         _artifact, payload = await self.read(
             artifact_id=artifact_id,
             principal=principal,

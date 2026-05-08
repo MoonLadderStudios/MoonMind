@@ -1164,6 +1164,13 @@ async def test_task_shaped_create_preserves_image_input_attachments(tmp_path, mo
                 task = canonical.parameters["task"]
                 assert task["inputAttachments"][0]["artifactId"] == objective_artifact
                 assert task["steps"][0]["inputAttachments"][0]["artifactId"] == step_artifact
+                task_payload_json = json.dumps(task, sort_keys=True)
+                assert "data:" not in task_payload_json
+                assert "base64" not in task_payload_json.lower()
+                assert "uploadUrl" not in task_payload_json
+                assert "downloadUrl" not in task_payload_json
+                assert "presign" not in task_payload_json.lower()
+                assert "storageKey" not in task_payload_json
                 assert objective_artifact in canonical.artifact_refs
                 assert step_artifact in canonical.artifact_refs
 

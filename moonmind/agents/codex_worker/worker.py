@@ -1358,6 +1358,8 @@ class QueueApiClient:
         headers: dict[str, str] = {"Accept": "application/json"}
         if worker_token:
             headers["X-MoonMind-Worker-Token"] = worker_token
+        if client is not None:
+            client.headers.update(headers)
         self._client = client or httpx.AsyncClient(
             base_url=base_url,
             timeout=timeout_seconds,

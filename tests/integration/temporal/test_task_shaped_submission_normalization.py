@@ -192,3 +192,108 @@ def test_task_shaped_submission_boundary_rejects_invalid_alias_and_target_bindin
     assert duplicate_target_response.status_code == 422
     assert duplicate_same_target_response.status_code == 422
     service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("artifact_status", "message_fragment"),
+    [
+        (TemporalArtifactStatus.PENDING_UPLOAD, "pending_upload"),
+        (TemporalArtifactStatus.FAILED, "failed"),
+    ],
+)
+def test_task_shaped_submission_boundary_rejects_unfinalized_binary_ref(
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_status: TemporalArtifactStatus,
+    message_fragment: str,
+) -> None:
+    """MM-628: unfinalized binary refs fail before execution creation."""
+
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    test_client, service = _client()
+    artifact_id = f"art_01MM628INT{artifact_status.value.upper():0<14}"[:30]
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id=artifact_id,
+                status=artifact_status,
+                content_type="image/png",
+                size_bytes=10,
+            )
+        ]
+    )
+
+    with test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex",
+                    "task": {
+                        "instructions": "Reject unfinalized binary input.",
+                        "inputAttachments": [
+                            {
+                                "artifactId": artifact_id,
+                                "filename": "unfinalized.png",
+                                "contentType": "image/png",
+                                "sizeBytes": 10,
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert message_fragment in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_task_shaped_submission_boundary_rejects_wrong_owner_binary_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MM-628: unauthorized binary refs fail before execution creation."""
+
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak")
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    test_client, service = _client()
+    artifact_id = "art_01MM628INTWRONGOWNER0000"
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id=artifact_id,
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=10,
+                created_by_principal="another-user",
+            )
+        ]
+    )
+
+    with test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex",
+                    "task": {
+                        "instructions": "Reject unauthorized binary input.",
+                        "inputAttachments": [
+                            {
+                                "artifactId": artifact_id,
+                                "filename": "wrong-owner.png",
+                                "contentType": "image/png",
+                                "sizeBytes": 10,
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert "not authorized" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()

@@ -6,12 +6,14 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from moonmind.agents.codex_worker.handlers import WorkerExecutionResult
 from moonmind.agents.codex_worker.worker import (
     CodexWorker,
     CodexWorkerConfig,
+    QueueApiClient,
 )
 
 class _FakeQueueClient:
@@ -237,6 +239,33 @@ async def test_materialize_input_attachments_records_prepare_download_diagnostic
     assert [event["payload"]["event"] for event in queue.events] == [
         event["event"] for event in diagnostic_events
     ]
+
+@pytest.mark.asyncio
+async def test_queue_artifact_download_uses_worker_service_authorization() -> None:
+    """MM-628: worker materialization reads through MoonMind with worker credentials."""
+
+    captured: list[httpx.Request] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, content=b"artifact-bytes", request=request)
+
+    client = httpx.AsyncClient(
+        base_url="http://moonmind.test",
+        transport=httpx.MockTransport(_handler),
+    )
+    queue = QueueApiClient(
+        base_url="http://moonmind.test",
+        worker_token="worker-secret",
+        client=client,
+    )
+
+    payload = await queue.download_artifact(artifact_id="art_objective")
+
+    assert payload == b"artifact-bytes"
+    assert len(captured) == 1
+    assert captured[0].url.path == "/api/artifacts/art_objective/download"
+    assert captured[0].headers["X-MoonMind-Worker-Token"] == "worker-secret"
 
 @pytest.mark.asyncio
 async def test_materialize_input_attachments_records_failed_step_diagnostics(
