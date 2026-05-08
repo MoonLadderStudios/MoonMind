@@ -128,7 +128,7 @@ class SkillsOnDemandFailureDiagnostic(BaseModel):
     """Safe structured failure evidence for on-demand Skill operations."""
 
     status: Literal["denied"] = "denied"
-    code: str
+    code: SkillsOnDemandDeniedCode
     message: str
     current_snapshot_ref: str | None = None
     diagnostics_ref: str | None = None
@@ -150,9 +150,9 @@ class SkillsOnDemandAuditEvent(BaseModel):
     query_hash: str | None = None
     result_count: int | None = None
     result: SkillsOnDemandRequestAuditResult | None = None
-    result_code: str | None = None
+    result_code: SkillsOnDemandDeniedCode | None = None
     denied: bool | None = None
-    denial_code: str | None = None
+    denial_code: SkillsOnDemandDeniedCode | None = None
     derived_snapshot_id: str | None = None
     manifest_ref: str | None = None
     diagnostics_ref: str | None = None
@@ -164,7 +164,7 @@ class SkillsOnDemandDiagnosticArtifact(BaseModel):
     """Controlled pointer metadata for larger Skills On Demand diagnostics."""
 
     diagnostics_ref: str
-    failure_code: str
+    failure_code: SkillsOnDemandDeniedCode
     summary: str
     context: dict[str, Any] = Field(default_factory=dict)
     redaction_status: str = "redacted"

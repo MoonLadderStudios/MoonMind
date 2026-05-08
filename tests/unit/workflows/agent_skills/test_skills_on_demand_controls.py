@@ -188,6 +188,32 @@ async def test_enabled_query_validates_blank_context_values() -> None:
     assert snapshot_result.code == "invalid_request"
 
 
+async def test_denied_query_diagnostics_fall_back_to_active_snapshot() -> None:
+    active_snapshot = ResolvedSkillSet(
+        snapshot_id="skillset-active",
+        resolved_at=datetime.now(UTC),
+        skills=[],
+    )
+
+    result = SkillsOnDemandService(enabled=True)._denied_result(
+        SkillsOnDemandQueryRequest(
+            query="jira",
+            active_snapshot=active_snapshot,
+        ),
+        code="artifact_unavailable",
+        message="Catalog artifact could not be loaded.",
+    )
+
+    assert result.diagnostics_ref == (
+        "diagnostics://skills-on-demand/artifact_unavailable/skillset-active"
+    )
+    assert result.failure_diagnostic is not None
+    assert result.failure_diagnostic.current_snapshot_ref == "skillset-active"
+    assert result.failure_diagnostic.diagnostics_ref == result.diagnostics_ref
+    assert result.audit_events[0].current_snapshot_id == "skillset-active"
+    assert result.audit_events[0].diagnostics_ref == result.diagnostics_ref
+
+
 async def test_enabled_query_marks_policy_ineligible_matches() -> None:
     result = await SkillsOnDemandService(
         enabled=True,

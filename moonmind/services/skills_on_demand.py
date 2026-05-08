@@ -8,8 +8,10 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillSet,
     RuntimeSkillMaterialization,
     SkillsOnDemandAuditEvent,
+    SkillsOnDemandDeniedCode,
     SkillsOnDemandFailureDiagnostic,
     SkillsOnDemandMaterializationSummary,
+    SkillsOnDemandRequestAuditResult,
     SkillCatalogSearchResult,
     SkillsOnDemandQueryRequest,
     SkillsOnDemandQueryResult,
@@ -17,16 +19,18 @@ from moonmind.schemas.agent_skill_models import (
     SkillsOnDemandRequestResult,
 )
 
-SKILLS_ON_DEMAND_DISABLED_CODE = "feature_disabled"
+SKILLS_ON_DEMAND_DISABLED_CODE: SkillsOnDemandDeniedCode = "feature_disabled"
 SKILLS_ON_DEMAND_DISABLED_MESSAGE = (
     "Skills On Demand is disabled for this deployment."
 )
-SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_CODE = "enabled_mode_not_implemented"
+SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_CODE: SkillsOnDemandDeniedCode = (
+    "enabled_mode_not_implemented"
+)
 SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_MESSAGE = (
     "Skills On Demand enabled mode is not implemented for this deployment."
 )
-SKILLS_ON_DEMAND_INVALID_REQUEST_CODE = "invalid_request"
-SKILLS_ON_DEMAND_ALREADY_ACTIVE_CODE = "already_active"
+SKILLS_ON_DEMAND_INVALID_REQUEST_CODE: SkillsOnDemandDeniedCode = "invalid_request"
+SKILLS_ON_DEMAND_ALREADY_ACTIVE_CODE: SkillsOnDemandDeniedCode = "already_active"
 SKILLS_ON_DEMAND_DISABLED_INSTRUCTION = (
     "- Skills On Demand is disabled for this run. Use only the active Skills "
     "already available under the active skill path provided by MoonMind."
@@ -181,7 +185,7 @@ class SkillsOnDemandService:
         self,
         request: SkillsOnDemandRequest,
         *,
-        code: str,
+        code: SkillsOnDemandDeniedCode,
         message: str,
     ) -> SkillsOnDemandRequestResult:
         active_snapshot = request.active_snapshot
@@ -347,12 +351,13 @@ class SkillsOnDemandService:
         self,
         request: SkillsOnDemandQueryRequest,
         *,
-        code: str,
+        code: SkillsOnDemandDeniedCode,
         message: str,
     ) -> SkillsOnDemandQueryResult:
-        diagnostics_ref = self._diagnostics_ref_for(
-            code, request.current_snapshot_ref
-        )
+        current_snapshot_id = request.current_snapshot_ref
+        if current_snapshot_id is None and request.active_snapshot is not None:
+            current_snapshot_id = request.active_snapshot.snapshot_id
+        diagnostics_ref = self._diagnostics_ref_for(code, current_snapshot_id)
         return SkillsOnDemandQueryResult(
             status="denied",
             code=code,
@@ -367,7 +372,7 @@ class SkillsOnDemandService:
             failure_diagnostic=SkillsOnDemandFailureDiagnostic(
                 code=code,
                 message=message,
-                current_snapshot_ref=request.current_snapshot_ref,
+                current_snapshot_ref=current_snapshot_id,
                 diagnostics_ref=diagnostics_ref,
             ),
             audit_events=[
@@ -446,7 +451,7 @@ class SkillsOnDemandService:
         *,
         result_count: int,
         denied: bool,
-        denial_code: str | None = None,
+        denial_code: SkillsOnDemandDeniedCode | None = None,
         diagnostics_ref: str | None = None,
     ) -> SkillsOnDemandAuditEvent:
         current_snapshot_id = request.current_snapshot_ref
@@ -469,8 +474,8 @@ class SkillsOnDemandService:
         self,
         request: SkillsOnDemandRequest,
         *,
-        result: str,
-        result_code: str | None = None,
+        result: SkillsOnDemandRequestAuditResult,
+        result_code: SkillsOnDemandDeniedCode | None = None,
         parent_snapshot_id: str | None = None,
         derived_snapshot_id: str | None = None,
         manifest_ref: str | None = None,
@@ -496,7 +501,7 @@ class SkillsOnDemandService:
         )
 
     def _diagnostics_ref_for(
-        self, code: str, snapshot_ref: str | None
+        self, code: SkillsOnDemandDeniedCode, snapshot_ref: str | None
     ) -> str | None:
         if code not in {
             "artifact_unavailable",
