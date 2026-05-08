@@ -243,6 +243,53 @@ class DisabledComposeRunner:
         )
 
 
+def _is_host_absolute_path(path: Path | str) -> bool:
+    """Return True for paths that are absolute on either POSIX or Windows.
+
+    A worker running on Linux still receives Windows host paths (e.g.
+    ``C:\\repo``) when the operator runs Docker Desktop on Windows. ``Path``
+    parses those as relative on POSIX, so we additionally accept the
+    ``<drive>:`` prefix and UNC-style ``\\\\server\\share`` forms.
+    """
+
+    text = str(path)
+    if not text:
+        return False
+    if Path(text).is_absolute():
+        return True
+    if len(text) >= 2 and text[1] == ":" and text[0].isalpha():
+        return True
+    if text.startswith("\\\\") or text.startswith("//"):
+        return True
+    return False
+
+
+def _remap_host_compose_path(
+    compose_file: Path, host_dir: Path, local_dir: Path
+) -> Path | None:
+    """Map an absolute host-side ``compose_file`` into the local mount.
+
+    Preserves the subpath beneath ``host_dir`` (so
+    ``/host/repo/deploy/foo.yaml`` becomes ``<local_dir>/deploy/foo.yaml``).
+    Falls back to the basename when no shared prefix is present, which keeps
+    the previous flat-path behavior for cases the host path is unrelated to
+    the project directory.
+    """
+
+    try:
+        relative = compose_file.relative_to(host_dir)
+        return local_dir / relative
+    except ValueError:
+        pass
+    host_text = str(host_dir).replace("\\", "/").rstrip("/")
+    compose_text = str(compose_file).replace("\\", "/")
+    if host_text and compose_text.lower().startswith(host_text.lower() + "/"):
+        suffix = compose_text[len(host_text) + 1 :]
+        if suffix:
+            return local_dir.joinpath(*suffix.split("/"))
+    return local_dir / compose_file.name
+
+
 @dataclass(frozen=True, slots=True)
 class HostDockerComposeRunner:
     """Docker Compose runner for a trusted deployment-control worker.
@@ -373,7 +420,7 @@ class HostDockerComposeRunner:
 
     def _compose_base_command(self) -> list[str]:
         host_dir = self._host_dir()
-        if not host_dir.is_absolute():
+        if not _is_host_absolute_path(host_dir):
             raise ToolFailure(
                 error_code="POLICY_VIOLATION",
                 message="Deployment compose project directory must be absolute.",
@@ -396,14 +443,18 @@ class HostDockerComposeRunner:
             )
         if self.compose_file:
             compose_file = Path(self.compose_file).expanduser()
-            if compose_file.is_absolute() and not compose_file.exists():
-                # Treat absolute paths that don't exist locally as host-side
-                # paths and fall back to resolving the basename inside the
-                # local mount so the worker can still read the file.
-                candidate = local_dir / compose_file.name
-                if candidate.exists():
+            is_abs = _is_host_absolute_path(compose_file)
+            if is_abs and not compose_file.exists():
+                # Treat absolute host paths that don't exist locally as
+                # host-side paths and remap them into the local mount,
+                # preserving any subpath beneath ``host_dir`` so configs
+                # like ``/host/repo/deploy/docker-compose.yaml`` resolve to
+                # ``<local_dir>/deploy/docker-compose.yaml`` rather than
+                # collapsing to the basename.
+                candidate = _remap_host_compose_path(compose_file, host_dir, local_dir)
+                if candidate is not None and candidate.exists():
                     compose_file = candidate
-            elif not compose_file.is_absolute():
+            elif not is_abs:
                 compose_file = local_dir / compose_file
         else:
             compose_file = local_dir / "docker-compose.yaml"
