@@ -8,8 +8,10 @@ that the context explicitly names.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,8 +22,29 @@ from moonmind.workflows.temporal.remediation_context import (
     REMEDIATION_CONTEXT_LINK_TYPE,
     RemediationLifecyclePublisher,
 )
+from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
 RemediationLogStream = Literal["stdout", "stderr", "merged", "diagnostics"]
+
+_ALLOWED_ACTION_RESULT_STATUSES = frozenset(
+    {
+        "applied",
+        "no_op",
+        "rejected",
+        "precondition_failed",
+        "approval_required",
+        "timed_out",
+        "failed",
+    }
+)
+_ABSOLUTE_PATH_PATTERN = re.compile(r"(?<![\w.-])/(?:[^\s\"']+/)*[^\s\"']+")
+_PRESIGNED_URL_PATTERN = re.compile(
+    r"https?://[^\s\"']*(?:X-Amz-Signature|X-Amz-Credential|AWSAccessKeyId|Signature|sig=|token=)[^\s\"']*",
+    re.IGNORECASE,
+)
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b(?:token|password|secret|api[_-]?key|credential)\s*[:=]\s*([^\s,;\"']+)"
+)
 
 class RemediationEvidenceToolError(RuntimeError):
     """Raised when a remediation evidence tool request is invalid."""
@@ -386,11 +409,13 @@ class RemediationEvidenceToolService:
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.action_request",
             name=f"reports/remediation_action_request-{action_request['actionId']}.json",
-            payload={
-                "authority": dict(authority_result),
-                "guard": dict(guard_result),
-                "request": dict(action_request),
-            },
+            payload=_redact_payload_value(
+                {
+                    **dict(action_request),
+                    "authority": dict(authority_result),
+                    "guard": dict(guard_result),
+                }
+            ),
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
             principal=principal,
@@ -403,15 +428,43 @@ class RemediationEvidenceToolService:
         )
         if not isinstance(raw_result, Mapping):
             raise RemediationEvidenceToolError("action executor returned invalid result.")
-        status = _required_string(raw_result.get("status"), "status")
+        status = _normalize_action_result_status(raw_result.get("status"))
+        verification_required = _bool_or_default(
+            raw_result.get("verificationRequired"),
+            default=status == "applied",
+        )
+        verification_hint = _string_or_none(raw_result.get("verificationHint"))
+        if verification_hint is None and verification_required:
+            action_result = authority_result.get("result")
+            action_result_mapping = (
+                action_result if isinstance(action_result, Mapping) else {}
+            )
+            verification_hint = _string_or_none(
+                action_result_mapping.get("verificationHint")
+            )
+        if verification_required and verification_hint is None:
+            raise RemediationEvidenceToolError(
+                "verificationHint is required when verificationRequired is true."
+            )
+        redacted_verification_hint = _redact_text(verification_hint)
+        if verification_required and redacted_verification_hint is None:
+            redacted_verification_hint = "Verification hint redacted."
+        applied_at = _string_or_none(raw_result.get("appliedAt"))
+        if applied_at is None and status == "applied":
+            applied_at = datetime.now(timezone.utc).isoformat()
         result_payload = {
             "schemaVersion": "v1",
             "actionKind": action_kind,
             "actionId": action_request["actionId"],
             "status": status,
-            "beforeStateRef": _string_or_none(raw_result.get("beforeStateRef")),
-            "afterStateRef": _string_or_none(raw_result.get("afterStateRef")),
-            "sideEffects": _safe_sequence(raw_result.get("sideEffects")),
+            "message": _redact_text(raw_result.get("message"))
+            or f"Action {action_kind} completed with status {status}.",
+            "appliedAt": applied_at,
+            "verificationRequired": verification_required,
+            "verificationHint": redacted_verification_hint,
+            "beforeStateRef": _redact_text(raw_result.get("beforeStateRef")),
+            "afterStateRef": _redact_text(raw_result.get("afterStateRef")),
+            "sideEffects": _redact_sequence(raw_result.get("sideEffects")),
         }
         result_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
@@ -687,6 +740,14 @@ def _normalize_sequence(value: int | None, *, default_cursor: Any) -> int | None
         return max(0, parsed)
     return None
 
+def _normalize_action_result_status(value: Any) -> str:
+    status = _required_string(value, "status")
+    if status not in _ALLOWED_ACTION_RESULT_STATUSES:
+        raise RemediationEvidenceToolError(
+            f"Unsupported action result status: {status}."
+        )
+    return status
+
 def _required_string(value: Any, field_name: str) -> str:
     normalized = _string_or_none(value)
     if not normalized:
@@ -703,6 +764,51 @@ def _safe_sequence(value: Any) -> list[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return list(value)
     return []
+
+def _bool_or_default(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+def _redact_sequence(value: Any) -> list[Any]:
+    return [_redact_payload_value(item) for item in _safe_sequence(value)]
+
+def _redact_payload_value(value: Any) -> Any:
+    def apply_custom_redaction(node: Any) -> Any:
+        if isinstance(node, str):
+            return _redact_text(node)
+        if isinstance(node, Mapping):
+            return {
+                str(key): apply_custom_redaction(item)
+                for key, item in node.items()
+            }
+        if isinstance(node, (list, tuple)):
+            return [apply_custom_redaction(item) for item in node]
+        return node
+
+    return apply_custom_redaction(redact_sensitive_payload(value))
+
+def _redact_text(value: Any) -> str | None:
+    normalized = _string_or_none(value)
+    if normalized is None:
+        return None
+    if normalized.startswith(("artifact://", "ref://")):
+        return normalized
+    redacted = redact_sensitive_text(normalized)
+    if redacted is None:
+        return None
+    redacted = _PRESIGNED_URL_PATTERN.sub("[REDACTED_URL]", redacted)
+    redacted = _SECRET_ASSIGNMENT_PATTERN.sub("[REDACTED_SECRET]", redacted)
+    redacted = _ABSOLUTE_PATH_PATTERN.sub("[REDACTED_PATH]", redacted)
+    return redacted
 
 def _enum_value(value: Any) -> str | None:
     if value is None:
