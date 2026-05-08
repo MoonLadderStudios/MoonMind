@@ -620,7 +620,6 @@ interface StepState {
   presetDetail: TaskTemplateDetail | null;
   submitExpansion?: PresetSubmitExpansionState | null;
   presetMessage: string | null;
-  stepTypeMessage: string | null;
   templateStepId: string;
   templateInstructions: string;
   inputAttachments: StepAttachmentRef[];
@@ -1251,7 +1250,6 @@ function createStepStateEntry(
     presetDetail: null,
     submitExpansion: null,
     presetMessage: null,
-    stepTypeMessage: null,
     templateStepId: "",
     templateInstructions: "",
     inputAttachments: [],
@@ -5512,11 +5510,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           return step;
         }
 
-        const discardedLabels: string[] = [];
         const nextStep: StepState = {
           ...step,
           stepType: nextType,
-          stepTypeMessage: null,
         };
 
         if (
@@ -5525,7 +5521,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             step.skillArgs.trim() ||
             step.skillRequiredCapabilities.trim())
         ) {
-          discardedLabels.push("Skill configuration");
           nextStep.skillId = "";
           nextStep.skillArgs = "";
           nextStep.skillRequiredCapabilities = "";
@@ -5537,7 +5532,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             step.toolVersion.trim() ||
             (step.toolInputs.trim() && step.toolInputs.trim() !== "{}"))
         ) {
-          discardedLabels.push("Tool configuration");
           nextStep.toolId = "";
           nextStep.toolVersion = "";
           nextStep.toolInputs = "{}";
@@ -5548,18 +5542,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           (step.presetKey ||
             Object.keys(step.presetInputValues).length > 0)
         ) {
-          discardedLabels.push("Preset configuration");
           nextStep.presetKey = "";
           nextStep.presetInputValues = {};
           nextStep.presetInputErrors = {};
           nextStep.presetDetail = null;
           nextStep.presetMessage = null;
-        }
-
-        if (discardedLabels.length > 0) {
-          nextStep.stepTypeMessage = `${discardedLabels.join(
-            ", ",
-          )} discarded after changing Step Type. Shared instructions were preserved.`;
         }
 
         return nextStep;
@@ -8152,10 +8139,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       })}
                     </div>
                   </fieldset>
-                  {step.stepTypeMessage ? (
-                    <p className="notice small">{step.stepTypeMessage}</p>
-                  ) : null}
-
                   {step.stepType === "tool" ? (
                     <div className="stack queue-step-type-panel">
                       <p className="small">
