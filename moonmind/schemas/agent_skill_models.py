@@ -96,10 +96,28 @@ class RuntimeSkillMaterialization(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-SkillsOnDemandStatus = Literal["denied"]
+SkillsOnDemandStatus = Literal["ok", "denied"]
 SkillsOnDemandDeniedCode = Literal[
-    "feature_disabled", "enabled_mode_not_implemented"
+    "feature_disabled",
+    "enabled_mode_not_implemented",
+    "invalid_request",
 ]
+
+
+class SkillCatalogSearchResult(BaseModel):
+    """Metadata-only Skill catalog query result."""
+
+    name: str
+    title: str | None = None
+    description: str | None = None
+    latest_version: str | None = None
+    source_kind: AgentSkillSourceKind
+    supported_runtimes: list[str] = Field(default_factory=list)
+    eligible: bool
+    in_current_snapshot: bool = False
+    eligibility_summary: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class SkillsOnDemandQueryRequest(BaseModel):
@@ -109,6 +127,7 @@ class SkillsOnDemandQueryRequest(BaseModel):
     runtime_id: str | None = None
     current_snapshot_ref: str | None = None
     max_results: int = Field(default=20, ge=1, le=100)
+    active_snapshot: ResolvedSkillSet | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -117,9 +136,10 @@ class SkillsOnDemandQueryResult(BaseModel):
     """Deterministic on-demand Skill catalog query result."""
 
     status: SkillsOnDemandStatus
-    code: SkillsOnDemandDeniedCode
+    code: SkillsOnDemandDeniedCode | None = None
     message: str
-    results: list[dict[str, Any]] = Field(default_factory=list)
+    results: list[SkillCatalogSearchResult] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(extra="forbid")
 

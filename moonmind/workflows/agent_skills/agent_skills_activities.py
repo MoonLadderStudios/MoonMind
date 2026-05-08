@@ -204,8 +204,25 @@ class AgentSkillsActivities:
     ) -> SkillsOnDemandQueryResult:
         """Query on-demand Skills through the runtime control gate."""
 
+        catalog_entries = []
+        if settings.workflow.skills_on_demand_enabled:
+            info = activity.info()
+            context = SkillResolutionContext(
+                snapshot_id=(
+                    request.current_snapshot_ref
+                    or f"skillquery_{info.workflow_id}_{info.activity_id}"
+                ),
+                workspace_root=settings.workflow.repo_root,
+                async_session_maker=getattr(self, "_async_session_maker", None),
+            )
+            catalog_entries = await AgentSkillResolver().query_catalog(
+                SkillSelector(),
+                context,
+            )
+
         service = SkillsOnDemandService(
-            enabled=settings.workflow.skills_on_demand_enabled
+            enabled=settings.workflow.skills_on_demand_enabled,
+            catalog_entries=catalog_entries,
         )
         return await service.query(request)
 

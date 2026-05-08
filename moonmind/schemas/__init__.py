@@ -13,8 +13,11 @@ from .agent_skill_models import (
     ResolvedSkillEntry,
     ResolvedSkillSet,
     RuntimeMaterializationMode,
+    SkillCatalogSearchResult,
     SkillSelector,
     SkillSelectorEntry,
+    SkillsOnDemandQueryRequest,
+    SkillsOnDemandQueryResult,
 )
 from .managed_session_models import (
     CODEX_MANAGED_SESSION_CONTROL_ACTIONS,
@@ -314,8 +317,11 @@ __all__ = [
     "ResolvedSkillEntry",
     "ResolvedSkillSet",
     "RuntimeMaterializationMode",
+    "SkillCatalogSearchResult",
     "SkillSelector",
     "SkillSelectorEntry",
+    "SkillsOnDemandQueryRequest",
+    "SkillsOnDemandQueryResult",
     "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",
     "CLAUDE_CHILD_WORK_EVENT_NAMES",
     "CLAUDE_CHECKPOINT_CAPTURE_MODES",
