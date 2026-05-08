@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-import moonmind.workflows.temporal.story_output_tools as story_tools
+from moonmind.workflows.temporal import story_output_tools as story_tools
 from moonmind.workflows.temporal.story_output_tools import (
     check_jira_blockers,
     create_document_update_tasks_from_paths,
@@ -1568,6 +1568,36 @@ async def test_discover_documents_uses_repository_tree_for_repo_relative_directo
     assert result.status == "COMPLETED"
     assert result.outputs["source"] == "github"
     assert result.outputs["documentPaths"] == ["docs/Artifacts/ReportArtifacts.md"]
+
+
+@pytest.mark.asyncio
+async def test_discover_documents_fails_when_github_tree_truncated(
+    tmp_path, monkeypatch
+):
+    worker_cwd = tmp_path / "worker-cwd"
+    worker_cwd.mkdir()
+    monkeypatch.chdir(worker_cwd)
+
+    async def fake_discover_github_document_paths(**kwargs):
+        return ["docs/Artifacts/ReportArtifacts.md"], "main", True, True
+
+    monkeypatch.setattr(
+        story_tools,
+        "_discover_github_document_paths",
+        fake_discover_github_document_paths,
+    )
+
+    result = await discover_documents(
+        {
+            "directory": "docs/Artifacts",
+            "repository": "MoonLadderStudios/MoonMind",
+            "ref": "main",
+        }
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["documentPaths"] == []
+    assert "truncated" in result.outputs["error"].lower()
 
 
 @pytest.mark.asyncio

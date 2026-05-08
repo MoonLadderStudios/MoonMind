@@ -1890,6 +1890,20 @@ async def discover_documents(
                         ),
                     },
                 )
+            if truncated:
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "documentPaths": [],
+                        "error": (
+                            "GitHub returned a truncated repository tree for "
+                            f"{_github_repository_slug(repository) or repository}@"
+                            f"{resolved_ref}; remote document discovery cannot "
+                            "produce a complete listing for "
+                            f"{normalized_directory or '<repo root>'}"
+                        ),
+                    },
+                )
             return ToolResult(
                 status="COMPLETED",
                 outputs={
