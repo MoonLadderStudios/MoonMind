@@ -202,6 +202,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert len(doc_steps) == 2
         assert doc_steps[0]["type"] == "tool"
         assert doc_steps[0]["tool"]["id"] == "document.discover"
+        assert doc_steps[0]["tool"]["inputs"]["repository"] == "{{ context.repository }}"
         assert "{{ inputs.document_directory }}" in doc_steps[0]["instructions"]
         assert doc_steps[1]["type"] == "tool"
         assert doc_steps[1]["tool"]["id"] == "story.create_document_update_tasks"

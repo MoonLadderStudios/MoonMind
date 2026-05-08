@@ -38,6 +38,8 @@ steps:
       id: document.discover
       args:
         directory: "{{ inputs.document_directory }}"
+        repository: "{{ context.repository }}"
+        ref: "{{ context.branch }}"
   - title: Create document update tasks
     type: tool
     instructions: |-

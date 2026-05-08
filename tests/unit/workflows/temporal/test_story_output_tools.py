@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+import moonmind.workflows.temporal.story_output_tools as story_tools
 from moonmind.workflows.temporal.story_output_tools import (
     check_jira_blockers,
     create_document_update_tasks_from_paths,
@@ -1508,6 +1509,64 @@ async def test_discover_documents_accepts_windows_style_relative_directory(
     result = await discover_documents({"directory": "docs\\Artifacts"})
 
     assert result.status == "COMPLETED"
+    assert result.outputs["documentPaths"] == ["docs/Artifacts/ReportArtifacts.md"]
+
+
+@pytest.mark.asyncio
+async def test_discover_documents_resolves_relative_directory_from_repo_root(
+    tmp_path, monkeypatch
+):
+    repo_root = tmp_path / "repo"
+    docs = repo_root / "docs" / "Artifacts"
+    docs.mkdir(parents=True)
+    (docs / "ReportArtifacts.md").write_text("# report")
+
+    outside = tmp_path / "worker-cwd"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+
+    result = await discover_documents(
+        {
+            "directory": "docs/Artifacts",
+            "repoRoot": str(repo_root),
+        }
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["source"] == "filesystem"
+    assert result.outputs["documentPaths"] == ["docs/Artifacts/ReportArtifacts.md"]
+
+
+@pytest.mark.asyncio
+async def test_discover_documents_uses_repository_tree_for_repo_relative_directory(
+    tmp_path, monkeypatch
+):
+    worker_cwd = tmp_path / "worker-cwd"
+    worker_cwd.mkdir()
+    monkeypatch.chdir(worker_cwd)
+
+    async def fake_discover_github_document_paths(**kwargs):
+        assert kwargs["repository"] == "MoonLadderStudios/MoonMind"
+        assert kwargs["directory"] == "docs/Artifacts"
+        assert kwargs["ref"] == "main"
+        return ["docs/Artifacts/ReportArtifacts.md"], "main", False, True
+
+    monkeypatch.setattr(
+        story_tools,
+        "_discover_github_document_paths",
+        fake_discover_github_document_paths,
+    )
+
+    result = await discover_documents(
+        {
+            "directory": "docs\\Artifacts",
+            "repository": "MoonLadderStudios/MoonMind",
+            "ref": "main",
+        }
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["source"] == "github"
     assert result.outputs["documentPaths"] == ["docs/Artifacts/ReportArtifacts.md"]
 
 
