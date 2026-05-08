@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from temporalio.testing import ActivityEnvironment
@@ -474,3 +475,127 @@ async def test_enabled_activity_query_returns_typed_result(
     assert "artifact-body-ref" not in str(result.model_dump(mode="json"))
     mock_query_catalog.assert_awaited_once()
     mock_materialize.assert_not_called()
+
+
+async def test_enabled_activity_request_resolves_against_active_snapshot_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        "moonmind.workflows.agent_skills.agent_skills_activities.settings.workflow.skills_on_demand_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.agent_skills.agent_skills_activities.settings.workflow.repo_root",
+        str(tmp_path),
+    )
+    active_snapshot = ResolvedSkillSet(
+        snapshot_id="skillset-active",
+        resolved_at=datetime.now(UTC),
+        skills=[_entry("helper-skill", content_ref="helper-body-ref")],
+    )
+    primary_skill = _entry("primary-skill", content_ref="primary-body-ref").model_copy(
+        update={"required_skills": ["helper-skill"]}
+    )
+    materialization = RuntimeSkillMaterialization(
+        runtime_id="codex",
+        materialization_mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+        workspace_paths=[str(tmp_path / ".agents" / "skills")],
+    )
+    activities = AgentSkillsActivities()
+    env = ActivityEnvironment()
+
+    async def fake_load_candidates(*_args, **_kwargs):
+        return {AgentSkillSourceKind.DEPLOYMENT: [primary_skill]}
+
+    with (
+        patch(
+            "moonmind.services.skill_resolution.AgentSkillResolver._load_candidates",
+            new=AsyncMock(side_effect=fake_load_candidates),
+        ),
+        patch(
+            "moonmind.workflows.agent_skills.agent_skills_activities.AgentSkillMaterializer.materialize",
+            new=AsyncMock(return_value=materialization),
+        ) as mock_materialize,
+    ):
+        result = await env.run(
+            activities.request_on_demand,
+            SkillsOnDemandRequest(
+                current_snapshot_ref="skillset-active",
+                requested_skills=[SkillsOnDemandRequestedSkill(name="primary-skill")],
+                runtime_id="codex",
+                active_snapshot=active_snapshot,
+            ),
+        )
+
+    assert result.status == "activated"
+    assert result.metadata["activated_skills"] == ["primary-skill"]
+    materialized_skillset = mock_materialize.await_args.args[0]
+    by_name = {skill.skill_name: skill for skill in materialized_skillset.skills}
+    assert set(by_name) == {"helper-skill", "primary-skill"}
+    assert by_name["helper-skill"].content_ref == "helper-body-ref"
+    assert by_name["primary-skill"].required_by == []
+
+
+async def test_enabled_activity_request_does_not_persist_manifest_on_materialization_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        "moonmind.workflows.agent_skills.agent_skills_activities.settings.workflow.skills_on_demand_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.agent_skills.agent_skills_activities.settings.workflow.repo_root",
+        str(tmp_path),
+    )
+    active_snapshot = ResolvedSkillSet(
+        snapshot_id="skillset-active",
+        resolved_at=datetime.now(UTC),
+        skills=[],
+    )
+    resolved_additions = ResolvedSkillSet(
+        snapshot_id="resolver-snapshot",
+        resolved_at=datetime.now(UTC),
+        skills=[_entry("jira-issue-updater", content_ref="requested-body-ref")],
+    )
+
+    class FakeArtifactService:
+        def __init__(self) -> None:
+            self.created: list[dict] = []
+
+        async def create(self, **kwargs):
+            self.created.append(kwargs)
+            return SimpleNamespace(artifact_id=f"artifact-{len(self.created)}"), None
+
+        async def write_complete(self, **_kwargs) -> None:
+            return None
+
+    artifact_service = FakeArtifactService()
+    activities = AgentSkillsActivities(artifact_service=artifact_service)
+    env = ActivityEnvironment()
+
+    with (
+        patch(
+            "moonmind.workflows.agent_skills.agent_skills_activities.AgentSkillResolver.resolve",
+            new=AsyncMock(return_value=resolved_additions),
+        ),
+        patch(
+            "moonmind.workflows.agent_skills.agent_skills_activities.AgentSkillMaterializer.materialize",
+            new=AsyncMock(side_effect=RuntimeError("materialization exploded")),
+        ),
+    ):
+        result = await env.run(
+            activities.request_on_demand,
+            SkillsOnDemandRequest(
+                current_snapshot_ref="skillset-active",
+                requested_skills=[
+                    SkillsOnDemandRequestedSkill(name="jira-issue-updater")
+                ],
+                active_snapshot=active_snapshot,
+            ),
+        )
+
+    assert result.status == "denied"
+    assert result.code == "materialization_failed"
+    assert artifact_service.created == []

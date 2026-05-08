@@ -271,6 +271,7 @@ class AgentSkillsActivities:
             resolved_additions = await AgentSkillResolver().resolve(
                 addition_selector,
                 context,
+                base_entries=list(active_snapshot.skills),
             )
             derived_set = self._build_on_demand_derived_skillset(
                 active_snapshot=active_snapshot,
@@ -281,11 +282,6 @@ class AgentSkillsActivities:
             if self._artifact_service:
                 derived_set = await self._persist_file_backed_skill_content(
                     resolved_set=derived_set,
-                    activity_info=info,
-                )
-                derived_set = await self._persist_resolved_skillset_manifest(
-                    resolved_set=derived_set,
-                    snapshot_id=derived_set.snapshot_id,
                     activity_info=info,
                 )
             materializer = AgentSkillMaterializer(
@@ -299,6 +295,12 @@ class AgentSkillsActivities:
                 request.runtime_id or "managed-runtime",
                 RuntimeMaterializationMode.WORKSPACE_MOUNTED,
             )
+            if self._artifact_service:
+                derived_set = await self._persist_resolved_skillset_manifest(
+                    resolved_set=derived_set,
+                    snapshot_id=derived_set.snapshot_id,
+                    activity_info=info,
+                )
         except ValueError as exc:
             return service.denied_request_result(
                 request,
@@ -328,7 +330,30 @@ class AgentSkillsActivities:
     ) -> ResolvedSkillSet:
         active_by_name = {skill.skill_name: skill for skill in active_snapshot.skills}
         merged = dict(active_by_name)
+        requested_versions = {}
+        for requested_skill in request.requested_skills:
+            name = requested_skill.name.strip()
+            version = (
+                requested_skill.version.strip()
+                if requested_skill.version is not None
+                else None
+            )
+            if name not in requested_versions:
+                requested_versions[name] = version
         for skill in resolved_additions.skills:
+            active_skill = active_by_name.get(skill.skill_name)
+            requested_version = requested_versions.get(skill.skill_name)
+            if (
+                active_skill is not None
+                and (
+                    skill.skill_name not in requested_versions
+                    or (
+                        requested_version is None
+                        or requested_version == active_skill.version
+                    )
+                )
+            ):
+                continue
             merged[skill.skill_name] = skill.model_copy(
                 update={"selection_reason": "skills_on_demand"}
             )
