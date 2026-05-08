@@ -1897,7 +1897,13 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"taskRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"},
+            initial_parameters={
+                "taskRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
+                "resumeSource": {"workflowId": "mm:source", "runId": "run-old"},
+                "resumeCheckpointRef": "artifact://checkpoint/old",
+                "preservedSteps": [{"id": "step-1"}],
+                "completedSteps": [{"id": "step-0"}],
+            },
             idempotency_key=None,
         )
         created.memo["taskRunId"] = "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
@@ -1934,6 +1940,10 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
         assert refreshed.memo["latest_temporal_run_id"] == refreshed.run_id
         assert "taskRunId" not in refreshed.memo
         assert "taskRunId" not in refreshed.parameters
+        assert "resumeSource" not in refreshed.parameters
+        assert "resumeCheckpointRef" not in refreshed.parameters
+        assert "preservedSteps" not in refreshed.parameters
+        assert "completedSteps" not in refreshed.parameters
         assert refreshed.search_attributes["mm_continue_as_new_cause"] == "manual_rerun"
 
 @pytest.mark.asyncio
@@ -1955,6 +1965,10 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
             initial_parameters={
                 "taskRunId": "old-task-run",
                 "task_run_id": "old-task-run-snake",
+                "resumeSource": {"workflowId": "mm:source", "runId": "run-old"},
+                "resumeCheckpointRef": "artifact://checkpoint/old",
+                "preservedSteps": [{"id": "step-1"}],
+                "completedSteps": [{"id": "step-0"}],
             },
             idempotency_key=None,
         )
@@ -1997,6 +2011,10 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         }
         assert "taskRunId" not in rerun.parameters
         assert "task_run_id" not in rerun.parameters
+        assert "resumeSource" not in rerun.parameters
+        assert "resumeCheckpointRef" not in rerun.parameters
+        assert "preservedSteps" not in rerun.parameters
+        assert "completedSteps" not in rerun.parameters
         assert service._client_adapter.update_workflow.await_count == 0
 
 def _valid_resume_checkpoint_payload(
@@ -3253,7 +3271,12 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
             plan_artifact_ref="artifact://plan/original",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters={
+                "resumeSource": {"workflowId": "mm:source", "runId": "run-old"},
+                "resumeCheckpointRef": "artifact://checkpoint/old",
+                "preservedSteps": [{"id": "step-1"}],
+                "completedSteps": [{"id": "step-0"}],
+            },
             idempotency_key=None,
         )
 
@@ -3279,6 +3302,16 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
         assert refreshed.search_attributes["mm_continue_as_new_cause"] == (
             "major_reconfiguration"
         )
+        assert refreshed.parameters["resumeSource"] == {
+            "workflowId": "mm:source",
+            "runId": "run-old",
+        }
+        assert refreshed.parameters["resumeCheckpointRef"] == (
+            "artifact://checkpoint/old"
+        )
+        assert refreshed.parameters["preservedSteps"] == [{"id": "step-1"}]
+        assert refreshed.parameters["completedSteps"] == [{"id": "step-0"}]
+
 
 @pytest.mark.asyncio
 async def test_record_progress_triggers_continue_as_new_for_run_threshold(tmp_path):

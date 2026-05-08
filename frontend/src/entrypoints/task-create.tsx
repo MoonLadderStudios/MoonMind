@@ -6284,12 +6284,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     workflowId: string;
     updateName: "UpdateInputs" | "RequestRerun";
     inputArtifactRef: string | null;
-    parametersPatch: Record<string, unknown>;
+    parametersPatch?: Record<string, unknown> | null;
   }): Promise<void> {
     const updatePayload = buildTemporalArtifactEditUpdatePayload({
       updateName,
       inputArtifactRef,
-      parametersPatch,
+      parametersPatch: parametersPatch ?? null,
     });
     const isRerun = updateName === "RequestRerun";
     const attemptEvent = isRerun ? "rerun_submit_attempt" : "update_submit_attempt";
@@ -7475,6 +7475,42 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             })
           : null;
       const artifactPayload = editParametersPatch ?? submittedPayload;
+      const isExactRerunRequest =
+        pageMode.mode === "rerun" && pageMode.intent === "rerun";
+      const rerunDraft = temporalDraftData?.draft;
+      const rerunFormChanged = isExactRerunRequest
+        ? !rerunDraft ||
+          selectedAttachmentFiles.length > 0 ||
+          normalizedRepository !== String(rerunDraft.repository || "").trim() ||
+          normalizedRuntime !== String(rerunDraft.runtime || "").trim() ||
+          model.trim() !== String(rerunDraft.model || "").trim() ||
+          effort.trim() !== String(rerunDraft.effort || "").trim() ||
+          effectivePublishMode !== String(rerunDraft.publishMode || "").trim() ||
+          produceReport !== Boolean(rerunDraft.reportOutputEnabled) ||
+          objectiveInstructionsForSubmit !==
+            String(rerunDraft.taskInstructions || "").trim() ||
+          JSON.stringify(
+            submissionSteps.map((step) => ({
+              id: step.id.trim(),
+              title: step.title.trim(),
+              instructions: step.instructions.trim(),
+              skillId: step.skillId.trim(),
+              inputAttachments: step.inputAttachments,
+            })),
+          ) !==
+            JSON.stringify(
+              rerunDraft.steps.map((step) => ({
+                id: String(step.id || "").trim(),
+                title: String(step.title || "").trim(),
+                instructions: String(step.instructions || "").trim(),
+                skillId: String(step.skillId || "").trim(),
+                inputAttachments: step.inputAttachments,
+              })),
+            ) ||
+          JSON.stringify(taskLevelAttachmentRefs) !==
+            JSON.stringify(rerunDraft.inputAttachments)
+        : false;
+      const isExactRerun = isExactRerunRequest && !rerunFormChanged;
       const taskInputArtifactBody = JSON.stringify({
         repository: artifactPayload.repository ?? normalizedRepository,
         task: artifactPayload.task ?? taskPayload,
@@ -7484,8 +7520,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         temporalDraftQuery.data?.execution.inputArtifactRef || "",
       ).trim();
       const shouldCreateInputArtifact =
-        taskInputArtifactBytes > INLINE_TASK_INPUT_LIMIT_BYTES ||
-        (pageMode.mode !== "create" && Boolean(existingInputArtifactRef));
+        !isExactRerun &&
+        (taskInputArtifactBytes > INLINE_TASK_INPUT_LIMIT_BYTES ||
+          (pageMode.mode !== "create" && Boolean(existingInputArtifactRef)));
       if (shouldCreateInputArtifact) {
         const sourceWorkflowId =
           pageMode.mode === "rerun" ? String(pageMode.executionId || "").trim() : null;
@@ -7513,8 +7550,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           workflowId,
           updateName:
             pageMode.mode === "rerun" ? "RequestRerun" : "UpdateInputs",
-          inputArtifactRef,
-          parametersPatch: artifactPayload,
+          inputArtifactRef: isExactRerun ? null : inputArtifactRef,
+          parametersPatch: isExactRerun ? null : artifactPayload,
         });
         return;
       }

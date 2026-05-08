@@ -73,6 +73,18 @@ TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.CANCELED,
 }
 CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
+FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
+    {
+        "resumeSource",
+        "resume_source",
+        "resumeCheckpointRef",
+        "resume_checkpoint_ref",
+        "preservedSteps",
+        "preserved_steps",
+        "completedSteps",
+        "completed_steps",
+    }
+)
 ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
@@ -2459,7 +2471,9 @@ class TemporalExecutionService:
         if parameters_patch:
             params = dict(record.parameters or {})
             params.update(parameters_patch)
-            record.parameters = params
+            record.parameters = self._full_rerun_parameters(params)
+        else:
+            record.parameters = self._full_rerun_parameters(record.parameters)
         self._continue_as_new(
             record,
             summary="Rerun requested via Continue-As-New.",
@@ -2484,8 +2498,7 @@ class TemporalExecutionService:
         params = dict(record.parameters or {})
         if parameters_patch:
             params.update(parameters_patch)
-        for key in TASK_RUN_ID_PARAM_KEYS:
-            params.pop(key, None)
+        params = self._full_rerun_parameters(params)
 
         rerun_source = {
             "workflowId": record.workflow_id,
@@ -2529,6 +2542,17 @@ class TemporalExecutionService:
             "continue_as_new_cause": "manual_rerun",
             "workflow_id": created.workflow_id,
         }
+
+    @staticmethod
+    def _full_rerun_parameters(
+        parameters: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        params = dict(parameters or {})
+        for key in TASK_RUN_ID_PARAM_KEYS:
+            params.pop(key, None)
+        for key in FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS:
+            params.pop(key, None)
+        return params
 
     async def create_failed_step_resume_execution(
         self,

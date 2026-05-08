@@ -250,6 +250,8 @@ Key diagnostics:
 - Existing Temporal execution records, `execution_remediation_links`, Temporal artifact metadata/content store, and an existing or reusable control-event/audit persistence mechanism; no new persistent table planned unless queryable audit events cannot safely reuse current control-event/audit infrastructure (323-publish-remediation-audit)
 - Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind artifact and vision services (325-prepare-target-aware-inputs)
 - Existing artifact store plus workspace-local prepared files/manifest refs; no new persistent database tables planned (325-prepare-target-aware-inputs)
+- Python 3.12; TypeScript/React for Mission Control UI + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Vitest, pytest (326-expose-distinct-full-retry-recovery-actions)
+- Existing Temporal execution records, canonical execution parameters/memo/search attributes, Temporal artifact metadata/content store, and existing original task input snapshot artifacts; no new persistent tables planned (326-expose-distinct-full-retry-recovery-actions)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
