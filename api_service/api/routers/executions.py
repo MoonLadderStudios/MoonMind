@@ -2562,9 +2562,11 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         _task_input_snapshot_ref_from_memo(dict(getattr(record, "memo", None) or {}))
     )
     has_resume_checkpoint = bool(_resume_checkpoint_ref_from_record(record))
-    if workflow_type_value != "MoonMind.Run" or not temporal_task_editing_enabled:
-        enabled = enabled - {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}
-    elif not has_task_input_snapshot:
+    if (
+        workflow_type_value != "MoonMind.Run"
+        or not temporal_task_editing_enabled
+        or not has_task_input_snapshot
+    ):
         enabled = enabled - {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}
     if (
         workflow_type_value == "MoonMind.Run"
