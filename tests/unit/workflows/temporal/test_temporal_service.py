@@ -2182,6 +2182,13 @@ async def test_failed_step_resume_creates_linked_execution_with_source_identity(
         assert resumed.parameters["resumeSource"]["sourceWorkflowId"] == created.workflow_id
         assert resumed.parameters["resumeSource"]["sourceRunId"] == created.run_id
         assert resumed.parameters["resumeSource"]["failedStepId"] == "implement"
+        assert resumed.parameters["resumeSource"]["resumeWorkspace"] == {
+            "branch": "feature",
+            "commit": "abc123",
+        }
+        assert resumed.parameters["resumeSource"]["preservedSteps"][0][
+            "logicalStepId"
+        ] == "plan"
         assert "taskRunId" not in resumed.parameters
 
 

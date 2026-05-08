@@ -2696,7 +2696,8 @@ class TemporalExecutionService:
             failedStepId=failed_step_id,
             failedStepAttempt=failed_step_attempt,
             resumeCheckpointRef=checkpoint_ref,
-            preservedSteps=(checkpoint.preserved_steps if checkpoint else []),
+            resumeWorkspace=checkpoint.resume_workspace,
+            preservedSteps=checkpoint.preserved_steps,
         ).model_dump(by_alias=True, mode="json")
 
         task_params = params.get("task") if isinstance(params.get("task"), dict) else {}

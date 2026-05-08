@@ -576,7 +576,9 @@ class ResumeCheckpointModel(BaseModel):
     prepared_artifact_refs: list[str] = Field(
         default_factory=list, alias="preparedArtifactRefs"
     )
-    resume_workspace: dict[str, Any] = Field(default_factory=dict, alias="resumeWorkspace")
+    resume_workspace: dict[str, Any] = Field(
+        default_factory=dict, alias="resumeWorkspace"
+    )
 
     @field_validator("plan_ref", "plan_digest", mode="before")
     @classmethod
@@ -624,6 +626,9 @@ class ResumeSourceModel(BaseModel):
     failed_step_id: str = Field(..., alias="failedStepId", min_length=1)
     failed_step_attempt: int = Field(..., alias="failedStepAttempt", ge=1)
     resume_checkpoint_ref: str = Field(..., alias="resumeCheckpointRef", min_length=1)
+    resume_workspace: dict[str, Any] = Field(
+        default_factory=dict, alias="resumeWorkspace"
+    )
     preserved_steps: list[ResumeCheckpointPreservedStepModel] = Field(
         default_factory=list, alias="preservedSteps"
     )
@@ -1127,6 +1132,7 @@ class PreservedStepProvenanceModel(BaseModel):
 
     workflow_id: str = Field(..., alias="workflowId", min_length=1)
     run_id: str = Field(..., alias="runId", min_length=1)
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     attempt: int = Field(..., alias="attempt", ge=1)
 
 class StepLedgerRowModel(BaseModel):

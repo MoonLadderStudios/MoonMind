@@ -5370,6 +5370,8 @@ export interface components {
             workflowId: string;
             /** Runid */
             runId: string;
+            /** Logicalstepid */
+            logicalStepId: string;
             /** Attempt */
             attempt: number;
         };
