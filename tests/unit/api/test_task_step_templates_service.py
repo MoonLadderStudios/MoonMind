@@ -2125,6 +2125,9 @@ async def test_seed_catalog_includes_document_update_orchestrate_preset(tmp_path
 
             assert len(expanded["steps"]) == 2
             assert expanded["steps"][0]["tool"]["id"] == "document.discover"
+            assert expanded["steps"][0]["tool"]["inputs"]["repository"] == (
+                "MoonLadderStudios/MoonMind"
+            )
             assert expanded["steps"][1]["tool"]["id"] == "story.create_document_update_tasks"
             assert expanded["steps"][1]["documentUpdateOrchestration"]["task"]["publish"] == {
                 "mode": "pr",

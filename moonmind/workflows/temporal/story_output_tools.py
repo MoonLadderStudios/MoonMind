@@ -9,9 +9,11 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
+from urllib.parse import urlparse
 
 import httpx
 
+from moonmind.config.settings import settings
 from moonmind.integrations.jira.models import (
     CreateIssueRequest,
     CreateIssueLinkRequest,
@@ -40,6 +42,9 @@ JIRA_DEPENDENCY_MODES = frozenset(
 
 DOCUMENT_DISCOVER_TOOL_NAME = "document.discover"
 DOCUMENT_UPDATE_TASKS_TOOL_NAME = "story.create_document_update_tasks"
+_GITHUB_OWNER_REPO_PATTERN = re.compile(
+    r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$"
+)
 
 StoryFetcher = Callable[
     [str, str, str],
@@ -62,6 +67,225 @@ def _list(value: Any) -> list[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return list(value)
     return []
+
+def _first_string(*values: Any) -> str:
+    for value in values:
+        normalized = _string(value)
+        if normalized:
+            return normalized
+    return ""
+
+def _normalize_document_directory(value: str) -> str:
+    return value.replace("\\", "/") if "\\" in value else value
+
+def _path_from_existing_dir(value: Any) -> Path | None:
+    normalized = _string(value)
+    if not normalized:
+        return None
+    path = Path(normalized).expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    else:
+        path = path.resolve()
+    return path if path.exists() and path.is_dir() else None
+
+def _github_repository_slug(value: Any) -> str:
+    normalized = _string(value).removesuffix(".git")
+    if not normalized:
+        return ""
+    if _GITHUB_OWNER_REPO_PATTERN.fullmatch(normalized):
+        return normalized
+    if normalized.startswith("git@github.com:"):
+        candidate = normalized.removeprefix("git@github.com:").removesuffix(".git")
+        return candidate if _GITHUB_OWNER_REPO_PATTERN.fullmatch(candidate) else ""
+    parsed = urlparse(normalized)
+    if parsed.hostname not in {"github.com", "www.github.com"}:
+        return ""
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if len(parts) < 2:
+        return ""
+    candidate = f"{parts[0]}/{parts[1].removesuffix('.git')}"
+    return candidate if _GITHUB_OWNER_REPO_PATTERN.fullmatch(candidate) else ""
+
+def _repository_from_inputs_or_context(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> str:
+    context_mapping = _mapping(context)
+    workspace_spec = _mapping(
+        context_mapping.get("workspaceSpec") or context_mapping.get("workspace_spec")
+    )
+    return _first_string(
+        inputs.get("repository"),
+        inputs.get("repo"),
+        inputs.get("githubRepository"),
+        inputs.get("github_repository"),
+        workspace_spec.get("repository"),
+        workspace_spec.get("repo"),
+        context_mapping.get("repository"),
+        context_mapping.get("repo"),
+        settings.workflow.github_repository,
+    )
+
+def _ref_from_inputs_or_context(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> str:
+    context_mapping = _mapping(context)
+    workspace_spec = _mapping(
+        context_mapping.get("workspaceSpec") or context_mapping.get("workspace_spec")
+    )
+    return _first_string(
+        inputs.get("ref"),
+        inputs.get("branch"),
+        inputs.get("startingBranch"),
+        inputs.get("starting_branch"),
+        workspace_spec.get("ref"),
+        workspace_spec.get("branch"),
+        workspace_spec.get("startingBranch"),
+        workspace_spec.get("starting_branch"),
+        context_mapping.get("ref"),
+        context_mapping.get("branch"),
+        context_mapping.get("startingBranch"),
+        context_mapping.get("starting_branch"),
+    )
+
+def _repo_root_candidates(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> list[Path]:
+    context_mapping = _mapping(context)
+    workspace_spec = _mapping(
+        context_mapping.get("workspaceSpec") or context_mapping.get("workspace_spec")
+    )
+    candidates: list[Path] = []
+    for source in (inputs, context_mapping, workspace_spec):
+        for key in (
+            "repoRoot",
+            "repo_root",
+            "repositoryRoot",
+            "repository_root",
+            "workspaceRoot",
+            "workspace_root",
+            "workspacePath",
+            "workspace_path",
+            "repoPath",
+            "repo_path",
+            "path",
+        ):
+            path = _path_from_existing_dir(source.get(key))
+            if path is not None and path not in candidates:
+                candidates.append(path)
+
+    repository_path = _path_from_existing_dir(
+        inputs.get("repository") or inputs.get("repo")
+    )
+    if repository_path is not None and repository_path not in candidates:
+        candidates.append(repository_path)
+
+    configured = _path_from_existing_dir(settings.workflow.repo_root)
+    if configured is not None and configured not in candidates:
+        candidates.append(configured)
+
+    cwd = Path.cwd().resolve()
+    if cwd not in candidates:
+        candidates.append(cwd)
+    return candidates
+
+def _resolve_local_document_root(
+    *,
+    directory: str,
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> tuple[Path, Path] | None:
+    candidate_path = Path(directory).expanduser()
+    if candidate_path.is_absolute():
+        root = candidate_path.resolve()
+        if root.exists() and root.is_dir():
+            workspace_root = Path.cwd().resolve()
+            output_base = workspace_root if root.is_relative_to(workspace_root) else root
+            return root, output_base
+        return None
+
+    relative = Path(directory)
+    for repo_root in _repo_root_candidates(inputs, context):
+        root = (repo_root / relative).resolve()
+        if not root.is_relative_to(repo_root):
+            continue
+        if root.exists() and root.is_dir():
+            return root, repo_root
+    return None
+
+async def _github_default_branch(
+    client: httpx.AsyncClient,
+    *,
+    repository: str,
+    headers: Mapping[str, str],
+) -> str:
+    response = await client.get(
+        f"https://api.github.com/repos/{repository}",
+        headers=dict(headers),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return _string(payload.get("default_branch")) or "main"
+
+async def _discover_github_document_paths(
+    *,
+    repository: str,
+    directory: str,
+    extensions: frozenset[str],
+    ref: str,
+) -> tuple[list[str], str, bool, bool]:
+    repo_slug = _github_repository_slug(repository)
+    if not repo_slug:
+        raise ValueError(
+            "repository must be a GitHub owner/repo slug or GitHub URL for remote discovery"
+        )
+
+    token, _resolution_error = await GitHubService.resolve_github_token()
+    headers = GitHubService._github_headers(token) if token else {}
+    normalized_directory = directory.strip("/")
+    prefix = f"{normalized_directory}/" if normalized_directory else ""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resolved_ref = ref or await _github_default_branch(
+            client,
+            repository=repo_slug,
+            headers=headers,
+        )
+        response = await client.get(
+            f"https://api.github.com/repos/{repo_slug}/git/trees/{resolved_ref}",
+            headers=headers,
+            params={"recursive": "1"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+    found_directory = normalized_directory == ""
+    document_paths: list[str] = []
+    for item in _list(payload.get("tree")):
+        if not isinstance(item, Mapping):
+            continue
+        path = _string(item.get("path"))
+        if not path:
+            continue
+        if normalized_directory and path == normalized_directory:
+            found_directory = True
+            continue
+        if prefix and not path.startswith(prefix):
+            continue
+        found_directory = True
+        if _string(item.get("type")).lower() != "blob":
+            continue
+        if any(path.endswith(ext) for ext in extensions):
+            document_paths.append(path)
+
+    return (
+        sorted(document_paths),
+        resolved_ref,
+        bool(payload.get("truncated")),
+        found_directory,
+    )
 
 def _issue_key(value: Mapping[str, Any]) -> str:
     return _string(value.get("key") or value.get("issueKey")).upper()
@@ -1617,22 +1841,6 @@ async def discover_documents(
             },
         )
 
-    root = Path(directory).expanduser().resolve()
-    if (not root.exists() or not root.is_dir()) and "\\" in directory:
-        normalized_directory = directory.replace("\\", "/")
-        normalized_root = Path(normalized_directory).expanduser().resolve()
-        if normalized_root.exists() and normalized_root.is_dir():
-            root = normalized_root
-
-    if not root.exists() or not root.is_dir():
-        return ToolResult(
-            status="FAILED",
-            outputs={
-                "documentPaths": [],
-                "error": f"Directory does not exist or is not a directory: {directory}",
-            },
-        )
-
     extensions = frozenset(
         _list(
             inputs.get("extensions")
@@ -1642,9 +1850,85 @@ async def discover_documents(
     if not extensions:
         extensions = frozenset({".md", ".txt", ".tex"})
 
+    normalized_directory = _normalize_document_directory(directory)
+    local_root = _resolve_local_document_root(
+        directory=normalized_directory,
+        inputs=inputs,
+        context=_context,
+    )
+    if local_root is None and not Path(normalized_directory).expanduser().is_absolute():
+        repository = _repository_from_inputs_or_context(inputs, _context)
+        if repository:
+            try:
+                document_paths, resolved_ref, truncated, found_directory = (
+                    await _discover_github_document_paths(
+                        repository=repository,
+                        directory=normalized_directory,
+                        extensions=extensions,
+                        ref=_ref_from_inputs_or_context(inputs, _context),
+                    )
+                )
+            except Exception as exc:
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "documentPaths": [],
+                        "error": (
+                            "Directory does not exist in local repo roots and remote "
+                            f"repository discovery failed for {directory}: {exc}"
+                        ),
+                    },
+                )
+            if not found_directory:
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "documentPaths": [],
+                        "error": (
+                            "Directory does not exist or is not a directory in "
+                            f"repository {repository}: {directory}"
+                        ),
+                    },
+                )
+            if truncated:
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "documentPaths": [],
+                        "error": (
+                            "GitHub returned a truncated repository tree for "
+                            f"{_github_repository_slug(repository) or repository}@"
+                            f"{resolved_ref}; remote document discovery cannot "
+                            "produce a complete listing for "
+                            f"{normalized_directory or '<repo root>'}"
+                        ),
+                    },
+                )
+            return ToolResult(
+                status="COMPLETED",
+                outputs={
+                    "directory": normalized_directory,
+                    "repository": _github_repository_slug(repository) or repository,
+                    "ref": resolved_ref,
+                    "source": "github",
+                    "extensions": sorted(extensions),
+                    "documentCount": len(document_paths),
+                    "documentPaths": document_paths,
+                    "truncated": truncated,
+                },
+            )
+
+    if local_root is None:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "documentPaths": [],
+                "error": f"Directory does not exist or is not a directory: {directory}",
+            },
+        )
+
+    root, output_base = local_root
     document_paths: list[str] = []
-    workspace_root = Path.cwd().resolve()
-    output_base = workspace_root if root.is_relative_to(workspace_root) else root
     for ext in extensions:
         pattern = f"*{ext}"
         for path in root.rglob(pattern):
@@ -1657,6 +1941,7 @@ async def discover_documents(
         status="COMPLETED",
         outputs={
             "directory": str(root),
+            "source": "filesystem",
             "extensions": sorted(extensions),
             "documentCount": len(document_paths),
             "documentPaths": document_paths,
