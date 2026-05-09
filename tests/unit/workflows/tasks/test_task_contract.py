@@ -938,7 +938,7 @@ def test_fr011_target_branch_normalized_to_branch_in_canonical_output() -> None:
     )
     git = result["task"]["git"]
     assert git.get("branch") == "feature/legacy"
-    assert git.get("targetBranch") is None
+    assert "targetBranch" not in git
 
 
 # SC-001: Full resume_from_failed_step acceptance scenario
@@ -960,6 +960,44 @@ def test_sc001_well_formed_resume_payload_accepted() -> None:
     assert result["task"]["resume"]["failedStepId"] == "step-3"
     assert result["task"]["resume"]["resumeCheckpointRef"] == "art_ckpt_abc"
     assert result["task"]["resume"]["taskInputSnapshotRef"] == "art_snap_abc"
+
+
+def test_sc001_resume_source_workflow_id_must_match_recovery() -> None:
+    """MM-638: recovery and resume must pin the same source workflow."""
+    with pytest.raises(TaskContractError, match="sourceWorkflowId"):
+        build_canonical_task_view(
+            job_type="task",
+            payload=_canonical_task_payload({
+                "recovery": {
+                    "kind": "resume_from_failed_step",
+                    "sourceWorkflowId": "mm:abc123",
+                    "sourceRunId": "run-1",
+                },
+                "resume": {
+                    **_VALID_RESUME_BLOCK,
+                    "sourceWorkflowId": "mm:other",
+                },
+            }),
+        )
+
+
+def test_sc001_resume_source_run_id_must_match_recovery() -> None:
+    """MM-638: recovery and resume must pin the same source run."""
+    with pytest.raises(TaskContractError, match="sourceRunId"):
+        build_canonical_task_view(
+            job_type="task",
+            payload=_canonical_task_payload({
+                "recovery": {
+                    "kind": "resume_from_failed_step",
+                    "sourceWorkflowId": "mm:abc123",
+                    "sourceRunId": "run-1",
+                },
+                "resume": {
+                    **_VALID_RESUME_BLOCK,
+                    "sourceRunId": "run-2",
+                },
+            }),
+        )
 
 
 # Edge cases

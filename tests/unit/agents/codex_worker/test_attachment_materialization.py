@@ -459,3 +459,92 @@ async def test_prepare_stage_materializes_attachments_before_return(
         event["event"]
         for event in task_context["attachments"]["diagnostics"]["events"]
     ].count("prepare_download_completed") == 3
+
+
+@pytest.mark.asyncio
+async def test_prepare_stage_uses_canonical_branch_as_pr_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queue = _FakeQueueClient(
+        {
+            "art_objective": b"one",
+            "art_step": b"step",
+            "art_no_id": b"no-id",
+        }
+    )
+    worker = _worker(tmp_path, queue)
+
+    async def _noop_git_identity(**kwargs):
+        return None
+
+    async def _default_branch(**kwargs):
+        return "main"
+
+    monkeypatch.setattr(
+        worker, "_run_prepare_git_identity_preflight", _noop_git_identity
+    )
+    monkeypatch.setattr(worker, "_resolve_default_branch", _default_branch)
+
+    canonical_payload = _canonical_payload()
+    task = canonical_payload["task"]
+    assert isinstance(task, dict)
+    task["git"] = {"branch": "main"}
+    task["publish"] = {"mode": "pr"}
+
+    prepared = await worker._run_prepare_stage(
+        job_id=uuid4(),
+        canonical_payload=canonical_payload,
+        source_payload={"workdirMode": "existing"},
+        selected_skills=[],
+        job_type="task",
+        skill_meta={},
+    )
+
+    assert prepared.starting_branch == "main"
+    assert prepared.new_branch is not None
+    assert prepared.new_branch.startswith("task/")
+    assert prepared.working_branch == prepared.new_branch
+
+
+@pytest.mark.asyncio
+async def test_prepare_stage_uses_canonical_branch_as_branch_publish_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queue = _FakeQueueClient(
+        {
+            "art_objective": b"one",
+            "art_step": b"step",
+            "art_no_id": b"no-id",
+        }
+    )
+    worker = _worker(tmp_path, queue)
+
+    async def _noop_git_identity(**kwargs):
+        return None
+
+    async def _default_branch(**kwargs):
+        return "main"
+
+    monkeypatch.setattr(
+        worker, "_run_prepare_git_identity_preflight", _noop_git_identity
+    )
+    monkeypatch.setattr(worker, "_resolve_default_branch", _default_branch)
+
+    canonical_payload = _canonical_payload()
+    task = canonical_payload["task"]
+    assert isinstance(task, dict)
+    task["git"] = {"branch": "main"}
+    task["publish"] = {"mode": "branch"}
+
+    prepared = await worker._run_prepare_stage(
+        job_id=uuid4(),
+        canonical_payload=canonical_payload,
+        source_payload={"workdirMode": "existing"},
+        selected_skills=[],
+        job_type="task",
+        skill_meta={},
+    )
+
+    assert prepared.starting_branch == "main"
+    assert prepared.new_branch is None
+    assert prepared.working_branch == "main"

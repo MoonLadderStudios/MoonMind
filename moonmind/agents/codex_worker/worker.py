@@ -3066,7 +3066,11 @@ class CodexWorker:
         publish_base_branch = str(publish.get("prBaseBranch") or "").strip() or None
         git_node = task.get("git")
         git = git_node if isinstance(git_node, Mapping) else {}
-        publish_working_branch = str(git.get("targetBranch") or "").strip() or None
+        authored_branch = str(git.get("branch") or "").strip() or None
+        legacy_work_branch = str(git.get("targetBranch") or "").strip() or None
+        publish_working_branch = (
+            authored_branch if publish_mode == "branch" else legacy_work_branch
+        )
         checkpoint = self._extract_jules_runtime_checkpoint(job.payload)
         checkpoint_now = datetime.now(UTC).isoformat()
         if checkpoint is not None:
@@ -4326,12 +4330,19 @@ class CodexWorker:
                 fallback="main",
                 env=auth_context.repo_command_env,
             )
-            starting_branch_input = str(git.get("startingBranch") or "").strip() or None
+            authored_branch_input = str(git.get("branch") or "").strip() or None
+            starting_branch_input = (
+                str(git.get("startingBranch") or "").strip()
+                or authored_branch_input
+                or None
+            )
             new_branch_input = str(git.get("targetBranch") or "").strip() or None
             starting_branch = starting_branch_input or default_branch
 
             if new_branch_input:
                 new_branch = new_branch_input
+            elif publish_mode == "branch" and authored_branch_input:
+                new_branch = None
             elif starting_branch != default_branch:
                 new_branch = None
             else:

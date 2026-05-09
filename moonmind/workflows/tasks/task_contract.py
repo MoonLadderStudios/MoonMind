@@ -556,7 +556,6 @@ class TaskGitSelection(BaseModel):
 
     branch: str | None = Field(None, alias="branch")
     starting_branch: str | None = Field(None, alias="startingBranch")
-    target_branch: str | None = Field(None, alias="targetBranch")
 
     @model_validator(mode="before")
     @classmethod
@@ -570,7 +569,7 @@ class TaskGitSelection(BaseModel):
             payload.pop("targetBranch")
         return payload
 
-    @field_validator("branch", "starting_branch", "target_branch", mode="before")
+    @field_validator("branch", "starting_branch", mode="before")
     @classmethod
     def _normalize_branches(cls, value: object) -> str | None:
         return _clean_optional_str(value)
@@ -1368,15 +1367,15 @@ class TaskExecutionSpec(BaseModel):
                     "task.resume is only valid when task.recovery.kind is "
                     f"'resume_from_failed_step'; got {recovery.kind!r}"
                 )
-
-        if (
-            recovery is not None
-            and recovery.kind in {"exact_full_rerun", "edited_full_retry"}
-            and resume is not None
-        ):
-            raise TaskContractError(
-                f"task.resume must not be set when task.recovery.kind is {recovery.kind!r}"
-            )
+            if recovery.source_workflow_id != resume.source_workflow_id:
+                raise TaskContractError(
+                    "task.recovery.sourceWorkflowId and task.resume.sourceWorkflowId "
+                    "must match"
+                )
+            if recovery.source_run_id != resume.source_run_id:
+                raise TaskContractError(
+                    "task.recovery.sourceRunId and task.resume.sourceRunId must match"
+                )
 
         return self
 

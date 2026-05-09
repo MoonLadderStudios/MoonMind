@@ -117,4 +117,4 @@ def test_sc006_target_branch_normalized_to_branch_in_canonical_output() -> None:
 
     git = result["task"]["git"]
     assert git.get("branch") == "feature/legacy-branch"
-    assert git.get("targetBranch") is None
+    assert "targetBranch" not in git
