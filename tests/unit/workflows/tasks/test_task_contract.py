@@ -7,7 +7,10 @@ from moonmind.workflows.tasks.task_contract import (
     build_canonical_task_view,
     build_effective_task_skill_selectors,
     CanonicalTaskPayload,
+    ResumeFromFailedStepRef,
+    TaskContractError,
     TaskExecutionSpec,
+    TaskRecoveryProvenance,
     TaskStepSpec,
 )
 
@@ -678,3 +681,288 @@ def test_task_input_attachments_must_be_lists() -> None:
                 },
             }
         )
+
+
+# --- MM-638: Recovery / Resume contract type tests ---
+
+_VALID_RESUME_BLOCK = {
+    "kind": "resume_from_failed_step",
+    "sourceWorkflowId": "mm:abc123",
+    "sourceRunId": "run-1",
+    "failedStepId": "step-3",
+    "resumeCheckpointRef": "art_ckpt_abc",
+    "taskInputSnapshotRef": "art_snap_abc",
+}
+
+_BASE_TASK_PAYLOAD = {
+    "repository": "test/repo",
+    "task": {"instructions": "Do work"},
+}
+
+
+def _canonical_task_payload(task_overrides: dict) -> dict:
+    payload = dict(_BASE_TASK_PAYLOAD)
+    payload["task"] = {**_BASE_TASK_PAYLOAD["task"], **task_overrides}
+    return payload
+
+
+# FR-001: TaskRecoveryKind must accept exactly three values
+
+def test_fr001_task_recovery_kind_accepts_valid_literals() -> None:
+    """MM-638 FR-001: Each canonical recovery kind is accepted."""
+    for kind in ("exact_full_rerun", "edited_full_retry", "resume_from_failed_step"):
+        prov = TaskRecoveryProvenance.model_validate(
+            {"kind": kind, "sourceWorkflowId": "mm:x", "sourceRunId": "r1"}
+        )
+        assert prov.kind == kind
+
+
+def test_fr001_task_recovery_kind_rejects_invalid_literal() -> None:
+    """MM-638 FR-001: Values outside the three canonical literals are rejected."""
+    with pytest.raises(ValidationError):
+        TaskRecoveryProvenance.model_validate(
+            {"kind": "unknown_kind", "sourceWorkflowId": "mm:x", "sourceRunId": "r1"}
+        )
+
+
+# FR-002: TaskRecoveryProvenance required/optional fields
+
+def test_fr002_recovery_provenance_requires_non_empty_source_ids() -> None:
+    """MM-638 FR-002: sourceWorkflowId and sourceRunId must be non-empty."""
+    with pytest.raises(ValidationError):
+        TaskRecoveryProvenance.model_validate(
+            {"kind": "exact_full_rerun", "sourceWorkflowId": "", "sourceRunId": "r1"}
+        )
+    with pytest.raises(ValidationError):
+        TaskRecoveryProvenance.model_validate(
+            {"kind": "exact_full_rerun", "sourceWorkflowId": "mm:x", "sourceRunId": ""}
+        )
+
+
+def test_fr002_recovery_provenance_optional_fields_absent_is_valid() -> None:
+    """MM-638 FR-002: requestedBy and requestedAt are optional."""
+    prov = TaskRecoveryProvenance.model_validate(
+        {"kind": "exact_full_rerun", "sourceWorkflowId": "mm:x", "sourceRunId": "r1"}
+    )
+    assert prov.requested_by is None
+    assert prov.requested_at is None
+
+
+# FR-003: ResumeFromFailedStepRef required/optional fields
+
+def test_fr003_resume_ref_requires_non_empty_required_fields() -> None:
+    """MM-638 FR-003: All required ResumeFromFailedStepRef fields must be non-empty."""
+    for empty_field in ("sourceWorkflowId", "sourceRunId", "failedStepId",
+                        "resumeCheckpointRef", "taskInputSnapshotRef"):
+        bad = dict(_VALID_RESUME_BLOCK)
+        bad[empty_field] = ""
+        with pytest.raises(ValidationError):
+            ResumeFromFailedStepRef.model_validate(bad)
+
+
+def test_fr003_resume_ref_optional_fields_absent_is_valid() -> None:
+    """MM-638 FR-003: failedStepAttempt, planRef, planDigest are optional."""
+    ref = ResumeFromFailedStepRef.model_validate(_VALID_RESUME_BLOCK)
+    assert ref.failed_step_attempt is None
+    assert ref.plan_ref is None
+    assert ref.plan_digest is None
+
+
+# FR-004/005: TaskExecutionSpec accepts recovery and resume as optional fields
+
+def test_fr004_fr005_plain_task_unaffected_by_new_fields() -> None:
+    """MM-638 FR-004/005: A plain task without recovery/resume is accepted and unaffected."""
+    spec = TaskExecutionSpec.model_validate({"instructions": "Do work"})
+    assert spec.recovery is None
+    assert spec.resume is None
+    assert spec.depends_on is None
+
+
+def test_fr004_recovery_field_accepted_on_task_execution_spec() -> None:
+    """MM-638 FR-004: recovery field is accepted on TaskExecutionSpec."""
+    spec = TaskExecutionSpec.model_validate({
+        "instructions": "Retry",
+        "recovery": {"kind": "exact_full_rerun", "sourceWorkflowId": "mm:x", "sourceRunId": "r1"},
+    })
+    assert spec.recovery is not None
+    assert spec.recovery.kind == "exact_full_rerun"
+
+
+# FR-006: resume_from_failed_step without resume block → error
+
+def test_fr006_resume_from_failed_step_without_resume_block_is_rejected() -> None:
+    """MM-638 FR-006: Missing resume block with resume_from_failed_step recovery kind raises TaskContractError."""
+    with pytest.raises(TaskContractError, match="task.resume is required"):
+        build_canonical_task_view(
+            job_type="task",
+            payload=_canonical_task_payload({
+                "recovery": {
+                    "kind": "resume_from_failed_step",
+                    "sourceWorkflowId": "mm:x",
+                    "sourceRunId": "r1",
+                },
+            }),
+        )
+
+
+# FR-007: resume block without matching recovery.kind → error
+
+def test_fr007_resume_block_without_matching_recovery_kind_is_rejected() -> None:
+    """MM-638 FR-007: resume block paired with wrong recovery.kind raises TaskContractError."""
+    with pytest.raises(TaskContractError, match="resume_from_failed_step"):
+        build_canonical_task_view(
+            job_type="task",
+            payload=_canonical_task_payload({
+                "recovery": {
+                    "kind": "exact_full_rerun",
+                    "sourceWorkflowId": "mm:x",
+                    "sourceRunId": "r1",
+                },
+                "resume": _VALID_RESUME_BLOCK,
+            }),
+        )
+
+
+def test_fr007_resume_block_without_any_recovery_is_rejected() -> None:
+    """MM-638 FR-007: resume block with no recovery field raises TaskContractError."""
+    with pytest.raises(TaskContractError, match="task.recovery must be present"):
+        build_canonical_task_view(
+            job_type="task",
+            payload=_canonical_task_payload({"resume": _VALID_RESUME_BLOCK}),
+        )
+
+
+# FR-008: exact_full_rerun and edited_full_retry with/without source IDs
+
+def test_fr008_exact_full_rerun_accepted_with_source_ids() -> None:
+    """MM-638 FR-008: exact_full_rerun with sourceWorkflowId and sourceRunId is accepted."""
+    result = build_canonical_task_view(
+        job_type="task",
+        payload=_canonical_task_payload({
+            "recovery": {
+                "kind": "exact_full_rerun",
+                "sourceWorkflowId": "mm:abc",
+                "sourceRunId": "run-2",
+            },
+        }),
+    )
+    assert result["task"]["recovery"]["kind"] == "exact_full_rerun"
+    assert result["task"].get("resume") is None
+
+
+def test_fr008_edited_full_retry_accepted_with_source_ids() -> None:
+    """MM-638 FR-008: edited_full_retry with sourceWorkflowId and sourceRunId is accepted."""
+    result = build_canonical_task_view(
+        job_type="task",
+        payload=_canonical_task_payload({
+            "recovery": {
+                "kind": "edited_full_retry",
+                "sourceWorkflowId": "mm:abc",
+                "sourceRunId": "run-3",
+            },
+        }),
+    )
+    assert result["task"]["recovery"]["kind"] == "edited_full_retry"
+
+
+def test_fr008_exact_full_rerun_with_resume_is_rejected() -> None:
+    """MM-638 FR-008: exact_full_rerun paired with a resume block raises TaskContractError."""
+    with pytest.raises(TaskContractError, match="resume_from_failed_step"):
+        build_canonical_task_view(
+            job_type="task",
+            payload=_canonical_task_payload({
+                "recovery": {
+                    "kind": "exact_full_rerun",
+                    "sourceWorkflowId": "mm:x",
+                    "sourceRunId": "r1",
+                },
+                "resume": _VALID_RESUME_BLOCK,
+            }),
+        )
+
+
+# FR-009: dependsOn list preserved verbatim; empty list normalized to None
+
+def test_fr009_depends_on_preserved_verbatim() -> None:
+    """MM-638 FR-009: dependsOn list is accepted and preserved verbatim."""
+    result = build_canonical_task_view(
+        job_type="task",
+        payload=_canonical_task_payload({
+            "dependsOn": ["mm:workflow-1", "mm:workflow-2"],
+        }),
+    )
+    assert result["task"]["dependsOn"] == ["mm:workflow-1", "mm:workflow-2"]
+
+
+def test_fr009_empty_depends_on_normalized_to_none() -> None:
+    """MM-638 FR-009: Empty dependsOn list is normalized to None."""
+    spec = TaskExecutionSpec.model_validate({
+        "instructions": "Work",
+        "dependsOn": [],
+    })
+    assert spec.depends_on is None
+
+
+# FR-010/011: task.git.branch is the canonical field; targetBranch normalized away
+
+def test_fr010_branch_is_canonical_authored_field() -> None:
+    """MM-638 FR-010: task.git.branch is accepted and present in canonical output."""
+    result = build_canonical_task_view(
+        job_type="task",
+        payload=_canonical_task_payload({"git": {"branch": "feature/my-branch"}}),
+    )
+    assert result["task"]["git"]["branch"] == "feature/my-branch"
+
+
+def test_fr011_target_branch_normalized_to_branch_in_canonical_output() -> None:
+    """MM-638 FR-011: targetBranch is normalized to branch; canonical output has branch set."""
+    result = build_canonical_task_view(
+        job_type="task",
+        payload=_canonical_task_payload({"git": {"targetBranch": "feature/legacy"}}),
+    )
+    git = result["task"]["git"]
+    assert git.get("branch") == "feature/legacy"
+    assert git.get("targetBranch") is None
+
+
+# SC-001: Full resume_from_failed_step acceptance scenario
+
+def test_sc001_well_formed_resume_payload_accepted() -> None:
+    """MM-638 SC-001: A complete resume_from_failed_step payload is accepted and preserved."""
+    result = build_canonical_task_view(
+        job_type="task",
+        payload=_canonical_task_payload({
+            "recovery": {
+                "kind": "resume_from_failed_step",
+                "sourceWorkflowId": "mm:abc123",
+                "sourceRunId": "run-1",
+            },
+            "resume": _VALID_RESUME_BLOCK,
+        }),
+    )
+    assert result["task"]["recovery"]["kind"] == "resume_from_failed_step"
+    assert result["task"]["resume"]["failedStepId"] == "step-3"
+    assert result["task"]["resume"]["resumeCheckpointRef"] == "art_ckpt_abc"
+    assert result["task"]["resume"]["taskInputSnapshotRef"] == "art_snap_abc"
+
+
+# Edge cases
+
+def test_edge_case_resume_checkpoint_ref_empty_is_rejected() -> None:
+    """MM-638 edge case: resumeCheckpointRef empty string is rejected."""
+    bad_resume = {**_VALID_RESUME_BLOCK, "resumeCheckpointRef": ""}
+    with pytest.raises(ValidationError):
+        ResumeFromFailedStepRef.model_validate(bad_resume)
+
+
+def test_edge_case_branch_and_starting_branch_both_preserved() -> None:
+    """MM-638 edge case: branch and startingBranch are distinct fields and both preserved."""
+    result = build_canonical_task_view(
+        job_type="task",
+        payload=_canonical_task_payload({
+            "git": {"branch": "main", "startingBranch": "sha-abc123"},
+        }),
+    )
+    git = result["task"]["git"]
+    assert git["branch"] == "main"
+    assert git["startingBranch"] == "sha-abc123"

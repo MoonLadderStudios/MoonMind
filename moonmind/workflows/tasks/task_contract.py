@@ -554,10 +554,23 @@ class TaskGitSelection(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
+    branch: str | None = Field(None, alias="branch")
     starting_branch: str | None = Field(None, alias="startingBranch")
     target_branch: str | None = Field(None, alias="targetBranch")
 
-    @field_validator("starting_branch", "target_branch", mode="before")
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_target_branch(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        payload = dict(value)
+        if "targetBranch" in payload and not payload.get("branch"):
+            payload["branch"] = payload.pop("targetBranch")
+        elif "targetBranch" in payload:
+            payload.pop("targetBranch")
+        return payload
+
+    @field_validator("branch", "starting_branch", "target_branch", mode="before")
     @classmethod
     def _normalize_branches(cls, value: object) -> str | None:
         return _clean_optional_str(value)
@@ -1151,6 +1164,79 @@ class TaskStepSpec(BaseModel):
             )
         return payload
 
+
+# --- MM-638: Recovery / Resume contract types ---
+
+TaskRecoveryKind = Literal["exact_full_rerun", "edited_full_retry", "resume_from_failed_step"]
+
+
+class TaskRecoveryProvenance(BaseModel):
+    """Recovery provenance attached to a task submission."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    kind: TaskRecoveryKind = Field(..., alias="kind")
+    source_workflow_id: str = Field(..., alias="sourceWorkflowId")
+    source_run_id: str = Field(..., alias="sourceRunId")
+    requested_by: str | None = Field(None, alias="requestedBy")
+    requested_at: str | None = Field(None, alias="requestedAt")
+
+    @field_validator("source_workflow_id", "source_run_id", mode="before")
+    @classmethod
+    def _require_non_empty(cls, value: object) -> str:
+        cleaned = _clean_str(value)
+        if not cleaned:
+            raise TaskContractError(
+                "sourceWorkflowId and sourceRunId must be non-empty strings"
+            )
+        return cleaned
+
+    @field_validator("requested_by", "requested_at", mode="before")
+    @classmethod
+    def _clean_optional(cls, value: object) -> str | None:
+        return _clean_optional_str(value)
+
+
+class ResumeFromFailedStepRef(BaseModel):
+    """Pins a resume submission to a specific source run, failed step, and checkpoint."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    kind: Literal["resume_from_failed_step"] = Field(
+        "resume_from_failed_step", alias="kind"
+    )
+    source_workflow_id: str = Field(..., alias="sourceWorkflowId")
+    source_run_id: str = Field(..., alias="sourceRunId")
+    failed_step_id: str = Field(..., alias="failedStepId")
+    failed_step_attempt: int | None = Field(None, alias="failedStepAttempt")
+    resume_checkpoint_ref: str = Field(..., alias="resumeCheckpointRef")
+    task_input_snapshot_ref: str = Field(..., alias="taskInputSnapshotRef")
+    plan_ref: str | None = Field(None, alias="planRef")
+    plan_digest: str | None = Field(None, alias="planDigest")
+
+    @field_validator(
+        "source_workflow_id",
+        "source_run_id",
+        "failed_step_id",
+        "resume_checkpoint_ref",
+        "task_input_snapshot_ref",
+        mode="before",
+    )
+    @classmethod
+    def _require_non_empty(cls, value: object) -> str:
+        cleaned = _clean_str(value)
+        if not cleaned:
+            raise TaskContractError(
+                "ResumeFromFailedStepRef required fields must be non-empty strings"
+            )
+        return cleaned
+
+    @field_validator("plan_ref", "plan_digest", mode="before")
+    @classmethod
+    def _clean_optional(cls, value: object) -> str | None:
+        return _clean_optional_str(value)
+
+
 class TaskExecutionSpec(BaseModel):
     """Main task execution body."""
 
@@ -1182,6 +1268,9 @@ class TaskExecutionSpec(BaseModel):
     authored_presets: list[AuthoredPresetBinding] | None = Field(
         None, alias="authoredPresets"
     )
+    recovery: TaskRecoveryProvenance | None = Field(None, alias="recovery")
+    resume: ResumeFromFailedStepRef | None = Field(None, alias="resume")
+    depends_on: list[str] | None = Field(None, alias="dependsOn")
 
     @field_validator("instructions", mode="before")
     @classmethod
@@ -1247,6 +1336,49 @@ class TaskExecutionSpec(BaseModel):
         if not isinstance(value, list):
             raise TaskContractError("task.steps must be a list")
         return list(value)
+
+    @field_validator("depends_on", mode="before")
+    @classmethod
+    def _normalize_depends_on(cls, value: object) -> list[str] | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, list) and len(value) == 0:
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _validate_recovery_resume_consistency(self) -> "TaskExecutionSpec":
+        recovery = self.recovery
+        resume = self.resume
+
+        if recovery is not None and recovery.kind == "resume_from_failed_step":
+            if resume is None:
+                raise TaskContractError(
+                    "task.resume is required when task.recovery.kind is 'resume_from_failed_step'"
+                )
+
+        if resume is not None:
+            if recovery is None:
+                raise TaskContractError(
+                    "task.recovery must be present with kind 'resume_from_failed_step' "
+                    "when task.resume is provided"
+                )
+            if recovery.kind != "resume_from_failed_step":
+                raise TaskContractError(
+                    "task.resume is only valid when task.recovery.kind is "
+                    f"'resume_from_failed_step'; got {recovery.kind!r}"
+                )
+
+        if (
+            recovery is not None
+            and recovery.kind in {"exact_full_rerun", "edited_full_retry"}
+            and resume is not None
+        ):
+            raise TaskContractError(
+                f"task.resume must not be set when task.recovery.kind is {recovery.kind!r}"
+            )
+
+        return self
 
     @model_validator(mode="after")
     def _validate_container_steps_compatibility(self) -> "TaskExecutionSpec":
@@ -1903,6 +2035,9 @@ __all__ = [
     "AuthoredPresetBinding",
     "TaskContractError",
     "TaskInputAttachmentRef",
+    "TaskRecoveryKind",
+    "TaskRecoveryProvenance",
+    "ResumeFromFailedStepRef",
     "TaskStepSource",
     "build_task_stage_plan",
     "build_canonical_task_view",
