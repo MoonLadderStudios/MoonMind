@@ -13,6 +13,13 @@ from moonmind.workflows.tasks.task_contract import (
     TaskRecoveryProvenance,
     TaskStepSpec,
 )
+from tests.helpers.step_type_payloads import (
+    mixed_tool_skill_step,
+    preset_step,
+    skill_step,
+    task_payload,
+    tool_step,
+)
 
 def test_task_skills_accepts_valid_properties() -> None:
     """T001: Ensure task.skills structures successfully marshal."""
@@ -382,6 +389,43 @@ def test_task_steps_reject_shell_like_executable_fields(field: str) -> None:
                 ],
             }
         )
+
+def test_mm569_accepts_executable_tool_and_skill_payload_fixtures() -> None:
+    result = build_canonical_task_view(
+        job_type="task",
+        payload=task_payload(tool_step(), skill_step()),
+    )
+
+    steps = result["task"]["steps"]
+    assert steps[0]["type"] == "tool"
+    assert steps[0]["tool"]["id"] == "jira.get_issue"
+    assert steps[1]["type"] == "skill"
+    assert steps[1]["skill"]["id"] == "moonspec-implement"
+
+
+def test_mm569_rejects_mixed_and_unresolved_preset_runtime_steps() -> None:
+    with pytest.raises(TaskContractError, match="Tool steps must not include a skill payload"):
+        build_canonical_task_view(
+            job_type="task",
+            payload=task_payload(mixed_tool_skill_step()),
+        )
+
+    with pytest.raises(TaskContractError, match="task\\.steps\\[\\]\\.type"):
+        build_canonical_task_view(
+            job_type="task",
+            payload=task_payload(preset_step()),
+        )
+
+
+def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
+    invalid = tool_step()
+    invalid["tool"].pop("id")
+
+    with pytest.raises(TaskContractError) as excinfo:
+        build_canonical_task_view(job_type="task", payload=task_payload(invalid))
+
+    assert "task.steps[].tool.id" in str(excinfo.value)
+    assert "tool.name" in str(excinfo.value)
 
 def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> None:
     task_skills = TaskExecutionSpec.model_validate(

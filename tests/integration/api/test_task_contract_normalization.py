@@ -18,6 +18,12 @@ from moonmind.workflows.tasks.task_contract import (
     TaskContractError,
     build_canonical_task_view,
 )
+from tests.helpers.step_type_payloads import (
+    preset_step,
+    skill_step,
+    task_payload,
+    tool_step,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -118,3 +124,36 @@ def test_sc006_target_branch_normalized_to_branch_in_canonical_output() -> None:
     git = result["task"]["git"]
     assert git.get("branch") == "feature/legacy-branch"
     assert "targetBranch" not in git
+
+
+def test_mm569_unresolved_preset_submission_rejected_with_field_path() -> None:
+    with pytest.raises(TaskContractError) as excinfo:
+        build_canonical_task_view(job_type="task", payload=task_payload(preset_step()))
+
+    assert "task.steps[].type" in str(excinfo.value)
+    assert "tool, skill" in str(excinfo.value)
+
+
+def test_mm569_flat_executable_steps_preserve_preset_provenance_without_lookup() -> None:
+    tool = tool_step()
+    tool["source"] = {
+        "kind": "preset-derived",
+        "presetSlug": "mm569-parent",
+        "presetVersion": "1.0.0",
+        "includePath": ["mm569-parent@1.0.0"],
+    }
+    skill = skill_step()
+    skill["source"] = {
+        "kind": "preset-derived",
+        "presetSlug": "mm569-parent",
+        "presetVersion": "1.0.0",
+        "includePath": ["mm569-parent@1.0.0"],
+    }
+
+    result = build_canonical_task_view(job_type="task", payload=task_payload(tool, skill))
+
+    steps = result["task"]["steps"]
+    assert [step["type"] for step in steps] == ["tool", "skill"]
+    assert steps[0]["source"]["presetSlug"] == "mm569-parent"
+    assert steps[1]["source"]["presetSlug"] == "mm569-parent"
+    assert all(step.get("type") != "preset" for step in steps)

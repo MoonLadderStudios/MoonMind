@@ -1115,7 +1115,10 @@ class TaskStepSpec(BaseModel):
                     tool_payload.get("id") or tool_payload.get("name")
                 )
                 if not tool_id:
-                    raise TaskContractError("Tool steps require tool.id or tool.name")
+                    raise TaskContractError(
+                        "task.steps[].tool.id or task.steps[].tool.name is required; "
+                        "Tool steps require tool.id or tool.name"
+                    )
                 if skill_payload is not None:
                     raise TaskContractError(
                         "Tool steps must not include a skill payload"
