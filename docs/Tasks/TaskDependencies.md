@@ -20,7 +20,7 @@ Task dependencies allow one `MoonMind.Run` execution to wait on one or more othe
 - For Temporal-backed task surfaces, `taskId == workflowId`.
 - `runId` is diagnostic only and is never a valid dependency target.
 - A prerequisite is satisfied only when it reaches terminal MoonMind state `completed`.
-- Any other terminal prerequisite outcome causes the dependent run to fail with a dependency-specific failure.
+- Any other prerequisite terminal outcome — `failed`, `canceled`, `terminated`, `timed_out`, or runtime unresolvable — keeps the dependent run blocked in `waiting_on_dependencies` until the same prerequisite `workflowId` later reaches `completed`. The dependent never auto-fails on a prerequisite failure. The only way out without prerequisite success is for an operator to cancel the dependent run or bypass the dependency.
 - Dependencies are **non-transitive** at the contract level: if C depends on B and B depends on A, C waits on B only.
 
 ### 2.1 Contract boundaries
@@ -119,9 +119,9 @@ When dependencies are present, the workflow must:
 3. initialize local dependency-tracking state for all declared prerequisite IDs,
 4. perform an immediate status check for each prerequisite using durable execution state,
 5. mark prerequisites already in `completed` as satisfied immediately,
-6. fail immediately if any prerequisite is already in a non-success terminal state,
+6. record any prerequisite already in a non-success terminal state as a retryable outcome (`waiting_for_successful_rerun`) and continue waiting,
 7. wait for explicit dependency-resolution notifications for the remaining unresolved prerequisites,
-8. proceed only after all declared prerequisites resolve successfully.
+8. proceed only after all declared prerequisites reach `completed` (possibly after one or more prerequisite reruns), or after an operator cancels the dependent run or bypasses the dependency.
 
 ### 4.3 Dependency resolution signals
 
@@ -165,33 +165,48 @@ Cancellation and pause behavior during dependency waiting is:
 * dependency waiting never cancels, terminates, or mutates prerequisite runs,
 * pausing the dependent run does not stop prerequisite runs,
 * pausing the dependent run does not suppress receipt of dependency-resolution signals,
-* while paused, the workflow may continue recording dependency outcomes, but it must not leave the dependency gate or enter active planning/execution until unpaused,
-* if a prerequisite reaches a non-success terminal outcome while the dependent run is paused, the dependent run fails immediately with a dependency-specific failure,
+* while paused, the workflow continues recording dependency outcomes, but it must not leave the dependency gate or enter active planning/execution until unpaused,
+* a prerequisite non-success terminal outcome while the dependent is paused does not fail the dependent; the outcome is recorded as `waiting_for_successful_rerun` and the dependent stays blocked until prerequisites complete, the dependent is canceled, or the dependency is bypassed,
 * scheduled runs do not begin dependency resolution until they leave `scheduled` and enter `initializing`.
 
-### 4.6 Failure behavior
+### 4.6 Wait-through-rerun behavior
 
-A dependent run clears the dependency gate only when **every** declared prerequisite completes successfully.
+A dependent run clears the dependency gate only when **every** declared prerequisite reaches MoonMind terminal state `completed`.
 
-Any other prerequisite terminal outcome is a dependency failure, including:
+A prerequisite non-success terminal outcome is **not** a dependency failure under the current contract. The following terminal outcomes keep the dependent in `waiting_on_dependencies`:
 
 * `failed`,
 * `canceled`,
 * `terminated`,
 * `timed_out`,
-* runtime inability to resolve a dependency after successful create-time validation.
+* runtime inability to resolve a dependency.
 
-The first observed non-success terminal prerequisite outcome ends the dependency gate and fails the dependent run.
+For each non-success terminal outcome the workflow records a structured per-dependency entry that surfaces:
 
-Dependency failures must be structured rather than generic. At minimum, the failure record must identify:
+* `workflowId`,
+* latest prerequisite terminal MoonMind state,
+* latest prerequisite Temporal close status when available,
+* failure category,
+* `failureCount` — number of distinct non-success terminal observations for this prerequisite,
+* `lastFailedAt` — most recent non-success terminal timestamp,
+* human-readable message,
+* `resolution = "waiting_for_successful_rerun"`.
 
-* `failedDependencyId`,
-* prerequisite terminal MoonMind state,
-* prerequisite Temporal close status when available,
-* dependency failure category,
-* human-readable message.
+If the same prerequisite later reaches `completed` (under the same `workflowId` after rerun), the per-dependency entry transitions to `resolution = "satisfied_after_rerun"` and the prerequisite is removed from the unresolved set. Once every prerequisite is satisfied, the gate clears.
 
-A dependency failure must never degrade into an infinite wait.
+The only ways to leave the dependency gate without prerequisite success are:
+
+* an operator cancels the dependent run,
+* an operator bypasses the dependency wait (`BypassDependencies` signal),
+* an operator manually skips the wait (`SkipDependencyWait` update).
+
+A dependent run that has been waiting for a rerun and never receives one will stay in `waiting_on_dependencies` until standard workflow timeouts apply or an operator intervenes.
+
+Stale or duplicate dependency-resolution signals must be ignored:
+
+* a `completed` signal that arrives after the prerequisite is already recorded as `satisfied` or `satisfied_after_rerun` is a no-op,
+* a non-success terminal observation with the same `resolvedAt` as the prerequisite's already-recorded `lastFailedAt` does not increment `failureCount`,
+* a non-success terminal signal that arrives after the prerequisite is already recorded as `satisfied`, `satisfied_after_rerun`, or `bypassed` is a no-op and never reverts the prior resolution.
 
 ### 4.7 Continue-As-New and replay safety
 
@@ -244,11 +259,15 @@ At minimum, the `dependencies` block must include:
 * `failedDependencyId`,
 * `outcomes`.
 
-Recommended `resolution` values are:
+Recommended top-level `resolution` values are:
 
-* `not_applicable`,
-* `satisfied`,
-* `dependency_failed`.
+* `not_applicable` — no dependencies declared,
+* `satisfied` — every prerequisite cleared on its first observed terminal outcome,
+* `satisfied_after_rerun` — at least one prerequisite reached `completed` only after one or more prior non-success terminal outcomes,
+* `bypassed` — operator bypassed the dependency wait,
+* `manual_override` — operator manually skipped the dependency wait.
+
+Per-dependency outcomes carry their own `resolution` field that may also include the non-terminal marker `waiting_for_successful_rerun` while the workflow is still active.
 
 When no dependencies are declared, the stable empty shape is:
 
@@ -265,7 +284,9 @@ When no dependencies are declared, the stable empty shape is:
 }
 ```
 
-When dependencies are declared, the summary should capture per-dependency outcomes when known. Example:
+When dependencies are declared, the summary should capture per-dependency outcomes when known. Each per-dependency outcome carries `workflowId`, `terminalState`, `closeStatus`, `resolvedAt`, `resolution`, `failureCount`, `lastFailedAt`, `failureCategory`, and `message` fields when applicable.
+
+Example: every prerequisite cleared on first observation.
 
 ```json
 {
@@ -279,15 +300,65 @@ When dependencies are declared, the summary should capture per-dependency outcom
       {
         "workflowId": "mm:01ABC...",
         "terminalState": "completed",
-        "resolvedAt": "2026-04-03T17:24:16Z"
+        "closeStatus": "completed",
+        "resolvedAt": "2026-04-03T17:24:16Z",
+        "resolution": "satisfied",
+        "failureCount": 0,
+        "lastFailedAt": null
       },
       {
         "workflowId": "mm:01DEF...",
         "terminalState": "completed",
-        "resolvedAt": "2026-04-03T17:24:18Z"
+        "closeStatus": "completed",
+        "resolvedAt": "2026-04-03T17:24:18Z",
+        "resolution": "satisfied",
+        "failureCount": 0,
+        "lastFailedAt": null
       }
     ]
   }
+}
+```
+
+Example: a prerequisite failed and was rerun to success.
+
+```json
+{
+  "dependencies": {
+    "declaredIds": ["mm:01ABC..."],
+    "waited": true,
+    "waitDurationMs": 945000,
+    "resolution": "satisfied_after_rerun",
+    "failedDependencyId": null,
+    "outcomes": [
+      {
+        "workflowId": "mm:01ABC...",
+        "terminalState": "completed",
+        "closeStatus": "completed",
+        "resolvedAt": "2026-04-03T17:39:18Z",
+        "resolution": "satisfied_after_rerun",
+        "failureCount": 1,
+        "lastFailedAt": "2026-04-03T17:24:16Z",
+        "message": "Prerequisite completed after rerun."
+      }
+    ]
+  }
+}
+```
+
+While the workflow is active and a prerequisite is currently failed, the per-dependency outcome carries the non-terminal marker `waiting_for_successful_rerun`:
+
+```json
+{
+  "workflowId": "mm:01ABC...",
+  "terminalState": "failed",
+  "closeStatus": "failed",
+  "resolvedAt": null,
+  "resolution": "waiting_for_successful_rerun",
+  "failureCount": 1,
+  "lastFailedAt": "2026-04-03T17:24:16Z",
+  "failureCategory": "dependency_failed",
+  "message": "Prerequisite execution 'mm:01ABC...' reached terminal state 'failed'; waiting for successful rerun."
 }
 ```
 
@@ -305,12 +376,13 @@ The create UX should provide:
 * client-side enforcement of the 10-item limit,
 * duplicate prevention,
 * clear validation messaging for invalid targets,
-* clear messaging that the new run will remain blocked until prerequisites complete successfully.
+* clear messaging that the new run stays blocked while a prerequisite is running, failed, canceled, terminated, timed out, or unresolvable, and unblocks once the prerequisite completes successfully — and that the only ways out without prerequisite success are canceling the dependent run or bypassing the dependency wait.
 
 ### 6.2 List and detail surfaces
 
 * `waiting_on_dependencies` maps to dashboard status `waiting`.
 * Task detail shows a **Dependencies** panel with prerequisite links, titles, statuses, and terminal outcomes.
+* When a per-dependency outcome carries `resolution = "waiting_for_successful_rerun"`, the panel must surface a clear "Prerequisite failed; waiting for successful rerun" indicator alongside the failure count and last-failed timestamp.
 * Prerequisite detail shows a **Dependents** panel or equivalent reverse-lookup view.
 * List and quick-view surfaces may show a compact blocked-by summary when useful.
 
@@ -342,9 +414,10 @@ Task dependencies block one workflow on the terminal outcome of another workflow
 ## 8. Edge Cases and Failure Modes
 
 * **Prerequisite already completed:** resolve immediately and continue if all prerequisites are satisfied.
-* **Prerequisite already terminal and non-successful:** fail immediately with a dependency-specific failure.
-* **Duplicate or stale notifications:** ignore idempotently.
-* **Missing runtime target after validation:** fail the dependent run; do not wait forever.
+* **Prerequisite already terminal and non-successful:** record a `waiting_for_successful_rerun` outcome and keep the dependent blocked. The dependent does not auto-fail.
+* **Prerequisite cycles between failed and completed across reruns:** the gate ratchets — once a prerequisite is recorded as `satisfied` or `satisfied_after_rerun`, subsequent stale failure observations are ignored.
+* **Duplicate or stale notifications:** ignore idempotently. Duplicate non-success observations sharing the same `resolvedAt` do not increment `failureCount`.
+* **Missing runtime target after validation:** record `waiting_for_successful_rerun` with `failureCategory = "dependency_unresolved"`. The dependent stays blocked until the prerequisite resolves to a `completed` outcome, the dependent is canceled, or the dependency is bypassed.
 * **Signal delivery uncertainty:** use bounded reconciliation against durable execution state; do not rely on unbounded polling loops.
-* **Workflow timeout while waiting:** standard workflow timeout behavior still applies.
+* **Workflow timeout while waiting:** standard workflow timeout behavior still applies. A run that waits indefinitely can still be timed out by ordinary workflow timeouts or operator cancel.
 * **Long waits or long chains:** preserve dependency context across Continue-As-New; the direct-dependency limit remains 10 per run.

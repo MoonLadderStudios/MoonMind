@@ -131,6 +131,9 @@ const DependencyOutcomeSchema = z
     resolvedAt: z.string().nullable().optional(),
     failureCategory: z.string().nullable().optional(),
     message: z.string().nullable().optional(),
+    resolution: z.string().nullable().optional(),
+    failureCount: z.number().nullable().optional(),
+    lastFailedAt: z.string().nullable().optional(),
   })
   .passthrough();
 
@@ -4627,7 +4630,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               </div>
               {execution.blockedOnDependencies ? (
                 <div className="notice">
-                  <strong>Blocked on prerequisites.</strong> This run will not advance until every prerequisite reaches <code>completed</code>.
+                  <strong>Blocked on prerequisites.</strong> This run keeps waiting until every prerequisite reaches <code>completed</code>. Failed, canceled, terminated, or timed-out prerequisites do not fail this run automatically — rerun the prerequisite, cancel this run, or bypass the dependency.
                   {actionsOn && actions?.canBypassDependencies ? (
                     <div className="actions" style={{ marginTop: '0.75rem' }}>
                       <button
@@ -4650,7 +4653,13 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                   <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                     {prerequisiteRows.map((item) => {
                       const outcome = dependencyOutcomesById.get(item.workflowId);
-                      const stateLabel = outcome?.terminalState || item.state || 'unknown';
+                      const isWaitingForRerun =
+                        outcome?.resolution === 'waiting_for_successful_rerun';
+                      const stateLabel = isWaitingForRerun
+                        ? 'waiting_for_successful_rerun'
+                        : outcome?.terminalState || item.state || 'unknown';
+                      const failureCount = outcome?.failureCount ?? null;
+                      const lastFailedAt = outcome?.lastFailedAt ?? null;
                       return (
                         <li key={item.workflowId} className="card">
                           <div className="stack gap-1">
@@ -4659,6 +4668,15 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                             </a>
                             <code className="text-xs break-all">{item.workflowId}</code>
                             <span {...executionStatusPillProps(stateLabel)}>{formatStatusLabel(stateLabel)}</span>
+                            {isWaitingForRerun ? (
+                              <p className="small">
+                                <strong>Prerequisite failed; waiting for successful rerun.</strong>{' '}
+                                {failureCount && failureCount > 0
+                                  ? `Failure count: ${failureCount}.`
+                                  : null}
+                                {lastFailedAt ? ` Last failed at ${lastFailedAt}.` : null}
+                              </p>
+                            ) : null}
                             {item.summary ? <p className="small">{item.summary}</p> : null}
                             {outcome?.message ? <p className="small">{outcome.message}</p> : null}
                             {outcome?.failureCategory ? (

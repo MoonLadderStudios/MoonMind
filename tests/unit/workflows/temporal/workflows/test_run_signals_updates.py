@@ -516,7 +516,14 @@ def test_child_state_changed_sets_provider_profile_waiting_reason(monkeypatch):
     assert workflow_instance._attention_required is False
 
 @pytest.mark.asyncio
-async def test_wait_for_dependencies_raises_dependency_specific_failure(monkeypatch):
+async def test_legacy_wait_for_dependencies_raises_dependency_specific_failure(monkeypatch):
+    """Legacy fail-fast path: in-flight workflows whose history predates the
+    wait-through-rerun patch must continue raising on a failed prerequisite."""
+    from moonmind.workflows.temporal.workflows.run import (
+        DEPENDENCY_GATE_PATCH,
+        DEPENDENCY_WAIT_THROUGH_RERUN_PATCH,
+    )
+
     workflow_instance = MoonMindRunWorkflow()
     workflow_instance._owner_id = "owner-1"
     workflow_instance._owner_type = "user"
@@ -540,7 +547,13 @@ async def test_wait_for_dependencies_raises_dependency_specific_failure(monkeypa
     monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
     monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
     monkeypatch.setattr(workflow, "upsert_memo", lambda memo: None)
-    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    # Enable only the gate patch, not the wait-through-rerun patch, so we
+    # exercise the legacy fail-fast code path.
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
+    )
     monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
     workflow_info = type(
         "WorkflowInfo",
@@ -604,6 +617,9 @@ async def test_wait_for_dependencies_can_be_bypassed_by_operator_signal(monkeypa
             "resolvedAt": workflow_instance._dependency_outcomes_by_id["dep-1"]["resolvedAt"],
             "failureCategory": None,
             "message": "No longer needed.",
+            "resolution": "bypassed",
+            "failureCount": 0,
+            "lastFailedAt": None,
         },
         {
             "workflowId": "dep-2",
@@ -612,6 +628,9 @@ async def test_wait_for_dependencies_can_be_bypassed_by_operator_signal(monkeypa
             "resolvedAt": workflow_instance._dependency_outcomes_by_id["dep-2"]["resolvedAt"],
             "failureCategory": None,
             "message": "No longer needed.",
+            "resolution": "bypassed",
+            "failureCount": 0,
+            "lastFailedAt": None,
         },
     ]
     assert all(
