@@ -485,11 +485,11 @@ class SettingsRegistry:
         migration_rules: tuple[SettingMigrationRule, ...] = (),
         stable_key_ledger: frozenset[str] | None = _CATALOG_KEY_LEDGER,
     ) -> None:
-        self._entries = entries
+        self._entries = tuple(sorted(entries, key=lambda e: e.order))
         self._migration_rules = migration_rules
         self._stable_key_ledger = stable_key_ledger
         self._entries_by_key: dict[str, SettingRegistryEntry] = {
-            e.key: e for e in entries
+            e.key: e for e in self._entries
         }
         self._validate()
 
@@ -559,7 +559,12 @@ class SettingsRegistry:
             description: str | None = mm.get("description") or getattr(
                 field_info, "description", None
             )
-            default_any = field_info.default if field_info.default is not None else None
+            default_any = (
+                None
+                if field_info.is_required()
+                or getattr(field_info, "default_factory", None) is not None
+                else field_info.default
+            )
             options_raw: list[tuple[str, str]] = mm.get("options", [])
             entries.append(
                 SettingRegistryEntry(
@@ -602,7 +607,7 @@ class SettingsCatalogBuilder:
         if descriptor_fn is None:
             raise ValueError("descriptor_fn is required to build catalog descriptors")
         categories: dict[str, list[SettingDescriptor]] = {}
-        for entry in sorted(self._registry.entries, key=lambda e: e.order):
+        for entry in self._registry.entries:
             if section is not None and entry.section != section:
                 continue
             if scope is not None and scope not in entry.scopes:
@@ -661,13 +666,13 @@ class SettingsCatalogService:
         return self._catalog_builder.build(
             section,
             scope,
-            descriptor_fn=lambda entry: self._descriptor(entry),
+            descriptor_fn=self._descriptor,
         )
 
     def _entries_for_scope(self, scope: SettingScope) -> list[SettingRegistryEntry]:
         return [
             entry
-            for entry in sorted(self._registry, key=lambda item: item.order)
+            for entry in self._registry
             if scope in entry.scopes
         ]
 
@@ -677,9 +682,10 @@ class SettingsCatalogService:
         section: SettingSection | None = None,
         scope: SettingScope | None = None,
     ) -> SettingsCatalogResponse:
+        self._validate_apply_modes()
         entries = [
             entry
-            for entry in sorted(self._registry, key=lambda item: item.order)
+            for entry in self._registry
             if (section is None or entry.section == section)
             and (scope is None or scope in entry.scopes)
         ]

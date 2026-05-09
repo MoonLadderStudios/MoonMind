@@ -101,6 +101,26 @@ def test_catalog_rejects_descriptor_without_apply_mode():
         service.catalog(section="user-workspace", scope="workspace")
 
 
+@pytest.mark.asyncio
+async def test_catalog_async_rejects_descriptor_without_apply_mode():
+    broken_entry = SettingsCatalogService(env={})._registry[0].__class__(
+        key="broken.apply_mode",
+        title="Broken Apply Mode",
+        category="Broken",
+        section="user-workspace",
+        value_type="string",
+        ui="text",
+        scopes=("workspace",),
+        order=999,
+        apply_mode="",  # type: ignore[arg-type]
+        applies_to=("task_creation",),
+    )
+    service = SettingsCatalogService(env={}, registry=(broken_entry,))
+
+    with pytest.raises(ValueError, match="broken\\.apply_mode"):
+        await service.catalog_async(section="user-workspace", scope="workspace")
+
+
 def test_activation_metadata_covers_supported_apply_modes():
     entry_type = SettingsCatalogService(env={})._registry[0].__class__
     registry = (
@@ -1447,6 +1467,20 @@ def test_settings_registry_accepts_valid_dotted_key():
     assert registry.get("workflow.my_setting_1") is entry
 
 
+def test_settings_registry_orders_entries_at_initialization():
+    first = _minimal_entry("workflow.first")
+    second = _minimal_entry("workflow.second")
+    first = first.__class__(**{**first.__dict__, "order": 1})
+    second = second.__class__(**{**second.__dict__, "order": 2})
+
+    registry = SettingsRegistry((second, first), stable_key_ledger=None)
+
+    assert [entry.key for entry in registry.entries] == [
+        "workflow.first",
+        "workflow.second",
+    ]
+
+
 def test_settings_registry_migration_gate_raises_for_removed_key_without_rule():
     ledger = frozenset({"workflow.default_task_runtime", "workflow.old_key"})
     entry = _minimal_entry("workflow.default_task_runtime")
@@ -1642,6 +1676,44 @@ def test_settings_registry_from_pydantic_model_skips_unexposed_field():
     registry = SettingsRegistry.from_pydantic_model(SampleSettings, stable_key_ledger=None)
     assert registry.get("test.exposed_field") is not None
     assert len(registry.entries) == 1
+
+
+def test_settings_registry_from_pydantic_model_does_not_expose_undefined_defaults():
+    from pydantic import Field
+    from pydantic_settings import BaseSettings
+
+    def exposed(key: str) -> dict:
+        return {
+            "moonmind": {
+                "expose": True,
+                "key": key,
+                "section": "user-workspace",
+                "category": "Test",
+                "scopes": ["workspace"],
+                "ui": "input",
+                "type": "string",
+                "apply_mode": "next_task",
+                "applies_to": ["test"],
+                "order": 1,
+            }
+        }
+
+    class SampleSettings(BaseSettings):
+        required_value: str = Field(..., json_schema_extra=exposed("test.required_value"))
+        generated_value: str = Field(
+            default_factory=lambda: "generated",
+            json_schema_extra=exposed("test.generated_value"),
+        )
+        literal_value: str = Field(
+            "literal",
+            json_schema_extra=exposed("test.literal_value"),
+        )
+
+    registry = SettingsRegistry.from_pydantic_model(SampleSettings, stable_key_ledger=None)
+
+    assert registry.get("test.required_value").default_value is None
+    assert registry.get("test.generated_value").default_value is None
+    assert registry.get("test.literal_value").default_value == "literal"
 
 
 def test_workflow_settings_has_moonmind_expose_metadata():
