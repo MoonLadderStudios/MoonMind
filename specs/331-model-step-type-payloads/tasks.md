@@ -17,7 +17,7 @@
 - Integration tests: `./tools/test_integration.sh`
 - Final verification: `/moonspec-verify`
 
-## Format: `[ID] [P?] Description`
+## Task Format
 
 - **[P]**: Can run in parallel because the task touches different files and has no dependency on incomplete work.
 - Every task names exact file paths and requirement, scenario, success criterion, or source IDs where applicable.
