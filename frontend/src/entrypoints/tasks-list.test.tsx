@@ -252,8 +252,8 @@ describe('Tasks List Entrypoint', () => {
     fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
 
     const runtimeFilter = screen.getByLabelText('Runtime filter value') as HTMLSelectElement;
+    expect(runtimeFilter.multiple).toBe(true);
     expect(Array.from(runtimeFilter.options).map((option) => option.value)).toEqual([
-      '',
       'codex_cli',
       'codex',
       'claude_code',
@@ -557,8 +557,8 @@ describe('Tasks List Entrypoint', () => {
     const options = Array.from(statusFilter.options).map((option) => option.value);
     const optionLabels = Array.from(statusFilter.options).map((option) => option.textContent);
 
+    expect(statusFilter.multiple).toBe(true);
     expect(options).toEqual([
-      '',
       'scheduled',
       'initializing',
       'waiting_on_dependencies',
@@ -573,7 +573,6 @@ describe('Tasks List Entrypoint', () => {
       'canceled',
     ]);
     expect(optionLabels).toEqual([
-      'All Statuses',
       'scheduled',
       'initializing',
       'AWAITING TASK',
@@ -699,7 +698,8 @@ describe('Tasks List Entrypoint', () => {
 
     await screen.findAllByText('Example task');
     fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
-    fireEvent.click(screen.getByLabelText('Exclude canceled'));
+    fireEvent.change(screen.getByLabelText('Status filter mode'), { target: { value: 'exclude' } });
+    fireEvent.change(screen.getByLabelText('Status filter value'), { target: { value: 'canceled' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
 
     await waitFor(() => {
@@ -717,6 +717,27 @@ describe('Tasks List Entrypoint', () => {
         '/api/executions?source=temporal&pageSize=50&scope=tasks',
       );
     });
+  });
+
+  it('selects multiple status values and submits them through stateIn', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+
+    const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
+    for (const option of Array.from(statusFilter.options)) {
+      option.selected = option.value === 'completed' || option.value === 'failed';
+    }
+    fireEvent.change(statusFilter);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed%2Cfailed',
+      );
+    });
+    expect(screen.getByRole('button', { name: 'Status filter: completed +1' })).toBeTruthy();
   });
 
   it('clears stale cursor state when the page size changes', async () => {

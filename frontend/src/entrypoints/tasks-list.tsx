@@ -794,14 +794,26 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     }));
   };
 
-  const updateDraftValue = (field: 'status' | 'targetRuntime' | 'targetSkill', value: string) => {
-    setDraftFilters((current) => ({
-      ...current,
-      [field]: value ? { ...current[field], values: [value], blank: '' } : emptyValueFilter(),
-    }));
+  const updateDraftValues = (
+    field: 'status' | 'targetRuntime' | 'targetSkill',
+    values: string[],
+  ) => {
+    setDraftFilters((current) => {
+      const dedupedValues = uniqueValues(values);
+      if (dedupedValues.length === 0) {
+        return { ...current, [field]: { ...emptyValueFilter(), mode: current[field].mode } };
+      }
+      return {
+        ...current,
+        [field]: { ...current[field], values: dedupedValues, blank: '' },
+      };
+    });
   };
 
-  const updateDraftValueMode = (field: 'targetRuntime' | 'targetSkill', mode: ValueFilter['mode']) => {
+  const updateDraftValueMode = (
+    field: 'status' | 'targetRuntime' | 'targetSkill',
+    mode: ValueFilter['mode'],
+  ) => {
     setDraftFilters((current) => ({
       ...current,
       [field]: { ...current[field], mode },
@@ -819,15 +831,18 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     setDraftFilters((current) => ({ ...current, [field]: { ...current[field], ...patch } }));
   };
 
-  const applyMobileValue = (field: 'status' | 'targetRuntime', value: string) => {
+  const applyMobileValues = (
+    field: 'status' | 'targetRuntime' | 'targetSkill',
+    values: string[],
+  ) => {
+    const dedupedValues = uniqueValues(values);
+    const currentField = filters[field];
     applyFilters({
       ...filters,
       [field]:
-        value && field === 'targetRuntime'
-          ? { ...filters.targetRuntime, values: [value], blank: '' }
-          : value
-            ? { mode: 'include', values: [value], blank: '' }
-            : emptyValueFilter(),
+        dedupedValues.length === 0
+          ? { ...emptyValueFilter(), mode: currentField.mode }
+          : { ...currentField, values: dedupedValues, blank: '' },
     });
   };
 
@@ -928,21 +943,43 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     }
 
     if (field === 'status') {
-      const selected = isMobile ? filters.status.values[0] || '' : draftFilters.status.values[0] || '';
+      const draft = isMobile ? filters.status : draftFilters.status;
+      const selectedSet = new Set(draft.values.map((value) => value.toLowerCase()));
       return (
         <div className="queue-inline-filter task-list-header-filter-control">
           <label>
-            {labelPrefix}Status filter value
+            {labelPrefix}Status filter mode
             <select
-              value={selected}
+              value={draft.mode}
               disabled={!listEnabled}
               onChange={(event) => {
-                const value = event.target.value.toLowerCase();
-                if (isMobile) applyMobileValue('status', value);
-                else updateDraftValue('status', value);
+                const mode = event.target.value as ValueFilter['mode'];
+                if (isMobile) {
+                  applyFilters({ ...filters, status: { ...filters.status, mode } });
+                } else {
+                  updateDraftValueMode('status', mode);
+                }
               }}
             >
-              <option value="">All Statuses</option>
+              <option value="include">Include selected</option>
+              <option value="exclude">Exclude selected</option>
+            </select>
+          </label>
+          <label>
+            {labelPrefix}Status filter value
+            <select
+              multiple
+              value={Array.from(selectedSet)}
+              size={Math.min(TEMPORAL_STATUSES.length, 8)}
+              disabled={!listEnabled}
+              onChange={(event) => {
+                const next = Array.from(event.target.selectedOptions).map((option) =>
+                  option.value.toLowerCase(),
+                );
+                if (isMobile) applyMobileValues('status', next);
+                else updateDraftValues('status', next);
+              }}
+            >
               {TEMPORAL_STATUSES.map((status) => (
                 <option key={status} value={status}>
                   {formatStatusLabel(status)}
@@ -950,23 +987,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               ))}
             </select>
           </label>
-          {!isMobile ? (
-            <label className="task-list-filter-checkbox">
-              <input
-                type="checkbox"
-                checked={draftFilters.status.mode === 'exclude' && draftFilters.status.values.includes('canceled')}
-                onChange={(event) => {
-                  setDraftFilters((current) => ({
-                    ...current,
-                    status: event.target.checked
-                      ? { mode: 'exclude', values: ['canceled'], blank: '' }
-                      : emptyValueFilter(),
-                  }));
-                }}
-              />
-              Exclude canceled
-            </label>
-          ) : null}
           {renderFacetNotice('status')}
         </div>
       );
@@ -1044,14 +1064,16 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           <label>
             {labelPrefix}Runtime filter value
             <select
-              value={draft.values[0] || ''}
+              multiple
+              value={draft.values}
+              size={Math.min(Math.max(runtimeOptions.length, 1), 8)}
               disabled={!listEnabled}
               onChange={(event) => {
-                if (isMobile) applyMobileValue('targetRuntime', event.target.value);
-                else updateDraftValue('targetRuntime', event.target.value);
+                const next = Array.from(event.target.selectedOptions).map((option) => option.value);
+                if (isMobile) applyMobileValues('targetRuntime', next);
+                else updateDraftValues('targetRuntime', next);
               }}
             >
-              <option value="">All Runtimes</option>
               {runtimeOptions.map((runtime) => (
                 <option key={runtime} value={runtime}>
                   {formatRuntimeLabel(runtime)}
@@ -1087,22 +1109,16 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           <label>
             {labelPrefix}Skill filter value
             <select
-              value={draft.values[0] || ''}
+              multiple
+              value={draft.values}
+              size={Math.min(Math.max(skillOptions.length, 1), 8)}
               disabled={!listEnabled}
               onChange={(event) => {
-                if (isMobile) {
-                  applyFilters({
-                    ...filters,
-                    targetSkill: event.target.value
-                      ? { ...filters.targetSkill, values: [event.target.value], blank: '' }
-                      : emptyValueFilter(),
-                  }, null);
-                } else {
-                  updateDraftValue('targetSkill', event.target.value);
-                }
+                const next = Array.from(event.target.selectedOptions).map((option) => option.value);
+                if (isMobile) applyMobileValues('targetSkill', next);
+                else updateDraftValues('targetSkill', next);
               }}
             >
-              <option value="">All Skills</option>
               {skillOptions.map((skill) => (
                 <option key={skill} value={skill}>
                   {skill}
