@@ -34,7 +34,7 @@
 ## Assumptions
 
 - "In Progress" is a discoverable Jira workflow status reachable from MM-653's current status on the project that owns MM-653.
-- The runtime executing this workflow already has access to MoonMind's trusted Jira tool surface (e.g., `jira.get_issue`, `jira.get_transitions`, `jira.transition_issue`); raw Jira REST credentials are not provided to or used by the agent runtime.
+- The runtime executing this workflow already has access to MoonMind's trusted Jira tool surface for retrieving issue details, discovering available transitions, and executing status changes; raw Jira REST credentials are not provided to or used by the agent runtime.
 - The brief targets a status transition only — no description, label, assignee, or other field updates are implied by "Change ... to status 'In Progress'".
 - Status name matching is case-insensitive and ignores surrounding whitespace, but otherwise compares against the literal target name `In Progress`.
 
