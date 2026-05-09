@@ -34,7 +34,7 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 
 **Goal**: Task authors can use reusable Presets transparently during task authoring while generated executable Tool and Skill steps remain editable and unresolved Preset placeholders do not reach runtime execution.
 
-**Independent Test**: Render the task authoring surface, choose Step Type `Preset`, select and configure an available preset, preview generated steps and warnings, apply the preset, and verify the draft contains editable executable Tool and/or Skill steps while unresolved Preset submission remains blocked.
+**Independent Test**: Render the task authoring surface, choose Step Type `Preset`, and verify that submission is blocked. Select and configure an available preset, preview generated steps and warnings, apply the preset, and verify the draft contains editable executable Tool and/or Skill steps.
 
 **Acceptance Scenarios**:
 
@@ -80,7 +80,7 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 - **FR-002**: The system MUST validate that the selected preset exists, the selected version is active or explicitly previewable, and input values are valid before preview or apply succeeds.
 - **FR-003**: The system MUST preview configured Preset expansion deterministically and list generated step titles, Step Types, and warnings before application.
 - **FR-004**: Applying a valid Preset expansion MUST replace the temporary Preset placeholder with concrete executable Tool and/or Skill steps.
-- **FR-005**: Preset-derived generated steps MUST remain editable like ordinary executable steps after application.
+- **FR-005**: Preset-derived generated steps MUST remain editable like ordinary executable steps after application and MUST include provenance metadata for audit purposes.
 - **FR-006**: Generated Tool and Skill steps MUST validate under their own rules before executable submission, and unresolved Preset steps MUST be rejected by default.
 - **FR-007**: Preset management and preset use MUST remain separate; the Presets management section MUST NOT be required for choosing and applying a preset to the current task draft.
 - **FR-008**: Preview/apply failure states MUST leave the current draft unchanged and show visible author feedback.
@@ -89,7 +89,7 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 
 - **Preset Step Draft**: Temporary authored step with Step Type `Preset`, selected preset identity/version, and input values.
 - **Preset Expansion Preview**: Deterministic generated step list plus warnings or errors shown before application.
-- **Preset-Derived Executable Step**: Concrete Tool or Skill step inserted by applying a preset, including available provenance metadata.
+- **Preset-Derived Executable Step**: Concrete Tool or Skill step inserted by applying a preset, including preserved provenance metadata.
 
 ## Success Criteria
 

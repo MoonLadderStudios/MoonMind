@@ -10,7 +10,7 @@ Fields:
 - `presetId`: selected preset/capability identifier
 - `version`: selected active or previewable preset version
 - `inputs`: schema-validated preset input values
-- `previewState`: optional current preview result or stale/error state
+- `previewState`: optional current Preset Expansion Preview or stale/error state
 
 Validation:
 
@@ -44,7 +44,7 @@ Fields:
 - `stepType`: `tool` or `skill`
 - `title`: editable generated title
 - `tool` or `skill`: executable binding and inputs
-- `provenance`: preset source metadata when available
+- `provenance`: preset source metadata preserved from the applied expansion
 
 Validation:
 

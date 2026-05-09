@@ -23,7 +23,7 @@ Those artifacts may provide implementation evidence when the downstream implemen
 | FR-002 | pending_downstream_verification | Existing task-template services are expected to own detail/expand validation. | Verify preset existence/version/input validation. | Focused UI/API tests as needed |
 | FR-003 | pending_downstream_verification | Design requires deterministic expansion preview. | Verify generated title/type/warning preview. | Focused Create page tests |
 | FR-004 | pending_downstream_verification | Design requires apply to replace Preset placeholder. | Verify replacement with concrete Tool/Skill steps. | Focused Create page tests |
-| FR-005 | pending_downstream_verification | Design requires generated steps to remain ordinary editable steps. | Verify editability after apply. | Focused Create page tests |
+| FR-005 | pending_downstream_verification | Design requires generated steps to remain ordinary editable steps with audit provenance. | Verify editability and provenance preservation after apply. | Focused Create page tests |
 | FR-006 | pending_downstream_verification | Design requires unresolved Preset steps not to execute by default. | Verify unresolved submission block and generated step validation. | Focused Create page tests |
 | FR-007 | pending_downstream_verification | Design separates management from use. | Verify Presets management is not required for authoring apply. | Focused Create page tests |
 | FR-008 | pending_downstream_verification | Design requires visible validation feedback. | Verify failed preview/apply leaves draft unchanged. | Focused Create page tests |
