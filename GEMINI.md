@@ -237,6 +237,8 @@ Key diagnostics:
 - Existing Temporal execution records, task input snapshot artifacts, Temporal artifact metadata/content, and existing step ledger/projection payloads; no new persistent tables planned (329-show-attachment-recovery-diagnostics-by-target)
 - Python 3.12; TypeScript/React for Create-page behavior. + Pydantic v2, FastAPI, SQLAlchemy async ORM, Temporal Python SDK activity/service boundaries, React, TanStack Query, Vitest, Testing Library. (331-model-step-type-payloads)
 - Existing task-template catalog tables and execution payload/artifact records only; no new persistent storage planned. (331-model-step-type-payloads)
+- Python 3.12 (existing MoonMind runtime); no new code modules required. + Existing trusted Jira tool registry (`moonmind/mcp/jira_tool_registry.py`), `JiraToolService` (`moonmind/integrations/jira/tool.py`), `redact_sensitive_text` / `SecretRedactor` redaction helpers. (334-transition-mm667-in-pr)
+- N/A — this is a one-shot tool-driven workflow. The only persisted artifact is the run's structured outcome report (artifact-backed run output); no new persistent tables. (334-transition-mm667-in-pr)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
