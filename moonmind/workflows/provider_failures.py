@@ -18,10 +18,6 @@ _RATE_LIMIT_MARKERS = (
     "too many requests",
     "usage limit",
     "hit your limit",
-    "you've hit your limit",
-    "you have hit your limit",
-    "you've hit your usage limit",
-    "you have hit your usage limit",
     "send a request to your admin",
 )
 

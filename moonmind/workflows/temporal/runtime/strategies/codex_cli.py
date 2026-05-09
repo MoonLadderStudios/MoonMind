@@ -245,16 +245,12 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
         stdout: str,
         stderr: str,
     ) -> tuple[str, str | None]:
-        parser = self.create_output_parser()
-        parsed = parser.parse(stdout, stderr)
-        if parsed.rate_limited:
-            return "failed", "integration_error"
-        if exit_code == 0:
-            blocker_lines = CodexCliOutputParser.extract_blocker_lines(stdout, stderr)
-            if blocker_lines:
-                return "failed", "execution_error"
-            return "completed", None
-        return "failed", "execution_error"
+        result = self.classify_result(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+        )
+        return result.status, result.failure_class
 
     def classify_result(
         self,
@@ -277,12 +273,14 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
                 status="failed",
                 failure_class="execution_error",
             )
-        return super().classify_result(
+        # Defer the default exit-code mapping to the base classify_exit.
+        # Calling super().classify_result here would recurse via self.classify_exit.
+        status, failure_class = super().classify_exit(
             exit_code=exit_code,
             stdout=stdout,
             stderr=stderr,
-            parsed_output=parsed,
         )
+        return ManagedRuntimeExitResult(status=status, failure_class=failure_class)
 
     def create_output_parser(self) -> CodexCliOutputParser:
         return CodexCliOutputParser()

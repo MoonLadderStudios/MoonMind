@@ -25,10 +25,7 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
 # exit with a non-zero code and otherwise look like a generic execution error.
 _CLAUDE_CODE_RATE_LIMIT_MARKERS: tuple[str, ...] = (
     "hit your limit",
-    "hit your usage limit",
-    "usage limit reached",
-    "rate limit",
-    "rate-limit",
+    "usage limit",
     "status 429",
     "status: 429",
     "too many requests",
@@ -37,10 +34,8 @@ _CLAUDE_CODE_RATE_LIMIT_MARKERS: tuple[str, ...] = (
 # "You've hit your usage limit. To get more access now, send a request to
 # your admin or try again at HH:MM AM/PM."
 _CODEX_RATE_LIMIT_MARKERS: tuple[str, ...] = (
-    "hit your usage limit",
     "hit your limit",
-    "rate limit",
-    "rate-limit",
+    "usage limit",
     "status 429",
     "status: 429",
     "too many requests",
