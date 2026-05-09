@@ -406,18 +406,19 @@ describe('Tasks List Entrypoint', () => {
         document.querySelectorAll(
           '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
         ),
-      ).toHaveLength(4);
+      ).toHaveLength(6);
     });
 
     const activePills = document.querySelectorAll<HTMLElement>(
       '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
     );
-    expect(activePills).toHaveLength(4);
+    expect(activePills).toHaveLength(6);
     expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'planning')).toHaveLength(2);
     expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'executing')).toHaveLength(2);
+    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'finalizing')).toHaveLength(2);
     for (const pill of activePills) {
       const label = pill.dataset.state;
-      if (label !== 'planning' && label !== 'executing') {
+      if (label !== 'planning' && label !== 'executing' && label !== 'finalizing') {
         throw new Error(`Unexpected active status pill state: ${label}`);
       }
       expect(pill.dataset.state).toBe(label);
@@ -456,11 +457,6 @@ describe('Tasks List Entrypoint', () => {
       expect(pill.dataset.effect).toBeUndefined();
     }
 
-    const finalizingPills = nonExecutingStatusPills.filter((pill) => pill.textContent === 'finalizing');
-    expect(finalizingPills.length).toBeGreaterThan(0);
-    for (const pill of finalizingPills) {
-      expect(pill.dataset.effect).toBeUndefined();
-    }
   });
 
   it('keeps started time out of the task list presentation', async () => {
