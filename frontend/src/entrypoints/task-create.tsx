@@ -7219,13 +7219,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           if (!sourceStep) {
             return entry.payload;
           }
+          const submittedPayload = entry.payload;
           const payloadAttachments = Array.isArray(
-            entry.payload.inputAttachments,
+            submittedPayload.inputAttachments,
           )
-            ? (entry.payload.inputAttachments as StepAttachmentRef[])
+            ? (submittedPayload.inputAttachments as StepAttachmentRef[])
             : [];
           const effectivePayloadAttachments =
-            Array.isArray(entry.payload.inputAttachments) ||
+            Array.isArray(submittedPayload.inputAttachments) ||
             !sourceStep.templateStepId ||
             sourceStep.id !== sourceStep.templateStepId
               ? payloadAttachments
@@ -7263,8 +7264,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             );
           const shouldSubmitStepType =
             submittedStepType === "tool" ||
-            Boolean(entry.payload.tool) ||
-            Boolean(entry.payload.skill);
+            Boolean(submittedPayload?.tool) ||
+            Boolean(submittedPayload?.skill);
           const submittedStep = {
             ...(shouldPreserveStepId && sourceStep.id.trim()
               ? { id: sourceStep.id.trim() }
