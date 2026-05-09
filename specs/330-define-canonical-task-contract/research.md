@@ -48,9 +48,9 @@ Decision: `dependsOn` is stored as `list[str]` on `TaskExecutionSpec`. An empty 
 
 ### Test patterns
 
-Existing `tests/unit/workflows/tasks/test_task_contract.py` (680 lines) uses direct `TaskExecutionSpec.model_validate(...)` and `build_canonical_task_view(...)` calls with `pytest.raises(ValidationError)` / `pytest.raises(TaskContractError)` assertions. New tests follow the same pattern.
+Existing `tests/unit/workflows/tasks/test_task_contract.py` uses direct `TaskExecutionSpec.model_validate(...)` and `build_canonical_task_view(...)` calls with `pytest.raises(ValidationError)` / `pytest.raises(TaskContractError)` assertions. New tests follow the same pattern.
 
-`tests/integration/temporal/test_task_shaped_submission_normalization.py` exercises end-to-end submission normalization. Acceptance scenarios from the spec map directly to new unit tests; no new integration test is required to cover the contract-definition story (the existing integration test already exercises normalization at the API boundary).
+`tests/integration/temporal/test_task_shaped_submission_normalization.py` exercises end-to-end submission normalization at the HTTP API boundary (POST to `/api/executions`). However, it does not yet cover the new recovery/resume payload scenarios introduced in MM-638. New integration tests (T017-T020) directly invoke `build_canonical_task_view` with well-formed and malformed recovery/resume payloads and are marked `integration_ci`. These are hermetic (no external credentials or network required) and complement the existing API-level test by providing targeted coverage for FR-012 at the normalization boundary.
 
 ## Decisions
 

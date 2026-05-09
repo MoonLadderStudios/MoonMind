@@ -5,8 +5,8 @@
 
 ## Summary
 
-- **Total tasks**: 21
-- **Parallelizable**: T003, T004, T005 (new types independent of each other); T009, T010, T011 (unit tests within phase)
+- **Total tasks**: 29
+- **Parallelizable**: T003, T004, T005 (new types independent of each other); T011, T012, T013, T014, T015 (unit tests within phase)
 - **Independent test criteria**: Submit canonical `task`-typed payloads with/without recovery fields to `build_canonical_task_view` (unit) and the executions API (integration) and confirm valid payloads are accepted and normalized, while malformed payloads produce explicit `TaskContractError` messages
 
 ## Dependency Graph
@@ -14,18 +14,18 @@
 ```
 T001 (setup, verify read)
   └─► T002 [red-first: write failing unit tests]
-        └─► T003 [TaskRecoveryKind]   ─┐
-        └─► T004 [TaskRecoveryProv.]   ├─► T006 [TaskExecutionSpec fields]
-        └─► T005 [ResumeRef]          ─┘
-                                            └─► T007 [cross-validator]
-T008 [TaskGitSelection.branch] ────────► independent (no deps on T003-T005)
-T009-T012 [unit tests: complete] ──────► depends on T003-T008
-T013 [__all__ update] ─────────────────► depends on T003-T005
-T014 [run unit tests: all pass] ───────► depends on T009-T013
-T015-T018 [integration tests] ─────────► depends on T014
-T019 [run integration tests] ──────────► depends on T015-T018
-T020 [story validation] ───────────────► depends on T014, T019
-T021 [/moonspec-verify] ───────────────► depends on T020
+        └─► T003 [P] [TaskRecoveryKind]   ─┐
+        └─► T004 [P] [TaskRecoveryProv.]   ├─► T007 [TaskExecutionSpec fields]
+        └─► T005 [P] [ResumeRef]          ─┘      └─► T008 [depends_on validator]
+                                                          └─► T009 [cross-validator]
+T006 [TaskGitSelection.branch] ──────────────────────── independent (no deps on T003-T005)
+T010 [__all__ update] ──────────────────────────────── depends on T003-T005
+T011-T015 [P] [unit tests: complete] ───────────────── depends on T003-T010
+T016 [run unit tests: all pass] ────────────────────── depends on T011-T015
+T017-T020 [integration tests] ──────────────────────── depends on T016
+T021 [run integration tests] ───────────────────────── depends on T017-T020
+T022-T028 [story validation] ───────────────────────── depends on T016, T021
+T029 [/moonspec-verify] ────────────────────────────── depends on T022-T028
 ```
 
 ---
@@ -77,7 +77,7 @@ Write failing tests covering all FRs before touching implementation. Tests must 
 - [ ] T011 [P] [US1] Add/complete tests for FR-001/002/003 in `tests/unit/workflows/tasks/test_task_contract.py`: `TaskRecoveryKind` rejects invalid literals; `TaskRecoveryProvenance` requires non-empty `sourceWorkflowId`/`sourceRunId`; `ResumeFromFailedStepRef` requires non-empty required fields including `resumeCheckpointRef`
 - [ ] T012 [P] [US1] Add/complete tests for FR-004/005 in `tests/unit/workflows/tasks/test_task_contract.py`: `TaskExecutionSpec` accepts `recovery` and `resume` as optional fields; absence of both does not affect plain task payloads
 - [ ] T013 [P] [US1] Add/complete tests for FR-006/007 cross-validation in `tests/unit/workflows/tasks/test_task_contract.py`: `resume_from_failed_step` without `resume` block → `TaskContractError`; `resume` block without matching `recovery.kind` → `TaskContractError`; `resume` block with no `recovery` → `TaskContractError`
-- [ ] T014 [P] [US1] Add/complete tests for FR-008 in `tests/unit/workflows/tasks/test_task_contract.py`: `exact_full_rerun` and `edited_full_retry` with valid `sourceWorkflowId`/`sourceRunId` accepted; either without source IDs → error; either with `resume` block → error
+- [ ] T014 [P] [US1] Add/complete tests for FR-008 in `tests/unit/workflows/tasks/test_task_contract.py`: `exact_full_rerun` and `edited_full_retry` with valid `sourceWorkflowId`/`sourceRunId` accepted; either without source IDs → error (covered generically by FR-002 test but must also be verifiable for each of these recovery kinds); `exact_full_rerun` with `resume` block → error; `edited_full_retry` with `resume` block → error (FR-007 cross-validator covers both; confirm each produces a `TaskContractError`)
 - [ ] T015 [P] [US1] Add/complete tests for FR-009/010/011 in `tests/unit/workflows/tasks/test_task_contract.py`: `dependsOn` list preserved verbatim; empty list normalized to `None`; `task.git.targetBranch` absent from canonical output; `task.git.branch` present in output
 - [ ] T016 [US1] Run `./tools/test_unit.sh` (or `MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/unit/workflows/tasks/test_task_contract.py -v`) and confirm all new and existing tests pass
 

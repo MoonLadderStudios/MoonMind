@@ -137,7 +137,8 @@ result = build_canonical_task_view(job_type="task", payload={
     },
 })
 git = result["task"]["git"]
-assert git.get("targetBranch") is None or git.get("branch") == "feature/my-branch"
+assert git.get("branch") == "feature/my-branch"
+assert "targetBranch" not in git or git.get("targetBranch") is None
 print("SC-006 PASS")
 ```
 
