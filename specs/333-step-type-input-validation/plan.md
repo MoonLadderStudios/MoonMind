@@ -30,17 +30,27 @@ The existing `TaskContractError` already carries a `diagnostic` field for struct
 
 **File**: `moonmind/workflows/tasks/task_contract.py`
 
-Add two new Pydantic models alongside the existing `TaskContractError`:
+Add two new Pydantic models alongside the existing `TaskContractError`. The `code` field is constrained by an `Enum` to keep error codes consistent and typo-resistant; the `errors` field uses `Field(default_factory=list)` to follow the existing convention in this module (see `moonmind/workflows/tasks/task_contract.py` line 1075).
+
+The `path` field is rooted at the **request body** for the submission endpoint, so frontends can address fields directly from the submitted payload (e.g. `payload.task.steps[0].tool.inputs.issueKey`). The plan uses the `steps[i]...` shorthand below for brevity; the API contract documents the full root.
 
 ```python
+class ValidationErrorCode(str, Enum):
+    REQUIRED = "required"
+    TYPE = "type"
+    TOOL_NOT_FOUND = "tool_not_found"
+    SKILL_NOT_FOUND = "skill_not_found"
+    PRESET_NOT_FOUND = "preset_not_found"
+    SCHEMA_VIOLATION = "schema_violation"
+
 class ValidationFieldError(BaseModel):
-    path: str        # dot-bracket notation, e.g. "steps[0].tool.inputs.issueKey"
-    message: str     # human-readable description
-    code: str        # machine-readable, e.g. "required", "tool_not_found"
+    path: str                  # dot-bracket notation rooted at the request body, e.g. "payload.task.steps[0].tool.inputs.issueKey"
+    message: str               # human-readable description
+    code: ValidationErrorCode  # machine-readable error code
 
 class StepValidationResult(BaseModel):
     is_valid: bool
-    errors: list[ValidationFieldError] = []
+    errors: list[ValidationFieldError] = Field(default_factory=list)
 ```
 
 ### 2. Add step input validation collectors
@@ -57,21 +67,23 @@ Add a new function `validate_step_inputs(steps, step_idx)` that:
 
 **File**: `moonmind/workflows/tasks/task_contract.py` (task submission normalization path)
 
-Update the existing step-level validation to collect all `ValidationFieldError` instances instead of raising `TaskContractError` on the first failure. Raise a single `TaskContractError` carrying the full `errors` list once all steps have been checked.
+Update the existing step-level validation to collect all `ValidationFieldError` instances instead of raising `TaskContractError` on the first failure. Raise a single `TaskContractError` carrying the full `errors` list once all steps have been checked. Store the collected list on the existing `TaskContractError.diagnostic` field so the API layer can extract it from the standard error-handling pathway without a new sidecar attribute.
 
 ### 4. Update the 422 response shape
 
 **File**: `api_service/api/routers/executions.py`
 
-Update `_invalid_task_request()` (line ~3236) to include a `validation_errors` key in the 422 response body when the incoming `TaskContractError` carries field-level errors:
+The current signature of `_invalid_task_request()` (line ~3236) only accepts a `message: str`. Extend the signature to accept an optional `validation_errors: list[ValidationFieldError] | None = None` parameter so callers can pass structured field errors through. Update all existing call sites to keep working with the message-only form.
+
+When `validation_errors` is provided, include it as a `validation_errors` array in the 422 response body. Each entry uses paths rooted at the request body (e.g. `payload.task.steps[i]...`):
 
 ```json
 {
   "code": "invalid_execution_request",
   "message": "Step validation failed: 2 field error(s).",
   "validation_errors": [
-    {"path": "steps[0].tool.inputs.issueKey", "message": "Field 'issueKey' is required.", "code": "required"},
-    {"path": "steps[1].skill.inputs.repository", "message": "Field 'repository' must be a string.", "code": "type"}
+    {"path": "payload.task.steps[0].tool.inputs.issueKey", "message": "Field 'issueKey' is required.", "code": "required"},
+    {"path": "payload.task.steps[1].skill.inputs.repository", "message": "Field 'repository' must be a string.", "code": "type"}
   ]
 }
 ```
