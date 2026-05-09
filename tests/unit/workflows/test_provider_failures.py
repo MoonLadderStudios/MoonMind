@@ -38,6 +38,17 @@ def test_classifies_codex_usage_limit_as_429() -> None:
     assert result.provider_error_code == "429"
     assert result.retry_recommendation == "retry_after_cooldown"
 
+def test_classifies_claude_code_short_limit_as_429() -> None:
+    """Claude Code's shorter wording omits 'usage' — markers must still match."""
+    result = classify_provider_failure(
+        "You've hit your limit · resets 1pm (UTC)"
+    )
+
+    assert result is not None
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "429"
+    assert result.retry_recommendation == "retry_after_cooldown"
+
 def test_classifies_http_401_as_auth_user_error() -> None:
     result = classify_provider_failure("turn failed: http 401")
 

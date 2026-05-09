@@ -239,6 +239,19 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
                 env_source=environment,
             )
 
+    def classify_exit(
+        self,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+    ) -> tuple[str, str | None]:
+        result = self.classify_result(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+        )
+        return result.status, result.failure_class
+
     def classify_result(
         self,
         *,
@@ -248,21 +261,32 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
         parsed_output: ParsedOutput | None = None,
     ) -> ManagedRuntimeExitResult:
         parsed = parsed_output or self.create_output_parser().parse(stdout, stderr)
+        if parsed.rate_limited:
+            return ManagedRuntimeExitResult(
+                status="failed",
+                failure_class="integration_error",
+                provider_error_code="429",
+            )
         blocker_lines = CodexCliOutputParser.extract_blocker_lines(stdout, stderr)
         if exit_code == 0 and blocker_lines:
             return ManagedRuntimeExitResult(
                 status="failed",
                 failure_class="execution_error",
             )
-        return super().classify_result(
+        # Defer the default exit-code mapping to the base classify_exit.
+        # Calling super().classify_result here would recurse via self.classify_exit.
+        status, failure_class = super().classify_exit(
             exit_code=exit_code,
             stdout=stdout,
             stderr=stderr,
-            parsed_output=parsed,
         )
+        return ManagedRuntimeExitResult(status=status, failure_class=failure_class)
 
     def create_output_parser(self) -> CodexCliOutputParser:
         return CodexCliOutputParser()
+
+    def terminate_on_live_rate_limit(self) -> bool:
+        return True
 
     def probe_progress_at(
         self,
