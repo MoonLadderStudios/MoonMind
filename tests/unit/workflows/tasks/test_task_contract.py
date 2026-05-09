@@ -881,6 +881,22 @@ def test_fr008_exact_full_rerun_with_resume_is_rejected() -> None:
         )
 
 
+def test_fr008_edited_full_retry_with_resume_is_rejected() -> None:
+    """MM-638 FR-008: edited_full_retry paired with a resume block raises TaskContractError."""
+    with pytest.raises(TaskContractError, match="resume_from_failed_step"):
+        build_canonical_task_view(
+            job_type="task",
+            payload=_canonical_task_payload({
+                "recovery": {
+                    "kind": "edited_full_retry",
+                    "sourceWorkflowId": "mm:x",
+                    "sourceRunId": "r1",
+                },
+                "resume": _VALID_RESUME_BLOCK,
+            }),
+        )
+
+
 # FR-009: dependsOn list preserved verbatim; empty list normalized to None
 
 def test_fr009_depends_on_preserved_verbatim() -> None:
