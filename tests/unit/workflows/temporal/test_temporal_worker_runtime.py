@@ -2548,7 +2548,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         resolve_external_adapter,
         external_adapter_execution_style,
     ]
-    mock_build_deps.assert_called_once_with()
+    mock_build_deps.assert_called_once_with(artifact_service=ANY)
     run_supervisor.reconcile.assert_awaited_once()
     session_controller.reconcile.assert_awaited_once()
     deployment_handler_calls = [

@@ -173,19 +173,23 @@ class TestClaudeCodeBuildCommand:
 # ---------------------------------------------------------------------------
 
 class TestClaudeCodePrepareWorkspace:
+    """The strategy must not write CLAUDE.md from request.instruction_ref.
+
+    CLAUDE.md is project context (per ``docs/Steps/SkillSystem.md``); the turn
+    instruction is delivered to the Claude CLI via ``-p`` so it cannot be
+    treated as untrusted retrieved content. RAG context injection still mutates
+    ``request.instruction_ref`` so the prompt carries retrieved context inline.
+    """
+
     @pytest.mark.asyncio
-    async def test_creates_claude_md_when_absent(self, tmp_path) -> None:
-        """When CLAUDE.md does not exist, it is created with the instruction ref."""
+    async def test_does_not_create_claude_md_when_absent(self, tmp_path) -> None:
         s = ClaudeCodeStrategy()
         request = _make_request(instruction_ref="Do the task")
         await s.prepare_workspace(tmp_path, request)
-        claude_md = tmp_path / "CLAUDE.md"
-        assert claude_md.is_file() and not claude_md.is_symlink()
-        assert claude_md.read_text() == "Do the task"
+        assert not (tmp_path / "CLAUDE.md").exists()
 
     @pytest.mark.asyncio
     async def test_does_not_overwrite_existing_regular_file(self, tmp_path) -> None:
-        """When CLAUDE.md already exists as a regular file, it is left unchanged."""
         s = ClaudeCodeStrategy()
         claude_md = tmp_path / "CLAUDE.md"
         claude_md.write_text("existing project context")
@@ -195,8 +199,7 @@ class TestClaudeCodePrepareWorkspace:
 
     @pytest.mark.asyncio
     async def test_does_not_follow_symlink_to_agents_md(self, tmp_path) -> None:
-        """When CLAUDE.md is a symlink (e.g. -> AGENTS.md), it must not be followed.
-        AGENTS.md must remain intact after prepare_workspace runs."""
+        """An existing ``CLAUDE.md -> AGENTS.md`` symlink must remain intact."""
         s = ClaudeCodeStrategy()
         agents_md = tmp_path / "AGENTS.md"
         agents_md.write_text("# Agent coding standards\n\nDo not break me.")
@@ -204,14 +207,11 @@ class TestClaudeCodePrepareWorkspace:
         claude_md.symlink_to("AGENTS.md")
         request = _make_request(instruction_ref="Task instructions")
         await s.prepare_workspace(tmp_path, request)
-        # AGENTS.md must be untouched
         assert agents_md.read_text() == "# Agent coding standards\n\nDo not break me."
-        # CLAUDE.md symlink must still point to AGENTS.md
         assert claude_md.is_symlink()
 
     @pytest.mark.asyncio
     async def test_no_op_without_instruction_ref(self, tmp_path) -> None:
-        """When instruction_ref is absent, nothing is written."""
         s = ClaudeCodeStrategy()
         request = _make_request()
         await s.prepare_workspace(tmp_path, request)
@@ -219,11 +219,12 @@ class TestClaudeCodePrepareWorkspace:
 
     @pytest.mark.asyncio
     @patch("moonmind.rag.context_injection.ContextInjectionService")
-    async def test_injects_context_before_creating_claude_md(
+    async def test_injects_context_into_instruction_ref(
         self,
         mock_service_class,
         tmp_path,
     ) -> None:
+        """RAG context still mutates ``request.instruction_ref`` for the prompt."""
         mock_service = mock_service_class.return_value
 
         async def _inject_context(*, request, workspace_path):
@@ -240,7 +241,7 @@ class TestClaudeCodePrepareWorkspace:
             workspace_path=tmp_path,
         )
         assert request.instruction_ref == "Injected retrieval context"
-        assert (tmp_path / "CLAUDE.md").read_text() == "Injected retrieval context"
+        assert not (tmp_path / "CLAUDE.md").exists()
 
 # ---------------------------------------------------------------------------
 # CodexCliStrategy

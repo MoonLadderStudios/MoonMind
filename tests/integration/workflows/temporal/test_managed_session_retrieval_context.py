@@ -40,7 +40,7 @@ def _make_request(**overrides) -> AgentExecutionRequest:
 
 
 @patch("moonmind.rag.context_injection.ContextInjectionService")
-async def test_claude_launcher_uses_shared_context_injection_before_writing_claude_md(
+async def test_claude_launcher_uses_shared_context_injection_for_prompt(
     mock_service_class,
     tmp_path,
     monkeypatch,
@@ -104,8 +104,11 @@ async def test_claude_launcher_uses_shared_context_injection_before_writing_clau
     )
     await process.wait()
 
+    # The injected retrieval context lands in request.instruction_ref and is
+    # passed to the Claude CLI via -p; CLAUDE.md remains project context and
+    # is never written by the launcher.
     assert any(arg == "Injected retrieval context" for arg in captured_args)
-    assert (workspace / "CLAUDE.md").read_text(encoding="utf-8") == "Injected retrieval context"
+    assert not (workspace / "CLAUDE.md").exists()
 
 
 @pytest.mark.parametrize("transport", ["direct", "gateway"])
@@ -191,7 +194,6 @@ async def test_claude_launcher_publishes_context_artifact_reference_for_runtime_
     moonmind_meta = request.parameters["metadata"]["moonmind"]
     artifact_ref = moonmind_meta["retrievedContextArtifactPath"]
     artifact_path = workspace / artifact_ref
-    claude_md = (workspace / "CLAUDE.md").read_text(encoding="utf-8")
 
     assert artifact_ref.startswith("artifacts/context/rag-context-")
     assert moonmind_meta["retrievedContextTransport"] == transport
@@ -203,13 +205,16 @@ async def test_claude_launcher_publishes_context_artifact_reference_for_runtime_
     assert f'"transport": "{transport}"' in artifact_text
     assert '"initiation_mode": "automatic"' in artifact_text
     assert '"truncated": false' in artifact_text
-    assert "BEGIN_RETRIEVED_CONTEXT" in claude_md
-    assert "Retrieved context artifact: artifacts/context/" in claude_md
-    assert "Original instruction" in claude_md
+    # The retrieval prompt (BEGIN_RETRIEVED_CONTEXT, artifact ref, and original
+    # instruction) flows through request.instruction_ref to the Claude CLI via
+    # -p — not CLAUDE.md, which is project context and must not be overwritten.
+    assert not (workspace / "CLAUDE.md").exists()
+    prompt_args = [arg for arg in captured_args if isinstance(arg, str)]
+    assert any("BEGIN_RETRIEVED_CONTEXT" in arg for arg in prompt_args)
     assert any(
-        isinstance(arg, str) and "Retrieved context artifact: artifacts/context/" in arg
-        for arg in captured_args
+        "Retrieved context artifact: artifacts/context/" in arg for arg in prompt_args
     )
+    assert any("Original instruction" in arg for arg in prompt_args)
 
 
 async def test_claude_launcher_marks_local_fallback_as_degraded_retrieval(
@@ -295,14 +300,13 @@ async def test_claude_launcher_marks_local_fallback_as_degraded_retrieval(
     await process.wait()
 
     moonmind_meta = request.parameters["metadata"]["moonmind"]
-    claude_md = (workspace / "CLAUDE.md").read_text(encoding="utf-8")
 
     assert moonmind_meta["retrievedContextTransport"] == "local_fallback"
     assert moonmind_meta["retrievalMode"] == "degraded_local_fallback"
     assert moonmind_meta["retrievalDegradedReason"] == "collection_unavailable"
     assert moonmind_meta["retrievalInitiationMode"] == "automatic"
     assert moonmind_meta["retrievalContextTruncated"] is False
-    assert "Retrieved context mode: degraded local fallback" in claude_md
+    assert not (workspace / "CLAUDE.md").exists()
     assert any(
         isinstance(arg, str) and "Retrieved context mode: degraded local fallback" in arg
         for arg in captured_args

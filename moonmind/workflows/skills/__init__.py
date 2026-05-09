@@ -80,6 +80,14 @@ from .skill_registry import (
     parse_skill_registry,
     validate_skill_registry,
 )
+from .run_projection import (
+    SkillProjectionError,
+    build_skill_activation_summary,
+    load_resolved_skillset,
+    materialize_run_skill_snapshot,
+    prepend_skill_activation_summary,
+    verify_skill_projection,
+)
 from .workspace_links import (
     SkillWorkspaceError,
     SkillWorkspaceLinks,
@@ -151,4 +159,10 @@ __all__ = [
     "SkillWorkspaceError",
     "ensure_shared_skill_links",
     "validate_shared_skill_links",
+    "SkillProjectionError",
+    "build_skill_activation_summary",
+    "load_resolved_skillset",
+    "materialize_run_skill_snapshot",
+    "prepend_skill_activation_summary",
+    "verify_skill_projection",
 ]

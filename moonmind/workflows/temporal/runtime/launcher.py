@@ -10,6 +10,7 @@ import re
 import shlex
 import shutil
 import tempfile
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,12 @@ from moonmind.schemas.agent_runtime_models import (
     TERMINAL_AGENT_RUN_STATES,
 )
 from moonmind.utils.logging import SecretRedactor
+from moonmind.workflows.skills.run_projection import (
+    load_resolved_skillset,
+    materialize_run_skill_snapshot,
+    prepend_skill_activation_summary,
+    verify_skill_projection,
+)
 
 from .github_auth_broker import GitHubAuthBrokerManager
 from .git_auth import build_github_token_git_environment
@@ -44,11 +51,13 @@ class ManagedRuntimeLauncher:
         self,
         store: ManagedRunStore,
         log_streamer: RuntimeLogStreamer | None = None,
+        artifact_service: Any | None = None,
     ) -> None:
         self._store = store
         self._logger = logging.getLogger(__name__)
         self._github_auth_brokers = GitHubAuthBrokerManager()
         self._log_streamer = log_streamer
+        self._artifact_service = artifact_service
 
     @staticmethod
     def _build_managed_runtime_base_env() -> dict[str, str]:
@@ -684,6 +693,75 @@ class ManagedRuntimeLauncher:
 
         return cmd
 
+    async def _project_run_skill_snapshot(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        profile: ManagedRuntimeProfile,
+        resolved_workspace_path: str | None,
+    ) -> dict[str, Any] | None:
+        """Materialize, verify, and announce the resolved skill snapshot.
+
+        Implements ``docs/Steps/SkillSystem.md`` §14 for managed runtimes
+        launched through this launcher (notably ``claude_code``). When
+        ``request.resolved_skillset_ref`` is set:
+
+        1. load the immutable :class:`ResolvedSkillSet` from artifact storage,
+        2. materialize it into ``<run_root>/runtime/skills_active/<snapshot_id>``,
+        3. project at ``.agents/skills`` per the §14.4 strategy order (handled
+           by :class:`AgentSkillMaterializer`),
+        4. verify the runtime-visible projection matches the snapshot (§14.7.2),
+        5. prepend the canonical activation summary (§14.5) to
+           ``request.instruction_ref`` so the runtime sees it inline.
+
+        Returns the materialization metadata for downstream callers, or
+        ``None`` when no snapshot was requested. Raises
+        :class:`SkillProjectionError` so the activity converts that into a
+        typed ``skill_projection_failed`` classification.
+        """
+
+        skillset_ref = str(request.resolved_skillset_ref or "").strip()
+        if not skillset_ref or resolved_workspace_path is None:
+            return None
+
+        from moonmind.config.settings import settings as _mm_settings
+
+        run_root = Path(resolved_workspace_path).resolve().parent
+        resolved_skillset = await load_resolved_skillset(
+            self._artifact_service, skillset_ref
+        )
+        materialization_metadata = await materialize_run_skill_snapshot(
+            workspace_path=resolved_workspace_path,
+            run_root=str(run_root),
+            runtime_id=str(profile.runtime_id or "managed-runtime"),
+            resolved_skillset=resolved_skillset,
+            artifact_service=self._artifact_service,
+        )
+
+        params = request.parameters if isinstance(request.parameters, Mapping) else {}
+        from moonmind.workflows.agent_skills.selection import selected_agent_skill
+
+        selected_skill_name = selected_agent_skill(params) or None
+        await verify_skill_projection(
+            materialization_metadata=materialization_metadata,
+            resolved_skillset=resolved_skillset,
+            selected_skill=selected_skill_name,
+        )
+
+        existing_instructions = str(request.instruction_ref or "")
+        prepared = prepend_skill_activation_summary(
+            existing_instructions,
+            parameters=params,
+            materialization_metadata=materialization_metadata,
+            skills_on_demand_enabled=bool(
+                _mm_settings.workflow.skills_on_demand_enabled
+            ),
+        )
+        if prepared != existing_instructions:
+            request.instruction_ref = prepared
+
+        return materialization_metadata
+
     async def launch(
         self,
         *,
@@ -782,48 +860,17 @@ class ManagedRuntimeLauncher:
             env_overrides = strategy.shape_environment(env_overrides, profile)
 
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
-        # injection for Codex).
+        # injection for Codex/Claude). RAG injection mutates
+        # request.instruction_ref before the skill activation summary is
+        # prepended, so retrieved context lands inside the task block and the
+        # activation summary stays at the top.
         if resolved_workspace_path is not None and strategy is not None:
-            claude_md_path = None
-            claude_md_pre_existing = False
-            if strategy.runtime_id == "claude_code" and request.instruction_ref:
-                claude_md_path = Path(resolved_workspace_path) / "CLAUDE.md"
-                claude_md_pre_existing = (
-                    claude_md_path.exists() or claude_md_path.is_symlink()
-                )
-
             try:
                 await strategy.prepare_workspace(
                     Path(resolved_workspace_path),
                     request,
                     environment=env_overrides,
                 )
-
-                if claude_md_path is not None:
-                    if claude_md_pre_existing:
-                        self._emit_system_annotation(
-                            run_id=run_id,
-                            workspace_path=resolved_workspace_path,
-                            annotation_type="workspace_preparation_skipped",
-                            text="Launcher: skipped writing CLAUDE.md because the file already exists or is a symlink.",
-                            metadata={
-                                "source": "launcher",
-                                "target": "CLAUDE.md",
-                                "reason": "preexisting_or_symlink",
-                            },
-                        )
-                    elif claude_md_path.exists():
-                        self._emit_system_annotation(
-                            run_id=run_id,
-                            workspace_path=resolved_workspace_path,
-                            annotation_type="workspace_preparation_applied",
-                            text="Launcher: workspace instructions written to CLAUDE.md.",
-                            metadata={
-                                "source": "launcher",
-                                "target": "CLAUDE.md",
-                                "reason": "workspace_preparation",
-                            },
-                        )
             except Exception:
                 logger.warning(
                     "strategy.prepare_workspace failed for run_id=%s runtime=%s",
@@ -832,30 +879,53 @@ class ManagedRuntimeLauncher:
                     exc_info=True,
                 )
 
+        # Project the resolved skill snapshot into the canonical .agents/skills
+        # path and prepend the activation summary to request.instruction_ref
+        # before the runtime command is built (docs/Steps/SkillSystem.md §14).
+        # SkillProjectionError is propagated so the activity boundary can
+        # surface a typed skill_projection_failed classification rather than
+        # letting the run exit 0 with no result artifact.
+        skill_materialization_metadata = await self._project_run_skill_snapshot(
+            request=request,
+            profile=profile,
+            resolved_workspace_path=resolved_workspace_path,
+        )
+        if skill_materialization_metadata is not None:
+            self._emit_system_annotation(
+                run_id=run_id,
+                workspace_path=resolved_workspace_path,
+                annotation_type="skill_projection_applied",
+                text=(
+                    "Launcher: projected resolved skill snapshot at "
+                    f"{skill_materialization_metadata.get('visiblePath')}."
+                ),
+                metadata={
+                    "source": "launcher",
+                    "snapshotId": skill_materialization_metadata.get(
+                        "snapshotId"
+                    ),
+                    "visiblePath": str(
+                        skill_materialization_metadata.get("visiblePath") or ""
+                    ),
+                    "canonicalAliasAvailable": str(
+                        bool(
+                            skill_materialization_metadata.get(
+                                "canonicalAliasAvailable"
+                            )
+                        )
+                    ).lower(),
+                    "reason": "skill_projection",
+                },
+            )
+
         cmd = self.build_command(profile, request, strategy=strategy)
         self._reset_live_log_spool(resolved_workspace_path)
 
-        # Expose active skills projection if present
-        run_root: Path | None = None
-        if resolved_workspace_path is not None:
-            run_root = Path(resolved_workspace_path).resolve().parent
-            active_skills_dir = run_root / ".agents" / "skills_active"
-            if active_skills_dir.exists():
-                workspace_agents_dir = Path(resolved_workspace_path) / ".agents"
-                target_skills_dir = workspace_agents_dir / "skills"
-                try:
-                    workspace_agents_dir.mkdir(parents=True, exist_ok=True)
-                    if target_skills_dir.lexists():
-                        if target_skills_dir.is_symlink() or target_skills_dir.is_file():
-                            target_skills_dir.unlink()
-                        else:
-                            shutil.rmtree(target_skills_dir)
-                    target_skills_dir.symlink_to(
-                        active_skills_dir,
-                        target_is_directory=True,
-                    )
-                except OSError as ex:
-                    logger.warning("Failed to link active skills directory: %s", ex)
+        run_root: Path | None = (
+            Path(resolved_workspace_path).resolve().parent
+            if resolved_workspace_path is not None
+            else None
+        )
 
         for key in profile.passthrough_env_keys:
             value = os.environ.get(key)
