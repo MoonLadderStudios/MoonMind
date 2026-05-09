@@ -13,16 +13,16 @@ Requirement status from `plan.md`: implemented_unverified rows require verificat
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm active feature directory is `specs/332-compile-executable-runtime-plans` in `.specify/feature.json` and that `spec.md` contains exactly one `## User Story` section. (FR-007, SC-005)
-- [ ] T002 Confirm `specs/332-compile-executable-runtime-plans/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/runtime-step-plan-contract.md`, and `quickstart.md` exist before implementation. (FR-007, SC-005)
-- [ ] T003 Review existing runtime plan, task contract, proposal promotion, API normalization, and integration evidence in `moonmind/workflows/temporal/worker_runtime.py`, `moonmind/workflows/tasks/task_contract.py`, `moonmind/workflows/task_proposals/service.py`, `api_service/api/routers/executions.py`, and `tests/integration/temporal/test_task_shaped_submission_normalization.py`. (FR-001, FR-003, FR-005, DESIGN-REQ-006, DESIGN-REQ-012, DESIGN-REQ-021, DESIGN-REQ-022)
+- [X] T001 Confirm active feature directory is `specs/332-compile-executable-runtime-plans` in `.specify/feature.json` and that `spec.md` contains exactly one `## User Story` section. (FR-007, SC-005)
+- [X] T002 Confirm `specs/332-compile-executable-runtime-plans/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/runtime-step-plan-contract.md`, and `quickstart.md` exist before implementation. (FR-007, SC-005)
+- [X] T003 Review existing runtime plan, task contract, proposal promotion, API normalization, and integration evidence in `moonmind/workflows/temporal/worker_runtime.py`, `moonmind/workflows/tasks/task_contract.py`, `moonmind/workflows/task_proposals/service.py`, `api_service/api/routers/executions.py`, and `tests/integration/temporal/test_task_shaped_submission_normalization.py`. (FR-001, FR-003, FR-005, DESIGN-REQ-006, DESIGN-REQ-012, DESIGN-REQ-021, DESIGN-REQ-022)
 
 ## Phase 2: Foundational
 
-- [ ] T004 Identify reusable runtime planner fixtures in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py` for explicit Tool and Skill step payloads without changing production behavior. (FR-001, FR-002, FR-003, SC-001)
-- [ ] T005 Identify reusable task proposal fixtures in `tests/unit/workflows/task_proposals/test_service.py` for reviewed flattened payload promotion and unresolved Preset rejection. (FR-005, FR-006, SC-003, SC-004)
-- [ ] T006 Identify reusable task-shaped submission fixture coverage in `tests/integration/temporal/test_task_shaped_submission_normalization.py` for flattened steps and preset provenance. (FR-001, FR-004, SC-002, DESIGN-REQ-020)
-- [ ] T007 Confirm no database migration, new persistent table, or provider credential setup is required by reviewing `plan.md`, `data-model.md`, and `contracts/runtime-step-plan-contract.md`. (Constitution II, IV, XII)
+- [X] T004 Identify reusable runtime planner fixtures in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py` for explicit Tool and Skill step payloads without changing production behavior. (FR-001, FR-002, FR-003, SC-001)
+- [X] T005 Identify reusable task proposal fixtures in `tests/unit/workflows/task_proposals/test_service.py` for reviewed flattened payload promotion and unresolved Preset rejection. (FR-005, FR-006, SC-003, SC-004)
+- [X] T006 Identify reusable task-shaped submission fixture coverage in `tests/integration/temporal/test_task_shaped_submission_normalization.py` for flattened steps and preset provenance. (FR-001, FR-004, SC-002, DESIGN-REQ-020)
+- [X] T007 Confirm no database migration, new persistent table, or provider credential setup is required by reviewing `plan.md`, `data-model.md`, and `contracts/runtime-step-plan-contract.md`. (Constitution II, IV, XII)
 
 ## Phase 3: Story - Runtime Executes Flattened Steps
 
@@ -38,54 +38,54 @@ Requirement status from `plan.md`: implemented_unverified rows require verificat
 
 ### Unit Tests First
 
-- [ ] T008 [P] Add a verification unit test for explicit Skill step runtime planner mapping in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`. (FR-003, SCN-003, SC-001, DESIGN-REQ-012)
-- [ ] T009 [P] Add a verification unit test that one multi-step executable payload containing both Tool and Skill steps compiles into ordered runtime plan nodes in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`. (FR-001, FR-002, FR-003, SCN-001, SCN-002, SCN-003, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-012)
-- [ ] T010 [P] Add a verification unit test that runtime planner inputs preserve preset-derived source metadata without requiring catalog access in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`. (FR-004, SCN-004, SC-002, DESIGN-REQ-020)
-- [ ] T011 [P] Add a proposal promotion unit test proving a reviewed flattened task payload is promoted as stored even when a same-named preset catalog definition would differ or be unavailable in `tests/unit/workflows/task_proposals/test_service.py`. (FR-005, SCN-005, SC-003, DESIGN-REQ-021, DESIGN-REQ-022)
-- [ ] T012 [P] Add or confirm task contract unit coverage that `type: preset`, unresolved include work, and conflicting executable step payloads fail explicitly in `tests/unit/workflows/tasks/test_task_contract.py`. (FR-006, SCN-006, SC-004, DESIGN-REQ-018)
-- [ ] T013 [P] Add or confirm proposal promotion unit coverage that unresolved Preset steps and preset-derived steps without flat executable type are rejected in `tests/unit/workflows/task_proposals/test_service.py`. (FR-006, SCN-006, SC-004, DESIGN-REQ-018)
+- [X] T008 [P] Add a verification unit test for explicit Skill step runtime planner mapping in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`. (FR-003, SCN-003, SC-001, DESIGN-REQ-012)
+- [X] T009 [P] Add a verification unit test that one multi-step executable payload containing both Tool and Skill steps compiles into ordered runtime plan nodes in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`. (FR-001, FR-002, FR-003, SCN-001, SCN-002, SCN-003, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-012)
+- [X] T010 [P] Add a verification unit test that runtime planner inputs preserve preset-derived source metadata without requiring catalog access in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`. (FR-004, SCN-004, SC-002, DESIGN-REQ-020)
+- [X] T011 [P] Add a proposal promotion unit test proving a reviewed flattened task payload is promoted as stored even when a same-named preset catalog definition would differ or be unavailable in `tests/unit/workflows/task_proposals/test_service.py`. (FR-005, SCN-005, SC-003, DESIGN-REQ-021, DESIGN-REQ-022)
+- [X] T012 [P] Add or confirm task contract unit coverage that `type: preset`, unresolved include work, and conflicting executable step payloads fail explicitly in `tests/unit/workflows/tasks/test_task_contract.py`. (FR-006, SCN-006, SC-004, DESIGN-REQ-018)
+- [X] T013 [P] Add or confirm proposal promotion unit coverage that unresolved Preset steps and preset-derived steps without flat executable type are rejected in `tests/unit/workflows/task_proposals/test_service.py`. (FR-006, SCN-006, SC-004, DESIGN-REQ-018)
 
 ### Integration Tests First
 
-- [ ] T014 [P] Add or confirm hermetic integration coverage that task-shaped submission preserves flattened Tool/Skill steps and no `preset` step remains in `tests/integration/temporal/test_task_shaped_submission_normalization.py`. (FR-001, SCN-001, SC-004, SC-001, DESIGN-REQ-006)
-- [ ] T015 [P] Add or confirm hermetic integration coverage that preset-derived provenance and authored preset metadata remain compact and durable in `tests/integration/temporal/test_task_shaped_submission_normalization.py`. (FR-004, SCN-004, SC-002, DESIGN-REQ-020)
-- [ ] T016 [P] Add or confirm hermetic integration regression that manual-only task submissions do not gain fabricated preset metadata in `tests/integration/temporal/test_task_shaped_submission_normalization.py`. (Edge case: manual work, SC-002)
+- [X] T014 [P] Add or confirm hermetic integration coverage that task-shaped submission preserves flattened Tool/Skill steps and no `preset` step remains in `tests/integration/temporal/test_task_shaped_submission_normalization.py`. (FR-001, SCN-001, SC-004, SC-001, DESIGN-REQ-006)
+- [X] T015 [P] Add or confirm hermetic integration coverage that preset-derived provenance and authored preset metadata remain compact and durable in `tests/integration/temporal/test_task_shaped_submission_normalization.py`. (FR-004, SCN-004, SC-002, DESIGN-REQ-020)
+- [X] T016 [P] Add or confirm hermetic integration regression that manual-only task submissions do not gain fabricated preset metadata in `tests/integration/temporal/test_task_shaped_submission_normalization.py`. (Edge case: manual work, SC-002)
 
 ### Red-First Confirmation
 
-- [ ] T017 Run focused runtime planner tests and confirm the new MM-573 verification tests fail only when expected behavior is missing using `python -m pytest tests/unit/workflows/temporal/test_temporal_worker_runtime.py -q`. (FR-001, FR-002, FR-003, FR-004, SC-001, SC-002)
-- [ ] T018 Run focused proposal promotion tests and confirm the no-live-reexpansion verification fails only if promotion recomputes from live preset data using `python -m pytest tests/unit/workflows/task_proposals/test_service.py -q`. (FR-005, FR-006, SC-003, SC-004)
-- [ ] T019 Run focused task contract tests and confirm unresolved Preset/include rejection coverage remains passing or fails for a real gap using `python -m pytest tests/unit/workflows/tasks/test_task_contract.py -q`. (FR-006, SC-004, DESIGN-REQ-018)
-- [ ] T020 Run focused hermetic integration coverage and confirm task-shaped submission behavior using `python -m pytest tests/integration/temporal/test_task_shaped_submission_normalization.py -q -m integration_ci`. (FR-001, FR-004, SC-001, SC-002)
+- [X] T017 Run focused runtime planner tests and confirm the new MM-573 verification tests fail only when expected behavior is missing using `python -m pytest tests/unit/workflows/temporal/test_temporal_worker_runtime.py -q`. (FR-001, FR-002, FR-003, FR-004, SC-001, SC-002)
+- [X] T018 Run focused proposal promotion tests and confirm the no-live-reexpansion verification fails only if promotion recomputes from live preset data using `python -m pytest tests/unit/workflows/task_proposals/test_service.py -q`. (FR-005, FR-006, SC-003, SC-004)
+- [X] T019 Run focused task contract tests and confirm unresolved Preset/include rejection coverage remains passing or fails for a real gap using `python -m pytest tests/unit/workflows/tasks/test_task_contract.py -q`. (FR-006, SC-004, DESIGN-REQ-018)
+- [X] T020 Run focused hermetic integration coverage and confirm task-shaped submission behavior using `python -m pytest tests/integration/temporal/test_task_shaped_submission_normalization.py -q -m integration_ci`. (FR-001, FR-004, SC-001, SC-002)
 
 ### Conditional Fallback Implementation For Implemented-Unverified Rows
 
-- [ ] T021 If T008 or T009 fails because explicit Skill steps do not produce acceptable runtime materialization inputs, update multi-step planning in `moonmind/workflows/temporal/worker_runtime.py`. (FR-003, DESIGN-REQ-012)
-- [ ] T022 If T009 or T014 fails because executable payloads can contain unresolved Preset steps at runtime boundaries, tighten validation or normalization in `moonmind/workflows/tasks/task_contract.py` or `api_service/api/routers/executions.py`. (FR-001, DESIGN-REQ-006)
-- [ ] T023 If T010 or T015 fails because preset provenance requires live catalog lookup or is lost before execution, update provenance preservation in `moonmind/workflows/temporal/worker_runtime.py` or `api_service/api/routers/executions.py`. (FR-004, DESIGN-REQ-020)
-- [ ] T024 If T011 fails because promotion re-expands or mutates the reviewed payload, update promotion validation in `moonmind/workflows/task_proposals/service.py`. (FR-005, DESIGN-REQ-021, DESIGN-REQ-022)
-- [ ] T025 If T012 or T013 fails because unresolved Preset/include work is accepted, tighten rejection behavior in `moonmind/workflows/tasks/task_contract.py`, `moonmind/workflows/task_proposals/service.py`, or `moonmind/workflows/temporal/worker_runtime.py`. (FR-006, DESIGN-REQ-018)
+- [X] T021 Confirm T008 and T009 pass without fallback changes; explicit Skill steps already produce acceptable runtime materialization inputs in `moonmind/workflows/temporal/worker_runtime.py`. (FR-003, DESIGN-REQ-012)
+- [X] T022 Confirm T009 and T014 pass without fallback changes; executable payload boundaries do not retain unresolved Preset steps. (FR-001, DESIGN-REQ-006)
+- [X] T023 Confirm T010 and T015 pass without fallback changes; preset provenance is preserved without live catalog lookup. (FR-004, DESIGN-REQ-020)
+- [X] T024 Confirm T011 passes without fallback changes; promotion uses the reviewed flattened payload without live re-expansion. (FR-005, DESIGN-REQ-021, DESIGN-REQ-022)
+- [X] T025 Confirm T012 and T013 pass without fallback changes; unresolved Preset/include work is rejected before execution. (FR-006, DESIGN-REQ-018)
 
 ### Production Implementation
 
-- [ ] T026 Implement only the minimal runtime planner changes proven necessary by T017 in `moonmind/workflows/temporal/worker_runtime.py`. (FR-001, FR-003, SCN-001, SCN-003)
-- [ ] T027 Implement only the minimal task contract or API normalization changes proven necessary by T019 or T020 in `moonmind/workflows/tasks/task_contract.py` or `api_service/api/routers/executions.py`. (FR-001, FR-006, SCN-006)
-- [ ] T028 Implement only the minimal proposal promotion changes proven necessary by T018 in `moonmind/workflows/task_proposals/service.py`. (FR-005, SCN-005)
-- [ ] T029 Preserve MM-573 and `manual-mm-569-mm-574` references in implementation notes, test names or comments where useful, and final delivery metadata without adding noisy runtime fields in `specs/332-compile-executable-runtime-plans/tasks.md`. (FR-007, SC-005)
+- [X] T026 Confirm no runtime planner production changes were necessary after T017 passed in `moonmind/workflows/temporal/worker_runtime.py`. (FR-001, FR-003, SCN-001, SCN-003)
+- [X] T027 Confirm no task contract or API normalization production changes were necessary after T019 and T020 passed. (FR-001, FR-006, SCN-006)
+- [X] T028 Confirm no proposal promotion production changes were necessary after T018 passed. (FR-005, SCN-005)
+- [X] T029 Preserve MM-573 and `manual-mm-569-mm-574` references in implementation notes, test names or comments where useful, and final delivery metadata without adding noisy runtime fields in `specs/332-compile-executable-runtime-plans/tasks.md`. (FR-007, SC-005)
 
 ### Story Validation
 
-- [ ] T030 Re-run focused unit tests with `python -m pytest tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/task_proposals/test_service.py -q`. (FR-001 through FR-006, SC-001 through SC-004)
-- [ ] T031 Re-run focused hermetic integration coverage with `python -m pytest tests/integration/temporal/test_task_shaped_submission_normalization.py -q -m integration_ci` if any API/execution-boundary task changed production behavior. (FR-001, FR-004, SC-001, SC-002)
-- [ ] T032 Verify `contracts/runtime-step-plan-contract.md` is satisfied by comparing task contract validation, runtime planner output, and proposal promotion behavior against `specs/332-compile-executable-runtime-plans/contracts/runtime-step-plan-contract.md`. (FR-001 through FR-006)
-- [ ] T033 Verify `MM-573`, `manual-mm-569-mm-574`, and the original Jira preset brief remain preserved in `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/runtime-step-plan-contract.md`, `quickstart.md`, and `tasks.md`. (FR-007, SC-005)
+- [X] T030 Re-run focused unit tests with `python -m pytest tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/task_proposals/test_service.py -q`. (FR-001 through FR-006, SC-001 through SC-004)
+- [X] T031 Re-run focused hermetic integration coverage with `python -m pytest tests/integration/temporal/test_task_shaped_submission_normalization.py -q -m integration_ci` if any API/execution-boundary task changed production behavior. (FR-001, FR-004, SC-001, SC-002)
+- [X] T032 Verify `contracts/runtime-step-plan-contract.md` is satisfied by comparing task contract validation, runtime planner output, and proposal promotion behavior against `specs/332-compile-executable-runtime-plans/contracts/runtime-step-plan-contract.md`. (FR-001 through FR-006)
+- [X] T033 Verify `MM-573`, `manual-mm-569-mm-574`, and the original Jira preset brief remain preserved in `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/runtime-step-plan-contract.md`, `quickstart.md`, and `tasks.md`. (FR-007, SC-005)
 
 ## Final Phase: Polish And Verification
 
-- [ ] T034 Refactor any duplicated test fixtures introduced for MM-573 while keeping behavior unchanged in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, `tests/unit/workflows/task_proposals/test_service.py`, and `tests/integration/temporal/test_task_shaped_submission_normalization.py`. (Constitution VI, VIII)
-- [ ] T035 Run the full required unit suite with `./tools/test_unit.sh`. (FR-001 through FR-007)
-- [ ] T036 Run the required hermetic integration suite with `./tools/test_integration.sh` if production code or API/execution-boundary behavior changed; otherwise record why focused integration coverage is sufficient in `specs/332-compile-executable-runtime-plans/verification.md`. (FR-001, FR-004, SC-001, SC-002)
-- [ ] T037 Confirm no provider verification or credentialed tests are required for MM-573 and document any intentionally skipped provider checks in `specs/332-compile-executable-runtime-plans/verification.md`. (Constitution II, III)
+- [X] T034 Refactor any duplicated test fixtures introduced for MM-573 while keeping behavior unchanged in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, `tests/unit/workflows/task_proposals/test_service.py`, and `tests/integration/temporal/test_task_shaped_submission_normalization.py`. (Constitution VI, VIII)
+- [X] T035 Run the full required unit suite with `./tools/test_unit.sh`. (FR-001 through FR-007)
+- [X] T036 Run the required hermetic integration suite with `./tools/test_integration.sh` if production code or API/execution-boundary behavior changed; otherwise record why focused integration coverage is sufficient in `specs/332-compile-executable-runtime-plans/verification.md`. (FR-001, FR-004, SC-001, SC-002)
+- [X] T037 Confirm no provider verification or credentialed tests are required for MM-573 and document any intentionally skipped provider checks in `specs/332-compile-executable-runtime-plans/verification.md`. (Constitution II, III)
 - [ ] T038 Run `/moonspec-verify` after implementation and tests pass, and ensure verification covers MM-573, `manual-mm-569-mm-574`, the original Jira preset brief, FR-001 through FR-007, acceptance scenarios 1 through 6, SC-001 through SC-005, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-012, DESIGN-REQ-018, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-022, commands run, and remaining risks. (FR-007, SC-005)
 
 ## Dependencies And Execution Order

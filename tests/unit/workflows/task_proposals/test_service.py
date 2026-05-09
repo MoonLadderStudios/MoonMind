@@ -598,6 +598,74 @@ async def test_promote_proposal_preserves_preset_provenance() -> None:
 
 
 @pytest.mark.asyncio
+async def test_promote_proposal_uses_reviewed_flattened_payload_without_reexpansion() -> None:
+    repo = AsyncMock()
+    reviewed_steps = [
+        {
+            "id": "implement-mm-573",
+            "type": "skill",
+            "title": "Implement MM-573",
+            "instructions": "Implement the reviewed MM-573 payload.",
+            "skill": {
+                "id": "moonspec-implement",
+                "args": {"issueKey": "MM-573"},
+            },
+            "source": {
+                "kind": "preset-derived",
+                "presetSlug": "jira-orchestrate",
+                "presetVersion": "reviewed-version",
+                "originalStepId": "implement-story",
+            },
+        }
+    ]
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        repository="Moon/Repo",
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        task_create_request={
+            "payload": {
+                "repository": "Moon/Repo",
+                "task": {
+                    "instructions": "Promote reviewed MM-573 payload.",
+                    "taskTemplate": {
+                        "slug": "jira-orchestrate",
+                        "version": "live-version-that-must-not-be-expanded",
+                    },
+                    "authoredPresets": [
+                        {
+                            "presetSlug": "jira-orchestrate",
+                            "presetVersion": "reviewed-version",
+                        }
+                    ],
+                    "steps": reviewed_steps,
+                },
+            }
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    updated_proposal, final_request = await service.promote_proposal(
+        proposal_id=proposal.id,
+        promoted_by_user_id=uuid4(),
+    )
+
+    repo.commit.assert_awaited()
+    assert updated_proposal.status is TaskProposalStatus.PROMOTED
+    task = final_request["payload"]["task"]
+    assert len(task["steps"]) == 1
+    assert task["steps"][0]["id"] == reviewed_steps[0]["id"]
+    assert task["steps"][0]["type"] == reviewed_steps[0]["type"]
+    assert task["steps"][0]["skill"] == reviewed_steps[0]["skill"]
+    assert task["steps"][0]["source"]["presetVersion"] == "reviewed-version"
+    assert task["taskTemplate"]["version"] == "live-version-that-must-not-be-expanded"
+
+
+@pytest.mark.asyncio
 async def test_promote_proposal_preserves_canonical_proposal_intent() -> None:
     repo = AsyncMock()
     proposal = SimpleNamespace(
