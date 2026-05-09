@@ -7219,13 +7219,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           if (!sourceStep) {
             return entry.payload;
           }
+          const submittedPayload = entry.payload;
           const payloadAttachments = Array.isArray(
-            entry.payload.inputAttachments,
+            submittedPayload.inputAttachments,
           )
-            ? (entry.payload.inputAttachments as StepAttachmentRef[])
+            ? (submittedPayload.inputAttachments as StepAttachmentRef[])
             : [];
           const effectivePayloadAttachments =
-            Array.isArray(entry.payload.inputAttachments) ||
+            Array.isArray(submittedPayload.inputAttachments) ||
             !sourceStep.templateStepId ||
             sourceStep.id !== sourceStep.templateStepId
               ? payloadAttachments
@@ -7261,6 +7262,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               sourceStep.jiraOrchestration &&
                 Object.keys(sourceStep.jiraOrchestration).length > 0,
             );
+          const shouldSubmitStepType =
+            submittedStepType === "tool" ||
+            Boolean(submittedPayload?.tool) ||
+            Boolean(submittedPayload?.skill);
           const submittedStep = {
             ...(shouldPreserveStepId && sourceStep.id.trim()
               ? { id: sourceStep.id.trim() }
@@ -7268,7 +7273,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             ...(sourceStep.title.trim()
               ? { title: sourceStep.title.trim() }
               : {}),
-            ...(hasSubmittedStepShape ? { type: submittedStepType } : {}),
+            ...(hasSubmittedStepShape && shouldSubmitStepType
+              ? { type: submittedStepType }
+              : {}),
             ...(sourceStep.storyOutput
               ? { storyOutput: sourceStep.storyOutput }
               : {}),
