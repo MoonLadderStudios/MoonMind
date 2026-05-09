@@ -4632,6 +4632,39 @@ def test_serialize_execution_surfaces_runtime_fields_from_task_runtime_payload()
     assert dumped["effort"] == "low"
     assert dumped["profileId"] == "profile:claude-default"
 
+def test_serialize_execution_falls_back_to_resolved_model_alias() -> None:
+    """When `params['model']` is missing, the resolvedModel alias should populate
+    both `model` and `resolvedModel` so the task detail UI displays consistently."""
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = {
+        "targetRuntime": "codex_cli",
+        "resolvedModel": "gpt-5-codex",
+        "modelSource": "runtime_default",
+    }
+
+    payload = _serialize_execution(record)
+    dumped = payload.model_dump(by_alias=True)
+
+    assert dumped["model"] == "gpt-5-codex"
+    assert dumped["resolvedModel"] == "gpt-5-codex"
+    assert dumped["modelSource"] == "runtime_default"
+
+def test_serialize_execution_falls_back_to_requested_model_when_resolved_missing() -> None:
+    """If only the user-requested model is recorded, surface it on the detail
+    page so the Model fact is rendered consistently."""
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = {
+        "targetRuntime": "codex_cli",
+        "requestedModel": "gpt-5-codex",
+    }
+
+    payload = _serialize_execution(record)
+    dumped = payload.model_dump(by_alias=True)
+
+    assert dumped["model"] == "gpt-5-codex"
+    assert dumped["resolvedModel"] == "gpt-5-codex"
+    assert dumped["requestedModel"] == "gpt-5-codex"
+
 def test_serialize_execution_surfaces_task_template_slug_as_primary_skill() -> None:
     record = _build_execution_record(
         state=MoonMindWorkflowState.WAITING_ON_DEPENDENCIES

@@ -398,6 +398,9 @@ const ExecutionDetailSchema = z
     targetRuntime: z.string().nullable().optional(),
     targetSkill: z.string().nullable().optional(),
     model: z.string().nullable().optional(),
+    requestedModel: z.string().nullable().optional(),
+    resolvedModel: z.string().nullable().optional(),
+    modelSource: z.string().nullable().optional(),
     profileId: z.string().nullable().optional(),
     providerId: z.string().nullable().optional(),
     providerLabel: z.string().nullable().optional(),
@@ -4388,11 +4391,21 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
             <FactGroup title="Runtime">
               {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
-              {execution.model ? (
-                <Fact label="Model">
-                  <code className="text-xs">{execution.model}</code>
-                </Fact>
-              ) : null}
+              {(() => {
+                const displayedModel =
+                  execution.model
+                  || execution.resolvedModel
+                  || execution.requestedModel
+                  || null;
+                if (!displayedModel) {
+                  return null;
+                }
+                return (
+                  <Fact label="Model">
+                    <code className="text-xs">{displayedModel}</code>
+                  </Fact>
+                );
+              })()}
               {execution.profileId ? (
                 <Fact label="Provider Profile">{renderProviderProfileSummary(execution)}</Fact>
               ) : null}

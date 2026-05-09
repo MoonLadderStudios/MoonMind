@@ -1552,6 +1552,7 @@ def _serialize_execution(
         for key in ["targetRuntime", "model", "effort"]
     ]
     param_requested_model = str(params.get("requestedModel") or "").strip() or None
+    param_resolved_model = str(params.get("resolvedModel") or "").strip() or None
     param_model_source = str(params.get("modelSource") or "").strip() or None
     param_profile_id = str(params.get("profileId") or "").strip() or None
     if not target_runtime:
@@ -1619,6 +1620,23 @@ def _serialize_execution(
         ) or None
     if not param_model:
         param_model = _coerce_temporal_scalar(task_runtime_payload.get("model")) or None
+    if not param_resolved_model:
+        param_resolved_model = (
+            _coerce_temporal_scalar(task_runtime_payload.get("resolvedModel"))
+            or _coerce_temporal_scalar(task_runtime_payload.get("resolved_model"))
+        ) or None
+    if not param_requested_model:
+        param_requested_model = (
+            _coerce_temporal_scalar(task_runtime_payload.get("requestedModel"))
+            or _coerce_temporal_scalar(task_runtime_payload.get("requested_model"))
+        ) or None
+    # Ensure model and resolved_model are populated whenever any model
+    # signal is available so the Mission Control task detail page
+    # consistently surfaces a Model fact instead of intermittently
+    # hiding it for executions whose params omit one of the aliases.
+    effective_model = param_model or param_resolved_model or param_requested_model
+    param_model = effective_model
+    param_resolved_model = param_resolved_model or effective_model
     if not param_effort:
         param_effort = _coerce_temporal_scalar(task_runtime_payload.get("effort")) or None
     if not param_profile_id:
@@ -1816,7 +1834,7 @@ def _serialize_execution(
         target_skill=target_skill,
         model=param_model,
         requested_model=param_requested_model,
-        resolved_model=param_model,
+        resolved_model=param_resolved_model,
         model_source=param_model_source,
         profile_id=param_profile_id,
         effort=param_effort,
