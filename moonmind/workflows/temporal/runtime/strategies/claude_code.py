@@ -65,15 +65,15 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         request: Any,
         environment: Mapping[str, str] | None = None,
     ) -> None:
-        """Inject shared retrieval context and write CLAUDE.md in the workspace.
+        """Inject shared retrieval context for Claude Code.
 
-        If CLAUDE.md already exists as a symlink (e.g. CLAUDE.md -> AGENTS.md),
-        skip writing — following the symlink would overwrite AGENTS.md and destroy
-        the project's coding standards. Instructions are still passed via ``-p`` so
-        CLAUDE.md can continue to provide project context through the symlink.
-
-        Only write CLAUDE.md when it does not yet exist, ensuring repos that have
-        no CLAUDE.md still receive task instructions as project context.
+        The turn instruction (and any prepended skill activation summary built
+        by :meth:`ManagedRuntimeLauncher._project_run_skill_snapshot`) is
+        passed to the Claude CLI via ``-p`` in :meth:`build_command`. Writing
+        the same content into ``CLAUDE.md`` would conflate it with project
+        context — Claude Code reads ``CLAUDE.md`` as untrusted retrieved
+        instructions when it ships under a SAFETY NOTICE wrapper, so the task
+        is delivered as a first-class user prompt instead.
         """
         if not getattr(request, "instruction_ref", None):
             return
@@ -87,8 +87,3 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
             request=request,
             workspace_path=workspace_path,
         )
-
-        instruction_path = workspace_path / "CLAUDE.md"
-        if instruction_path.exists() or instruction_path.is_symlink():
-            return
-        instruction_path.write_text(request.instruction_ref, encoding="utf-8")

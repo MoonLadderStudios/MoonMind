@@ -1622,7 +1622,10 @@ def _positive_int_env(name: str) -> int | None:
         raise RuntimeError(f"{name} must be a positive integer")
     return value
 
-def _build_agent_runtime_deps() -> tuple[
+def _build_agent_runtime_deps(
+    *,
+    artifact_service: Any | None = None,
+) -> tuple[
     ManagedRunStore,
     ManagedRunSupervisor,
     ManagedRuntimeLauncher,
@@ -1667,7 +1670,11 @@ def _build_agent_runtime_deps() -> tuple[
     artifact_storage = LocalRuntimeArtifactStorage(artifact_root)
     log_streamer = RuntimeLogStreamer(artifact_storage)
     supervisor = ManagedRunSupervisor(store, log_streamer)
-    launcher = ManagedRuntimeLauncher(store, log_streamer=log_streamer)
+    launcher = ManagedRuntimeLauncher(
+        store,
+        log_streamer=log_streamer,
+        artifact_service=artifact_service,
+    )
     session_store = ManagedSessionStore(
         os.path.join(
             os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
@@ -1808,7 +1815,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 session_controller,
                 workload_registry,
                 workload_launcher,
-            ) = _build_agent_runtime_deps()
+            ) = _build_agent_runtime_deps(artifact_service=artifact_service)
             reconciled = await run_supervisor.reconcile()
             if reconciled:
                 logger.info(

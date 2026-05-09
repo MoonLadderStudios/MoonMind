@@ -472,6 +472,8 @@ Responsibilities:
 * resolve runtime profile and provider profile
 * prepare local workspace/runtime context
 * materialize any active skill snapshot into the managed runtime environment
+* prepend the canonical activation summary (`docs/Steps/SkillSystem.md` §14.5)
+  to the runtime instruction payload before launch
 * launch the runtime asynchronously
 * interpret runtime/supervisor state as canonical `AgentRunStatus`
 * fetch final outputs, logs, and diagnostics as `AgentRunResult`
@@ -479,7 +481,10 @@ Responsibilities:
 
 The managed adapter delegates to lower-level runtime execution components such as:
 
-* `ManagedRuntimeLauncher`
+* `ManagedRuntimeLauncher` — runs the active skill snapshot through
+  `AgentSkillMaterializer` and `ensure_shared_skill_links` per
+  `docs/Steps/SkillSystem.md` §14, then projects at `.agents/skills` and
+  prepends the activation summary to the runtime instruction
 * `ManagedRuntimeProfile`
 * `ManagedAgentProviderProfile`
 * `ManagedRunSupervisor`

@@ -1111,9 +1111,16 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
     assert launch_kwargs.get("cwd") == expected_workspace
 
 @pytest.mark.asyncio
-async def test_launch_emits_workspace_preparation_applied_annotation(
+async def test_launch_does_not_write_claude_md_for_claude_code(
     tmp_path, monkeypatch
 ):
+    """The launcher must not create CLAUDE.md from request.instruction_ref.
+
+    CLAUDE.md is project context (canonical: ``docs/Steps/SkillSystem.md``);
+    the turn instruction is delivered as a first-class user prompt via the
+    Claude CLI's ``-p`` flag.
+    """
+
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
@@ -1166,16 +1173,18 @@ async def test_launch_emits_workspace_preparation_applied_annotation(
     await process.wait()
     assert process is not None
     assert record.workspace_path == str(workspace_path)
-    assert (workspace_path / "CLAUDE.md").read_text(encoding="utf-8") == "Run task"
-    assert any(
-        emission.get("annotation_type") == "workspace_preparation_applied"
+    assert not (workspace_path / "CLAUDE.md").exists()
+    assert all(
+        emission.get("annotation_type") != "workspace_preparation_applied"
         for emission in log_streamer.emissions
     )
 
 @pytest.mark.asyncio
-async def test_launch_emits_workspace_preparation_skipped_annotation_for_existing_file(
+async def test_launch_preserves_existing_claude_md_for_claude_code(
     tmp_path, monkeypatch
 ):
+    """An existing CLAUDE.md (project context) is left untouched."""
+
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
@@ -1230,10 +1239,6 @@ async def test_launch_emits_workspace_preparation_skipped_annotation_for_existin
     assert process is not None
     assert record.workspace_path == str(workspace_path)
     assert (workspace_path / "CLAUDE.md").read_text(encoding="utf-8") == "already there"
-    assert any(
-        emission.get("annotation_type") == "workspace_preparation_skipped"
-        for emission in log_streamer.emissions
-    )
 
 @pytest.mark.asyncio
 async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypatch):
@@ -2485,5 +2490,290 @@ async def test_launch_builds_claude_command_after_workspace_preparation(
     )
     await process.wait()
 
+    # RAG injection mutates request.instruction_ref; the launcher passes that
+    # to the Claude CLI via -p. CLAUDE.md is project context and must not be
+    # overwritten with the turn instruction.
     assert any(arg == "Injected retrieval context" for arg in captured_args)
-    assert (workspace / "CLAUDE.md").read_text(encoding="utf-8") == "Injected retrieval context"
+    assert not (workspace / "CLAUDE.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# Skill projection (docs/Steps/SkillSystem.md §14): the launcher routes
+# resolved snapshots through AgentSkillMaterializer + ensure_shared_skill_links
+# and prepends the §14.5 activation summary to request.instruction_ref so the
+# Claude CLI sees it inline via ``-p``.
+# ---------------------------------------------------------------------------
+
+
+def _build_skill_snapshot_artifact(
+    snapshot_id: str, skill_names: list[str]
+) -> tuple[bytes, dict[str, bytes]]:
+    """Build a JSON-encoded ResolvedSkillSet payload and skill-content payloads."""
+
+    import hashlib
+    from datetime import UTC, datetime as _dt
+
+    from moonmind.schemas.agent_skill_models import (
+        AgentSkillProvenance,
+        AgentSkillSourceKind,
+        ResolvedSkillEntry,
+        ResolvedSkillSet,
+    )
+
+    skill_payloads: dict[str, bytes] = {}
+    entries: list[ResolvedSkillEntry] = []
+    for name in skill_names:
+        body = f"---\nname: {name}\n---\n".encode("utf-8")
+        ref = f"art-{name}"
+        skill_payloads[ref] = body
+        entries.append(
+            ResolvedSkillEntry(
+                skill_name=name,
+                version="1.0.0",
+                content_ref=ref,
+                content_digest="sha256:" + hashlib.sha256(body).hexdigest(),
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        )
+    skillset = ResolvedSkillSet(
+        snapshot_id=snapshot_id,
+        resolved_at=_dt.now(tz=UTC),
+        skills=entries,
+    )
+    return skillset.model_dump_json().encode("utf-8"), skill_payloads
+
+
+class _SkillArtifactService:
+    """Async artifact-service stub backed by an in-memory dict."""
+
+    def __init__(self, payloads: dict[str, bytes]) -> None:
+        self._payloads = payloads
+
+    async def read(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        allow_restricted_raw: bool,
+    ) -> tuple[object, bytes]:
+        del principal, allow_restricted_raw
+        return object(), self._payloads[artifact_id]
+
+
+@pytest.mark.asyncio
+async def test_launch_projects_resolved_skill_snapshot_for_claude_code(
+    tmp_path, monkeypatch
+):
+    """``claude_code`` runs through the canonical materializer when a snapshot is set."""
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    snapshot_payload, skill_payloads = _build_skill_snapshot_artifact(
+        "snap-claude-1", ["pr-resolver"]
+    )
+    artifact_service = _SkillArtifactService(
+        {"resolved-set-1": snapshot_payload, **skill_payloads}
+    )
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store, artifact_service=artifact_service)
+
+    profile = _make_profile(
+        runtime_id="claude_code", command_template=["claude", "-p"]
+    )
+    request = _make_request(
+        instruction_ref="Resolve the PR.",
+        resolved_skillset_ref="resolved-set-1",
+        parameters={"selectedSkill": "pr-resolver"},
+    )
+    workspace = tmp_path / "workspaces" / "run-snap" / "repo"
+    workspace.mkdir(parents=True)
+
+    captured_args: tuple[object, ...] = ()
+
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.pid = 4242
+            self.returncode = 0
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*args, **_kwargs):
+        nonlocal captured_args
+        captured_args = args
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-snap",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    # The §14.5 activation summary is prepended to instruction_ref and
+    # delivered to the Claude CLI via -p.
+    prompt_args = [arg for arg in captured_args if isinstance(arg, str)]
+    assert any("Active MoonMind skill snapshot:" in arg for arg in prompt_args)
+    assert any("Selected skill: pr-resolver" in arg for arg in prompt_args)
+    assert any("Resolve the PR." in arg for arg in prompt_args)
+
+    # Materialization landed in the run-scoped backing store, not in the repo.
+    backing_dir = (
+        workspace.parent / "runtime" / "skills_active" / "snap-claude-1"
+    )
+    assert (backing_dir / "_manifest.json").is_file()
+    assert (backing_dir / "pr-resolver" / "SKILL.md").is_file()
+
+    # The canonical alias .agents/skills resolves to the backing store.
+    agents_skills = workspace / ".agents" / "skills"
+    assert agents_skills.is_symlink()
+    assert agents_skills.resolve() == backing_dir.resolve()
+
+
+@pytest.mark.asyncio
+async def test_launch_skips_skill_projection_when_no_snapshot_ref(tmp_path, monkeypatch):
+    """Without ``resolved_skillset_ref`` the launcher leaves instruction_ref alone."""
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(
+        store, artifact_service=_SkillArtifactService({})
+    )
+
+    profile = _make_profile(
+        runtime_id="claude_code", command_template=["claude", "-p"]
+    )
+    request = _make_request(instruction_ref="Plain task")
+    workspace = tmp_path / "workspaces" / "run-no-snap" / "repo"
+    workspace.mkdir(parents=True)
+
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.pid = 4243
+            self.returncode = 0
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_args: tuple[object, ...] = ()
+
+    async def _fake_create_subprocess_exec(*args, **_kwargs):
+        nonlocal captured_args
+        captured_args = args
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-no-snap",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    prompt_args = [arg for arg in captured_args if isinstance(arg, str)]
+    assert "Plain task" in prompt_args
+    assert not any(
+        "Active MoonMind skill snapshot:" in arg for arg in prompt_args
+    )
+    assert not (workspace / ".agents" / "skills").exists()
+
+
+@pytest.mark.asyncio
+async def test_launch_fails_fast_when_skill_projection_errors(tmp_path, monkeypatch):
+    """Materialization failure surfaces as ``SkillProjectionError`` pre-launch."""
+
+    from moonmind.workflows.skills.run_projection import SkillProjectionError
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    snapshot_payload, _skill_payloads = _build_skill_snapshot_artifact(
+        "snap-broken", ["pr-resolver"]
+    )
+
+    class _BrokenArtifactService:
+        async def read(
+            self,
+            *,
+            artifact_id: str,
+            principal: str,
+            allow_restricted_raw: bool,
+        ) -> tuple[object, bytes]:
+            del principal, allow_restricted_raw
+            if artifact_id == "broken-set":
+                return object(), snapshot_payload
+            raise OSError("artifact backing store unreachable")
+
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(
+        store, artifact_service=_BrokenArtifactService()
+    )
+
+    profile = _make_profile(
+        runtime_id="claude_code", command_template=["claude", "-p"]
+    )
+    request = _make_request(
+        instruction_ref="Resolve.",
+        resolved_skillset_ref="broken-set",
+        parameters={"selectedSkill": "pr-resolver"},
+    )
+    workspace = tmp_path / "workspaces" / "run-broken" / "repo"
+    workspace.mkdir(parents=True)
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    with pytest.raises(SkillProjectionError):
+        await launcher.launch(
+            run_id="run-broken",
+            request=request,
+            profile=profile,
+            workspace_path=str(workspace),
+        )
