@@ -1971,7 +1971,11 @@ def _document_update_task_payload(
         "title": f"Document update: {Path(document_path).name}",
         "instructions": instructions,
         "inputs": dict(task_inputs),
-        "skill": {"id": "document-update", "args": dict(task_inputs)},
+        "skill": {
+            "name": "document-update",
+            "version": "1.0.0",
+            "args": dict(task_inputs),
+        },
     }
     if runtime:
         task["runtime"] = runtime
