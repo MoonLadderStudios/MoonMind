@@ -31,6 +31,7 @@ from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 from moonmind.workflows.temporal.workflows.run import (
     DEPENDENCY_GATE_PATCH,
     DEPENDENCY_RESOLUTION_BYPASSED,
+    DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
     DEPENDENCY_RESOLUTION_NOT_APPLICABLE,
     DEPENDENCY_RESOLUTION_SATISFIED,
     DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN,
@@ -419,6 +420,132 @@ def test_bypass_records_per_outcome_resolution_bypassed(monkeypatch) -> None:
     assert dep2["resolution"] == DEPENDENCY_RESOLUTION_BYPASSED
     assert dep2["failureCount"] == 0
 
+
+
+def test_late_completed_signal_after_bypass_preserves_bypassed_resolution(
+    monkeypatch,
+) -> None:
+    """A late completed signal must not erase an operator bypass audit trail."""
+
+    fixed_now = datetime(2026, 5, 8, 13, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {DEPENDENCY_GATE_PATCH, DEPENDENCY_WAIT_THROUGH_RERUN_PATCH},
+    )
+    monkeypatch.setattr(workflow, "now", lambda: fixed_now)
+
+    wf = MoonMindRunWorkflow()
+    wf._declared_dependencies = ["dep-1"]
+    wf._unresolved_dependency_ids = {"dep-1"}
+    wf._state = STATE_WAITING_ON_DEPENDENCIES
+    wf._dependency_wait_started_at = fixed_now
+    monkeypatch.setattr(wf, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(wf, "_update_memo", lambda: None)
+
+    wf._bypass_dependencies({"reason": "operator override"})
+    before = dict(wf._dependency_outcomes_by_id["dep-1"])
+
+    wf._record_dependency_outcome(
+        prerequisite_workflow_id="dep-1",
+        terminal_state="completed",
+        close_status="completed",
+        resolved_at="2026-05-08T13:15:00Z",
+        failure_category=None,
+        message="late completion",
+    )
+
+    assert wf._dependency_resolution == DEPENDENCY_RESOLUTION_BYPASSED
+    assert wf._dependency_outcomes_by_id["dep-1"] == before
+
+
+def test_late_signals_after_manual_override_preserve_manual_resolution(
+    monkeypatch,
+) -> None:
+    """Late dependency signals must not rewrite a manual skip decision."""
+
+    wf = _make_workflow_under_rerun_patch(monkeypatch, declared=["dep-1"])
+    monkeypatch.setattr(wf, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(wf, "_update_memo", lambda: None)
+    wf._state = STATE_WAITING_ON_DEPENDENCIES
+
+    wf.skip_dependency_wait()
+
+    wf._record_dependency_outcome(
+        prerequisite_workflow_id="dep-1",
+        terminal_state="completed",
+        close_status="completed",
+        resolved_at="2026-05-08T13:15:00Z",
+        failure_category=None,
+        message="late completion",
+    )
+    wf._record_dependency_outcome(
+        prerequisite_workflow_id="dep-1",
+        terminal_state="failed",
+        close_status="failed",
+        resolved_at="2026-05-08T13:30:00Z",
+        failure_category="dependency_failed",
+        message="late failure",
+    )
+
+    assert wf._dependency_resolution == DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
+    assert wf._dependency_outcomes_by_id == {}
+    assert wf._dependency_failure is None
+
+
+def test_top_level_resolution_preserves_override_outcomes(monkeypatch) -> None:
+    """Top-level rollup prioritizes operator override outcomes over satisfaction."""
+
+    wf = _make_workflow_under_rerun_patch(monkeypatch, declared=["dep-1", "dep-2"])
+    wf._dependency_outcomes_by_id["dep-1"] = {
+        "workflowId": "dep-1",
+        "resolution": DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN,
+    }
+    wf._dependency_outcomes_by_id["dep-2"] = {
+        "workflowId": "dep-2",
+        "resolution": DEPENDENCY_RESOLUTION_BYPASSED,
+    }
+
+    assert wf._compute_top_level_resolution() == DEPENDENCY_RESOLUTION_BYPASSED
+
+    wf._dependency_outcomes_by_id["dep-2"]["resolution"] = (
+        DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
+    )
+
+    assert (
+        wf._compute_top_level_resolution()
+        == DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
+    )
+
+
+def test_repeated_reconcile_observation_with_new_timestamp_is_not_new_failure(
+    monkeypatch,
+) -> None:
+    """Fresh reconcile timestamps for the same failed prerequisite are idempotent."""
+
+    wf = _make_workflow_under_rerun_patch(monkeypatch, declared=["dep-1"])
+
+    wf._record_dependency_outcome(
+        prerequisite_workflow_id="dep-1",
+        terminal_state="failed",
+        close_status="failed",
+        resolved_at="2026-05-08T12:00:00Z",
+        failure_category="dependency_failed",
+        message="upstream broken",
+    )
+    wf._record_dependency_outcome(
+        prerequisite_workflow_id="dep-1",
+        terminal_state="failed",
+        close_status="failed",
+        resolved_at="2026-05-08T12:30:00Z",
+        failure_category="dependency_failed",
+        message="upstream broken",
+    )
+
+    outcome = wf._dependency_outcomes_by_id["dep-1"]
+    assert outcome["failureCount"] == 1
+    assert outcome["lastFailedAt"] == "2026-05-08T12:00:00Z"
 
 # ---------------------------------------------------------------------------
 # Backwards-compatibility: legacy fail-fast path

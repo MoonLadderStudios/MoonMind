@@ -1288,11 +1288,19 @@ class MoonMindRunWorkflow:
             str(existing.get("resolution") or "") if existing else ""
         )
 
+        if self._dependency_resolution in (
+            DEPENDENCY_RESOLUTION_BYPASSED,
+            DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
+        ):
+            return
+
         if terminal_state == STATE_COMPLETED:
             # Idempotency: stale completed signals after already satisfied are no-ops.
             if existing_resolution in (
                 DEPENDENCY_RESOLUTION_SATISFIED,
                 DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN,
+                DEPENDENCY_RESOLUTION_BYPASSED,
+                DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
             ):
                 return
 
@@ -1347,14 +1355,27 @@ class MoonMindRunWorkflow:
             DEPENDENCY_RESOLUTION_SATISFIED,
             DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN,
             DEPENDENCY_RESOLUTION_BYPASSED,
+            DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
         ):
             return
 
         last_failed_at = self._dependency_last_failed_at.get(
             prerequisite_workflow_id
         )
+        existing_waiting = (
+            existing_resolution == DEPENDENCY_RESOLUTION_WAITING_FOR_RERUN
+        )
+        existing_message = str(existing.get("message") or "") if existing else ""
+        incoming_message = str(message or "")
         is_duplicate_observation = (
-            last_failed_at is not None and last_failed_at == resolved_at
+            last_failed_at == resolved_at
+            or (
+                existing_waiting
+                and existing.get("terminalState") == terminal_state
+                and existing.get("closeStatus") == close_status
+                and existing.get("failureCategory") == failure_category
+                and existing_message == incoming_message
+            )
         )
         if not is_duplicate_observation:
             self._dependency_failure_counts[prerequisite_workflow_id] = (
@@ -1401,14 +1422,29 @@ class MoonMindRunWorkflow:
     def _compute_top_level_resolution(self) -> str:
         if not self._declared_dependencies:
             return DEPENDENCY_RESOLUTION_NOT_APPLICABLE
+
+        if self._dependency_resolution in (
+            DEPENDENCY_RESOLUTION_BYPASSED,
+            DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
+        ):
+            return self._dependency_resolution
+
+        any_rerun = False
         for workflow_id in self._declared_dependencies:
             outcome = self._dependency_outcomes_by_id.get(workflow_id, {})
-            if (
-                outcome.get("resolution")
-                == DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN
-            ):
-                return DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN
-        return DEPENDENCY_RESOLUTION_SATISFIED
+            resolution = outcome.get("resolution")
+            if resolution == DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE:
+                return DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
+            if resolution == DEPENDENCY_RESOLUTION_BYPASSED:
+                return DEPENDENCY_RESOLUTION_BYPASSED
+            if resolution == DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN:
+                any_rerun = True
+
+        return (
+            DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN
+            if any_rerun
+            else DEPENDENCY_RESOLUTION_SATISFIED
+        )
 
     def _record_missing_dependency(self, prerequisite_workflow_id: str) -> None:
         self._record_dependency_outcome(
