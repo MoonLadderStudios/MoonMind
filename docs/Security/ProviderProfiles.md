@@ -694,6 +694,52 @@ provider profile whenever the failure can be attributed to that profile. The
 the same profile selector unless the request required an exact profile. If no
 compatible profile is available, the run waits in `awaiting_slot`.
 
+#### 10.6.1 Cross-runtime classification contract
+
+The slot-release + cooldown path is gated by `provider_error_requires_cooldown()`
+in `moonmind/workflows/provider_failures.py`, which fires when the
+`AgentRunResult` carries either:
+
+- `provider_error_code in {"429", "provider_capacity"}`, or
+- `retry_recommendation == "retry_after_cooldown"`.
+
+**Every managed runtime strategy** is therefore required to classify
+provider rate-limit signals as `failure_class="integration_error"` with
+`provider_error_code="429"`. Strategies that emit the generic
+`failure_class="execution_error"` for a 429 fall through to Temporal's
+exponential activity-retry policy
+(`initial_interval=5s, backoff_coefficient=2.0`), which retries 3× across
+~35s and never outlives a real quota window — the slot-release path is
+intentionally chosen over activity retries because cooldown timers on
+Anthropic/OpenAI/Google quotas are minutes-to-hours long.
+
+Currently registered strategies and the surfaces that detect 429 signals:
+
+| Runtime ID    | Strategy class       | Output parser            | 429 surface                                        |
+|---------------|----------------------|--------------------------|----------------------------------------------------|
+| `gemini_cli`  | `GeminiCliStrategy`  | `GeminiCliOutputParser`  | `status: 429`, `MODEL_CAPACITY_EXHAUSTED`, etc.    |
+| `claude_code` | `ClaudeCodeStrategy` | `ClaudeCodeOutputParser` | `hit your (usage )limit`, `usage limit reached`    |
+| `codex_cli`   | `CodexCliStrategy`   | `CodexCliOutputParser`   | `hit your usage limit`, `send a request to admin`  |
+
+Each strategy must also override `terminate_on_live_rate_limit()` to return
+`True` when streamed-output detection of a 429 should stop the subprocess
+early instead of letting it run to its idle timeout.
+
+Two complementary markers lists must stay aligned with the per-runtime
+parsers above:
+
+- **Per-runtime stream markers** in
+  `moonmind/workflows/temporal/runtime/output_parser.py` drive supervisor
+  classification of normal exits.
+- **Shared summary markers** in `_RATE_LIMIT_MARKERS` of
+  `moonmind/workflows/provider_failures.py` drive
+  `_managed_start_failure_result` and the codex-session adapter, which only
+  see a stringified failure summary rather than a captured stdout/stderr.
+
+When adding support for a new managed runtime, update **both** lists in the
+same change, plus the strategy and parser tests in
+`tests/unit/workflows/temporal/runtime/test_output_parser.py`.
+
 ---
 
 ## 11. Runtime Materialization Pipeline

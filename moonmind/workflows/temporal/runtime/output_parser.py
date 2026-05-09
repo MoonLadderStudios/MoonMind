@@ -19,6 +19,33 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
     "ratelimitexceeded",
     "retrying with backoff",
 )
+# Markers for Anthropic Claude Code CLI usage-limit messages.  The shipped CLI
+# prints variations of "You've hit your limit · resets <time>" (account
+# quota) and "You've hit your usage limit ..." (workspace/admin quota); both
+# exit with a non-zero code and otherwise look like a generic execution error.
+_CLAUDE_CODE_RATE_LIMIT_MARKERS: tuple[str, ...] = (
+    "hit your limit",
+    "hit your usage limit",
+    "usage limit reached",
+    "rate limit",
+    "rate-limit",
+    "status 429",
+    "status: 429",
+    "too many requests",
+)
+# Markers for OpenAI Codex CLI usage-limit messages.  Codex prints
+# "You've hit your usage limit. To get more access now, send a request to
+# your admin or try again at HH:MM AM/PM."
+_CODEX_RATE_LIMIT_MARKERS: tuple[str, ...] = (
+    "hit your usage limit",
+    "hit your limit",
+    "rate limit",
+    "rate-limit",
+    "status 429",
+    "status: 429",
+    "too many requests",
+    "send a request to your admin",
+)
 _CODEX_HARD_BLOCKER_MARKERS: tuple[str, ...] = (
     "blocked on the workspace tooling constraint",
     "apply_patch executable or tool is not available",
@@ -109,7 +136,7 @@ def _last_nonempty_line(text: str) -> str | None:
     return None
 
 class CodexCliOutputParser(PlainTextOutputParser):
-    """Plain-text parser with Codex-specific managed-runtime blocker detection."""
+    """Plain-text parser with Codex-specific managed-runtime blocker and 429 detection."""
 
     @staticmethod
     def extract_blocker_lines(*texts: str) -> list[str]:
@@ -127,20 +154,76 @@ class CodexCliOutputParser(PlainTextOutputParser):
                 matches.append(line)
         return matches
 
+    @staticmethod
+    def extract_rate_limit_lines(*texts: str) -> list[str]:
+        return _extract_matching_lines(_CODEX_RATE_LIMIT_MARKERS, *texts)
+
     def parse(self, stdout: str, stderr: str) -> ParsedOutput:
         base = super().parse(stdout, stderr)
         blocker_lines = self.extract_blocker_lines(stdout, stderr)
+        rate_limit_lines = self.extract_rate_limit_lines(stdout, stderr)
         error_messages = list(base.error_messages)
         for line in blocker_lines:
+            if line not in error_messages:
+                error_messages.append(line)
+        for line in rate_limit_lines:
             if line not in error_messages:
                 error_messages.append(line)
         return ParsedOutput(
             raw_text=base.raw_text,
             events=base.events,
             error_messages=error_messages,
-            rate_limited=base.rate_limited,
+            rate_limited=base.rate_limited or bool(rate_limit_lines),
             has_structured_output=base.has_structured_output,
         )
+
+    def parse_stream_chunk(self, chunk: str) -> list[dict]:
+        events: list[dict] = []
+        for line in self.extract_rate_limit_lines(chunk):
+            events.append(
+                {
+                    "type": "rate_limit",
+                    "provider": "codex_cli",
+                    "status_code": 429,
+                    "message": line,
+                }
+            )
+        return events
+
+class ClaudeCodeOutputParser(PlainTextOutputParser):
+    """Plain-text parser with Anthropic Claude Code 429 detection."""
+
+    @staticmethod
+    def extract_rate_limit_lines(*texts: str) -> list[str]:
+        return _extract_matching_lines(_CLAUDE_CODE_RATE_LIMIT_MARKERS, *texts)
+
+    def parse(self, stdout: str, stderr: str) -> ParsedOutput:
+        base = super().parse(stdout, stderr)
+        rate_limit_lines = self.extract_rate_limit_lines(stdout, stderr)
+        error_messages = list(base.error_messages)
+        for line in rate_limit_lines:
+            if line not in error_messages:
+                error_messages.append(line)
+        return ParsedOutput(
+            raw_text=base.raw_text,
+            events=base.events,
+            error_messages=error_messages,
+            rate_limited=base.rate_limited or bool(rate_limit_lines),
+            has_structured_output=base.has_structured_output,
+        )
+
+    def parse_stream_chunk(self, chunk: str) -> list[dict]:
+        events: list[dict] = []
+        for line in self.extract_rate_limit_lines(chunk):
+            events.append(
+                {
+                    "type": "rate_limit",
+                    "provider": "claude_code",
+                    "status_code": 429,
+                    "message": line,
+                }
+            )
+        return events
 
 class GeminiCliOutputParser(PlainTextOutputParser):
     """Plain-text parser with Gemini-specific 429/capacity detection."""

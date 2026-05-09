@@ -441,8 +441,8 @@ class ManagedRunSupervisor:
                     error_message = stalled_progress_reason or (
                         "Managed runtime stalled without observable progress"
                     )
-                elif runtime_id == "gemini_cli" and exit_result.provider_error_code == "429":
-                    error_message = "Gemini API rate limit exceeded"
+                elif exit_result.provider_error_code == "429":
+                    error_message = "Provider API rate limit exceeded"
                 else:
                     error_message = f"Process exited with code {exit_code}"
                     if parsed_output.error_messages:

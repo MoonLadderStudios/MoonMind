@@ -239,6 +239,23 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
                 env_source=environment,
             )
 
+    def classify_exit(
+        self,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+    ) -> tuple[str, str | None]:
+        parser = self.create_output_parser()
+        parsed = parser.parse(stdout, stderr)
+        if parsed.rate_limited:
+            return "failed", "integration_error"
+        if exit_code == 0:
+            blocker_lines = CodexCliOutputParser.extract_blocker_lines(stdout, stderr)
+            if blocker_lines:
+                return "failed", "execution_error"
+            return "completed", None
+        return "failed", "execution_error"
+
     def classify_result(
         self,
         *,
@@ -248,6 +265,12 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
         parsed_output: ParsedOutput | None = None,
     ) -> ManagedRuntimeExitResult:
         parsed = parsed_output or self.create_output_parser().parse(stdout, stderr)
+        if parsed.rate_limited:
+            return ManagedRuntimeExitResult(
+                status="failed",
+                failure_class="integration_error",
+                provider_error_code="429",
+            )
         blocker_lines = CodexCliOutputParser.extract_blocker_lines(stdout, stderr)
         if exit_code == 0 and blocker_lines:
             return ManagedRuntimeExitResult(
@@ -263,6 +286,9 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
 
     def create_output_parser(self) -> CodexCliOutputParser:
         return CodexCliOutputParser()
+
+    def terminate_on_live_rate_limit(self) -> bool:
+        return True
 
     def probe_progress_at(
         self,

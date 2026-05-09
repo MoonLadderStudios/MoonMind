@@ -5,7 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+from moonmind.workflows.temporal.runtime.output_parser import (
+    ClaudeCodeOutputParser,
+    ParsedOutput,
+    RuntimeOutputParser,
+)
 from moonmind.workflows.temporal.runtime.strategies.base import (
+    ManagedRuntimeExitResult,
     ManagedRuntimeStrategy,
 )
 
@@ -58,6 +64,48 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
             cmd.append(request.instruction_ref)
 
         return cmd
+
+    def classify_exit(
+        self,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+    ) -> tuple[str, str | None]:
+        parser = self.create_output_parser()
+        parsed = parser.parse(stdout, stderr)
+        if parsed.rate_limited:
+            return "failed", "integration_error"
+        if exit_code == 0:
+            return "completed", None
+        return "failed", "execution_error"
+
+    def classify_result(
+        self,
+        *,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        parsed_output: ParsedOutput | None = None,
+    ) -> ManagedRuntimeExitResult:
+        parsed = parsed_output or self.create_output_parser().parse(stdout, stderr)
+        if parsed.rate_limited:
+            return ManagedRuntimeExitResult(
+                status="failed",
+                failure_class="integration_error",
+                provider_error_code="429",
+            )
+        if exit_code == 0:
+            return ManagedRuntimeExitResult(status="completed", failure_class=None)
+        return ManagedRuntimeExitResult(
+            status="failed",
+            failure_class="execution_error",
+        )
+
+    def create_output_parser(self) -> RuntimeOutputParser:
+        return ClaudeCodeOutputParser()
+
+    def terminate_on_live_rate_limit(self) -> bool:
+        return True
 
     async def prepare_workspace(
         self,
