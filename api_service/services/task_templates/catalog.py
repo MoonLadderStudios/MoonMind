@@ -99,6 +99,7 @@ _STEP_RESERVED_KEYS = frozenset(
         "tool",
         "skill",
         "skills",
+        "preset",
         "annotations",
     }
 )
@@ -118,6 +119,7 @@ _STEP_KIND = "step"
 _INCLUDE_KIND = "include"
 _STEP_TYPE_TOOL = "tool"
 _STEP_TYPE_SKILL = "skill"
+_STEP_TYPE_PRESET = "preset"
 _RUNTIME_ONLY_ORCHESTRATE_SLUGS = {"jira-orchestrate", "moonspec-orchestrate"}
 _ORCHESTRATION_MODE_INPUT = "orchestration_mode"
 _SKILL_METADATA_KEYS = frozenset(
@@ -293,11 +295,32 @@ def _normalize_step_type(raw_step: Mapping[str, Any], *, index: int) -> str:
     if raw_type is None or str(raw_type).strip() == "":
         return _STEP_TYPE_SKILL
     step_type = str(raw_type).strip().lower()
-    if step_type not in {_STEP_TYPE_TOOL, _STEP_TYPE_SKILL}:
+    if step_type not in {_STEP_TYPE_TOOL, _STEP_TYPE_SKILL, _STEP_TYPE_PRESET}:
         raise TaskTemplateValidationError(
-            f"Step {index} type must be one of: tool, skill."
+            f"Step {index} type must be one of: tool, skill, preset."
         )
     return step_type
+
+
+def _step_validation_error(
+    *,
+    index: int,
+    path: str,
+    message: str,
+    code: str = "invalid",
+    recoverable: bool = True,
+) -> TaskTemplateValidationError:
+    return TaskTemplateValidationError(
+        message,
+        errors=[
+            {
+                "path": f"steps[{index - 1}].{path}",
+                "message": message,
+                "code": code,
+                "recoverable": recoverable,
+            }
+        ],
+    )
 
 
 def _has_substantive_tool_metadata(value: Any) -> bool:
@@ -398,6 +421,77 @@ def _normalize_skill_payload(raw_skill: Any, *, index: int) -> dict[str, Any]:
                 )
             skill_payload[key] = dict(value) if isinstance(value, Mapping) else value
     return skill_payload
+
+
+def _normalize_preset_payload(raw_preset: Any, *, index: int) -> dict[str, Any]:
+    if not isinstance(raw_preset, Mapping):
+        raise _step_validation_error(
+            index=index,
+            path="preset",
+            message="Preset steps require a preset payload object.",
+            code="required",
+        )
+    preset_slug = str(raw_preset.get("slug") or raw_preset.get("id") or "").strip()
+    if not preset_slug:
+        raise _step_validation_error(
+            index=index,
+            path="preset.slug",
+            message="Preset steps require preset.slug or preset.id.",
+            code="required",
+        )
+    version = str(
+        raw_preset.get("version") or raw_preset.get("presetVersion") or ""
+    ).strip()
+    if not version:
+        raise _step_validation_error(
+            index=index,
+            path="preset.version",
+            message="Preset steps require preset.version.",
+            code="required",
+        )
+    inputs = raw_preset.get("inputs", raw_preset.get("inputMapping", {}))
+    if inputs is None:
+        inputs = {}
+    if not isinstance(inputs, Mapping):
+        raise _step_validation_error(
+            index=index,
+            path="preset.inputs",
+            message="Preset step inputs must be an object when provided.",
+        )
+    preset_payload: dict[str, Any] = {
+        "slug": _normalize_slug(preset_slug),
+        "version": version,
+        "inputs": dict(inputs),
+    }
+    scope = raw_preset.get("scope")
+    if scope is not None:
+        preset_payload["scope"] = _normalize_scope(str(scope)).value
+    return preset_payload
+
+
+def _preset_step_to_include(
+    raw_step: Mapping[str, Any], *, index: int
+) -> dict[str, Any]:
+    preset = _normalize_preset_payload(raw_step.get("preset"), index=index)
+    alias_source = (
+        raw_step.get("alias")
+        or raw_step.get("id")
+        or raw_step.get("title")
+        or preset["slug"]
+    )
+    include_payload: dict[str, Any] = {
+        "kind": _INCLUDE_KIND,
+        "slug": preset["slug"],
+        "version": preset["version"],
+        "alias": _normalize_slug(str(alias_source)),
+        "inputMapping": dict(preset["inputs"]),
+    }
+    if "scope" in preset:
+        include_payload["scope"] = preset["scope"]
+    annotations = raw_step.get("annotations")
+    if annotations is not None:
+        include_payload["annotations"] = annotations
+    return include_payload
 
 def _slugify_from_title(title: str) -> str:
     return _normalize_slug(title)
@@ -1343,6 +1437,9 @@ class TaskTemplateCatalogService:
                 "type": step_type,
                 "instructions": instructions,
             }
+            step_id = str(raw_step.get("id") or "").strip()
+            if step_id:
+                step_payload["id"] = step_id
             title = str(raw_step.get("title") or "").strip()
             if title:
                 step_payload["title"] = title
@@ -1353,16 +1450,35 @@ class TaskTemplateCatalogService:
                     raise TaskTemplateValidationError(
                         f"Step {index} Tool step must not include a skill payload."
                     )
+                if raw_step.get("preset") is not None:
+                    raise TaskTemplateValidationError(
+                        f"Step {index} Tool step must not include a preset payload."
+                    )
                 step_payload["tool"] = _normalize_tool_payload(
                     raw_step.get("tool"), index=index
                 )
-            else:
+            elif step_type == _STEP_TYPE_SKILL:
                 if raw_step.get("tool") is not None:
                     raise TaskTemplateValidationError(
                         f"Step {index} Skill step must not include a tool payload."
                     )
+                if raw_step.get("preset") is not None:
+                    raise TaskTemplateValidationError(
+                        f"Step {index} Skill step must not include a preset payload."
+                    )
                 step_payload["skill"] = _normalize_skill_payload(
                     raw_step.get("skill"), index=index
+                )
+            else:
+                if (
+                    raw_step.get("tool") is not None
+                    or raw_step.get("skill") is not None
+                ):
+                    raise TaskTemplateValidationError(
+                        f"Step {index} Preset step must not include tool or skill payloads."
+                    )
+                step_payload["preset"] = _normalize_preset_payload(
+                    raw_step.get("preset"), index=index
                 )
             annotations = raw_step.get("annotations")
             if annotations is not None:
@@ -1435,6 +1551,13 @@ class TaskTemplateCatalogService:
                     f"Expanded step at {_format_include_path(path)} must be an object."
                 )
             kind = str(rendered.get("kind") or _STEP_KIND).strip().lower()
+            if (
+                kind == _STEP_KIND
+                and str(rendered.get("type") or "").strip().lower()
+                == _STEP_TYPE_PRESET
+            ):
+                rendered = _preset_step_to_include(rendered, index=source_index)
+                kind = _INCLUDE_KIND
             if kind == _INCLUDE_KIND:
                 include_slug = _normalize_slug(str(rendered.get("slug") or ""))
                 include_version = str(rendered.get("version") or "").strip()

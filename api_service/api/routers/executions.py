@@ -3589,34 +3589,95 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         if normalized_input_attachments:
             normalized_step["inputAttachments"] = normalized_input_attachments
 
+        raw_type = str(step_payload.get("type") or "").strip().lower()
+        if raw_type:
+            if raw_type not in {"tool", "skill"}:
+                raise _invalid_task_request(
+                    f"payload.task.steps[{index}].type / task.steps[].type "
+                    "must be one of: tool, skill."
+                )
+            normalized_step["type"] = raw_type
+
+        raw_tool = (
+            step_payload.get("tool")
+            if isinstance(step_payload.get("tool"), Mapping)
+            else None
+        )
         raw_skill = (
             step_payload.get("skill")
             if isinstance(step_payload.get("skill"), Mapping)
-            else step_payload.get("tool")
-            if isinstance(step_payload.get("tool"), Mapping)
-            else {}
+            else None
         )
-        skill_id = str(
-            raw_skill.get("id") or raw_skill.get("name") or ""
-        ).strip()
-        if skill_id:
-            normalized_skill: dict[str, Any] = {"id": skill_id}
-            raw_args = raw_skill.get("args")
-            if not isinstance(raw_args, dict):
-                raw_args = raw_skill.get("inputs")
-            if isinstance(raw_args, dict) and raw_args:
-                normalized_skill["args"] = dict(raw_args)
-            raw_caps = raw_skill.get("requiredCapabilities")
+        step_type = raw_type or "skill"
+        if step_type == "tool":
+            if raw_skill is not None:
+                raise _invalid_task_request(
+                    f"payload.task.steps[{index}].skill must be omitted for Tool steps."
+                )
+            if raw_tool is None:
+                raise _invalid_task_request(
+                    f"payload.task.steps[{index}].tool is required for Tool steps."
+                )
+            tool_id = str(raw_tool.get("id") or raw_tool.get("name") or "").strip()
+            if not tool_id:
+                raise _invalid_task_request(
+                    f"payload.task.steps[{index}].tool.id or "
+                    f"payload.task.steps[{index}].tool.name is required."
+                )
+            normalized_tool: dict[str, Any] = {"id": tool_id}
+            raw_inputs = raw_tool.get("inputs")
+            if not isinstance(raw_inputs, dict):
+                raw_inputs = raw_tool.get("args")
+            if isinstance(raw_inputs, dict):
+                normalized_tool["inputs"] = dict(raw_inputs)
+            raw_caps = raw_tool.get("requiredCapabilities")
             if raw_caps is not None:
                 normalized_caps = _coerce_string_list(
                     raw_caps,
                     field_name=(
-                        f"payload.task.steps[{index}].skill.requiredCapabilities"
+                        f"payload.task.steps[{index}].tool.requiredCapabilities"
                     ),
                 )
                 if normalized_caps:
-                    normalized_skill["requiredCapabilities"] = normalized_caps
-            normalized_step["skill"] = normalized_skill
+                    normalized_tool["requiredCapabilities"] = normalized_caps
+            normalized_step["tool"] = normalized_tool
+        else:
+            selected_skill = raw_skill
+            if selected_skill is None and raw_tool is not None:
+                tool_type = str(
+                    raw_tool.get("type") or raw_tool.get("kind") or ""
+                ).strip().lower()
+                if tool_type not in {"", "skill"}:
+                    raise _invalid_task_request(
+                        f"payload.task.steps[{index}].tool must be omitted for Skill steps."
+                    )
+                selected_skill = raw_tool
+            if raw_type == "skill" and selected_skill is None:
+                raise _invalid_task_request(
+                    f"payload.task.steps[{index}].skill is required for Skill steps."
+                )
+            if selected_skill is not None:
+                skill_id = str(
+                    selected_skill.get("id") or selected_skill.get("name") or ""
+                ).strip()
+                if skill_id:
+                    normalized_skill: dict[str, Any] = {"id": skill_id}
+                    raw_args = selected_skill.get("args")
+                    if not isinstance(raw_args, dict):
+                        raw_args = selected_skill.get("inputs")
+                    if isinstance(raw_args, dict):
+                        normalized_skill["args"] = dict(raw_args)
+                    raw_caps = selected_skill.get("requiredCapabilities")
+                    if raw_caps is not None:
+                        normalized_caps = _coerce_string_list(
+                            raw_caps,
+                            field_name=(
+                                f"payload.task.steps[{index}].skill.requiredCapabilities"
+                            ),
+                        )
+                        if normalized_caps:
+                            normalized_skill["requiredCapabilities"] = normalized_caps
+                    normalized_step["skill"] = normalized_skill
 
         for key, value in step_payload.items():
             normalized_key = str(key).strip()
@@ -3624,11 +3685,13 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "id",
                 "title",
                 "instructions",
+                "type",
                 "inputAttachments",
                 "input_attachments",
                 "skill",
                 "skills",
                 "tool",
+                "preset",
             }:
                 continue
             normalized_step[normalized_key] = value

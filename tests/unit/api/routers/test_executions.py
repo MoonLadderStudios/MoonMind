@@ -1091,6 +1091,76 @@ def test_create_task_shaped_execution_rejects_more_than_50_steps(
     assert "payload.task.steps can have a maximum of 50 items" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
+def test_create_task_shaped_execution_rejects_explicit_skill_step_without_skill_payload(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """MM-569: explicit `type: skill` steps must require a skill sub-payload."""
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Run a skill step without a payload.",
+                    "steps": [
+                        {
+                            "id": "missing-skill",
+                            "title": "Missing skill payload",
+                            "type": "skill",
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert (
+        "payload.task.steps[0].skill is required for Skill steps"
+        in response.json()["detail"]["message"]
+    )
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_preserves_empty_skill_args(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """MM-569: empty `skill.args` dictionaries must be preserved through normalization,
+    matching the tool-step `inputs` behavior so downstream contract validation sees
+    the same shape regardless of step type."""
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Run a skill step without args.",
+                    "steps": [
+                        {
+                            "id": "skill-empty-args",
+                            "title": "Skill with empty args",
+                            "type": "skill",
+                            "skill": {"id": "noop", "args": {}},
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    create_kwargs = service.create_execution.await_args.kwargs
+    initial_parameters = create_kwargs["initial_parameters"]
+    normalized_steps = initial_parameters["task"]["steps"]
+    assert len(normalized_steps) == 1
+    assert normalized_steps[0]["skill"] == {"id": "noop", "args": {}}
+
+
 def test_create_task_shaped_execution_rejects_attachments_when_policy_disabled(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,

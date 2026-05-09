@@ -20,6 +20,7 @@ from tests.unit.api.routers.test_executions import (
     _build_execution_record,
     _override_user_dependencies,
 )
+from tests.helpers.step_type_payloads import preset_step, skill_step, tool_step
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -218,6 +219,77 @@ def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
         "quality:child-checks@1.0.0",
     ]
     assert all(step.get("type") != "preset" for step in task["steps"])
+
+
+def test_mm569_task_shaped_submission_rejects_unresolved_preset_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    test_client, service = _client()
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        []
+    )
+
+    with test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex",
+                    "task": {
+                        "instructions": "Reject unresolved MM-569 preset.",
+                        "steps": [preset_step()],
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert "task.steps[].type" in response.text
+    service.create_execution.assert_not_awaited()
+
+
+def test_mm569_task_shaped_submission_preserves_flat_tool_skill_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    test_client, service = _client()
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(
+        []
+    )
+    tool = tool_step()
+    skill = skill_step()
+    for step in (tool, skill):
+        step["source"] = {
+            "kind": "preset-derived",
+            "presetSlug": "mm569-parent",
+            "presetVersion": "1.0.0",
+            "includePath": ["mm569-parent@1.0.0"],
+        }
+
+    with test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex",
+                    "task": {
+                        "instructions": "Submit flat MM-569 executable steps.",
+                        "steps": [tool, skill],
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    assert [step["type"] for step in task["steps"]] == ["tool", "skill"]
+    assert task["steps"][0]["source"]["presetSlug"] == "mm569-parent"
+    assert task["steps"][1]["source"]["presetSlug"] == "mm569-parent"
 
 def test_task_shaped_submission_boundary_does_not_fabricate_preset_metadata(
     monkeypatch: pytest.MonkeyPatch,

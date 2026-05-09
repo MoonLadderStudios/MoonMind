@@ -27,6 +27,7 @@ from api_service.services.task_templates.catalog import (
 )
 from api_service.services.task_templates.save import TaskTemplateSaveService
 from moonmind.config.settings import settings
+from tests.helpers.step_type_payloads import preset_step, skill_step, tool_step
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -2708,3 +2709,121 @@ async def test_mm557_command_tool_rejects_empty_policy_metadata(tmp_path):
                     required_capabilities=[],
                     created_by=user_id,
                 )
+
+
+async def test_mm569_accepts_valid_tool_skill_and_preset_draft_steps(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="mm569-child-preset",
+                title="MM-569 Child Preset",
+                description="Child preset for explicit Step Type validation.",
+                scope="global",
+                scope_ref=None,
+                tags=["mm-569"],
+                inputs_schema=[
+                    {
+                        "name": "issue_key",
+                        "label": "Issue key",
+                        "type": "text",
+                        "required": True,
+                    }
+                ],
+                steps=[
+                    {
+                        "type": "skill",
+                        "title": "Child skill",
+                        "instructions": "Implement {{ inputs.issue_key }}.",
+                        "skill": {"id": "moonspec-implement", "args": {}},
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+            created = await service.create_template(
+                slug="mm569-explicit-step-types",
+                title="MM-569 Explicit Step Types",
+                description="Draft Tool, Skill, and Preset examples.",
+                scope="global",
+                scope_ref=None,
+                tags=["mm-569"],
+                inputs_schema=[],
+                steps=[
+                    tool_step(),
+                    skill_step(),
+                    preset_step(slug="mm569-child-preset"),
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+            expanded = await service.expand_template(
+                slug="mm569-explicit-step-types",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={},
+                context={},
+            )
+
+    tool, skill, preset = created["steps"]
+    assert tool["id"] == "fetch-issue"
+    assert tool["title"] == "Fetch issue"
+    assert tool["type"] == "tool"
+    assert tool["tool"]["id"] == "jira.get_issue"
+    assert skill["id"] == "implement"
+    assert skill["title"] == "Implement story"
+    assert skill["type"] == "skill"
+    assert skill["skill"]["id"] == "moonspec-implement"
+    assert preset["id"] == "run-preset"
+    assert preset["title"] == "Run preset"
+    assert preset["type"] == "preset"
+    assert preset["preset"] == {
+        "slug": "mm569-child-preset",
+        "version": "1.0.0",
+        "inputs": {"issue_key": "MM-569"},
+    }
+    assert [step["type"] for step in expanded["steps"]] == ["tool", "skill", "skill"]
+    assert expanded["steps"][2]["source"]["presetSlug"] == "mm569-child-preset"
+
+
+async def test_mm569_preset_draft_validation_reports_field_addressable_error(
+    tmp_path,
+):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            with pytest.raises(TaskTemplateValidationError) as excinfo:
+                await service.create_template(
+                    slug="mm569-bad-preset",
+                    title="MM-569 Bad Preset",
+                    description="Invalid preset draft.",
+                    scope="global",
+                    scope_ref=None,
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "id": "bad-preset",
+                            "title": "Bad preset",
+                            "type": "preset",
+                            "instructions": "Apply a preset.",
+                            "preset": {"inputs": {"issue_key": "MM-569"}},
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=None,
+                )
+
+    assert excinfo.value.errors == [
+        {
+            "path": "steps[0].preset.slug",
+            "message": "Preset steps require preset.slug or preset.id.",
+            "code": "required",
+            "recoverable": True,
+        }
+    ]

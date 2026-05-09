@@ -1115,7 +1115,10 @@ class TaskStepSpec(BaseModel):
                     tool_payload.get("id") or tool_payload.get("name")
                 )
                 if not tool_id:
-                    raise TaskContractError("Tool steps require tool.id or tool.name")
+                    raise TaskContractError(
+                        "task.steps[].tool.id or task.steps[].tool.name is required; "
+                        "Tool steps require tool.id or tool.name"
+                    )
                 if skill_payload is not None:
                     raise TaskContractError(
                         "Tool steps must not include a skill payload"
@@ -1872,6 +1875,11 @@ def build_canonical_task_view(
             step_skill_caps = step_skill.get("requiredCapabilities")
             if isinstance(step_skill_caps, list):
                 required.extend(step_skill_caps)
+            step_tool_raw = step_raw.get("tool")
+            step_tool = step_tool_raw if isinstance(step_tool_raw, Mapping) else {}
+            step_tool_caps = step_tool.get("requiredCapabilities")
+            if isinstance(step_tool_caps, list):
+                required.extend(step_tool_caps)
 
     container_node = (canonical.get("task") or {}).get("container")
     container = container_node if isinstance(container_node, Mapping) else {}
