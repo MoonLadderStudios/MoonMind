@@ -274,6 +274,12 @@ describe("Task Create Step Type authoring", () => {
         "Preset configuration discarded after changing Step Type. Shared instructions were preserved.",
       ),
     ).toBeNull();
+
+    selectStepType(primaryStep, "Preset");
+    expect(
+      (within(primaryStep).getByLabelText("Preset Template") as HTMLSelectElement)
+        .value,
+    ).toBe("");
   });
 
   it("expands a preset step in place and pushes following steps down", async () => {
