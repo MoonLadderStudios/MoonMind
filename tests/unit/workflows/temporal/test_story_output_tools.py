@@ -1659,9 +1659,17 @@ async def test_create_document_update_tasks_from_inline_paths():
     assert second["dependsOn"] == [first["workflowId"]]
 
     first_task = creator.requests[0]["initial_parameters"]["task"]
-    assert first_task["taskTemplate"]["slug"] == "document-update"
     assert first_task["publish"]["mode"] == "pr"
     assert first_task["publish"]["mergeAutomation"]["enabled"] is True
+    assert "taskTemplate" not in first_task
+    assert first_task["skill"] == {
+        "name": "document-update",
+        "version": "1.0.0",
+        "args": {
+            "document_path": "/docs/readme.md",
+            "source_directory": "/docs",
+        },
+    }
 
 
 @pytest.mark.asyncio
