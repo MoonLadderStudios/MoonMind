@@ -290,6 +290,125 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
         "originalStepId": "fetch-jira-issue",
     }
 
+def test_runtime_planner_maps_explicit_skill_step_with_provenance_to_agent_runtime_node():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Run explicit skill step.",
+                "runtime": {"mode": "codex_cli"},
+                "steps": [
+                    {
+                        "id": "implement-mm-573",
+                        "type": "skill",
+                        "instructions": "Implement MM-573.",
+                        "skill": {
+                            "id": "moonspec-implement",
+                            "version": "1.0.0",
+                            "inputs": {"issueKey": "MM-573"},
+                        },
+                        "source": {
+                            "kind": "preset-derived",
+                            "presetSlug": "jira-orchestrate",
+                            "presetVersion": "1.0.0",
+                        },
+                    }
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"][0]["tool"] == {
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
+    }
+    assert plan["nodes"][0]["inputs"]["selectedSkill"] == "moonspec-implement"
+    assert plan["nodes"][0]["inputs"]["type"] == "skill"
+    assert plan["nodes"][0]["inputs"]["issueKey"] == "MM-573"
+    assert plan["nodes"][0]["inputs"]["source"] == {
+        "kind": "preset-derived",
+        "presetSlug": "jira-orchestrate",
+        "presetVersion": "1.0.0",
+    }
+
+
+def test_runtime_planner_orders_flattened_tool_and_skill_steps_with_provenance():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Run flattened MM-573 steps.",
+                "runtime": {"mode": "codex_cli"},
+                "steps": [
+                    {
+                        "id": "fetch-issue",
+                        "type": "tool",
+                        "instructions": "Fetch MM-573.",
+                        "tool": {
+                            "id": "jira.get_issue",
+                            "version": "1.0.0",
+                            "inputs": {"issueKey": "MM-573"},
+                        },
+                        "source": {
+                            "kind": "preset-derived",
+                            "presetSlug": "jira-orchestrate",
+                            "presetVersion": "1.0.0",
+                        },
+                    },
+                    {
+                        "id": "implement-story",
+                        "type": "skill",
+                        "instructions": "Implement MM-573.",
+                        "skill": {
+                            "id": "moonspec-implement",
+                            "version": "1.0.0",
+                            "inputs": {"issueKey": "MM-573"},
+                        },
+                        "source": {
+                            "kind": "preset-derived",
+                            "presetSlug": "jira-orchestrate",
+                            "presetVersion": "1.0.0",
+                        },
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert [node["id"] for node in plan["nodes"]] == [
+        "fetch-issue",
+        "implement-story",
+    ]
+    assert plan["edges"] == [{"from": "fetch-issue", "to": "implement-story"}]
+    assert plan["nodes"][0]["tool"] == {
+        "type": "skill",
+        "name": "jira.get_issue",
+        "version": "1.0.0",
+    }
+    assert plan["nodes"][1]["tool"] == {
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
+    }
+    assert plan["nodes"][0]["inputs"]["source"]["presetSlug"] == "jira-orchestrate"
+    assert plan["nodes"][1]["inputs"]["source"]["presetSlug"] == "jira-orchestrate"
+
+
 def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
