@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Set Jira Issue MM-601 to Status "In PR"
+# Specification Quality Checklist: Set Jira Issue MM-601 to Status "In Progress"
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-05-09
