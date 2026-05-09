@@ -8969,7 +8969,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             <p className="small">No prerequisites selected.</p>
           )}
           <p className={dependencyMessage ? "notice error" : "small"}>
-            {dependencyMessage || "Direct dependencies only. Dependency failures propagate immediately to the dependent run."}
+            {dependencyMessage || "Direct dependencies only. The new run stays blocked while a prerequisite is running, failed, canceled, terminated, timed out, or unresolvable, and unblocks once the prerequisite completes successfully. Cancel this run or bypass the dependency to proceed without that prerequisite."}
           </p>
         </section>
 

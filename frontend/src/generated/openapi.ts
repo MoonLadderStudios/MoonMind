@@ -3896,6 +3896,12 @@ export interface components {
             failureCategory?: string | null;
             /** Message */
             message?: string | null;
+            /** Resolution */
+            resolution?: string | null;
+            /** Failurecount */
+            failureCount?: number | null;
+            /** Lastfailedat */
+            lastFailedAt?: string | null;
         };
         /**
          * ExecutionDependencySummaryModel

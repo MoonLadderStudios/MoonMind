@@ -151,9 +151,11 @@ CLOSE_STATUS_CANCELED = "canceled"
 CLOSE_STATUS_FAILED = "failed"
 DEPENDENCY_RESOLUTION_NOT_APPLICABLE = "not_applicable"
 DEPENDENCY_RESOLUTION_SATISFIED = "satisfied"
+DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN = "satisfied_after_rerun"
 DEPENDENCY_RESOLUTION_FAILED = "dependency_failed"
 DEPENDENCY_RESOLUTION_BYPASSED = "bypassed"
 DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE = "manual_override"
+DEPENDENCY_RESOLUTION_WAITING_FOR_RERUN = "waiting_for_successful_rerun"
 MERGE_AUTOMATION_SUCCESS_STATUSES = frozenset({"merged", "already_merged"})
 MERGE_AUTOMATION_FAILURE_STATUSES = frozenset({"blocked", "failed", "expired"})
 MERGE_AUTOMATION_CANCELED_STATUS = "canceled"
@@ -192,6 +194,12 @@ RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH = (
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
+# Replay-stable patch id for unified wait-through-rerun dependency behavior.
+# Under this patch, a non-success prerequisite terminal outcome (failed,
+# canceled, terminated, timed_out, unresolvable) keeps the dependent run
+# blocked in waiting_on_dependencies until the prerequisite is rerun and
+# completes, the dependent is canceled, or an operator bypasses the gate.
+DEPENDENCY_WAIT_THROUGH_RERUN_PATCH = "dependency-wait-through-rerun-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
 NATIVE_PR_BRANCH_DEFAULTS_PATCH = "native-pr-branch-defaults-v1"
 NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
@@ -296,6 +304,13 @@ class MoonMindRunWorkflow:
         self._dependency_wait_started_at: datetime | None = None
         self._dependency_failure: dict[str, Any] | None = None
         self._dependency_manual_override_unresolved_count: int = 0
+        # Per-prerequisite tracking under wait-through-rerun. failureCount
+        # increments on each distinct non-success terminal observation;
+        # lastFailedAt records the most recent failure resolved-at timestamp
+        # for the prerequisite. Both are surfaced in dependency outcomes for
+        # operator diagnosis even after the prerequisite later succeeds.
+        self._dependency_failure_counts: dict[str, int] = {}
+        self._dependency_last_failed_at: dict[str, str] = {}
 
         # Artifact refs
         self._input_ref: Optional[str] = None
@@ -1229,6 +1244,20 @@ class MoonMindRunWorkflow:
     ) -> None:
         if prerequisite_workflow_id not in self._declared_dependencies:
             return
+
+        if workflow.patched(DEPENDENCY_WAIT_THROUGH_RERUN_PATCH):
+            self._record_dependency_outcome_wait_through_rerun(
+                prerequisite_workflow_id=prerequisite_workflow_id,
+                terminal_state=terminal_state,
+                close_status=close_status,
+                resolved_at=resolved_at,
+                failure_category=failure_category,
+                message=message,
+            )
+            return
+
+        # Legacy fail-fast path preserved for in-flight workflows whose history
+        # predates DEPENDENCY_WAIT_THROUGH_RERUN_PATCH.
         if prerequisite_workflow_id in self._dependency_outcomes_by_id:
             return
 
@@ -1258,6 +1287,179 @@ class MoonMindRunWorkflow:
             "message": message,
         }
         self._unresolved_dependency_ids.discard(prerequisite_workflow_id)
+
+    def _record_dependency_outcome_wait_through_rerun(
+        self,
+        *,
+        prerequisite_workflow_id: str,
+        terminal_state: str,
+        close_status: str | None,
+        resolved_at: str,
+        failure_category: str | None,
+        message: str | None,
+    ) -> None:
+        existing = self._dependency_outcomes_by_id.get(prerequisite_workflow_id)
+        existing_resolution = (
+            str(existing.get("resolution") or "") if existing else ""
+        )
+
+        if self._dependency_resolution in (
+            DEPENDENCY_RESOLUTION_BYPASSED,
+            DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
+        ):
+            return
+
+        if terminal_state == STATE_COMPLETED:
+            # Idempotency: stale completed signals after already satisfied are no-ops.
+            if existing_resolution in (
+                DEPENDENCY_RESOLUTION_SATISFIED,
+                DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN,
+                DEPENDENCY_RESOLUTION_BYPASSED,
+                DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
+            ):
+                return
+
+            had_failures = (
+                self._dependency_failure_counts.get(prerequisite_workflow_id, 0) > 0
+            )
+            per_dep_resolution = (
+                DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN
+                if had_failures
+                else DEPENDENCY_RESOLUTION_SATISFIED
+            )
+
+            outcome: dict[str, Any] = {
+                "workflowId": prerequisite_workflow_id,
+                "terminalState": terminal_state,
+                "closeStatus": close_status,
+                "resolvedAt": resolved_at,
+                "failureCategory": None,
+                "message": message,
+                "resolution": per_dep_resolution,
+                "failureCount": self._dependency_failure_counts.get(
+                    prerequisite_workflow_id, 0
+                ),
+                "lastFailedAt": self._dependency_last_failed_at.get(
+                    prerequisite_workflow_id
+                ),
+            }
+            self._dependency_outcomes_by_id[prerequisite_workflow_id] = outcome
+            self._unresolved_dependency_ids.discard(prerequisite_workflow_id)
+
+            if not self._unresolved_dependency_ids:
+                self._dependency_resolution = self._compute_top_level_resolution()
+
+            if had_failures:
+                self._get_logger().info(
+                    "Dependency gate satisfied after rerun",
+                    extra={
+                        "event": "dependency_gate_satisfied_after_rerun",
+                        "prerequisite_workflow_id": prerequisite_workflow_id,
+                        "failure_count": self._dependency_failure_counts.get(
+                            prerequisite_workflow_id, 0
+                        ),
+                        "wait_duration_ms": self._dependency_wait_duration_ms,
+                    },
+                )
+            return
+
+        # Non-success terminal: stay blocked, accumulate diagnostics. Stale
+        # failure observations after the prerequisite is already satisfied
+        # or the gate was bypassed are ignored.
+        if existing_resolution in (
+            DEPENDENCY_RESOLUTION_SATISFIED,
+            DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN,
+            DEPENDENCY_RESOLUTION_BYPASSED,
+            DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
+        ):
+            return
+
+        last_failed_at = self._dependency_last_failed_at.get(
+            prerequisite_workflow_id
+        )
+        existing_waiting = (
+            existing_resolution == DEPENDENCY_RESOLUTION_WAITING_FOR_RERUN
+        )
+        existing_message = str(existing.get("message") or "") if existing else ""
+        incoming_message = str(message or "")
+        is_duplicate_observation = (
+            last_failed_at == resolved_at
+            or (
+                existing_waiting
+                and existing.get("terminalState") == terminal_state
+                and existing.get("closeStatus") == close_status
+                and existing.get("failureCategory") == failure_category
+                and existing_message == incoming_message
+            )
+        )
+        if not is_duplicate_observation:
+            self._dependency_failure_counts[prerequisite_workflow_id] = (
+                self._dependency_failure_counts.get(prerequisite_workflow_id, 0)
+                + 1
+            )
+            self._dependency_last_failed_at[prerequisite_workflow_id] = resolved_at
+
+        failure_count = self._dependency_failure_counts.get(
+            prerequisite_workflow_id, 0
+        )
+        last_failed = self._dependency_last_failed_at.get(prerequisite_workflow_id)
+
+        diagnostic_message = message or (
+            f"Prerequisite execution '{prerequisite_workflow_id}' reached "
+            f"terminal state '{terminal_state}'; waiting for successful rerun."
+        )
+
+        outcome = {
+            "workflowId": prerequisite_workflow_id,
+            "terminalState": terminal_state,
+            "closeStatus": close_status,
+            "resolvedAt": None,
+            "failureCategory": failure_category,
+            "message": diagnostic_message,
+            "resolution": DEPENDENCY_RESOLUTION_WAITING_FOR_RERUN,
+            "failureCount": failure_count,
+            "lastFailedAt": last_failed,
+        }
+        self._dependency_outcomes_by_id[prerequisite_workflow_id] = outcome
+
+        if not is_duplicate_observation:
+            self._get_logger().info(
+                "Dependency gate waiting for successful rerun",
+                extra={
+                    "event": "dependency_gate_waiting_for_rerun",
+                    "prerequisite_workflow_id": prerequisite_workflow_id,
+                    "terminal_state": terminal_state,
+                    "close_status": close_status,
+                    "failure_count": failure_count,
+                },
+            )
+
+    def _compute_top_level_resolution(self) -> str:
+        if not self._declared_dependencies:
+            return DEPENDENCY_RESOLUTION_NOT_APPLICABLE
+
+        if self._dependency_resolution in (
+            DEPENDENCY_RESOLUTION_BYPASSED,
+            DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
+        ):
+            return self._dependency_resolution
+
+        any_rerun = False
+        for workflow_id in self._declared_dependencies:
+            outcome = self._dependency_outcomes_by_id.get(workflow_id, {})
+            resolution = outcome.get("resolution")
+            if resolution == DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE:
+                return DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
+            if resolution == DEPENDENCY_RESOLUTION_BYPASSED:
+                return DEPENDENCY_RESOLUTION_BYPASSED
+            if resolution == DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN:
+                any_rerun = True
+
+        return (
+            DEPENDENCY_RESOLUTION_SATISFIED_AFTER_RERUN
+            if any_rerun
+            else DEPENDENCY_RESOLUTION_SATISFIED
+        )
 
     def _record_missing_dependency(self, prerequisite_workflow_id: str) -> None:
         self._record_dependency_outcome(
@@ -1364,6 +1566,13 @@ class MoonMindRunWorkflow:
                 "resolvedAt": bypassed_at,
                 "failureCategory": None,
                 "message": reason,
+                "resolution": DEPENDENCY_RESOLUTION_BYPASSED,
+                "failureCount": self._dependency_failure_counts.get(
+                    prerequisite_workflow_id, 0
+                ),
+                "lastFailedAt": self._dependency_last_failed_at.get(
+                    prerequisite_workflow_id
+                ),
             }
 
         self._unresolved_dependency_ids.clear()
@@ -1491,6 +1700,8 @@ class MoonMindRunWorkflow:
         self._dependency_failure = None
         self._dependency_outcomes_by_id = {}
         self._unresolved_dependency_ids = set(dependency_ids)
+        self._dependency_failure_counts = {}
+        self._dependency_last_failed_at = {}
         self._waiting_reason = "dependency_wait"
         self._set_state(
             STATE_WAITING_ON_DEPENDENCIES,

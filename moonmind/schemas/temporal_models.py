@@ -873,6 +873,9 @@ class ExecutionDependencyOutcomeModel(BaseModel):
     resolved_at: Optional[datetime] = Field(None, alias="resolvedAt")
     failure_category: Optional[str] = Field(None, alias="failureCategory")
     message: Optional[str] = Field(None, alias="message")
+    resolution: Optional[str] = Field(None, alias="resolution")
+    failure_count: Optional[int] = Field(None, alias="failureCount")
+    last_failed_at: Optional[datetime] = Field(None, alias="lastFailedAt")
 
 class ExecutionDependencySummaryModel(BaseModel):
     """Compact linked execution metadata for prerequisites or dependents."""
