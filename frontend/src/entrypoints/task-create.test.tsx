@@ -14558,6 +14558,28 @@ describe("Task Create governed Tool authoring", () => {
             ],
           } as Response);
         }
+        if (url === "/api/artifacts") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              artifact_ref: { artifact_id: "art_01ACTIVEIMAGE00000000000" },
+              upload: {
+                mode: "single_put",
+                upload_url: "/api/artifacts/art_01ACTIVEIMAGE00000000000/content",
+                required_headers: {},
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/art_01ACTIVEIMAGE00000000000/content") {
+          return Promise.resolve({ ok: true } as Response);
+        }
+        if (url === "/api/artifacts/art_01ACTIVEIMAGE00000000000/complete") {
+          return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+        }
+        if (url === "/api/artifacts/art_01ACTIVEIMAGE00000000000/links") {
+          return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+        }
         if (url.startsWith("/api/executions?")) {
           return Promise.resolve({
             ok: true,
@@ -14680,6 +14702,49 @@ describe("Task Create governed Tool authoring", () => {
       },
       requiredCapabilities: ["git", "jira"],
     });
+  });
+
+  it("submits auto skill step attachments without explicit skill type", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Review the attached screenshot." },
+    });
+    const attachmentInput = within(step).getByLabelText(
+      "Step 1 attachment file picker",
+    );
+    const file = new File(["fake image"], "wireframe.png", {
+      type: "image/png",
+    });
+    fireEvent.change(attachmentInput, { target: { files: [file] } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: { task: { steps: Array<Record<string, unknown>> } };
+    };
+    expect(request.payload.task.steps[0]).toMatchObject({
+      instructions: "Review the attached screenshot.",
+      inputAttachments: [
+        {
+          artifactId: "art_01ACTIVEIMAGE00000000000",
+          filename: "wireframe.png",
+          contentType: "image/png",
+          sizeBytes: file.size,
+        },
+      ],
+    });
+    expect(request.payload.task.steps[0]?.type).toBeUndefined();
+    expect(request.payload.task.steps[0]?.skill).toBeUndefined();
   });
 
   it("loads trusted Jira transition statuses into submitted Tool inputs", async () => {

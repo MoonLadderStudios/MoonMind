@@ -7261,6 +7261,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               sourceStep.jiraOrchestration &&
                 Object.keys(sourceStep.jiraOrchestration).length > 0,
             );
+          const shouldSubmitStepType =
+            submittedStepType === "tool" ||
+            Boolean(entry.payload.tool) ||
+            Boolean(entry.payload.skill);
           const submittedStep = {
             ...(shouldPreserveStepId && sourceStep.id.trim()
               ? { id: sourceStep.id.trim() }
@@ -7268,7 +7272,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             ...(sourceStep.title.trim()
               ? { title: sourceStep.title.trim() }
               : {}),
-            ...(hasSubmittedStepShape ? { type: submittedStepType } : {}),
+            ...(hasSubmittedStepShape && shouldSubmitStepType
+              ? { type: submittedStepType }
+              : {}),
             ...(sourceStep.storyOutput
               ? { storyOutput: sourceStep.storyOutput }
               : {}),
