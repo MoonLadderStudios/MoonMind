@@ -3652,6 +3652,10 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                         f"payload.task.steps[{index}].tool must be omitted for Skill steps."
                     )
                 selected_skill = raw_tool
+            if raw_type == "skill" and selected_skill is None:
+                raise _invalid_task_request(
+                    f"payload.task.steps[{index}].skill is required for Skill steps."
+                )
             if selected_skill is not None:
                 skill_id = str(
                     selected_skill.get("id") or selected_skill.get("name") or ""
@@ -3661,7 +3665,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                     raw_args = selected_skill.get("args")
                     if not isinstance(raw_args, dict):
                         raw_args = selected_skill.get("inputs")
-                    if isinstance(raw_args, dict) and raw_args:
+                    if isinstance(raw_args, dict):
                         normalized_skill["args"] = dict(raw_args)
                     raw_caps = selected_skill.get("requiredCapabilities")
                     if raw_caps is not None:

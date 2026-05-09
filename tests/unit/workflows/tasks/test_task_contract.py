@@ -417,6 +417,18 @@ def test_mm569_rejects_mixed_and_unresolved_preset_runtime_steps() -> None:
         )
 
 
+def test_mm569_tool_step_required_capabilities_aggregate_into_canonical_required() -> None:
+    """MM-569: capability requirements declared on a tool step must propagate into the
+    canonical top-level requiredCapabilities so the worker selector can route the job
+    to a worker that advertises them (matches existing skill-step behavior)."""
+    result = build_canonical_task_view(
+        job_type="task",
+        payload=task_payload(tool_step()),  # default fixture sets requiredCapabilities=["jira"]
+    )
+
+    assert "jira" in result["requiredCapabilities"]
+
+
 def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
     invalid = tool_step()
     invalid["tool"].pop("id")
