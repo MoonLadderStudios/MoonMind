@@ -238,6 +238,50 @@ describe("Task Create Step Type authoring", () => {
     expect(fetchSpy).toHaveBeenCalled();
   });
 
+  it("clears Preset configuration after changing Step Type without showing the discard warning", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    const instructions = within(primaryStep).getByLabelText(
+      "Instructions",
+    ) as HTMLTextAreaElement;
+
+    fireEvent.change(instructions, {
+      target: { value: "Keep these shared instructions." },
+    });
+    selectStepType(primaryStep, "Preset");
+
+    const presetSelect = within(primaryStep).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-orchestrate" },
+    });
+
+    selectStepType(primaryStep, "Tool");
+
+    expect(
+      (within(primaryStep).getByLabelText("Step 1 Instructions") as HTMLTextAreaElement)
+        .value,
+    ).toBe("Keep these shared instructions.");
+    expect(
+      screen.queryByText(
+        "Preset configuration discarded after changing Step Type. Shared instructions were preserved.",
+      ),
+    ).toBeNull();
+
+    selectStepType(primaryStep, "Preset");
+    expect(
+      (within(primaryStep).getByLabelText("Preset Template") as HTMLSelectElement)
+        .value,
+    ).toBe("");
+  });
+
   it("expands a preset step in place and pushes following steps down", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
