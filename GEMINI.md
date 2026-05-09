@@ -235,6 +235,8 @@ Key diagnostics:
 - Existing Temporal execution records, memo/search attributes, Temporal artifact metadata/content store, task input snapshot artifacts, step ledger/checkpoint artifacts; no new persistent database table planned (327-gate-resume-checkpoint-evidence)
 - Python 3.12; TypeScript/React + FastAPI, Pydantic v2, SQLAlchemy async ORM, Temporal Python SDK, React, TanStack Query, Zod, Vitest, Testing Library, pytest (329-show-attachment-recovery-diagnostics-by-target)
 - Existing Temporal execution records, task input snapshot artifacts, Temporal artifact metadata/content, and existing step ledger/projection payloads; no new persistent tables planned (329-show-attachment-recovery-diagnostics-by-target)
+- Python 3.12; TypeScript/React for Create-page behavior. + Pydantic v2, FastAPI, SQLAlchemy async ORM, Temporal Python SDK activity/service boundaries, React, TanStack Query, Vitest, Testing Library. (331-model-step-type-payloads)
+- Existing task-template catalog tables and execution payload/artifact records only; no new persistent storage planned. (331-model-step-type-payloads)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
