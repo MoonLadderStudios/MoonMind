@@ -944,7 +944,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
     if (field === 'status') {
       const draft = isMobile ? filters.status : draftFilters.status;
-      const selectedSet = new Set(draft.values.map((value) => value.toLowerCase()));
       return (
         <div className="queue-inline-filter task-list-header-filter-control">
           <label>
@@ -969,7 +968,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             {labelPrefix}Status filter value
             <select
               multiple
-              value={Array.from(selectedSet)}
+              value={draft.values}
               size={Math.min(TEMPORAL_STATUSES.length, 8)}
               disabled={!listEnabled}
               onChange={(event) => {
