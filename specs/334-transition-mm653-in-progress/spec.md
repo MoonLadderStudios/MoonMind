@@ -17,7 +17,7 @@
 
 **Acceptance Scenarios**:
 
-1. **Given** MM-653 is in a workflow status from which an "In Progress" transition is currently available, **When** the workflow runs against `MM-653`, **Then** MM-653's workflow status becomes "In Progress" and the run report names the issue key, the prior status, the chosen transition, and the verified post-transition status.
+1. **Given** `MM-653` is in a workflow status from which a transition leading to "In Progress" is currently available, **When** the workflow runs against `MM-653`, **Then** `MM-653`'s workflow status becomes "In Progress" and the run report names the issue key, the prior status, the chosen transition, and the verified post-transition status.
 2. **Given** MM-653 is already in workflow status "In Progress", **When** the workflow runs against `MM-653`, **Then** no transition is performed, no other fields on MM-653 are changed, and the run report describes the outcome as a no-op with the current status `In Progress`.
 3. **Given** MM-653 is in a workflow status from which no available transition leads to "In Progress", **When** the workflow runs against `MM-653`, **Then** the workflow stops with an explicit "no matching transition" error, MM-653 is not modified, and the report names the available transition options for operator inspection.
 4. **Given** MM-653 has more than one available transition whose target status name matches "In Progress" (case-insensitive), **When** the workflow runs against `MM-653`, **Then** the workflow stops with an explicit ambiguity error, MM-653 is not modified, and the report lists the candidate transitions for operator selection.
@@ -66,7 +66,7 @@
 - **FR-007**: System MUST stop with an explicit, named error and perform no mutation when (a) no available transition matches `In Progress`, (b) more than one available transition matches `In Progress`, (c) MM-653 cannot be located by the configured Jira credentials, or (d) Jira reports required transition fields whose values were not supplied.
 - **FR-008**: System MUST NOT modify any field on MM-653 other than its workflow status, and MUST NOT modify any Jira issue other than MM-653.
 - **FR-009**: System MUST NOT emit Jira credentials, API tokens, auth headers, cookies, or full environment dumps in any user-visible output, log, or artifact, including failure reports.
-- **FR-010**: System MUST report, on completion, the issue key, the prior status, the action taken (transitioned, no-op, or stopped with reason), and the verified final status.
+- **FR-010**: System MUST report, on completion, the issue key, the prior status, the chosen transition (if any), the action taken (transitioned, no-op, or stopped with reason), and the verified final status.
 
 ### Key Entities
 
