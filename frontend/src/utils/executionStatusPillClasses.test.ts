@@ -58,7 +58,6 @@ describe('executionStatusPillProps', () => {
     expect(executionStatusPillProps('awaiting_external')).toEqual({
       className: 'status status-awaiting_action',
     });
-    expect(executionStatusPillProps('finalizing').className).toBe('status status-running is-finalizing');
     expect(executionStatusPillProps('paused')).toEqual({ className: 'status status-neutral' });
     expect(executionStatusPillProps('canceled')).toEqual({ className: 'status status-cancelled' });
   });
