@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Transition Jira Issue MM-652 to "In PR"
+# Specification Quality Checklist: Transition Jira Issue MM-652 to "In Progress"
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-05-09
@@ -37,6 +37,6 @@
 ## Notes
 
 - Intent classification: `runtime`. The brief asks the system to perform a Jira workflow status transition and verify the resulting state, which is observable system behavior rather than a docs-only change.
-- Source design mapping: The user brief `"Change Jira issue MM-652 to status 'In PR'."` is the sole source. DESIGN-REQ-001..003 are all in scope and each maps to at least one functional requirement.
-- Single-story scope: The brief describes one independently testable operation against a single issue key (`MM-652`) with one target status (`In PR`); no additional stories were collapsed into this spec.
+- Source design mapping: The user brief `"Change Jira issue MM-652 to status 'In Progress'."` is the sole source. DESIGN-REQ-001..003 are all in scope and each maps to at least one functional requirement.
+- Single-story scope: The brief describes one independently testable operation against a single issue key (`MM-652`) with one target status (`In Progress`); no additional stories were collapsed into this spec.
 - Implementation-detail check: Mentions of "trusted Jira tooling" describe a credential boundary (no raw secrets in the agent runtime), not a specific framework, library, or API contract; this is retained as a security/scope constraint rather than an implementation choice.
