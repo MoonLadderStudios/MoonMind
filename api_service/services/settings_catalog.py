@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Iterable, Literal
+from typing import Any, Callable, Iterable, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -284,6 +285,21 @@ def has_settings_permission(user: Any, permission: str) -> bool:
     return permission in settings_permissions_for_user(user)
 
 
+_SETTING_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
+
+_CATALOG_KEY_LEDGER: frozenset[str] = frozenset(
+    {
+        "workflow.default_task_runtime",
+        "workflow.default_publish_mode",
+        "workflow.default_provider_profile_ref",
+        "skills.policy_mode",
+        "skills.canary_percent",
+        "live_sessions.default_enabled",
+        "integrations.github.token_ref",
+    }
+)
+
+
 @dataclass(frozen=True)
 class SettingRegistryEntry:
     key: str
@@ -454,6 +470,153 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
 )
 
 
+class SettingsRegistry:
+    """Backend-owned registry of exposed settings descriptors with migration gate.
+
+    Owns descriptor registration, key format validation, uniqueness enforcement,
+    eligibility filtering, and migration-gate checking against the committed
+    stable-key ledger.  Corresponds to the SettingsRegistry component in
+    docs/Security/SettingsSystem.md §26.
+    """
+
+    def __init__(
+        self,
+        entries: tuple[SettingRegistryEntry, ...],
+        migration_rules: tuple[SettingMigrationRule, ...] = (),
+        stable_key_ledger: frozenset[str] | None = _CATALOG_KEY_LEDGER,
+    ) -> None:
+        self._entries = tuple(sorted(entries, key=lambda e: e.order))
+        self._migration_rules = migration_rules
+        self._stable_key_ledger = stable_key_ledger
+        self._entries_by_key: dict[str, SettingRegistryEntry] = {
+            e.key: e for e in self._entries
+        }
+        self._validate()
+
+    def _validate(self) -> None:
+        seen: set[str] = set()
+        for entry in self._entries:
+            if not _SETTING_KEY_RE.match(entry.key):
+                raise ValueError(f"invalid_key_format: {entry.key!r}")
+            if entry.key in seen:
+                raise ValueError(f"duplicate_key: {entry.key!r}")
+            seen.add(entry.key)
+        if self._stable_key_ledger is not None:
+            migrated = {r.old_key for r in self._migration_rules}
+            removed_without_migration = self._stable_key_ledger - seen - migrated
+            if removed_without_migration:
+                raise ValueError(
+                    "catalog_integrity_error: descriptors removed without migration "
+                    f"entries: {sorted(removed_without_migration)}"
+                )
+
+    @property
+    def entries(self) -> tuple[SettingRegistryEntry, ...]:
+        return self._entries
+
+    @property
+    def entries_by_key(self) -> dict[str, SettingRegistryEntry]:
+        return self._entries_by_key
+
+    @property
+    def migration_rules(self) -> tuple[SettingMigrationRule, ...]:
+        return self._migration_rules
+
+    def get(self, key: str) -> SettingRegistryEntry | None:
+        return self._entries_by_key.get(key)
+
+    @classmethod
+    def from_pydantic_model(
+        cls,
+        model_class: type,
+        migration_rules: tuple[SettingMigrationRule, ...] = (),
+        stable_key_ledger: frozenset[str] | None = None,
+    ) -> "SettingsRegistry":
+        """Derive registry entries from Pydantic model fields with moonmind.expose metadata.
+
+        Only top-level fields with json_schema_extra={"moonmind": {"expose": True, ...}}
+        are extracted.  Fields without explicit moonmind.expose metadata are skipped.
+        """
+        entries: list[SettingRegistryEntry] = []
+        model_fields = getattr(model_class, "model_fields", {})
+        for _field_name, field_info in model_fields.items():
+            extra = getattr(field_info, "json_schema_extra", None) or {}
+            mm = extra.get("moonmind", {}) if isinstance(extra, dict) else {}
+            if not mm.get("expose"):
+                continue
+            key = mm.get("key", "")
+            if not key:
+                continue
+            section: SettingSection = mm.get("section", "user-workspace")
+            category: str = mm.get("category", "General")
+            scopes: tuple[SettingScope, ...] = tuple(mm.get("scopes", ["workspace"]))
+            ui: str = mm.get("ui", "input")
+            requires_reload: bool = bool(mm.get("requires_reload", False))
+            apply_mode: SettingApplyMode = (
+                "worker_reload" if requires_reload else mm.get("apply_mode", "next_task")
+            )
+            title: str = mm.get("title") or _field_name.replace("_", " ").title()
+            description: str | None = mm.get("description") or getattr(
+                field_info, "description", None
+            )
+            default_any = (
+                None
+                if field_info.is_required()
+                or getattr(field_info, "default_factory", None) is not None
+                else field_info.default
+            )
+            options_raw: list[tuple[str, str]] = mm.get("options", [])
+            entries.append(
+                SettingRegistryEntry(
+                    key=key,
+                    title=title,
+                    description=description,
+                    category=category,
+                    section=section,
+                    value_type=mm.get("type", "string"),
+                    ui=ui,
+                    scopes=scopes,
+                    default_value=default_any,
+                    apply_mode=apply_mode,
+                    requires_reload=requires_reload,
+                    options=tuple(options_raw),
+                    applies_to=tuple(mm.get("applies_to", [])),
+                    order=mm.get("order", 999),
+                )
+            )
+        return cls(tuple(entries), migration_rules, stable_key_ledger)
+
+
+class SettingsCatalogBuilder:
+    """Builds SettingsCatalogResponse from a SettingsRegistry.
+
+    Corresponds to the SettingsCatalogBuilder component in
+    docs/Security/SettingsSystem.md §26.
+    """
+
+    def __init__(self, registry: SettingsRegistry) -> None:
+        self._registry = registry
+
+    def build(
+        self,
+        section: SettingSection | None = None,
+        scope: SettingScope | None = None,
+        descriptor_fn: Callable[[SettingRegistryEntry], SettingDescriptor] | None = None,
+    ) -> SettingsCatalogResponse:
+        """Build a catalog response, filtered by section and/or scope."""
+        if descriptor_fn is None:
+            raise ValueError("descriptor_fn is required to build catalog descriptors")
+        categories: dict[str, list[SettingDescriptor]] = {}
+        for entry in self._registry.entries:
+            if section is not None and entry.section != section:
+                continue
+            if scope is not None and scope not in entry.scopes:
+                continue
+            descriptor = descriptor_fn(entry)
+            categories.setdefault(entry.category, []).append(descriptor)
+        return SettingsCatalogResponse(section=section, scope=scope, categories=categories)
+
+
 class SettingsCatalogService:
     """Build catalog and effective settings responses from explicit metadata."""
 
@@ -470,9 +633,12 @@ class SettingsCatalogService:
     ) -> None:
         self._settings = settings or app_settings
         self._env = env if env is not None else os.environ
-        self._registry = registry
-        self._entries_by_key = {entry.key: entry for entry in registry}
         self._migration_rules = migration_rules
+        ledger = _CATALOG_KEY_LEDGER if registry is _REGISTRY else None
+        self._settings_registry = SettingsRegistry(registry, migration_rules, stable_key_ledger=ledger)
+        self._catalog_builder = SettingsCatalogBuilder(self._settings_registry)
+        self._registry = self._settings_registry.entries
+        self._entries_by_key = self._settings_registry.entries_by_key
         self._rules_by_old_key = {rule.old_key: rule for rule in migration_rules}
         self._rename_rules_by_new_key = {
             str(rule.new_key): rule
@@ -496,25 +662,17 @@ class SettingsCatalogService:
         section: SettingSection | None = None,
         scope: SettingScope | None = None,
     ) -> SettingsCatalogResponse:
-        self._validate_registry()
-        categories: dict[str, list[SettingDescriptor]] = {}
-        for entry in sorted(self._registry, key=lambda item: item.order):
-            if section is not None and entry.section != section:
-                continue
-            if scope is not None and scope not in entry.scopes:
-                continue
-            descriptor = self._descriptor(entry)
-            categories.setdefault(entry.category, []).append(descriptor)
-        return SettingsCatalogResponse(
-            section=section,
-            scope=scope,
-            categories=categories,
+        self._validate_apply_modes()
+        return self._catalog_builder.build(
+            section,
+            scope,
+            descriptor_fn=self._descriptor,
         )
 
     def _entries_for_scope(self, scope: SettingScope) -> list[SettingRegistryEntry]:
         return [
             entry
-            for entry in sorted(self._registry, key=lambda item: item.order)
+            for entry in self._registry
             if scope in entry.scopes
         ]
 
@@ -524,10 +682,10 @@ class SettingsCatalogService:
         section: SettingSection | None = None,
         scope: SettingScope | None = None,
     ) -> SettingsCatalogResponse:
-        self._validate_registry()
+        self._validate_apply_modes()
         entries = [
             entry
-            for entry in sorted(self._registry, key=lambda item: item.order)
+            for entry in self._registry
             if (section is None or entry.section == section)
             and (scope is None or scope in entry.scopes)
         ]
@@ -554,18 +712,14 @@ class SettingsCatalogService:
             if scope is not None
             and entry.key == "workflow.default_provider_profile_ref"
         )
-        categories: dict[str, list[SettingDescriptor]] = {}
-        for entry in entries:
-            descriptor = self._descriptor(
+        return self._catalog_builder.build(
+            section,
+            scope,
+            descriptor_fn=lambda entry: self._descriptor(
                 entry,
                 scope=scope,
                 overrides=overrides,
-            )
-            categories.setdefault(entry.category, []).append(descriptor)
-        return SettingsCatalogResponse(
-            section=section,
-            scope=scope,
-            categories=categories,
+            ),
         )
 
     def effective_values(self, *, scope: SettingScope) -> EffectiveSettingsResponse:
@@ -1017,7 +1171,7 @@ class SettingsCatalogService:
             values.update(await self._deprecated_override_diagnostics(scope=scope))
         return SettingsDiagnosticsResponse(scope=scope, values=values)
 
-    def _validate_registry(self) -> None:
+    def _validate_apply_modes(self) -> None:
         self._validate_migration_rules()
         for entry in self._registry:
             if not entry.apply_mode:

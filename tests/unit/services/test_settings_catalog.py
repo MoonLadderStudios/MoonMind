@@ -17,7 +17,12 @@ from api_service.services.settings_catalog import (
     SETTINGS_PERMISSION_NAMES,
     SettingAuditPolicy,
     SettingMigrationRule,
+    SettingsCatalogBuilder,
     SettingsCatalogService,
+    SettingsRegistry,
+    SettingRegistryEntry,
+    _CATALOG_KEY_LEDGER,
+    _REGISTRY,
 )
 
 
@@ -94,6 +99,26 @@ def test_catalog_rejects_descriptor_without_apply_mode():
 
     with pytest.raises(ValueError, match="broken\\.apply_mode"):
         service.catalog(section="user-workspace", scope="workspace")
+
+
+@pytest.mark.asyncio
+async def test_catalog_async_rejects_descriptor_without_apply_mode():
+    broken_entry = SettingsCatalogService(env={})._registry[0].__class__(
+        key="broken.apply_mode",
+        title="Broken Apply Mode",
+        category="Broken",
+        section="user-workspace",
+        value_type="string",
+        ui="text",
+        scopes=("workspace",),
+        order=999,
+        apply_mode="",  # type: ignore[arg-type]
+        applies_to=("task_creation",),
+    )
+    service = SettingsCatalogService(env={}, registry=(broken_entry,))
+
+    with pytest.raises(ValueError, match="broken\\.apply_mode"):
+        await service.catalog_async(section="user-workspace", scope="workspace")
 
 
 def test_activation_metadata_covers_supported_apply_modes():
@@ -1397,3 +1422,312 @@ def test_invalid_secret_ref_diagnostic_does_not_fallback_to_sensitive_source(mon
 
     assert effective.diagnostics[0].code == "unresolved_secret_ref"
     assert "ghp_should_not_be_used" not in effective.model_dump_json()
+
+
+# ---------------------------------------------------------------------------
+# MM-652: SettingsRegistry, SettingsCatalogBuilder, migration gate
+# ---------------------------------------------------------------------------
+
+def _minimal_entry(key: str = "workflow.default_task_runtime") -> SettingRegistryEntry:
+    return SettingRegistryEntry(
+        key=key,
+        title="Test Setting",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        order=1,
+        apply_mode="immediate",
+        applies_to=("test",),
+    )
+
+
+def test_settings_registry_validates_unique_keys():
+    entry = _minimal_entry()
+    with pytest.raises(ValueError, match="duplicate_key"):
+        SettingsRegistry((entry, entry), stable_key_ledger=None)
+
+
+def test_settings_registry_validates_key_format():
+    bad = _minimal_entry("BadKey")
+    with pytest.raises(ValueError, match="invalid_key_format"):
+        SettingsRegistry((bad,), stable_key_ledger=None)
+
+
+def test_settings_registry_rejects_key_with_uppercase_segment():
+    bad = _minimal_entry("workflow.BadSuffix")
+    with pytest.raises(ValueError, match="invalid_key_format"):
+        SettingsRegistry((bad,), stable_key_ledger=None)
+
+
+def test_settings_registry_accepts_valid_dotted_key():
+    entry = _minimal_entry("workflow.my_setting_1")
+    registry = SettingsRegistry((entry,), stable_key_ledger=None)
+    assert registry.get("workflow.my_setting_1") is entry
+
+
+def test_settings_registry_orders_entries_at_initialization():
+    first = _minimal_entry("workflow.first")
+    second = _minimal_entry("workflow.second")
+    first = first.__class__(**{**first.__dict__, "order": 1})
+    second = second.__class__(**{**second.__dict__, "order": 2})
+
+    registry = SettingsRegistry((second, first), stable_key_ledger=None)
+
+    assert [entry.key for entry in registry.entries] == [
+        "workflow.first",
+        "workflow.second",
+    ]
+
+
+def test_settings_registry_migration_gate_raises_for_removed_key_without_rule():
+    ledger = frozenset({"workflow.default_task_runtime", "workflow.old_key"})
+    entry = _minimal_entry("workflow.default_task_runtime")
+    with pytest.raises(ValueError, match="catalog_integrity_error"):
+        SettingsRegistry((entry,), stable_key_ledger=ledger)
+
+
+def test_settings_registry_migration_gate_passes_with_migration_rule():
+    ledger = frozenset({"workflow.default_task_runtime", "workflow.old_key"})
+    entry = _minimal_entry("workflow.default_task_runtime")
+    rule = SettingMigrationRule(
+        old_key="workflow.old_key",
+        state="removed",
+        message="removed in MM-652",
+    )
+    registry = SettingsRegistry((entry,), migration_rules=(rule,), stable_key_ledger=ledger)
+    assert registry.get("workflow.default_task_runtime") is entry
+
+
+def test_settings_registry_migration_gate_skipped_when_no_ledger():
+    entry = _minimal_entry("workflow.default_task_runtime")
+    registry = SettingsRegistry((entry,), stable_key_ledger=None)
+    assert len(registry.entries) == 1
+
+
+def test_settings_registry_default_uses_catalog_key_ledger():
+    assert "workflow.default_task_runtime" in _CATALOG_KEY_LEDGER
+    assert len(_CATALOG_KEY_LEDGER) == 7
+
+
+def test_settings_registry_default_registry_passes_ledger_check():
+    registry = SettingsRegistry(_REGISTRY)
+    assert len(registry.entries) == 7
+
+
+def test_settings_catalog_builder_filters_by_section():
+    entry_uw = _minimal_entry("workflow.test_uw")
+    entry_ops = SettingRegistryEntry(
+        key="operations.test_ops",
+        title="Ops Setting",
+        category="Ops",
+        section="operations",
+        value_type="string",
+        ui="input",
+        scopes=("operator",),
+        order=2,
+        apply_mode="immediate",
+        applies_to=("test",),
+    )
+    registry = SettingsRegistry((entry_uw, entry_ops), stable_key_ledger=None)
+    builder = SettingsCatalogBuilder(registry)
+
+    from api_service.services.settings_catalog import SettingDescriptor, SettingAuditPolicy
+
+    def make_descriptor(entry):
+        return SettingDescriptor(
+            key=entry.key,
+            title=entry.title,
+            category=entry.category,
+            section=entry.section,
+            type=entry.value_type,
+            ui=entry.ui,
+            scopes=list(entry.scopes),
+            default_value=None,
+            effective_value=None,
+            source="default",
+            source_explanation="built-in default",
+            apply_mode=entry.apply_mode,
+            activation_state="active",
+            active=True,
+            order=entry.order,
+            audit=SettingAuditPolicy(),
+        )
+
+    result = builder.build("user-workspace", descriptor_fn=make_descriptor)
+    assert "Test" in result.categories
+    assert "Ops" not in result.categories
+
+
+def test_settings_catalog_builder_filters_by_scope():
+    user_entry = SettingRegistryEntry(
+        key="workflow.user_only",
+        title="User Only",
+        category="Workflow",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("user",),
+        order=1,
+        apply_mode="immediate",
+        applies_to=("test",),
+    )
+    ws_entry = SettingRegistryEntry(
+        key="workflow.workspace_only",
+        title="Workspace Only",
+        category="Workflow",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        order=2,
+        apply_mode="immediate",
+        applies_to=("test",),
+    )
+    registry = SettingsRegistry((user_entry, ws_entry), stable_key_ledger=None)
+    builder = SettingsCatalogBuilder(registry)
+
+    from api_service.services.settings_catalog import SettingDescriptor, SettingAuditPolicy
+
+    def make_descriptor(entry):
+        return SettingDescriptor(
+            key=entry.key,
+            title=entry.title,
+            category=entry.category,
+            section=entry.section,
+            type=entry.value_type,
+            ui=entry.ui,
+            scopes=list(entry.scopes),
+            default_value=None,
+            effective_value=None,
+            source="default",
+            source_explanation="built-in default",
+            apply_mode=entry.apply_mode,
+            activation_state="active",
+            active=True,
+            order=entry.order,
+            audit=SettingAuditPolicy(),
+        )
+
+    ws_result = builder.build(scope="workspace", descriptor_fn=make_descriptor)
+    ws_keys = [e.key for entries in ws_result.categories.values() for e in entries]
+    assert "workflow.workspace_only" in ws_keys
+    assert "workflow.user_only" not in ws_keys
+
+
+def test_settings_registry_from_pydantic_model_extracts_exposed_field():
+    from pydantic import Field
+    from pydantic_settings import BaseSettings
+
+    class SampleSettings(BaseSettings):
+        my_flag: bool = Field(
+            True,
+            json_schema_extra={
+                "moonmind": {
+                    "expose": True,
+                    "key": "test.my_flag",
+                    "section": "user-workspace",
+                    "category": "Test",
+                    "scopes": ["workspace"],
+                    "ui": "toggle",
+                    "type": "boolean",
+                    "requires_reload": False,
+                    "apply_mode": "next_task",
+                    "title": "My Flag",
+                    "applies_to": ["test"],
+                    "order": 1,
+                }
+            },
+        )
+        _hidden: str = "not_exposed"
+
+    registry = SettingsRegistry.from_pydantic_model(SampleSettings, stable_key_ledger=None)
+    assert registry.get("test.my_flag") is not None
+    assert registry.get("test.my_flag").value_type == "boolean"
+
+
+def test_settings_registry_from_pydantic_model_skips_unexposed_field():
+    from pydantic import Field
+    from pydantic_settings import BaseSettings
+
+    class SampleSettings(BaseSettings):
+        hidden_field: str = Field("hidden")
+        exposed_field: str = Field(
+            "exposed",
+            json_schema_extra={
+                "moonmind": {
+                    "expose": True,
+                    "key": "test.exposed_field",
+                    "section": "user-workspace",
+                    "category": "Test",
+                    "scopes": ["workspace"],
+                    "ui": "input",
+                    "type": "string",
+                    "requires_reload": False,
+                    "apply_mode": "next_task",
+                    "title": "Exposed Field",
+                    "applies_to": ["test"],
+                    "order": 1,
+                }
+            },
+        )
+
+    registry = SettingsRegistry.from_pydantic_model(SampleSettings, stable_key_ledger=None)
+    assert registry.get("test.exposed_field") is not None
+    assert len(registry.entries) == 1
+
+
+def test_settings_registry_from_pydantic_model_does_not_expose_undefined_defaults():
+    from pydantic import Field
+    from pydantic_settings import BaseSettings
+
+    def exposed(key: str) -> dict:
+        return {
+            "moonmind": {
+                "expose": True,
+                "key": key,
+                "section": "user-workspace",
+                "category": "Test",
+                "scopes": ["workspace"],
+                "ui": "input",
+                "type": "string",
+                "apply_mode": "next_task",
+                "applies_to": ["test"],
+                "order": 1,
+            }
+        }
+
+    class SampleSettings(BaseSettings):
+        required_value: str = Field(..., json_schema_extra=exposed("test.required_value"))
+        generated_value: str = Field(
+            default_factory=lambda: "generated",
+            json_schema_extra=exposed("test.generated_value"),
+        )
+        literal_value: str = Field(
+            "literal",
+            json_schema_extra=exposed("test.literal_value"),
+        )
+
+    registry = SettingsRegistry.from_pydantic_model(SampleSettings, stable_key_ledger=None)
+
+    assert registry.get("test.required_value").default_value is None
+    assert registry.get("test.generated_value").default_value is None
+    assert registry.get("test.literal_value").default_value == "literal"
+
+
+def test_workflow_settings_has_moonmind_expose_metadata():
+    from moonmind.config.settings import WorkflowSettings
+
+    exposed_keys = set()
+    for _name, field_info in WorkflowSettings.model_fields.items():
+        extra = getattr(field_info, "json_schema_extra", None) or {}
+        mm = extra.get("moonmind", {}) if isinstance(extra, dict) else {}
+        if mm.get("expose"):
+            exposed_keys.add(mm["key"])
+
+    assert "workflow.default_task_runtime" in exposed_keys
+    assert "workflow.default_publish_mode" in exposed_keys
+    assert "skills.policy_mode" in exposed_keys
+    assert "skills.canary_percent" in exposed_keys
+    assert "live_sessions.default_enabled" in exposed_keys

@@ -1,0 +1,53 @@
+{
+  "integrations.github.token_ref": {
+    "scopes": [
+      "user",
+      "workspace"
+    ],
+    "section": "user-workspace",
+    "type": "secret_ref"
+  },
+  "live_sessions.default_enabled": {
+    "scopes": [
+      "workspace"
+    ],
+    "section": "user-workspace",
+    "type": "boolean"
+  },
+  "skills.canary_percent": {
+    "scopes": [
+      "workspace"
+    ],
+    "section": "user-workspace",
+    "type": "integer"
+  },
+  "skills.policy_mode": {
+    "scopes": [
+      "workspace"
+    ],
+    "section": "user-workspace",
+    "type": "enum"
+  },
+  "workflow.default_provider_profile_ref": {
+    "scopes": [
+      "user",
+      "workspace"
+    ],
+    "section": "user-workspace",
+    "type": "string"
+  },
+  "workflow.default_publish_mode": {
+    "scopes": [
+      "workspace"
+    ],
+    "section": "user-workspace",
+    "type": "enum"
+  },
+  "workflow.default_task_runtime": {
+    "scopes": [
+      "workspace"
+    ],
+    "section": "user-workspace",
+    "type": "enum"
+  }
+}
