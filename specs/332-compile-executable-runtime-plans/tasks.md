@@ -84,8 +84,8 @@ Requirement status from `plan.md`: implemented_unverified rows require verificat
 
 - [ ] T034 Refactor any duplicated test fixtures introduced for MM-573 while keeping behavior unchanged in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, `tests/unit/workflows/task_proposals/test_service.py`, and `tests/integration/temporal/test_task_shaped_submission_normalization.py`. (Constitution VI, VIII)
 - [ ] T035 Run the full required unit suite with `./tools/test_unit.sh`. (FR-001 through FR-007)
-- [ ] T036 Run the required hermetic integration suite with `./tools/test_integration.sh` if production code or API/execution-boundary behavior changed; otherwise record why focused integration coverage is sufficient in final verification notes. (FR-001, FR-004, SC-001, SC-002)
-- [ ] T037 Confirm no provider verification or credentialed tests are required for MM-573 and document any intentionally skipped provider checks in final verification notes. (Constitution II, III)
+- [ ] T036 Run the required hermetic integration suite with `./tools/test_integration.sh` if production code or API/execution-boundary behavior changed; otherwise record why focused integration coverage is sufficient in `specs/332-compile-executable-runtime-plans/verification.md`. (FR-001, FR-004, SC-001, SC-002)
+- [ ] T037 Confirm no provider verification or credentialed tests are required for MM-573 and document any intentionally skipped provider checks in `specs/332-compile-executable-runtime-plans/verification.md`. (Constitution II, III)
 - [ ] T038 Run `/moonspec-verify` after implementation and tests pass, and ensure verification covers MM-573, `manual-mm-569-mm-574`, the original Jira preset brief, FR-001 through FR-007, acceptance scenarios 1 through 6, SC-001 through SC-005, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-012, DESIGN-REQ-018, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-022, commands run, and remaining risks. (FR-007, SC-005)
 
 ## Dependencies And Execution Order
