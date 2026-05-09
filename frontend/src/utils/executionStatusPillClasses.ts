@@ -14,9 +14,11 @@ export const EXECUTING_STATUS_PILL_TRACEABILITY = Object.freeze({
   ],
 });
 
+type ShimmerSweepStatusKey = 'executing' | 'planning' | 'running' | 'initializing' | 'finalizing';
+
 export type ExecutionStatusPillProps = Readonly<{
   className: string;
-  'data-state'?: 'executing' | 'planning';
+  'data-state'?: ShimmerSweepStatusKey;
   'data-effect'?: 'shimmer-sweep';
   'data-shimmer-label'?: string;
 }>;
@@ -51,11 +53,23 @@ function executionStatusVisibleLabel(status: string | null | undefined): string 
   return formatStatusLabel(status, 'executing');
 }
 
+const SHIMMER_SWEEP_STATUS_KEYS = new Set<ShimmerSweepStatusKey>([
+  'executing',
+  'planning',
+  'running',
+  'initializing',
+  'finalizing',
+]);
+
+function isShimmerSweepStatusKey(key: string): key is ShimmerSweepStatusKey {
+  return SHIMMER_SWEEP_STATUS_KEYS.has(key as ShimmerSweepStatusKey);
+}
+
 export function executionStatusPillProps(status: string | null | undefined): ExecutionStatusPillProps {
   const key = normalizedExecutionStatusKey(status);
   const className = executionStatusBaseClasses(key);
 
-  if (key === 'executing' || key === 'planning') {
+  if (isShimmerSweepStatusKey(key)) {
     return {
       className: `${className} is-${key}`,
       'data-state': key,

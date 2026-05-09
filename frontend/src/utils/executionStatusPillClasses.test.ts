@@ -6,7 +6,7 @@ import {
 } from './executionStatusPillClasses';
 
 describe('executionStatusPillProps', () => {
-  it('adds shimmer selector metadata for executing and planning status pills', () => {
+  it('adds shimmer selector metadata for blue running status pills', () => {
     expect(executionStatusPillProps('executing')).toMatchObject({
       className: 'status status-running is-executing',
       'data-state': 'executing',
@@ -21,8 +21,25 @@ describe('executionStatusPillProps', () => {
       'data-shimmer-label': 'planning',
     });
 
-    expect(executionStatusPillProps('running')).toEqual({
-      className: 'status status-running',
+    expect(executionStatusPillProps('running')).toMatchObject({
+      className: 'status status-running is-running',
+      'data-state': 'running',
+      'data-effect': 'shimmer-sweep',
+      'data-shimmer-label': 'running',
+    });
+
+    expect(executionStatusPillProps('initializing')).toMatchObject({
+      className: 'status status-running is-initializing',
+      'data-state': 'initializing',
+      'data-effect': 'shimmer-sweep',
+      'data-shimmer-label': 'initializing',
+    });
+
+    expect(executionStatusPillProps('finalizing')).toMatchObject({
+      className: 'status status-running is-finalizing',
+      'data-state': 'finalizing',
+      'data-effect': 'shimmer-sweep',
+      'data-shimmer-label': 'finalizing',
     });
     expect(executionStatusPillProps('waiting')).toEqual({
       className: 'status status-waiting',
@@ -41,9 +58,7 @@ describe('executionStatusPillProps', () => {
     expect(executionStatusPillProps('awaiting_external')).toEqual({
       className: 'status status-awaiting_action',
     });
-    expect(executionStatusPillProps('finalizing')).toEqual({
-      className: 'status status-running',
-    });
+    expect(executionStatusPillProps('finalizing').className).toBe('status status-running is-finalizing');
     expect(executionStatusPillProps('paused')).toEqual({ className: 'status status-neutral' });
     expect(executionStatusPillProps('canceled')).toEqual({ className: 'status status-cancelled' });
   });
