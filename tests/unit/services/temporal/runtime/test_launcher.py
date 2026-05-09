@@ -2721,6 +2721,48 @@ async def test_launch_skips_skill_projection_when_no_snapshot_ref(tmp_path, monk
 
 
 @pytest.mark.asyncio
+async def test_launch_fails_fast_when_snapshot_ref_has_no_artifact_service(
+    tmp_path, monkeypatch
+):
+    """A requested skill snapshot requires an artifact service."""
+
+    from moonmind.workflows.skills.run_projection import SkillProjectionError
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+
+    profile = _make_profile(
+        runtime_id="claude_code", command_template=["claude", "-p"]
+    )
+    request = _make_request(
+        instruction_ref="Resolve.",
+        resolved_skillset_ref="missing-service",
+        parameters={"selectedSkill": "pr-resolver"},
+    )
+    workspace = tmp_path / "workspaces" / "run-no-service" / "repo"
+    workspace.mkdir(parents=True)
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    with pytest.raises(SkillProjectionError, match="artifact service is required"):
+        await launcher.launch(
+            run_id="run-no-service",
+            request=request,
+            profile=profile,
+            workspace_path=str(workspace),
+        )
+
+
+@pytest.mark.asyncio
 async def test_launch_fails_fast_when_skill_projection_errors(tmp_path, monkeypatch):
     """Materialization failure surfaces as ``SkillProjectionError`` pre-launch."""
 

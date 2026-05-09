@@ -237,25 +237,27 @@ async def test_verify_accepts_valid_projection(tmp_path: Path) -> None:
         artifact_service=_StaticArtifactService(payloads),
     )
 
-    verify_skill_projection(
+    await verify_skill_projection(
         materialization_metadata=metadata,
         resolved_skillset=skillset,
         selected_skill="pr-resolver",
     )
 
 
-def test_verify_raises_when_visible_path_missing(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_verify_raises_when_visible_path_missing(tmp_path: Path) -> None:
     skillset = _resolved_skillset(
         "snap-x", [("pr-resolver", "art-pr")], {"art-pr": _skill_payload("pr-resolver")}
     )
     with pytest.raises(SkillProjectionError, match="visiblePath is missing"):
-        verify_skill_projection(
+        await verify_skill_projection(
             materialization_metadata={"visiblePath": str(tmp_path / "nope")},
             resolved_skillset=skillset,
         )
 
 
-def test_verify_raises_on_snapshot_id_mismatch(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_verify_raises_on_snapshot_id_mismatch(tmp_path: Path) -> None:
     visible = tmp_path / ".agents" / "skills"
     (visible / "pr-resolver").mkdir(parents=True)
     (visible / "pr-resolver" / "SKILL.md").write_text("x", encoding="utf-8")
@@ -271,13 +273,14 @@ def test_verify_raises_on_snapshot_id_mismatch(tmp_path: Path) -> None:
         {"art-pr": _skill_payload("pr-resolver")},
     )
     with pytest.raises(SkillProjectionError, match="snapshot_id does not match"):
-        verify_skill_projection(
+        await verify_skill_projection(
             materialization_metadata={"visiblePath": str(visible)},
             resolved_skillset=skillset,
         )
 
 
-def test_verify_raises_when_selected_skill_doc_missing(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_verify_raises_when_selected_skill_doc_missing(tmp_path: Path) -> None:
     visible = tmp_path / ".agents" / "skills"
     visible.mkdir(parents=True)
     (visible / "_manifest.json").write_text(
@@ -292,14 +295,17 @@ def test_verify_raises_when_selected_skill_doc_missing(tmp_path: Path) -> None:
         {"art-pr": _skill_payload("pr-resolver")},
     )
     with pytest.raises(SkillProjectionError, match="missing"):
-        verify_skill_projection(
+        await verify_skill_projection(
             materialization_metadata={"visiblePath": str(visible)},
             resolved_skillset=skillset,
             selected_skill="pr-resolver",
         )
 
 
-def test_verify_raises_when_manifest_missing_expected_skill(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_verify_raises_when_manifest_missing_expected_skill(
+    tmp_path: Path,
+) -> None:
     visible = tmp_path / ".agents" / "skills"
     (visible / "alpha").mkdir(parents=True)
     (visible / "alpha" / "SKILL.md").write_text("x", encoding="utf-8")
@@ -313,7 +319,7 @@ def test_verify_raises_when_manifest_missing_expected_skill(tmp_path: Path) -> N
         {"art-a": _skill_payload("alpha"), "art-b": _skill_payload("beta")},
     )
     with pytest.raises(SkillProjectionError, match="missing expected skills"):
-        verify_skill_projection(
+        await verify_skill_projection(
             materialization_metadata={"visiblePath": str(visible)},
             resolved_skillset=skillset,
         )
@@ -426,3 +432,22 @@ async def test_load_resolved_skillset_raises_on_invalid_payload() -> None:
         await load_resolved_skillset(
             _StaticArtifactService({"bad": b"not-json"}), "bad"
         )
+
+
+@pytest.mark.asyncio
+async def test_load_resolved_skillset_wraps_artifact_errors() -> None:
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactStateError
+
+    class _BrokenArtifactService:
+        async def read(
+            self,
+            *,
+            artifact_id: str,
+            principal: str,
+            allow_restricted_raw: bool,
+        ) -> tuple[object, bytes]:
+            del artifact_id, principal, allow_restricted_raw
+            raise TemporalArtifactStateError("artifact is not readable")
+
+    with pytest.raises(SkillProjectionError, match="failed to read"):
+        await load_resolved_skillset(_BrokenArtifactService(), "bad-ref")

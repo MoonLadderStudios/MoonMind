@@ -23,7 +23,6 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.skills.run_projection import (
-    SkillProjectionError,
     load_resolved_skillset,
     materialize_run_skill_snapshot,
     prepend_skill_activation_summary,
@@ -724,13 +723,6 @@ class ManagedRuntimeLauncher:
         skillset_ref = str(request.resolved_skillset_ref or "").strip()
         if not skillset_ref or resolved_workspace_path is None:
             return None
-        if self._artifact_service is None:
-            logger.warning(
-                "Skipping skill projection for run with resolvedSkillsetRef=%s: "
-                "launcher has no artifact_service",
-                skillset_ref,
-            )
-            return None
 
         from moonmind.config.settings import settings as _mm_settings
 
@@ -750,7 +742,7 @@ class ManagedRuntimeLauncher:
         from moonmind.workflows.agent_skills.selection import selected_agent_skill
 
         selected_skill_name = selected_agent_skill(params) or None
-        verify_skill_projection(
+        await verify_skill_projection(
             materialization_metadata=materialization_metadata,
             resolved_skillset=resolved_skillset,
             selected_skill=selected_skill_name,
@@ -910,7 +902,7 @@ class ManagedRuntimeLauncher:
                 metadata={
                     "source": "launcher",
                     "snapshotId": skill_materialization_metadata.get(
-                        "activeSkills"
+                        "snapshotId"
                     ),
                     "visiblePath": str(
                         skill_materialization_metadata.get("visiblePath") or ""

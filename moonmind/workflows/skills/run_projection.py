@@ -16,6 +16,7 @@ the activity class.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -30,8 +31,10 @@ from moonmind.schemas.agent_skill_models import (
 from moonmind.services.skill_materialization import AgentSkillMaterializer
 from moonmind.services.skills_on_demand import skills_on_demand_disabled_instruction
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
+from moonmind.workflows.temporal.artifacts import TemporalArtifactError
 
 AUTO_SKILL_SENTINEL = "auto"
+ACTIVE_SKILL_SNAPSHOT_HEADER = "Active MoonMind skill snapshot:"
 
 
 class SkillProjectionError(RuntimeError):
@@ -62,7 +65,13 @@ async def load_resolved_skillset(
         )
         data = json.loads(payload.decode("utf-8"))
         return ResolvedSkillSet.model_validate(data)
-    except (OSError, TypeError, ValueError, ValidationError) as exc:
+    except (
+        OSError,
+        TemporalArtifactError,
+        TypeError,
+        ValueError,
+        ValidationError,
+    ) as exc:
         raise SkillProjectionError(
             f"skill projection failed before runtime launch: failed to read "
             f"resolvedSkillsetRef {skillset_ref}: {exc}"
@@ -109,6 +118,7 @@ async def materialize_run_skill_snapshot(
         ) from exc
 
     metadata = dict(materialization.metadata or {})
+    metadata.setdefault("snapshotId", resolved_skillset.snapshot_id)
     if not str(metadata.get("visiblePath") or "").strip():
         raise SkillProjectionError(
             "skill projection failed before runtime launch: "
@@ -117,7 +127,7 @@ async def materialize_run_skill_snapshot(
     return metadata
 
 
-def verify_skill_projection(
+async def verify_skill_projection(
     *,
     materialization_metadata: Mapping[str, Any],
     resolved_skillset: ResolvedSkillSet,
@@ -153,7 +163,10 @@ def verify_skill_projection(
             f"active skill manifest is missing at {manifest_path}"
         )
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_text = await asyncio.to_thread(
+            manifest_path.read_text, encoding="utf-8"
+        )
+        manifest = json.loads(manifest_text)
         if not isinstance(manifest, Mapping):
             raise ValueError(f"manifest at {manifest_path} is not a mapping")
     except (OSError, TypeError, ValueError) as exc:
@@ -220,10 +233,12 @@ def build_skill_activation_summary(
         return ""
 
     visible_path = str(materialization_metadata.get("visiblePath") or "").strip()
-    skill_doc = f"{visible_path}/{selected_skill}/SKILL.md" if visible_path else ""
+    skill_doc = (
+        str(Path(visible_path) / selected_skill / "SKILL.md") if visible_path else ""
+    )
     alias_available = bool(materialization_metadata.get("canonicalAliasAvailable"))
     block = (
-        "Active MoonMind skill snapshot:\n"
+        f"{ACTIVE_SKILL_SNAPSHOT_HEADER}\n"
         f"- Selected skill: {selected_skill}\n"
         f"- Full active MoonMind skill content is available at: {visible_path}\n"
         f"- Read `{skill_doc}` first and follow that active snapshot.\n"
@@ -252,7 +267,7 @@ def prepend_skill_activation_summary(
 ) -> str:
     """Prepend the activation summary to ``instructions`` if applicable."""
 
-    if "Active MoonMind skill snapshot:" in instructions:
+    if ACTIVE_SKILL_SNAPSHOT_HEADER in instructions:
         return instructions
     block = build_skill_activation_summary(
         parameters=parameters,
@@ -266,6 +281,7 @@ def prepend_skill_activation_summary(
 
 __all__ = [
     "AUTO_SKILL_SENTINEL",
+    "ACTIVE_SKILL_SNAPSHOT_HEADER",
     "SkillProjectionError",
     "build_skill_activation_summary",
     "load_resolved_skillset",
