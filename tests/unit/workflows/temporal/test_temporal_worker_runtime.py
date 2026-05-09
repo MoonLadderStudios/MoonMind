@@ -290,7 +290,7 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
         "originalStepId": "fetch-jira-issue",
     }
 
-def test_runtime_planner_maps_explicit_skill_step_to_agent_runtime_node():
+def test_runtime_planner_maps_explicit_skill_step_with_provenance_to_agent_runtime_node():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
