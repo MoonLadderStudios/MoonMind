@@ -345,7 +345,11 @@ def _classify_jira_tool_error(exc: JiraToolError) -> OutcomeName:
         return "stopped:auth_or_permission"
     if status == 429 or status >= 500:
         return "stopped:transient_failure"
-    if 400 <= status < 500 or "validation" in code or "policy" in code:
+    if (
+        (400 <= status < 500 and status != 429)
+        or "validation" in code
+        or "policy" in code
+    ):
         return "stopped:validation_failure"
     return "stopped:tool_unavailable"
 

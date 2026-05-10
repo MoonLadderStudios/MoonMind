@@ -547,6 +547,7 @@ class _ModelRequestJiraToolService(JiraToolService):
     """JiraToolService test double whose methods require request models."""
 
     def __init__(self) -> None:
+        super().__init__()
         self.calls: list[tuple[str, Any]] = []
         self._get_issue_count = 0
 
