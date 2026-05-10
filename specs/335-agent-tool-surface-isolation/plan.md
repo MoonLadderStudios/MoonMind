@@ -113,6 +113,7 @@ moonmind/
 │   ├── temporal/
 │   │   ├── activity_runtime.py
 │   │   ├── activity_catalog.py
+│   │   ├── isolation_diagnostics.py
 │   │   ├── activities/jules_activities.py
 │   │   ├── runtime/launcher.py
 │   │   ├── workflows/run.py
@@ -127,7 +128,8 @@ tests/
 │   ├── workflows/skills/
 │   ├── workflows/temporal/
 │   ├── workflows/adapters/
-│   └── services/
+│   ├── services/
+│   └── specs/
 └── integration/
     └── temporal/ or managed-runtime boundary suites marked integration_ci
 ```

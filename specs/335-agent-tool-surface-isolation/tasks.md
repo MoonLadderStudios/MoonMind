@@ -98,7 +98,7 @@
 - [ ] T041 Update repo.create_pr activity result handling for adopted PRs in moonmind/workflows/temporal/activities/jules_activities.py and moonmind/workflows/temporal/workflows/run.py (FR-007, SCN-004)
 - [ ] T042 Implement lease-aware branch publish state, fetch-on-lease-miss, and retryable lease_conflict outputs in moonmind/workflows/temporal/activity_runtime.py (FR-008, SCN-005, SC-004, DESIGN-REQ-011)
 - [ ] T043 Wire sanitized isolation and publish diagnostics into workflow/activity outputs and artifact refs in moonmind/workflows/temporal/isolation_diagnostics.py, moonmind/workflows/temporal/activity_runtime.py, and moonmind/workflows/temporal/workflows/run.py (FR-009, DESIGN-REQ-014)
-- [ ] T044 Remove superseded internal fallback or denylist-only paths uncovered by T034-T043 in moonmind/workflows/temporal/runtime/launcher.py, moonmind/agents/codex_worker/worker.py, and related tests (DESIGN-REQ-015)
+- [ ] T044 Remove superseded internal fallback or denylist-only paths uncovered by T034-T043 in moonmind/workflows/temporal/runtime/launcher.py, moonmind/agents/codex_worker/worker.py, tests/unit/workflows/temporal/runtime/test_launcher_surface_contracts.py, and tests/unit/workflows/temporal/test_agent_runtime_activities.py (DESIGN-REQ-015)
 
 ### Story Validation
 
