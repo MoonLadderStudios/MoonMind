@@ -486,6 +486,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
   const [hasEditedFilters, setHasEditedFilters] = useState(false);
   const [openFilter, setOpenFilter] = useState<FilterField | null>(null);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [pendingFocusField, setPendingFocusField] = useState<FilterField | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const filterTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -1311,10 +1312,26 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             </div>
           </div>
         ) : null}
-        <div className="task-list-mobile-filter-controls" aria-label="Mobile task filters">
-          {TABLE_COLUMNS.map(([field]) =>
-            isFilterField(field) ? <div key={field}>{renderFilterControl(field, 'Mobile ')}</div> : null,
-          )}
+        <div className="task-list-mobile-filter-disclosure">
+          <button
+            type="button"
+            className="task-list-mobile-filter-toggle"
+            aria-expanded={mobileFiltersOpen}
+            aria-controls="task-list-mobile-filter-panel"
+            onClick={() => setMobileFiltersOpen((open) => !open)}
+          >
+            {mobileFiltersOpen ? 'Hide filters' : 'Show filters'}
+            {hasActiveFilters ? ` (${activeFilters.length})` : ''}
+          </button>
+          <div
+            id="task-list-mobile-filter-panel"
+            className={`task-list-mobile-filter-controls${mobileFiltersOpen ? ' is-open' : ''}`}
+            aria-label="Mobile task filters"
+          >
+            {TABLE_COLUMNS.map(([field]) =>
+              isFilterField(field) ? <div key={field}>{renderFilterControl(field, 'Mobile ')}</div> : null,
+            )}
+          </div>
         </div>
       </section>
 
