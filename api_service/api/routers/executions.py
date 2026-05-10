@@ -6703,8 +6703,9 @@ async def rerun_execution(
             },
         )
 
-    # Use canonical parameters which have targetRuntime, targetSkill, etc.
-    initial_params = dict(canonical.parameters or {})
+    # Use canonical parameters with rerun-specific sanitization to avoid carrying
+    # task dependency edges and recovery metadata from a prior execution.
+    initial_params = service._full_rerun_parameters(canonical.parameters or {})
 
     # Generate a new idempotency key based on the original workflow ID
     new_idempotency_key = f"rerun:{workflow_id}:{_uuid4()}"
