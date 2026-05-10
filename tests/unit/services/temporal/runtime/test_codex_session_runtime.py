@@ -422,6 +422,7 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
     )
     assert handle.status == "ready"
     assert handle.metadata["lastTurnStatus"] == "completed"
+    assert handle.metadata["assistantTextMissing"] is True
     assert (
         handle.metadata["lastTurnError"]
         == "codex app-server turn/completed produced no assistant output"
@@ -437,6 +438,7 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
         state_payload.get("lastTurnError")
         == "codex app-server turn/completed produced no assistant output"
     )
+    assert state_payload.get("lastAssistantTextMissing") is True
     stderr_path = Path(request.artifact_spool_path) / "stderr.log"
     assert not stderr_path.exists() or "turn completed without assistant output" not in stderr_path.read_text(
         encoding="utf-8"
@@ -753,6 +755,7 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
     )
     assert handle.status == "ready"
     assert handle.metadata["lastTurnStatus"] == "completed"
+    assert handle.metadata["assistantTextMissing"] is True
     assert (
         handle.metadata["lastTurnError"]
         == "codex app-server task_complete produced no assistant output"
