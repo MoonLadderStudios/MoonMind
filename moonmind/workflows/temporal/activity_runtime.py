@@ -213,6 +213,64 @@ _GEMINI_ERROR_REPORT_DIR = Path("/tmp")
 _GEMINI_ERROR_REPORT_GLOB = "gemini-client-error-*.json"
 
 
+def build_git_push_with_lease_args(
+    *,
+    branch: str,
+    recorded_remote_sha: str | None = None,
+) -> list[str]:
+    """Build the MM-680 branch publish command with lease semantics."""
+
+    branch_name = str(branch or "").strip()
+    if not branch_name:
+        raise ValueError("branch is required")
+    remote_sha = str(recorded_remote_sha or "").strip()
+    lease = (
+        f"--force-with-lease=refs/heads/{branch_name}:{remote_sha}"
+        if remote_sha
+        else f"--force-with-lease=refs/heads/{branch_name}"
+    )
+    return ["push", "-u", lease, "origin", branch_name]
+
+
+def classify_git_push_failure(
+    *,
+    stderr: str,
+    branch: str,
+    base_branch: str | None = None,
+) -> dict[str, Any]:
+    """Classify git push failures that indicate a retryable lease conflict."""
+
+    detail = str(stderr or "").strip() or "(no stderr)"
+    lowered = detail.casefold()
+    lease_markers = (
+        "stale info",
+        "fetch first",
+        "non-fast-forward",
+        "would clobber",
+        "force-with-lease",
+    )
+    if any(marker in lowered for marker in lease_markers):
+        result: dict[str, Any] = {
+            "push_status": "lease_conflict",
+            "push_branch": branch,
+            "push_error": detail,
+            "retryable": True,
+            "diagnostic_kind": "publish_lease_conflict",
+            "summary": (
+                "Remote branch changed before publish; fetch/rebase or retry "
+                "with updated lease."
+            ),
+        }
+        if base_branch:
+            result["push_base_branch"] = base_branch
+        return result
+    return {
+        "push_status": "failed",
+        "push_branch": branch,
+        "push_error": detail,
+    }
+
+
 def build_target_aware_prepared_context_payload(
     task_payload: Mapping[str, Any],
     *,
@@ -6546,17 +6604,51 @@ class TemporalAgentRuntimeActivities:
                     env=command_env,
                 )
 
-            push_proc = await asyncio.create_subprocess_exec(
+            remote_sha: str | None = None
+            remote_sha_proc = await asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
-                    workspace, "push", "-u", "origin", current_branch,
+                    workspace,
+                    "rev-parse",
+                    "--verify",
+                    f"refs/remotes/origin/{current_branch}",
                 ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=command_env,
             )
-            push_stdout, push_stderr = await asyncio.wait_for(
-                push_proc.communicate(), timeout=120,
+            try:
+                remote_sha_stdout, _ = await asyncio.wait_for(
+                    remote_sha_proc.communicate(), timeout=10,
+                )
+            except asyncio.TimeoutError:
+                remote_sha_proc.kill()
+                await remote_sha_proc.wait()
+                raise
+            if remote_sha_proc.returncode == 0:
+                remote_sha = remote_sha_stdout.decode(
+                    "utf-8", errors="replace"
+                ).strip() or None
+
+            push_proc = await asyncio.create_subprocess_exec(
+                *self._workspace_git_command(
+                    workspace,
+                    *build_git_push_with_lease_args(
+                        branch=current_branch,
+                        recorded_remote_sha=remote_sha,
+                    ),
+                ),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=command_env,
             )
+            try:
+                push_stdout, push_stderr = await asyncio.wait_for(
+                    push_proc.communicate(), timeout=120,
+                )
+            except asyncio.TimeoutError:
+                push_proc.kill()
+                await push_proc.wait()
+                raise
             if push_proc.returncode != 0:
                 error_detail = (
                     push_stderr.decode("utf-8", errors="replace").strip()
@@ -6570,11 +6662,41 @@ class TemporalAgentRuntimeActivities:
                     push_proc.returncode,
                     error_detail,
                 )
-                return {
-                    "push_status": "failed",
-                    "push_branch": current_branch,
-                    "push_error": error_detail,
-                }
+                classified = classify_git_push_failure(
+                    stderr=error_detail,
+                    branch=current_branch,
+                    base_branch=base_branch_name,
+                )
+                if classified.get("push_status") == "lease_conflict":
+                    fetch_proc = await asyncio.create_subprocess_exec(
+                        *self._workspace_git_command(
+                            workspace, "fetch", "origin", current_branch,
+                        ),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=command_env,
+                    )
+                    try:
+                        fetch_stdout, fetch_stderr = await asyncio.wait_for(
+                            fetch_proc.communicate(), timeout=60,
+                        )
+                    except asyncio.TimeoutError:
+                        fetch_proc.kill()
+                        await fetch_proc.wait()
+                        raise
+                    classified["fetch_status"] = (
+                        "fetched" if fetch_proc.returncode == 0 else "failed"
+                    )
+                    if fetch_proc.returncode != 0:
+                        classified["fetch_error"] = (
+                            fetch_stderr.decode(
+                                "utf-8", errors="replace"
+                            ).strip()
+                            or fetch_stdout.decode(
+                                "utf-8", errors="replace"
+                            ).strip()
+                        )
+                return classified
 
             head_sha = await self._resolve_workspace_head_sha(
                 workspace=workspace,

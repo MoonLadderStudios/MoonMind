@@ -64,6 +64,91 @@ def _ensure_non_empty(value: str, *, field_name: str) -> str:
         )
     return normalized
 
+
+def _normalize_surface_list(value: Any, *, field_name: str) -> tuple[str, ...]:
+    if not isinstance(value, list | tuple):
+        raise ContractValidationError(
+            "invalid_contract", f"{field_name} must be an explicit list"
+        )
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        entry = _ensure_non_empty(str(item), field_name=f"{field_name}[{index}]")
+        if entry not in seen:
+            normalized.append(entry)
+            seen.add(entry)
+    return tuple(normalized)
+
+
+@dataclass(frozen=True, slots=True)
+class PublishAuthorityMetadata:
+    """Closed declaration of publish authority available inside a runtime."""
+
+    allow_direct_publish: bool = False
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "PublishAuthorityMetadata":
+        if not isinstance(payload, Mapping):
+            raise ContractValidationError(
+                "invalid_contract", "publish must be an explicit object"
+            )
+        if "allowDirectPublish" not in payload:
+            raise ContractValidationError(
+                "invalid_contract", "publish.allowDirectPublish is required"
+            )
+        return cls(allow_direct_publish=bool(payload["allowDirectPublish"]))
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"allowDirectPublish": self.allow_direct_publish}
+
+
+@dataclass(frozen=True, slots=True)
+class SkillSurfaceContract:
+    """Closed runtime surface declaration for one resolved skill contract."""
+
+    tools: tuple[str, ...]
+    mcp_servers: tuple[str, ...]
+    connectors: tuple[str, ...]
+    egress: tuple[str, ...]
+    publish: PublishAuthorityMetadata = field(
+        default_factory=PublishAuthorityMetadata
+    )
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SkillSurfaceContract":
+        if not isinstance(payload, Mapping):
+            raise ContractValidationError(
+                "invalid_contract", "surface contract must be an object"
+            )
+        required = ("tools", "mcpServers", "connectors", "egress", "publish")
+        missing = [field_name for field_name in required if field_name not in payload]
+        if missing:
+            raise ContractValidationError(
+                "invalid_contract",
+                "surface contract is missing required field(s): "
+                + ", ".join(missing),
+            )
+        return cls(
+            tools=_normalize_surface_list(payload["tools"], field_name="tools"),
+            mcp_servers=_normalize_surface_list(
+                payload["mcpServers"], field_name="mcpServers"
+            ),
+            connectors=_normalize_surface_list(
+                payload["connectors"], field_name="connectors"
+            ),
+            egress=_normalize_surface_list(payload["egress"], field_name="egress"),
+            publish=PublishAuthorityMetadata.from_payload(payload["publish"]),
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "tools": list(self.tools),
+            "mcpServers": list(self.mcp_servers),
+            "connectors": list(self.connectors),
+            "egress": list(self.egress),
+            "publish": self.publish.to_payload(),
+        }
+
 @dataclass(frozen=True, slots=True)
 class ArtifactRef:
     """Opaque artifact reference passed between workflow steps and activities."""
