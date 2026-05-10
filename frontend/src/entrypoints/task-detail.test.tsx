@@ -1681,12 +1681,12 @@ describe('Task Detail Entrypoint', () => {
       payload: { model: 'gpt-5-codex' },
     },
     {
-      label: 'falls back to resolvedModel when model is missing',
-      payload: { resolvedModel: 'gpt-5-codex' },
+      label: 'backend-normalized model is shown when resolvedModel is also set',
+      payload: { model: 'gpt-5-codex', resolvedModel: 'gpt-5-codex' },
     },
     {
-      label: 'falls back to requestedModel when no other model fields are set',
-      payload: { requestedModel: 'gpt-5-codex' },
+      label: 'backend-normalized model is shown when only requestedModel was originally set',
+      payload: { model: 'gpt-5-codex', requestedModel: 'gpt-5-codex' },
     },
   ])('displays the Model fact consistently — $label', async ({ payload }) => {
     const mockExecution = {

@@ -4391,21 +4391,11 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
             <FactGroup title="Runtime">
               {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
-              {(() => {
-                const displayedModel =
-                  execution.model
-                  || execution.resolvedModel
-                  || execution.requestedModel
-                  || null;
-                if (!displayedModel) {
-                  return null;
-                }
-                return (
-                  <Fact label="Model">
-                    <code className="text-xs">{displayedModel}</code>
-                  </Fact>
-                );
-              })()}
+              {execution.model ? (
+                <Fact label="Model">
+                  <code className="text-xs">{execution.model}</code>
+                </Fact>
+              ) : null}
               {execution.profileId ? (
                 <Fact label="Provider Profile">{renderProviderProfileSummary(execution)}</Fact>
               ) : null}
