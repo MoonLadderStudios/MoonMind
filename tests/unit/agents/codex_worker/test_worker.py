@@ -941,6 +941,48 @@ async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) 
     assert runtime_config["providerProfile"] == "codex-provider-profile"
     assert runtime_config["profileId"] == "codex-provider-profile"
 
+async def test_run_once_rejects_task_git_target_branch_as_authored_input(
+    tmp_path: Path,
+) -> None:
+    """MM-668: task.git.targetBranch must not reach runtime preparation as input."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "run",
+                "runtime": {"mode": "codex"},
+                "git": {"targetBranch": "legacy-target"},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="done", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert len(queue.failed) == 1
+    assert "targetBranch" in queue.failed[0]
+    assert queue.completed == []
+    task_context_path = tmp_path / str(job.id) / "artifacts" / "task_context.json"
+    assert not task_context_path.exists()
+
 async def test_run_once_passes_runtime_inheritance_args_to_batch_pr_resolver_skill(
     tmp_path: Path,
 ) -> None:

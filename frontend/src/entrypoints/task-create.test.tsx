@@ -2650,6 +2650,51 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
+  it("does not promote target-only legacy branch snapshots to active branch", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:target-only-legacy",
+        workflowType: "MoonMind.Run",
+        inputParameters: {
+          targetRuntime: "codex_cli",
+          task: {
+            runtime: {
+              mode: "codex_cli",
+            },
+          },
+        },
+      },
+      {
+        snapshotVersion: 1,
+        source: { kind: "create" },
+        draft: {
+          taskShape: "skill_only",
+          runtime: "codex_cli",
+          repository: "MoonLadderStudios/MoonMind",
+          targetBranch: "legacy-target-only",
+          publish: { mode: "branch" },
+          instructions: "",
+          primarySkill: {
+            name: "moonspec-orchestrate",
+            inputs: {
+              request: "Preserve target-only legacy branch as metadata.",
+            },
+          },
+          appliedTemplates: [],
+          dependencies: [],
+          attachments: [],
+          proposeTasks: false,
+          proposalPolicy: null,
+        },
+      },
+    );
+
+    expect(draft.branch).toBeNull();
+    expect(draft.legacyBranchWarning).toBe(
+      "This older task only stored a target branch. The new form cannot use targetBranch as the active branch, so choose a branch before saving or rerunning.",
+    );
+  });
+
   it("reconstructs persisted objective and step attachments from the authoritative task snapshot", () => {
     const draft = buildTemporalSubmissionDraftFromExecution(
       {

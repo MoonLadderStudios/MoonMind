@@ -720,9 +720,9 @@ function normalizeLegacyBranchDraft({
   }
   if (!startingBranch && targetBranch) {
     return {
-      branch: targetBranch,
+      branch: null,
       warning:
-        "This older task only stored a target branch. Review the reconstructed branch before submitting.",
+        "This older task only stored a target branch. The new form cannot use targetBranch as the active branch, so choose a branch before saving or rerunning.",
     };
   }
   if (startingBranch && targetBranch && publishMode === "pr") {

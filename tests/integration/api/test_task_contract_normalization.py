@@ -8,7 +8,7 @@ Acceptance scenarios covered:
   SC-001  Well-formed resume_from_failed_step payload accepted; fields preserved
   SC-002  resume_from_failed_step without resume block → TaskContractError
   SC-003  resume block with wrong recovery.kind → TaskContractError
-  SC-006  task.git.targetBranch normalized to branch in canonical output
+  SC-006  task.git.targetBranch rejected as active authored branch input
 """
 from __future__ import annotations
 
@@ -113,17 +113,13 @@ def test_sc003_resume_block_with_wrong_recovery_kind_raises() -> None:
 
 
 # T020 — SC-006
-def test_sc006_target_branch_normalized_to_branch_in_canonical_output() -> None:
-    """MM-638 SC-006: task.git.targetBranch in a canonical payload is normalized so
-    the canonical output carries task.git.branch and does not carry targetBranch."""
-    result = build_canonical_task_view(
-        job_type="task",
-        payload=_task_payload({"git": {"targetBranch": "feature/legacy-branch"}}),
-    )
-
-    git = result["task"]["git"]
-    assert git.get("branch") == "feature/legacy-branch"
-    assert "targetBranch" not in git
+def test_sc006_target_branch_rejected_as_active_authored_input() -> None:
+    """MM-668: task.git.targetBranch is legacy metadata, not active authored input."""
+    with pytest.raises(TaskContractError, match="targetBranch"):
+        build_canonical_task_view(
+            job_type="task",
+            payload=_task_payload({"git": {"targetBranch": "feature/legacy-branch"}}),
+        )
 
 
 def test_mm569_unresolved_preset_submission_rejected_with_field_path() -> None:
