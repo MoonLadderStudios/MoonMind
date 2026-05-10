@@ -2591,6 +2591,16 @@ class TemporalExecutionService:
             params.pop(key, None)
         for key in FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS:
             params.pop(key, None)
+
+        task_payload = params.get("task")
+        if isinstance(task_payload, Mapping):
+            task_params = dict(task_payload)
+            task_params.pop("dependsOn", None)
+            if task_params:
+                params["task"] = task_params
+            else:
+                params.pop("task", None)
+        params.pop("dependsOn", None)
         return params
 
     async def create_failed_step_resume_execution(
