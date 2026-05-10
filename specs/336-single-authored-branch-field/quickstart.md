@@ -37,12 +37,11 @@ Task-shaped submission and normalization routes:
 ./tools/test_integration.sh
 ```
 
-Focused files when iterating locally:
+For local focused iteration before the full suite, use the same compose-backed pytest service that `./tools/test_integration.sh` uses and keep the `integration_ci` marker:
 
 ```bash
-MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh \
-  tests/integration/api/test_task_contract_normalization.py \
-  tests/integration/temporal/test_task_shaped_submission_normalization.py
+docker compose -f docker-compose.test.yaml run --rm pytest \
+  bash -lc "pytest tests/integration/api/test_task_contract_normalization.py tests/integration/temporal/test_task_shaped_submission_normalization.py -m 'integration_ci' --tb=short"
 ```
 
 Expected integration additions:
@@ -62,7 +61,7 @@ Expected integration additions:
 
 ## Final Verification
 
-Before `/speckit.verify`, run:
+Before `/moonspec-verify`, run:
 
 ```bash
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh

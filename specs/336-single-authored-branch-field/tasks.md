@@ -75,7 +75,7 @@
 - [ ] T016 [P] Add failing integration coverage in `tests/integration/api/test_task_contract_normalization.py` proving task-shaped submissions reject active `targetBranch` aliases and persist canonical `task.git.branch` only for FR-004, FR-010, SC-001, and DESIGN-REQ-009.
 - [ ] T017 [P] Add failing integration coverage in `tests/integration/temporal/test_task_shaped_submission_normalization.py` proving original task input snapshots and Temporal submission payloads omit active `targetBranch` for new authored submissions for FR-004, FR-008, SC-001, and DESIGN-REQ-009.
 - [ ] T018 [P] Add failing integration or boundary coverage in `tests/integration/temporal/test_task_shaped_submission_normalization.py` proving legacy reconstruction evidence preserves warning/metadata without submitting `targetBranch` as active branch for FR-007, FR-009, FR-011, SC-004, SC-005, and DESIGN-REQ-010.
-- [ ] T019 Run focused integration checks for `tests/integration/api/test_task_contract_normalization.py` and `tests/integration/temporal/test_task_shaped_submission_normalization.py` through the available repo test runner and confirm T016-T018 fail for the expected branch-contract reasons before implementation.
+- [ ] T019 Run `./tools/test_integration.sh` and confirm the integration tests added in T016-T018 fail for the expected branch-contract reasons before implementation, or record the exact Docker/integration environment blocker in `specs/336-single-authored-branch-field/tasks.md`.
 
 ### Conditional Verification-Only Work
 
@@ -98,7 +98,7 @@
 
 - [ ] T031 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and fix failures until FR-001 through FR-003, FR-006, FR-007, FR-009, FR-011, SC-002 through SC-005, DESIGN-REQ-009, and DESIGN-REQ-010 pass in frontend coverage.
 - [ ] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/api/routers/test_executions.py tests/unit/agents/codex_worker/test_worker.py` and fix failures until FR-004, FR-005, FR-008, FR-010, SC-001, DESIGN-REQ-009, and DESIGN-REQ-010 pass in backend/runtime unit coverage.
-- [ ] T033 Run the focused integration checks for `tests/integration/api/test_task_contract_normalization.py` and `tests/integration/temporal/test_task_shaped_submission_normalization.py` when integration dependencies are available, and record any environment blocker in `specs/336-single-authored-branch-field/tasks.md` for FR-004, FR-008, FR-010, SC-001, SC-004, SC-005, DESIGN-REQ-009, and DESIGN-REQ-010.
+- [ ] T033 Run `./tools/test_integration.sh` when integration dependencies are available, and record any environment blocker in `specs/336-single-authored-branch-field/tasks.md` for FR-004, FR-008, FR-010, SC-001, SC-004, SC-005, DESIGN-REQ-009, and DESIGN-REQ-010.
 - [ ] T034 Run the end-to-end story checklist from `specs/336-single-authored-branch-field/quickstart.md` and confirm the one-story independent test passes for MM-668.
 
 **Checkpoint**: The single story is implemented, covered by red-first unit and integration tests, and independently validated.
