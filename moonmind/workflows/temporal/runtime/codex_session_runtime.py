@@ -93,6 +93,9 @@ class CodexSessionRuntimeState(BaseModel):
     last_turn_id: str | None = Field(None, alias="lastTurnId")
     last_turn_status: str | None = Field(None, alias="lastTurnStatus")
     last_turn_error: str | None = Field(None, alias="lastTurnError")
+    last_assistant_text_missing: bool = Field(
+        False, alias="lastAssistantTextMissing"
+    )
 
 class CodexAppServerRpcClient:
     """Minimal JSON-RPC stdio client for ``codex app-server``."""
@@ -500,6 +503,8 @@ class CodexManagedSessionRuntime:
             merged.setdefault("lastTurnStatus", state.last_turn_status)
         if state.last_turn_error:
             merged.setdefault("lastTurnError", state.last_turn_error)
+        if state.last_assistant_text_missing:
+            merged.setdefault("assistantTextMissing", True)
         return CodexManagedSessionHandle(
             sessionState=self._session_state(state),
             status=status,
@@ -1166,7 +1171,7 @@ class CodexManagedSessionRuntime:
             if recovered_error:
                 return "failed", recovered_error
             return (
-                "failed",
+                "completed",
                 "codex app-server task_complete produced no assistant output",
             )
         if scan.assistant_text:
@@ -1198,10 +1203,10 @@ class CodexManagedSessionRuntime:
             if recovered_error:
                 return "failed", recovered_error
             return (
-                "failed",
+                "completed",
                 "codex app-server task_complete produced no assistant output",
             )
-        return "failed", "codex app-server turn/completed produced no assistant output"
+        return "completed", "codex app-server turn/completed produced no assistant output"
 
     def _resolved_rollout_path(
         self,
@@ -1471,12 +1476,16 @@ class CodexManagedSessionRuntime:
         assistant_text: str | None = None,
         error_text: str | None = None,
         append_assistant_to_spool: bool = True,
+        assistant_text_missing: bool = False,
     ) -> None:
         previous_status = state.last_turn_status
         state.active_turn_id = None
         state.last_turn_id = turn_id
         state.last_turn_status = status
         state.last_turn_error = error_text
+        state.last_assistant_text_missing = bool(
+            status == "completed" and assistant_text_missing
+        )
         if status == "completed":
             state.last_assistant_text = assistant_text or None
         self._save_state(state)
@@ -1561,20 +1570,15 @@ class CodexManagedSessionRuntime:
                     else None
                 ),
             )
-            if status == "failed":
-                self._append_spool(
-                    "stderr",
-                    (
-                        "codex app-server turn completed without assistant output: "
-                        f"{active_turn_id}\n"
-                    ),
-                )
         self._finalize_turn(
             state=state,
             turn_id=active_turn_id,
             status=status,
             assistant_text=assistant_text,
             error_text=error_text,
+            assistant_text_missing=(
+                status == "completed" and not assistant_text and bool(error_text)
+            ),
         )
         return state
 
@@ -1727,15 +1731,7 @@ class CodexManagedSessionRuntime:
                     vendor_turn_id=vendor_turn_id,
                     rollout_scan=completed_turn_inspection.rollout_scan,
                 )
-                if status == "failed":
-                    self._append_spool(
-                        "stderr",
-                        (
-                            "codex app-server turn completed without assistant output: "
-                            f"{vendor_turn_id}\n"
-                        ),
-                    )
-                else:
+                if status != "failed":
                     metadata["assistantTextMissing"] = True
             else:
                 metadata["assistantText"] = assistant_text
@@ -1750,6 +1746,7 @@ class CodexManagedSessionRuntime:
             append_assistant_to_spool=(
                 assistant_text.strip() not in rollout_mirror.emitted_assistant_texts
             ),
+            assistant_text_missing=bool(metadata.get("assistantTextMissing")),
         )
         return CodexManagedSessionTurnResponse(
             sessionState=self._session_state(state),
@@ -1907,6 +1904,7 @@ class CodexManagedSessionRuntime:
                 "lastTurnId": state.last_turn_id,
                 "lastTurnStatus": state.last_turn_status,
                 "lastTurnError": state.last_turn_error,
+                "assistantTextMissing": state.last_assistant_text_missing,
             },
         )
 

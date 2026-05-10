@@ -405,7 +405,8 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
         )
     )
 
-    assert response.status == "failed"
+    assert response.status == "completed"
+    assert response.metadata["assistantTextMissing"] is True
     assert (
         response.metadata["reason"]
         == "codex app-server turn/completed produced no assistant output"
@@ -419,7 +420,9 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
             threadId="logical-thread-1",
         )
     )
-    assert handle.status == "failed"
+    assert handle.status == "ready"
+    assert handle.metadata["lastTurnStatus"] == "completed"
+    assert handle.metadata["assistantTextMissing"] is True
     assert (
         handle.metadata["lastTurnError"]
         == "codex app-server turn/completed produced no assistant output"
@@ -435,8 +438,9 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
         state_payload.get("lastTurnError")
         == "codex app-server turn/completed produced no assistant output"
     )
+    assert state_payload.get("lastAssistantTextMissing") is True
     stderr_path = Path(request.artifact_spool_path) / "stderr.log"
-    assert "turn completed without assistant output" in stderr_path.read_text(
+    assert not stderr_path.exists() or "turn completed without assistant output" not in stderr_path.read_text(
         encoding="utf-8"
     )
 
@@ -736,9 +740,10 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
         )
     )
 
-    assert response.status == "failed"
+    assert response.status == "completed"
     assert response.metadata == {
-        "reason": "codex app-server task_complete produced no assistant output"
+        "assistantTextMissing": True,
+        "reason": "codex app-server task_complete produced no assistant output",
     }
     handle = runtime.session_status(
         CodexManagedSessionLocator(
@@ -748,7 +753,13 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
             threadId="logical-thread-1",
         )
     )
-    assert handle.status == "failed"
+    assert handle.status == "ready"
+    assert handle.metadata["lastTurnStatus"] == "completed"
+    assert handle.metadata["assistantTextMissing"] is True
+    assert (
+        handle.metadata["lastTurnError"]
+        == "codex app-server task_complete produced no assistant output"
+    )
     assert "lastAssistantText" not in handle.metadata
 
 def test_runtime_send_turn_fails_empty_task_complete_with_structured_error(
@@ -956,9 +967,9 @@ def test_runtime_session_status_fails_empty_task_complete_after_running_turn(
         )
     )
 
-    assert handle.status == "failed"
+    assert handle.status == "ready"
     assert handle.session_state.active_turn_id is None
-    assert handle.metadata["lastTurnStatus"] == "failed"
+    assert handle.metadata["lastTurnStatus"] == "completed"
     assert (
         handle.metadata["lastTurnError"]
         == "codex app-server task_complete produced no assistant output"
@@ -1307,7 +1318,8 @@ def test_runtime_send_turn_ignores_stale_terminal_rollout_without_turn_reference
         )
     )
 
-    assert response.status == "failed"
+    assert response.status == "completed"
+    assert response.metadata["assistantTextMissing"] is True
     assert (
         response.metadata["reason"]
         == "codex app-server turn/completed produced no assistant output"
@@ -1320,8 +1332,8 @@ def test_runtime_send_turn_ignores_stale_terminal_rollout_without_turn_reference
             threadId="logical-thread-1",
         )
     )
-    assert handle.status == "failed"
-    assert handle.metadata["lastTurnStatus"] == "failed"
+    assert handle.status == "ready"
+    assert handle.metadata["lastTurnStatus"] == "completed"
 
 def test_runtime_send_turn_fails_when_rollout_only_has_other_turn_output(
     tmp_path: Path,
@@ -1386,7 +1398,8 @@ def test_runtime_send_turn_fails_when_rollout_only_has_other_turn_output(
         )
     )
 
-    assert response.status == "failed"
+    assert response.status == "completed"
+    assert response.metadata["assistantTextMissing"] is True
     assert (
         response.metadata["reason"]
         == "codex app-server turn/completed produced no assistant output"
@@ -1399,8 +1412,8 @@ def test_runtime_send_turn_fails_when_rollout_only_has_other_turn_output(
             threadId="logical-thread-1",
         )
     )
-    assert handle.status == "failed"
-    assert handle.metadata["lastTurnStatus"] == "failed"
+    assert handle.status == "ready"
+    assert handle.metadata["lastTurnStatus"] == "completed"
 
 def test_runtime_send_turn_ignores_rollout_paths_outside_codex_sessions(
     tmp_path: Path,
@@ -1456,7 +1469,8 @@ def test_runtime_send_turn_ignores_rollout_paths_outside_codex_sessions(
         )
     )
 
-    assert response.status == "failed"
+    assert response.status == "completed"
+    assert response.metadata["assistantTextMissing"] is True
     assert (
         response.metadata["reason"]
         == "codex app-server turn/completed produced no assistant output"
