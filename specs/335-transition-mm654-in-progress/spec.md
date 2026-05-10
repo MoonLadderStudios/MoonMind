@@ -63,7 +63,7 @@
 - **FR-004**: System MUST execute the selected transition exclusively through MoonMind's trusted Jira tool surface, never through ad-hoc HTTP calls or raw Jira credentials in the agent runtime.
 - **FR-005**: System MUST verify the post-transition status by re-reading MM-654 and report the verified final status.
 - **FR-006**: System MUST treat the case where MM-654 is already in workflow status `In Progress` as a successful no-op, reporting the current status without invoking a redundant transition.
-- **FR-007**: System MUST stop with an explicit, named error and perform no mutation when (a) no available transition matches `In Progress`, (b) more than one available transition matches `In Progress`, (c) MM-654 cannot be located by the configured Jira credentials, or (d) Jira reports required transition fields whose values were not supplied.
+- **FR-007**: System MUST stop with an explicit, named error and perform no mutation when (a) no available transition leads to a target status named `In Progress`, (b) more than one available transition leads to a target status named `In Progress`, (c) MM-654 cannot be located by the configured Jira credentials, or (d) Jira reports required transition fields whose values were not supplied.
 - **FR-008**: System MUST NOT modify any field on MM-654 other than its workflow status, and MUST NOT modify any Jira issue other than MM-654.
 - **FR-009**: System MUST NOT emit Jira credentials, API tokens, auth headers, cookies, or full environment dumps in any user-visible output, log, or artifact, including failure reports.
 - **FR-010**: System MUST report, on completion, the issue key, the prior status, the chosen transition (if any), the action taken (transitioned, no-op, or stopped with reason), and the verified final status.
@@ -78,7 +78,7 @@
 ### Measurable Outcomes
 
 - **SC-001**: After a successful run, 100% of operator verifications of MM-654 in the Jira tracker show the workflow status as `In Progress`.
-- **SC-002**: 100% of runs end in exactly one of three outcomes — transitioned, no-op (already `In Progress`), or stopped with a named error — with zero partial mutations of MM-654.
+- **SC-002**: 100% of runs end in exactly one of three terminal outcomes — successfully transitioned to `In Progress`, no-op (already `In Progress`), or stopped with a named error (including verification mismatch) — with zero partial mutations of MM-654.
 - **SC-003**: Across all run outputs, logs, and artifacts, zero secrets (API tokens, auth headers, cookies, raw credentials) are exposed.
 - **SC-004**: No Jira issue other than MM-654 is modified by the run, verifiable by inspecting the run report and Jira change history.
 - **SC-005**: The run completes within a single operator-observed cycle, with no manual follow-up retry required when MM-654 is in an eligible source workflow status.
