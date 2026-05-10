@@ -1166,7 +1166,7 @@ class CodexManagedSessionRuntime:
             if recovered_error:
                 return "failed", recovered_error
             return (
-                "failed",
+                "completed",
                 "codex app-server task_complete produced no assistant output",
             )
         if scan.assistant_text:
@@ -1198,10 +1198,10 @@ class CodexManagedSessionRuntime:
             if recovered_error:
                 return "failed", recovered_error
             return (
-                "failed",
+                "completed",
                 "codex app-server task_complete produced no assistant output",
             )
-        return "failed", "codex app-server turn/completed produced no assistant output"
+        return "completed", "codex app-server turn/completed produced no assistant output"
 
     def _resolved_rollout_path(
         self,
