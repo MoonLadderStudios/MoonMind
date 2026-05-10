@@ -24,11 +24,15 @@ from typing import Any
 
 import pytest
 
+from moonmind.integrations.jira.errors import JiraToolError
+from moonmind.integrations.jira.models import (
+    GetIssueRequest,
+    GetTransitionsRequest,
+    TransitionIssueRequest,
+)
+from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.temporal.transition_mm667 import (
-    IN_PROGRESS_TARGET_NAME,
     MM667_ISSUE_KEY,
-    MatchResult,
-    TransitionMM667Outcome,
     build_outcome,
     is_already_in_progress,
     missing_required_fields,
@@ -272,6 +276,46 @@ def test_build_outcome_stopped_with_redacted_error_reason() -> None:
     assert len(payload["errorReason"]) <= 500
 
 
+def test_build_outcome_redacts_all_jira_derived_report_strings() -> None:
+    secret = "token" + "=secretvalue"
+    outcome = build_outcome(
+        prior_status=f"To Do {secret}",
+        action="transitioned",
+        outcome="transitioned",
+        transition={
+            "id": f"31-{secret}",
+            "name": f"Start {secret}",
+            "toStatusName": f"In Progress {secret}",
+        },
+        verified_final_status=f"In Progress {secret}",
+    )
+
+    payload = outcome.to_dict()
+    assert secret not in repr(payload)
+    assert "[REDACTED]" in repr(payload)
+
+
+def test_build_outcome_redacts_available_transitions_and_missing_fields() -> None:
+    secret = "password" + "=hunter2"
+    outcome = build_outcome(
+        prior_status="To Do",
+        action="stopped",
+        outcome="stopped:no_matching_transition",
+        available_transitions=[
+            {"id": f"11-{secret}", "name": f"Start {secret}", "toStatusName": "To Do"},
+        ],
+    )
+    assert secret not in repr(outcome.to_dict())
+
+    missing = build_outcome(
+        prior_status="To Do",
+        action="stopped",
+        outcome="stopped:missing_required_fields",
+        missing_fields=[f"resolution-{secret}"],
+    )
+    assert secret not in repr(missing.to_dict())
+
+
 def test_build_outcome_action_outcome_consistency_enforced() -> None:
     # action="transitioned" requires outcome="transitioned".
     with pytest.raises(ValueError):
@@ -475,6 +519,79 @@ def test_transition_issue_called_with_empty_fields_and_update() -> None:
     assert len(discovery_calls) == 1
     assert discovery_calls[0].get("expand_fields") is True
     assert outcome.to_dict()["outcome"] == "transitioned"
+
+
+def test_jira_validation_failure_is_not_classified_transient() -> None:
+    validation_error = JiraToolError(
+        "transitionId is not available for the target issue.",
+        code="jira_validation_failed",
+        status_code=422,
+        action="transition_issue",
+    )
+    jira = _RecordingTrustedJira(
+        issue_payload=_issue("To Do"),
+        transitions_payload={
+            "transitions": [
+                _transition(transition_id="31", name="Start", to_name="In Progress"),
+            ],
+        },
+        transition_response=validation_error,
+    )
+
+    outcome = asyncio.run(transition_mm667_to_in_progress(trusted_jira=jira))
+
+    assert outcome.to_dict()["outcome"] == "stopped:validation_failure"
+
+
+class _ModelRequestJiraToolService(JiraToolService):
+    """JiraToolService test double whose methods require request models."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Any]] = []
+        self._get_issue_count = 0
+
+    async def get_issue(self, request: GetIssueRequest) -> dict[str, Any]:
+        assert isinstance(request, GetIssueRequest)
+        self._get_issue_count += 1
+        self.calls.append(("jira.get_issue", request))
+        if self._get_issue_count == 1:
+            return _issue("To Do")
+        return _issue("In Progress")
+
+    async def get_transitions(
+        self, request: GetTransitionsRequest
+    ) -> dict[str, Any]:
+        assert isinstance(request, GetTransitionsRequest)
+        self.calls.append(("jira.get_transitions", request))
+        return {
+            "transitions": [
+                _transition(transition_id="31", name="Start", to_name="In Progress"),
+            ],
+        }
+
+    async def transition_issue(
+        self, request: TransitionIssueRequest
+    ) -> dict[str, Any]:
+        assert isinstance(request, TransitionIssueRequest)
+        self.calls.append(("jira.transition_issue", request))
+        return {"transitioned": True}
+
+
+def test_concrete_jira_tool_service_is_wrapped_with_request_models() -> None:
+    service = _ModelRequestJiraToolService()
+
+    outcome = asyncio.run(transition_mm667_to_in_progress(trusted_jira=service))
+
+    assert outcome.to_dict()["outcome"] == "transitioned"
+    assert [name for name, _ in service.calls] == [
+        "jira.get_issue",
+        "jira.get_transitions",
+        "jira.transition_issue",
+        "jira.get_issue",
+    ]
+    transition_request = service.calls[2][1]
+    assert transition_request.issue_key == MM667_ISSUE_KEY
+    assert transition_request.transition_id == "31"
 
 
 # ---------------------------------------------------------------------------

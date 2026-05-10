@@ -345,6 +345,36 @@ def test_edge_auth_or_permission_redacts_secret_strings() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Validation failures are permanent operator-actionable failures.
+# ---------------------------------------------------------------------------
+
+
+def test_edge_validation_failure_during_transition_is_not_transient() -> None:
+    validation_error = JiraToolError(
+        "transitionId is not available for the target issue.",
+        code="jira_validation_failed",
+        status_code=422,
+        action="transition_issue",
+    )
+    jira = _StubTrustedJira(
+        get_issue_responses=[_issue("To Do")],
+        get_transitions_response={
+            "transitions": [
+                _transition(transition_id="31", name="Start", to_name="In Progress"),
+            ],
+        },
+        transition_issue_response=validation_error,
+    )
+
+    outcome = asyncio.run(transition_mm667_to_in_progress(trusted_jira=jira))
+    report = outcome.to_dict()
+
+    assert report["outcome"] == "stopped:validation_failure"
+    assert report["action"] == "stopped"
+    assert report["priorStatus"] == "To Do"
+
+
+# ---------------------------------------------------------------------------
 # T021 — stopped:transient_failure
 # ---------------------------------------------------------------------------
 

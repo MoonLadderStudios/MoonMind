@@ -69,7 +69,7 @@ else:
   "issueKey": "MM-667",
   "priorStatus": "<string|null>",
   "action": "transitioned | noop_already_in_progress | stopped",
-  "outcome": "transitioned | noop_already_in_progress | stopped:no_matching_transition | stopped:ambiguous_transition | stopped:issue_not_found | stopped:missing_required_fields | stopped:auth_or_permission | stopped:tool_unavailable | stopped:transient_failure | stopped:final_status_mismatch",
+  "outcome": "transitioned | noop_already_in_progress | stopped:no_matching_transition | stopped:ambiguous_transition | stopped:issue_not_found | stopped:missing_required_fields | stopped:auth_or_permission | stopped:validation_failure | stopped:tool_unavailable | stopped:transient_failure | stopped:final_status_mismatch",
   "transition": {
     "id": "<string|null>",
     "name": "<string|null>",
@@ -104,6 +104,7 @@ else:
 | Edge: tool unavailable | 0 | `action="stopped"`, `outcome="stopped:tool_unavailable"`, `errorClass`, `errorReason` |
 | Edge: not found | 1 | `action="stopped"`, `outcome="stopped:issue_not_found"`, `errorClass`, `errorReason` |
 | Edge: auth/permission | 1 | `action="stopped"`, `outcome="stopped:auth_or_permission"`, redacted error |
+| Edge: validation | varies | `action="stopped"`, `outcome="stopped:validation_failure"` |
 | Edge: transient | varies | `action="stopped"`, `outcome="stopped:transient_failure"` |
 | Edge: post-transition mismatch | 1, 2, 3, 4 | `action="stopped"`, `outcome="stopped:final_status_mismatch"`, `verifiedFinalStatus=<observed>` |
 | Edge: required fields | 1, 2 | `action="stopped"`, `outcome="stopped:missing_required_fields"`, `missingFields` populated |

@@ -57,6 +57,7 @@ get_issue(MM-667)
 ├── error: not found / not visible              → stopped:issue_not_found
 ├── error: auth / permission                    → stopped:auth_or_permission
 ├── error: tool unavailable                     → stopped:tool_unavailable
+├── error: validation / non-auth 4xx           → stopped:validation_failure
 ├── error: transient (rate-limit / 5xx)         → stopped:transient_failure
 └── ok: priorStatus
     ├── priorStatus matches "In Progress"       → noop_already_in_progress

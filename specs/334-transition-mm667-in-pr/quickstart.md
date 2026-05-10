@@ -72,6 +72,7 @@ Spot-check at least one neighboring Jira issue (e.g., `MM-666` or `MM-668`) to c
 | `stopped:issue_not_found` | n/a (issue not visible) | Yes — operator must investigate Jira credentials/visibility |
 | `stopped:missing_required_fields` | `priorStatus` (unchanged) | Yes — surfaces required-field names without guessing values |
 | `stopped:auth_or_permission` | `priorStatus` (unchanged) | Yes — sanitized error |
+| `stopped:validation_failure` | `priorStatus` (unchanged) | Permanent Jira validation/policy failure; operator must inspect transition/request configuration rather than retrying as an outage |
 | `stopped:tool_unavailable` | `priorStatus` (unchanged) | Yes — operator must enable the trusted Jira binding |
 | `stopped:transient_failure` | `priorStatus` (unchanged) or partial — operator MUST recheck Jira | Acceptable as a stop, but requires a re-run when Jira is healthy |
 | `stopped:final_status_mismatch` | Some other status (Jira advanced through an intermediate state) | Stop is correct; operator inspects Jira workflow design |

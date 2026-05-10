@@ -46,9 +46,10 @@ Decision: The run emits exactly one of the following outcomes:
 5. `stopped:issue_not_found` — `jira.get_issue` for `MM-667` raises a not-found error.
 6. `stopped:missing_required_fields` — selected transition declares required fields not supplied; named field IDs listed; no mutation.
 7. `stopped:auth_or_permission` — auth/permission failure surfaced sanitized (no tokens, no headers).
-8. `stopped:tool_unavailable` — trusted Jira tool surface is not registered or disabled at runtime.
-9. `stopped:transient_failure` — Jira transient (rate-limited / 5xx) surfaced through existing `JiraToolError`; no ad-hoc retry; no claim of success.
-10. `stopped:final_status_mismatch` — post-transition fetch shows a status other than `In Progress` (Jira advanced through an intermediate state, etc.); the actual final status is reported.
+8. `stopped:validation_failure` — Jira validation/policy failure (non-auth 4xx such as 400/422) surfaced through existing `JiraToolError`; no ad-hoc retry; operator must inspect the request/transition configuration.
+9. `stopped:tool_unavailable` — trusted Jira tool surface is not registered or disabled at runtime.
+10. `stopped:transient_failure` — Jira transient (rate-limited / 5xx) surfaced through existing `JiraToolError`; no ad-hoc retry; no claim of success.
+11. `stopped:final_status_mismatch` — post-transition fetch shows a status other than `In Progress` (Jira advanced through an intermediate state, etc.); the actual final status is reported.
 Evidence: Spec FR-007, FR-009, FR-010, edge-cases section. `JiraToolError` raised in `tool.py:262-267` for unavailable transitions; existing redaction in `post_merge_jira_completion._scrub_exception` (`post_merge_jira_completion.py:264-265`).
 Rationale: Enumerated outcomes satisfy SC-002 (one of the named outcomes; zero partial mutations).
 Alternatives considered: Free-form error messages — rejected; SC-002 demands enumerated outcomes, and Mission Control benefits from stable outcome IDs.

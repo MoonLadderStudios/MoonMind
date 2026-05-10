@@ -36,7 +36,7 @@ The story moves a single Jira issue (`MM-667`) into workflow status `In Progress
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 (existing MoonMind runtime); no new code modules required.
+**Language/Version**: Python 3.12 (existing MoonMind runtime); includes `moonmind/workflows/temporal/transition_mm667.py` for the one-shot MM-667 orchestration.
 **Primary Dependencies**: Existing trusted Jira tool registry (`moonmind/mcp/jira_tool_registry.py`), `JiraToolService` (`moonmind/integrations/jira/tool.py`), `redact_sensitive_text` / `SecretRedactor` redaction helpers.
 **Storage**: N/A — this is a one-shot tool-driven workflow. The only persisted artifact is the run's structured outcome report (artifact-backed run output); no new persistent tables.
 **Unit Testing**: pytest (`./tools/test_unit.sh`). No new unit tests are added in this plan; existing trusted-tool unit tests cover transition discovery, transition execution, required-field handling, and credential redaction.

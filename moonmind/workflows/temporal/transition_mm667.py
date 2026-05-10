@@ -22,6 +22,12 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Literal, Mapping, Protocol
 
 from moonmind.integrations.jira.errors import JiraToolError
+from moonmind.integrations.jira.models import (
+    GetIssueRequest,
+    GetTransitionsRequest,
+    TransitionIssueRequest,
+)
+from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
 
 MM667_ISSUE_KEY = "MM-667"
@@ -39,6 +45,7 @@ OutcomeName = Literal[
     "stopped:issue_not_found",
     "stopped:missing_required_fields",
     "stopped:auth_or_permission",
+    "stopped:validation_failure",
     "stopped:tool_unavailable",
     "stopped:transient_failure",
     "stopped:final_status_mismatch",
@@ -52,9 +59,14 @@ class TrustedJiraToolUnavailable(RuntimeError):
 class TrustedJiraToolSurface(Protocol):
     """Subset of MoonMind's trusted Jira tool surface used by this story."""
 
-    async def get_issue(self, **kwargs: Any) -> Mapping[str, Any]: ...
-    async def get_transitions(self, **kwargs: Any) -> Mapping[str, Any]: ...
-    async def transition_issue(self, **kwargs: Any) -> Mapping[str, Any]: ...
+    async def get_issue(self, **kwargs: Any) -> Mapping[str, Any]:
+        pass
+
+    async def get_transitions(self, **kwargs: Any) -> Mapping[str, Any]:
+        pass
+
+    async def transition_issue(self, **kwargs: Any) -> Mapping[str, Any]:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +163,9 @@ def _status_name(issue: Mapping[str, Any] | None) -> str | None:
 
 def _serialize_transition(transition: Mapping[str, Any]) -> dict[str, str]:
     return {
-        "id": str(transition.get("id") or ""),
-        "name": str(transition.get("name") or ""),
-        "toStatusName": _to_name(transition),
+        "id": _redact_report_string(str(transition.get("id") or "")) or "",
+        "name": _redact_report_string(str(transition.get("name") or "")) or "",
+        "toStatusName": _redact_report_string(_to_name(transition)) or "",
     }
 
 
@@ -162,9 +174,8 @@ def _serialize_transition(transition: Mapping[str, Any]) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def redact_error_reason(text: str | None) -> str | None:
-    """Redact and trim a user-visible error reason to ≤500 chars (FR-009, SC-003)."""
-
+def _redact_report_string(text: str | None) -> str | None:
+    """Redact and trim one user-visible run-report string."""
     if text is None:
         return None
     if text == "":
@@ -176,6 +187,12 @@ def redact_error_reason(text: str | None) -> str | None:
     return redacted
 
 
+def redact_error_reason(text: str | None) -> str | None:
+    """Redact and trim a user-visible error reason to ≤500 chars (FR-009, SC-003)."""
+
+    return _redact_report_string(text)
+
+
 _VALID_OUTCOMES: frozenset[str] = frozenset(
     [
         "transitioned",
@@ -185,6 +202,7 @@ _VALID_OUTCOMES: frozenset[str] = frozenset(
         "stopped:issue_not_found",
         "stopped:missing_required_fields",
         "stopped:auth_or_permission",
+        "stopped:validation_failure",
         "stopped:tool_unavailable",
         "stopped:transient_failure",
         "stopped:final_status_mismatch",
@@ -252,9 +270,11 @@ def build_outcome(
         if not transition:
             raise ValueError("transitioned outcome requires a transition payload")
         transition_payload: dict[str, str | None] = {
-            "id": str(transition.get("id") or ""),
-            "name": str(transition.get("name") or ""),
-            "toStatusName": str(transition.get("toStatusName") or ""),
+            "id": _redact_report_string(str(transition.get("id") or "")),
+            "name": _redact_report_string(str(transition.get("name") or "")),
+            "toStatusName": _redact_report_string(
+                str(transition.get("toStatusName") or "")
+            ),
         }
     else:
         transition_payload = {"id": None, "name": None, "toStatusName": None}
@@ -275,24 +295,35 @@ def build_outcome(
             if isinstance(item, Mapping):
                 available.append(
                     {
-                        "id": str(item.get("id") or ""),
-                        "name": str(item.get("name") or ""),
-                        "toStatusName": str(item.get("toStatusName") or ""),
+                        "id": _redact_report_string(str(item.get("id") or "")) or "",
+                        "name": _redact_report_string(str(item.get("name") or ""))
+                        or "",
+                        "toStatusName": _redact_report_string(
+                            str(item.get("toStatusName") or "")
+                        )
+                        or "",
                     }
                 )
 
-    missing = list(missing_fields or []) if outcome == "stopped:missing_required_fields" else []
+    missing = (
+        [
+            _redact_report_string(str(field_id)) or ""
+            for field_id in list(missing_fields or [])
+        ]
+        if outcome == "stopped:missing_required_fields"
+        else []
+    )
 
-    err_class = error_class if action == "stopped" else None
+    err_class = _redact_report_string(error_class) if action == "stopped" else None
     err_reason = redact_error_reason(error_reason) if action == "stopped" else None
 
     return TransitionMM667Outcome(
-        issueKey=MM667_ISSUE_KEY,
-        priorStatus=prior_status,
+        issueKey=_redact_report_string(MM667_ISSUE_KEY) or MM667_ISSUE_KEY,
+        priorStatus=_redact_report_string(prior_status),
         action=action,
         outcome=outcome,
         transition=transition_payload,
-        verifiedFinalStatus=verified_final,
+        verifiedFinalStatus=_redact_report_string(verified_final),
         availableTransitions=available,
         missingFields=missing,
         errorClass=err_class,
@@ -314,7 +345,9 @@ def _classify_jira_tool_error(exc: JiraToolError) -> OutcomeName:
         return "stopped:auth_or_permission"
     if status == 429 or status >= 500:
         return "stopped:transient_failure"
-    return "stopped:transient_failure"
+    if 400 <= status < 500 or "validation" in code or "policy" in code:
+        return "stopped:validation_failure"
+    return "stopped:tool_unavailable"
 
 
 def _build_stopped_from_exception(
@@ -363,6 +396,8 @@ async def transition_mm667_to_in_progress(
             error_class="TrustedJiraToolUnavailable",
             error_reason="Trusted Jira tool surface is not registered in this runtime.",
         )
+    if isinstance(trusted_jira, JiraToolService):
+        trusted_jira = adapter_from_jira_tool_service(trusted_jira)
 
     # Call 1 — get_issue (pre-fetch).
     try:
@@ -531,6 +566,22 @@ class _CallableTrustedJiraAdapter:
         return await self._transition_issue(**kwargs)
 
 
+@dataclass(frozen=True, slots=True)
+class _JiraToolServiceAdapter:
+    """Adapter from JiraToolService request models to this story's keyword surface."""
+
+    _service: JiraToolService
+
+    async def get_issue(self, **kwargs: Any) -> Mapping[str, Any]:
+        return await self._service.get_issue(GetIssueRequest(**kwargs))
+
+    async def get_transitions(self, **kwargs: Any) -> Mapping[str, Any]:
+        return await self._service.get_transitions(GetTransitionsRequest(**kwargs))
+
+    async def transition_issue(self, **kwargs: Any) -> Mapping[str, Any]:
+        return await self._service.transition_issue(TransitionIssueRequest(**kwargs))
+
+
 def adapter_from_callables(
     *,
     get_issue: Callable[..., Awaitable[Mapping[str, Any]]],
@@ -546,6 +597,12 @@ def adapter_from_callables(
     )
 
 
+def adapter_from_jira_tool_service(service: JiraToolService) -> TrustedJiraToolSurface:
+    """Wrap the concrete JiraToolService in the keyword API used by the driver."""
+
+    return _JiraToolServiceAdapter(_service=service)
+
+
 __all__ = [
     "IN_PROGRESS_TARGET_NAME",
     "MM667_ISSUE_KEY",
@@ -554,6 +611,7 @@ __all__ = [
     "TrustedJiraToolSurface",
     "TrustedJiraToolUnavailable",
     "adapter_from_callables",
+    "adapter_from_jira_tool_service",
     "build_outcome",
     "is_already_in_progress",
     "missing_required_fields",
