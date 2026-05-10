@@ -76,6 +76,43 @@ async def test_create_pr_success(monkeypatch):
     assert result.created is True
     assert result.url == "https://github.com/o/r/pull/42"
     assert result.head_sha == "abc123"
+    assert result.adopted is False
+
+
+@pytest.mark.asyncio
+async def test_create_pr_adopts_existing_head_base_pr(monkeypatch):
+    """MM-680: existing PRs for the same head/base are adopted before create."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    existing_pr = {
+        "html_url": "https://github.com/o/r/pull/42",
+        "head": {"ref": "feature", "sha": "abc123", "repo": {"full_name": "o/r"}},
+        "base": {"ref": "main"},
+    }
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=_mock_get_response(200, [existing_pr]))
+    mock_client.post = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().create_pull_request(
+            repo="o/r",
+            head="feature",
+            base="main",
+            title="T",
+            body="B",
+        )
+
+    assert result.created is False
+    assert result.adopted is True
+    assert result.url == "https://github.com/o/r/pull/42"
+    assert result.head_sha == "abc123"
+    assert "adopted existing PR" in result.summary
+    mock_client.post.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_create_pr_missing_token(monkeypatch):

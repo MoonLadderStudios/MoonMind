@@ -430,6 +430,39 @@ async def test_repo_create_pr_activity_delegates():
             body="Body",
         )
 
+
+async def test_repo_create_pr_activity_returns_adopted_result():
+    from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
+
+    with patch("moonmind.workflows.adapters.github_service.GitHubService") as mock_svc_cls:
+        mock_svc = mock_svc_cls.return_value
+
+        from moonmind.workflows.adapters.github_service import CreatePRResult
+
+        mock_svc.create_pull_request = AsyncMock(
+            return_value=CreatePRResult(
+                url="https://github.com/owner/repo/pull/42",
+                created=False,
+                adopted=True,
+                summary="adopted existing PR",
+                headSha="abc123",
+            )
+        )
+
+        result = await repo_create_pr_activity(
+            {
+                "repo": "owner/repo",
+                "head": "branch",
+                "base": "main",
+                "title": "Title",
+                "body": "Body",
+            }
+        )
+
+    assert result["created"] is False
+    assert result["adopted"] is True
+    assert result["url"] == "https://github.com/owner/repo/pull/42"
+
 # --- Restored Regression Tests ---
 
 async def test_jules_activities_persist_tracking_artifacts(_patch_build_adapter):

@@ -1,5 +1,7 @@
 # Data Model: Agent Tool-Surface Isolation
 
+Source traceability: `MM-680` - Generalizable Agent Tool-Surface Isolation for MoonMind-Mediated Workflows.
+
 ## Managed Agent Session
 
 Represents one MoonMind-launched managed runtime session.

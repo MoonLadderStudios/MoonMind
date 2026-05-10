@@ -1,5 +1,7 @@
 # Publish Reconciliation Contract
 
+Source traceability: `MM-680` - Generalizable Agent Tool-Surface Isolation for MoonMind-Mediated Workflows.
+
 ## Purpose
 
 Define MoonMind-owned branch push and pull request creation behavior so residual races and pre-existing remote state reconcile instead of terminal-failing workflows.

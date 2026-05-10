@@ -1,5 +1,7 @@
 # Managed Runtime Isolation Contract
 
+Source traceability: `MM-680` - Generalizable Agent Tool-Surface Isolation for MoonMind-Mediated Workflows.
+
 ## Purpose
 
 Define the runtime boundary that prevents MoonMind-launched managed agent sessions from reaching external services or publish surfaces outside the resolved MoonMind skill contract.

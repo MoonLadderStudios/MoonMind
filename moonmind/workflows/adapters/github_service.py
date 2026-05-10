@@ -29,6 +29,7 @@ class CreatePRResult(BaseModel):
 
     url: Optional[str] = Field(None, alias="url")
     created: bool = Field(..., alias="created")
+    adopted: bool = Field(False, alias="adopted")
     summary: str = Field(..., alias="summary")
     head_sha: Optional[str] = Field(None, alias="headSha")
 
@@ -244,6 +245,81 @@ class GitHubService:
         if accepted:
             parts.append(f"accepted permissions: {redact_sensitive_text(accepted)}")
         return "; ".join(parts)
+
+    @staticmethod
+    def _head_query_for_repo(*, repo: str, head: str) -> str:
+        if ":" in head:
+            return head
+        owner = repo.split("/", 1)[0]
+        return f"{owner}:{head}"
+
+    @staticmethod
+    def _pull_request_matches_head_base(
+        pr_data: Mapping[str, Any],
+        *,
+        repo: str,
+        head: str,
+        base: str,
+    ) -> bool:
+        head_data = pr_data.get("head")
+        base_data = pr_data.get("base")
+        if not isinstance(head_data, Mapping) or not isinstance(base_data, Mapping):
+            return False
+        if str(base_data.get("ref") or "") != base:
+            return False
+
+        expected_head_ref = head.split(":", 1)[1] if ":" in head else head
+        if str(head_data.get("ref") or "") != expected_head_ref:
+            return False
+        if ":" in head:
+            expected_repo_owner = head.split(":", 1)[0]
+            head_repo = head_data.get("repo")
+            full_name = (
+                str(head_repo.get("full_name") or "")
+                if isinstance(head_repo, Mapping)
+                else ""
+            )
+            return full_name.startswith(f"{expected_repo_owner}/")
+        head_repo = head_data.get("repo")
+        if isinstance(head_repo, Mapping):
+            full_name = str(head_repo.get("full_name") or "")
+            return not full_name or full_name == repo
+        return True
+
+    async def _find_open_pull_request(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        repo: str,
+        head: str,
+        base: str,
+        headers: Mapping[str, str],
+    ) -> Mapping[str, Any] | None:
+        response = await client.get(
+            f"https://api.github.com/repos/{repo}/pulls",
+            headers=dict(headers),
+            params={
+                "state": "open",
+                "head": self._head_query_for_repo(repo=repo, head=head),
+                "base": base,
+                "per_page": 10,
+            },
+        )
+        if not isinstance(response, httpx.Response):
+            return None
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, list):
+            return None
+        for item in data:
+            if isinstance(item, Mapping) and self._pull_request_matches_head_base(
+                item,
+                repo=repo,
+                head=head,
+                base=base,
+            ):
+                return item
+        return None
 
     @classmethod
     def _permission_blocker(
@@ -680,6 +756,22 @@ class GitHubService:
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             try:
+                existing_pr = await self._find_open_pull_request(
+                    client,
+                    repo=repo,
+                    head=head,
+                    base=base,
+                    headers=headers,
+                )
+                if existing_pr is not None:
+                    existing_url = str(existing_pr.get("html_url") or "")
+                    return CreatePRResult(
+                        url=existing_url or None,
+                        created=False,
+                        adopted=True,
+                        summary=f"adopted existing PR: {existing_url}",
+                        head_sha=(existing_pr.get("head") or {}).get("sha"),
+                    )
                 response = await client.post(
                     api_url, headers=headers, json=payload
                 )
@@ -688,6 +780,7 @@ class GitHubService:
                 return CreatePRResult(
                     url=data.get("html_url"),
                     created=True,
+                    adopted=False,
                     summary=f"PR created successfully: {data.get('html_url')}",
                     head_sha=(data.get("head") or {}).get("sha"),
                 )

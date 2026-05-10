@@ -23,26 +23,26 @@
 
 **Purpose**: Confirm active artifacts and prepare task-specific test files without changing runtime behavior.
 
-- [ ] T001 Verify active feature artifacts exist and preserve MM-680 in specs/335-agent-tool-surface-isolation/spec.md, specs/335-agent-tool-surface-isolation/plan.md, specs/335-agent-tool-surface-isolation/research.md, specs/335-agent-tool-surface-isolation/data-model.md, specs/335-agent-tool-surface-isolation/quickstart.md, and specs/335-agent-tool-surface-isolation/contracts/managed-runtime-isolation-contract.md (FR-012, SC-006)
-- [ ] T002 [P] Add task-scope test module placeholder for skill surface contract validation in tests/unit/workflows/skills/test_tool_surface_contracts.py (FR-002, DESIGN-REQ-007)
+- [X] T001 Verify active feature artifacts exist and preserve MM-680 in specs/335-agent-tool-surface-isolation/spec.md, specs/335-agent-tool-surface-isolation/plan.md, specs/335-agent-tool-surface-isolation/research.md, specs/335-agent-tool-surface-isolation/data-model.md, specs/335-agent-tool-surface-isolation/quickstart.md, and specs/335-agent-tool-surface-isolation/contracts/managed-runtime-isolation-contract.md (FR-012, SC-006)
+- [X] T002 [P] Add task-scope test module placeholder for skill surface contract validation in tests/unit/workflows/skills/test_tool_surface_contracts.py (FR-002, DESIGN-REQ-007)
 - [ ] T003 [P] Add task-scope test module placeholder for managed runtime launcher isolation in tests/unit/workflows/temporal/runtime/test_launcher_surface_contracts.py (FR-001, FR-003)
-- [ ] T004 [P] Add task-scope test module placeholder for publish lease classification in tests/unit/workflows/temporal/test_publish_branch_lease.py (FR-008, DESIGN-REQ-011)
+- [X] T004 [P] Add task-scope test module placeholder for publish lease classification in tests/unit/workflows/temporal/test_publish_branch_lease.py (FR-008, DESIGN-REQ-011)
 - [ ] T005 [P] Add task-scope integration test module placeholder for managed runtime isolation in tests/integration/temporal/test_agent_runtime_surface_isolation.py (SCN-001, SCN-002, SCN-003)
-- [ ] T006 [P] Add task-scope integration test module placeholder for publish reconciliation in tests/integration/temporal/test_publish_reconciliation.py (SCN-004, SCN-005)
+- [X] T006 [P] Add task-scope integration test module placeholder for publish reconciliation in tests/integration/temporal/test_publish_reconciliation.py (SCN-004, SCN-005)
 
 ## Phase 2: Foundational
 
 **Purpose**: Establish shared contract and diagnostic test scaffolding that blocks story implementation.
 
-- [ ] T007 [P] Add failing unit tests for normalized SkillSurfaceContract parsing, explicit empty-surface declarations, and fail-closed missing surface fields in tests/unit/workflows/skills/test_tool_surface_contracts.py (FR-002, DESIGN-REQ-012)
-- [ ] T008 [P] Add failing unit tests for IsolationDiagnostic redaction and stable reason codes in tests/unit/workflows/temporal/test_isolation_diagnostics.py (FR-009, DESIGN-REQ-014)
+- [X] T007 [P] Add failing unit tests for normalized SkillSurfaceContract parsing, explicit empty-surface declarations, and fail-closed missing surface fields in tests/unit/workflows/skills/test_tool_surface_contracts.py (FR-002, DESIGN-REQ-012)
+- [X] T008 [P] Add failing unit tests for IsolationDiagnostic redaction and stable reason codes in tests/unit/workflows/temporal/test_isolation_diagnostics.py (FR-009, DESIGN-REQ-014)
 - [ ] T009 [P] Add failing unit tests for managed runtime service-identity validation rejecting operator-account OAuth and connector grants in tests/unit/workflows/temporal/runtime/test_launcher_surface_contracts.py (FR-001, DESIGN-REQ-003, DESIGN-REQ-006)
 - [ ] T010 [P] Add failing unit tests for direct publish authority contract validation in tests/unit/workflows/temporal/test_agent_runtime_activities.py (FR-005, FR-006, DESIGN-REQ-009)
 - [ ] T011 Run `./tools/test_unit.sh tests/unit/workflows/skills/test_tool_surface_contracts.py tests/unit/workflows/temporal/runtime/test_launcher_surface_contracts.py tests/unit/workflows/temporal/test_isolation_diagnostics.py tests/unit/workflows/temporal/test_agent_runtime_activities.py` and confirm T007-T010 fail for the expected missing contract/diagnostic behavior (FR-001, FR-002, FR-005, FR-006, FR-009)
-- [ ] T012 Implement SkillSurfaceContract and publish-authority metadata models in moonmind/workflows/skills/tool_plan_contracts.py and moonmind/workflows/skills/contracts.py (FR-002, DESIGN-REQ-007, DESIGN-REQ-012)
-- [ ] T013 Implement IsolationDiagnostic model and redaction helpers in moonmind/workflows/temporal/isolation_diagnostics.py (FR-009, DESIGN-REQ-014)
+- [X] T012 Implement SkillSurfaceContract and publish-authority metadata models in moonmind/workflows/skills/tool_plan_contracts.py and moonmind/workflows/skills/contracts.py (FR-002, DESIGN-REQ-007, DESIGN-REQ-012)
+- [X] T013 Implement IsolationDiagnostic model and redaction helpers in moonmind/workflows/temporal/isolation_diagnostics.py (FR-009, DESIGN-REQ-014)
 - [ ] T014 Wire contract metadata through resolved skillset outputs in moonmind/workflows/skills/resolver.py and moonmind/workflows/skills/run_projection.py without embedding large skill content in workflow history (FR-002, FR-003, DESIGN-REQ-005)
-- [ ] T015 Run `./tools/test_unit.sh tests/unit/workflows/skills/test_tool_surface_contracts.py tests/unit/workflows/temporal/test_isolation_diagnostics.py` and confirm foundational contract and diagnostic tests pass (FR-002, FR-009)
+- [X] T015 Run `./tools/test_unit.sh tests/unit/workflows/skills/test_tool_surface_contracts.py tests/unit/workflows/temporal/test_isolation_diagnostics.py` and confirm foundational contract and diagnostic tests pass (FR-002, FR-009)
 
 ## Phase 3: Story - Isolate Agent Tool Surfaces
 
@@ -60,12 +60,12 @@
 
 - [ ] T016 [P] Add failing unit tests for launcher surface diff rejection of undeclared tools, MCP servers, connectors, egress destinations, and publish authority in tests/unit/workflows/temporal/runtime/test_launcher_surface_contracts.py (FR-003, FR-004, FR-010, DESIGN-REQ-001, DESIGN-REQ-005, DESIGN-REQ-008)
 - [ ] T017 [P] Add failing unit tests for agent runtime request construction carrying sanitized surface contract refs and selected-skill metadata in tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py (FR-003, FR-010, DESIGN-REQ-012)
-- [ ] T018 [P] Add failing unit tests for GitHubService existing PR lookup/adoption before creation in tests/unit/workflows/adapters/test_github_service.py (FR-007, SCN-004, SC-003, DESIGN-REQ-010)
-- [ ] T019 [P] Add failing unit tests for repo.create_pr activity returning adopted PR results without raising duplicate validation errors in tests/unit/workflows/temporal/test_jules_activities.py (FR-007, SCN-004)
-- [ ] T020 [P] Add failing unit tests for branch publish command construction using lease semantics and returning retryable lease_conflict results in tests/unit/workflows/temporal/test_publish_branch_lease.py (FR-008, SCN-005, SC-004, DESIGN-REQ-011)
+- [X] T018 [P] Add failing unit tests for GitHubService existing PR lookup/adoption before creation in tests/unit/workflows/adapters/test_github_service.py (FR-007, SCN-004, SC-003, DESIGN-REQ-010)
+- [X] T019 [P] Add failing unit tests for repo.create_pr activity returning adopted PR results without raising duplicate validation errors in tests/unit/workflows/temporal/test_jules_activities.py (FR-007, SCN-004)
+- [X] T020 [P] Add failing unit tests for branch publish command construction using lease semantics and returning retryable lease_conflict results in tests/unit/workflows/temporal/test_publish_branch_lease.py (FR-008, SCN-005, SC-004, DESIGN-REQ-011)
 - [ ] T021 [P] Add failing unit tests for direct publish attempt denial evidence and publish projection filtering in tests/unit/workflows/temporal/test_agent_runtime_activities.py (FR-005, FR-006, SCN-003, DESIGN-REQ-004, DESIGN-REQ-009)
-- [ ] T022 [P] Add failing unit tests for blocked surface diagnostics covering egress_blocked, surface_rejected, direct_publish_denied, pull_request_adopted, and publish_lease_conflict in tests/unit/workflows/temporal/test_isolation_diagnostics.py (FR-009, SC-002, DESIGN-REQ-014)
-- [ ] T023 [P] Add verification-only unit test proving MM-680 traceability remains preserved in specs/335-agent-tool-surface-isolation/plan.md and specs/335-agent-tool-surface-isolation/tasks.md in tests/unit/specs/test_mm680_traceability.py (FR-012, SC-006, DESIGN-REQ-015)
+- [X] T022 [P] Add failing unit tests for blocked surface diagnostics covering egress_blocked, surface_rejected, direct_publish_denied, pull_request_adopted, and publish_lease_conflict in tests/unit/workflows/temporal/test_isolation_diagnostics.py (FR-009, SC-002, DESIGN-REQ-014)
+- [X] T023 [P] Add verification-only unit test proving MM-680 traceability remains preserved in specs/335-agent-tool-surface-isolation/plan.md and specs/335-agent-tool-surface-isolation/tasks.md in tests/unit/specs/test_mm680_traceability.py (FR-012, SC-006, DESIGN-REQ-015)
 
 ### Integration Tests (write first)
 
@@ -84,7 +84,7 @@
 
 ### Conditional Fallback for Implemented-Unverified Rows
 
-- [ ] T033 If T023 fails for missing traceability, update specs/335-agent-tool-surface-isolation/spec.md, specs/335-agent-tool-surface-isolation/plan.md, specs/335-agent-tool-surface-isolation/research.md, specs/335-agent-tool-surface-isolation/data-model.md, specs/335-agent-tool-surface-isolation/quickstart.md, specs/335-agent-tool-surface-isolation/contracts/managed-runtime-isolation-contract.md, specs/335-agent-tool-surface-isolation/contracts/publish-reconciliation-contract.md, and specs/335-agent-tool-surface-isolation/tasks.md to preserve MM-680 and the original preset brief (FR-012, SC-006, DESIGN-REQ-015)
+- [X] T033 If T023 fails for missing traceability, update specs/335-agent-tool-surface-isolation/spec.md, specs/335-agent-tool-surface-isolation/plan.md, specs/335-agent-tool-surface-isolation/research.md, specs/335-agent-tool-surface-isolation/data-model.md, specs/335-agent-tool-surface-isolation/quickstart.md, specs/335-agent-tool-surface-isolation/contracts/managed-runtime-isolation-contract.md, specs/335-agent-tool-surface-isolation/contracts/publish-reconciliation-contract.md, and specs/335-agent-tool-surface-isolation/tasks.md to preserve MM-680 and the original preset brief (FR-012, SC-006, DESIGN-REQ-015)
 
 ### Implementation
 
@@ -94,9 +94,9 @@
 - [ ] T037 Implement per-skill egress policy materialization and denied-egress diagnostic emission in moonmind/workflows/temporal/runtime/launcher.py and moonmind/workflows/temporal/workers.py (FR-004, SCN-002, SC-002, DESIGN-REQ-008)
 - [ ] T038 Implement direct publish authority removal or neutralization for managed runtime workspaces in moonmind/workflows/temporal/activity_runtime.py and moonmind/agents/codex_worker/worker.py (FR-005, FR-006, SCN-003, DESIGN-REQ-004, DESIGN-REQ-009)
 - [ ] T039 Implement direct_publish_denied diagnostics for in-session publish attempts in moonmind/workflows/temporal/isolation_diagnostics.py and moonmind/workflows/temporal/activity_runtime.py (FR-006, FR-009, SCN-003)
-- [ ] T040 Implement existing pull request lookup and adoption before creation in moonmind/workflows/adapters/github_service.py (FR-007, SCN-004, SC-003, DESIGN-REQ-010)
+- [X] T040 Implement existing pull request lookup and adoption before creation in moonmind/workflows/adapters/github_service.py (FR-007, SCN-004, SC-003, DESIGN-REQ-010)
 - [ ] T041 Update repo.create_pr activity result handling for adopted PRs in moonmind/workflows/temporal/activities/jules_activities.py and moonmind/workflows/temporal/workflows/run.py (FR-007, SCN-004)
-- [ ] T042 Implement lease-aware branch publish state, fetch-on-lease-miss, and retryable lease_conflict outputs in moonmind/workflows/temporal/activity_runtime.py (FR-008, SCN-005, SC-004, DESIGN-REQ-011)
+- [X] T042 Implement lease-aware branch publish state, fetch-on-lease-miss, and retryable lease_conflict outputs in moonmind/workflows/temporal/activity_runtime.py (FR-008, SCN-005, SC-004, DESIGN-REQ-011)
 - [ ] T043 Wire sanitized isolation and publish diagnostics into workflow/activity outputs and artifact refs in moonmind/workflows/temporal/isolation_diagnostics.py, moonmind/workflows/temporal/activity_runtime.py, and moonmind/workflows/temporal/workflows/run.py (FR-009, DESIGN-REQ-014)
 - [ ] T044 Remove superseded internal fallback or denylist-only paths uncovered by T034-T043 in moonmind/workflows/temporal/runtime/launcher.py, moonmind/agents/codex_worker/worker.py, tests/unit/workflows/temporal/runtime/test_launcher_surface_contracts.py, and tests/unit/workflows/temporal/test_agent_runtime_activities.py (DESIGN-REQ-015)
 

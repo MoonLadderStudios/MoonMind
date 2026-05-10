@@ -2,6 +2,7 @@
 
 **Branch**: `change-jira-issue-mm-680-to-status-in-pr-6478e030` | **Date**: 2026-05-10 | **Spec**: [spec.md](./spec.md)
 **Input**: Single-story feature specification from `/work/agent_jobs/mm:84c05579-71b9-4970-a650-3eb2341060d1/repo/specs/335-agent-tool-surface-isolation/spec.md`
+**Source Jira**: `MM-680` - Generalizable Agent Tool-Surface Isolation for MoonMind-Mediated Workflows.
 
 **Setup Note**: `.specify/scripts/bash/setup-plan.sh --json` was attempted but failed because the managed branch is `change-jira-issue-mm-680-to-status-in-pr-6478e030`, not a numeric MoonSpec branch. `.specify/feature.json` already points to this active feature directory, so planning proceeded manually against the active feature artifacts.
 
