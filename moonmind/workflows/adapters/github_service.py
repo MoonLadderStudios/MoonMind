@@ -295,8 +295,11 @@ class GitHubService:
         base: str,
         headers: Mapping[str, str],
     ) -> Mapping[str, Any] | None:
+        get = getattr(client, "get", None)
+        if not callable(get):
+            return None
         try:
-            response = await client.get(
+            response = await get(
                 f"https://api.github.com/repos/{repo}/pulls",
                 headers=dict(headers),
                 params={
