@@ -236,6 +236,7 @@ def classify_git_push_failure(
     *,
     stderr: str,
     branch: str,
+    base_branch: str | None = None,
 ) -> dict[str, Any]:
     """Classify git push failures that indicate a retryable lease conflict."""
 
@@ -245,27 +246,24 @@ def classify_git_push_failure(
         "stale info",
         "fetch first",
         "non-fast-forward",
-        "failed to push some refs",
         "would clobber",
-        "rejected",
+        "force-with-lease",
     )
     if any(marker in lowered for marker in lease_markers):
-        from moonmind.workflows.temporal.isolation_diagnostics import (
-            build_isolation_diagnostic,
-        )
-
-        return {
+        result: dict[str, Any] = {
             "push_status": "lease_conflict",
             "push_branch": branch,
             "push_error": detail,
             "retryable": True,
-            "diagnostic": build_isolation_diagnostic(
-                reason_code="publish_lease_conflict",
-                summary=detail,
-                surface=f"git push origin {branch}",
-                metadata={"branch": branch},
-            ).to_payload(),
+            "diagnostic_kind": "publish_lease_conflict",
+            "summary": (
+                "Remote branch changed before publish; fetch/rebase or retry "
+                "with updated lease."
+            ),
         }
+        if base_branch:
+            result["push_base_branch"] = base_branch
+        return result
     return {
         "push_status": "failed",
         "push_branch": branch,
@@ -6618,9 +6616,14 @@ class TemporalAgentRuntimeActivities:
                 stderr=asyncio.subprocess.PIPE,
                 env=command_env,
             )
-            remote_sha_stdout, _ = await asyncio.wait_for(
-                remote_sha_proc.communicate(), timeout=10,
-            )
+            try:
+                remote_sha_stdout, _ = await asyncio.wait_for(
+                    remote_sha_proc.communicate(), timeout=10,
+                )
+            except asyncio.TimeoutError:
+                remote_sha_proc.kill()
+                await remote_sha_proc.wait()
+                raise
             if remote_sha_proc.returncode == 0:
                 remote_sha = remote_sha_stdout.decode(
                     "utf-8", errors="replace"
@@ -6638,9 +6641,14 @@ class TemporalAgentRuntimeActivities:
                 stderr=asyncio.subprocess.PIPE,
                 env=command_env,
             )
-            push_stdout, push_stderr = await asyncio.wait_for(
-                push_proc.communicate(), timeout=120,
-            )
+            try:
+                push_stdout, push_stderr = await asyncio.wait_for(
+                    push_proc.communicate(), timeout=120,
+                )
+            except asyncio.TimeoutError:
+                push_proc.kill()
+                await push_proc.wait()
+                raise
             if push_proc.returncode != 0:
                 error_detail = (
                     push_stderr.decode("utf-8", errors="replace").strip()
@@ -6657,6 +6665,7 @@ class TemporalAgentRuntimeActivities:
                 classified = classify_git_push_failure(
                     stderr=error_detail,
                     branch=current_branch,
+                    base_branch=base_branch_name,
                 )
                 if classified.get("push_status") == "lease_conflict":
                     fetch_proc = await asyncio.create_subprocess_exec(
@@ -6667,9 +6676,14 @@ class TemporalAgentRuntimeActivities:
                         stderr=asyncio.subprocess.PIPE,
                         env=command_env,
                     )
-                    fetch_stdout, fetch_stderr = await asyncio.wait_for(
-                        fetch_proc.communicate(), timeout=60,
-                    )
+                    try:
+                        fetch_stdout, fetch_stderr = await asyncio.wait_for(
+                            fetch_proc.communicate(), timeout=60,
+                        )
+                    except asyncio.TimeoutError:
+                        fetch_proc.kill()
+                        await fetch_proc.wait()
+                        raise
                     classified["fetch_status"] = (
                         "fetched" if fetch_proc.returncode == 0 else "failed"
                     )

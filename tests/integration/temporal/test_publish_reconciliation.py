@@ -58,9 +58,10 @@ async def test_branch_publish_lease_miss_is_retryable_conflict() -> None:
     result = classify_git_push_failure(
         stderr="! [rejected] feature -> feature (fetch first)",
         branch="feature",
+        base_branch="main",
     )
 
     assert result["push_status"] == "lease_conflict"
+    assert result["push_base_branch"] == "main"
     assert result["retryable"] is True
-    assert result["diagnostic"]["reasonCode"] == "publish_lease_conflict"
-
+    assert result["diagnostic_kind"] == "publish_lease_conflict"

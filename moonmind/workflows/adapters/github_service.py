@@ -279,12 +279,12 @@ class GitHubService:
                 if isinstance(head_repo, Mapping)
                 else ""
             )
-            return full_name.startswith(f"{expected_repo_owner}/")
+            return bool(full_name) and full_name.startswith(f"{expected_repo_owner}/")
         head_repo = head_data.get("repo")
         if isinstance(head_repo, Mapping):
             full_name = str(head_repo.get("full_name") or "")
-            return not full_name or full_name == repo
-        return True
+            return full_name == repo
+        return False
 
     async def _find_open_pull_request(
         self,
@@ -295,19 +295,33 @@ class GitHubService:
         base: str,
         headers: Mapping[str, str],
     ) -> Mapping[str, Any] | None:
-        response = await client.get(
-            f"https://api.github.com/repos/{repo}/pulls",
-            headers=dict(headers),
-            params={
-                "state": "open",
-                "head": self._head_query_for_repo(repo=repo, head=head),
-                "base": base,
-                "per_page": 10,
-            },
-        )
-        if not isinstance(response, httpx.Response):
+        try:
+            response = await client.get(
+                f"https://api.github.com/repos/{repo}/pulls",
+                headers=dict(headers),
+                params={
+                    "state": "open",
+                    "head": self._head_query_for_repo(repo=repo, head=head),
+                    "base": base,
+                    "per_page": 10,
+                },
+            )
+            if not isinstance(response, httpx.Response):
+                return None
+            response.raise_for_status()
+        except (
+            httpx.HTTPStatusError,
+            httpx.TransportError,
+            httpx.TimeoutException,
+        ) as exc:
+            logger.warning(
+                "GitHub existing PR lookup failed for %s head=%s base=%s: %s",
+                repo,
+                head,
+                base,
+                exc.__class__.__name__,
+            )
             return None
-        response.raise_for_status()
         data = response.json()
         if not isinstance(data, list):
             return None

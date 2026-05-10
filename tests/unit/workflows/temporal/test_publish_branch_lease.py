@@ -31,5 +31,16 @@ def test_classify_git_push_failure_returns_retryable_lease_conflict() -> None:
 
     assert result["push_status"] == "lease_conflict"
     assert result["retryable"] is True
-    assert result["diagnostic"]["reasonCode"] == "publish_lease_conflict"
+    assert result["diagnostic_kind"] == "publish_lease_conflict"
 
+
+def test_classify_git_push_failure_does_not_treat_generic_rejection_as_lease() -> None:
+    result = classify_git_push_failure(
+        stderr="remote: protected branch update denied\n"
+        "! [remote rejected] feature -> feature (protected branch hook declined)\n"
+        "error: failed to push some refs",
+        branch="feature",
+    )
+
+    assert result["push_status"] == "failed"
+    assert result["push_branch"] == "feature"

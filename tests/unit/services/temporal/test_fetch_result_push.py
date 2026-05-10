@@ -405,10 +405,13 @@ class TestPushWorkspaceBranch:
             elif call_count == 3:  # pre-push rev-list --count
                 proc.communicate = AsyncMock(return_value=(b"1\n", b""))
                 proc.returncode = 0
-            elif call_count == 4:  # push
+            elif call_count == 4:  # remote branch sha before push
+                proc.communicate = AsyncMock(return_value=(b"develop-remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 5:  # rev-parse HEAD
+            elif call_count == 6:  # rev-parse HEAD
                 proc.communicate = AsyncMock(return_value=(b"abc123head\n", b""))
                 proc.returncode = 0
             else:
@@ -466,10 +469,13 @@ class TestPushWorkspaceBranch:
             elif call_count == 3:  # remote default branch
                 proc.communicate = AsyncMock(return_value=(b"origin/trunk\n", b""))
                 proc.returncode = 0
-            elif call_count == 4:  # push
+            elif call_count == 4:  # remote branch sha before push
+                proc.communicate = AsyncMock(return_value=(b"feature-remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 5:  # rev-parse HEAD
+            elif call_count == 6:  # rev-parse HEAD
                 proc.communicate = AsyncMock(return_value=(b"pushed-head-sha\n", b""))
                 proc.returncode = 0
             else:  # rev-list --count
@@ -532,10 +538,13 @@ class TestPushWorkspaceBranch:
             elif call_count == 3:  # remote default branch
                 proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
                 proc.returncode = 0
-            elif call_count == 4:  # push
+            elif call_count == 4:  # remote branch sha before push
+                proc.communicate = AsyncMock(return_value=(b"safe-remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 5:  # rev-parse HEAD
+            elif call_count == 6:  # rev-parse HEAD
                 proc.communicate = AsyncMock(return_value=(b"safe-head-sha\n", b""))
                 proc.returncode = 0
             else:  # rev-list --count
@@ -548,7 +557,7 @@ class TestPushWorkspaceBranch:
 
         assert result["push_status"] == "pushed"
         assert result["push_head_sha"] == "safe-head-sha"
-        assert len(recorded_calls) == 6
+        assert len(recorded_calls) == 7
         for call in recorded_calls:
             command = list(call)
             assert command[:5] == [
@@ -628,10 +637,13 @@ class TestPushWorkspaceBranch:
             elif call_count == 3:  # remote default branch
                 proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
                 proc.returncode = 0
-            elif call_count == 4:  # push
+            elif call_count == 4:  # remote branch sha before push
+                proc.communicate = AsyncMock(return_value=(b"auto-remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 5:  # rev-parse HEAD
+            elif call_count == 6:  # rev-parse HEAD
                 proc.communicate = AsyncMock(return_value=(b"no-commit-head-sha\n", b""))
                 proc.returncode = 0
             else:  # rev-list --count
@@ -733,10 +745,13 @@ class TestPushWorkspaceBranch:
             elif call_count == 6:  # remote default branch
                 proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
                 proc.returncode = 0
-            elif call_count == 7:  # push
+            elif call_count == 7:  # remote branch sha before push
+                proc.communicate = AsyncMock(return_value=(b"dirty-remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 8:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 8:  # rev-parse HEAD
+            elif call_count == 9:  # rev-parse HEAD
                 proc.communicate = AsyncMock(return_value=(b"dirty-head-sha\n", b""))
                 proc.returncode = 0
             else:  # rev-list --count
@@ -1013,10 +1028,16 @@ class TestPushWorkspaceBranch:
             elif call_count == 3:  # remote default branch
                 proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
                 proc.returncode = 0
-            elif call_count == 4:  # push
+            elif call_count == 4:  # remote branch sha before push
+                proc.communicate = AsyncMock(return_value=(b"auto-remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            else:  # rev-list --count — simulate failure
+            elif call_count == 6:  # rev-parse HEAD
+                proc.communicate = AsyncMock(return_value=(b"auto-head-sha\n", b""))
+                proc.returncode = 0
+            else:  # rev-list --count -- simulate failure
                 raise OSError("git rev-list failed")
             return proc
 
@@ -1046,10 +1067,16 @@ class TestPushWorkspaceBranch:
             elif call_count == 3:  # remote default branch
                 proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
                 proc.returncode = 0
-            elif call_count == 4:  # push
+            elif call_count == 4:  # remote branch sha before push
+                proc.communicate = AsyncMock(return_value=(b"auto-remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            else:  # rev-list --count — non-zero exit with empty stdout
+            elif call_count == 6:  # rev-parse HEAD
+                proc.communicate = AsyncMock(return_value=(b"auto-head-sha\n", b""))
+                proc.returncode = 0
+            else:  # rev-list --count -- non-zero exit with empty stdout
                 proc.communicate = AsyncMock(return_value=(b"", b"fatal: bad revision"))
                 proc.returncode = 128
             return proc
@@ -1079,10 +1106,13 @@ class TestPushWorkspaceBranch:
             elif call_count == 2:  # status --porcelain
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 3:  # push
+            elif call_count == 3:  # remote branch sha before push
+                proc.communicate = AsyncMock(return_value=(b"develop-remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 4:  # rev-parse HEAD
+            elif call_count == 5:  # rev-parse HEAD
                 proc.communicate = AsyncMock(return_value=(b"develop-head-sha\n", b""))
                 proc.returncode = 0
             else:  # rev-list --count
