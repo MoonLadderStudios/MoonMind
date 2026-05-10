@@ -1675,6 +1675,120 @@ describe('Task Detail Entrypoint', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');
   });
 
+  it.each([
+    {
+      label: 'model is the canonical resolved value',
+      payload: { model: 'gpt-5-codex' },
+    },
+    {
+      label: 'backend-normalized model is shown when resolvedModel is also set',
+      payload: { model: 'gpt-5-codex', resolvedModel: 'gpt-5-codex' },
+    },
+    {
+      label: 'backend-normalized model is shown when only requestedModel was originally set',
+      payload: { model: 'gpt-5-codex', requestedModel: 'gpt-5-codex' },
+    },
+  ])('displays the Model fact consistently — $label', async ({ payload }) => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      targetRuntime: 'codex_cli',
+      title: 'Model display task',
+      summary: 'Verifies model is shown',
+      status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: { canSetTitle: false, canCancel: false, canRerun: false },
+      ...payload,
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/remediations?direction=')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ direction: 'inbound', items: [] }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      const modelFact = screen.getByText('Model').closest('div');
+      expect(modelFact?.textContent).toContain('gpt-5-codex');
+    });
+  });
+
+  it('hides the Model fact when no model field is populated', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      targetRuntime: 'codex_cli',
+      title: 'No model task',
+      summary: 'No model resolved',
+      status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: { canSetTitle: false, canCancel: false, canRerun: false },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/remediations?direction=')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ direction: 'inbound', items: [] }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('No model task')).toBeTruthy();
+    });
+    expect(screen.queryByText('Model')).toBeNull();
+  });
+
   it('renders target attachment diagnostics without replacing raw diagnostics', async () => {
     const mockExecution = {
       taskId: 'test-123',
