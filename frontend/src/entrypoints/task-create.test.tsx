@@ -1093,6 +1093,32 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Atarget-only-branch-rerun?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:target-only-branch-rerun",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              repository: "MoonLadderStudios/MoonMind",
+              publishMode: "branch",
+              inputArtifactRef: "target-only-branch-input",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: { mode: "codex_cli" },
+                  publish: { mode: "branch" },
+                  tool: { type: "skill", name: "speckit-orchestrate" },
+                },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Acomplex-rerun?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -1787,6 +1813,35 @@ describe.skip("Task Create Entrypoint", () => {
                   },
                   publish: { mode: "pr" },
                   tool: { type: "skill", name: "speckit-orchestrate" },
+                },
+              }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/target-only-branch-input/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                snapshotVersion: 1,
+                source: { kind: "create" },
+                draft: {
+                  taskShape: "skill_only",
+                  runtime: "codex_cli",
+                  repository: "MoonLadderStudios/MoonMind",
+                  targetBranch: "legacy-target-only",
+                  publish: { mode: "branch" },
+                  instructions: "",
+                  primarySkill: {
+                    name: "speckit-orchestrate",
+                    inputs: {
+                      request: "Preserve target-only legacy branch as metadata.",
+                    },
+                  },
+                  appliedTemplates: [],
+                  dependencies: [],
+                  attachments: [],
+                  proposeTasks: false,
+                  proposalPolicy: null,
                 },
               }),
           } as Response);
@@ -3628,6 +3683,41 @@ describe.skip("Task Create Entrypoint", () => {
     expect(request).toEqual({
       updateName: "RequestRerun",
     });
+  });
+
+  it("blocks branch-publish reruns when only legacy targetBranch was reconstructed", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Atarget-only-branch-rerun",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "This older task only stored a target branch. The new form cannot use targetBranch as the active branch, so choose a branch before saving or rerunning.",
+        ),
+      ).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Rerun Task" }));
+
+    expect(
+      await screen.findByText(
+        "Choose a branch before saving or rerunning this publish-mode task.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) ===
+            "/api/executions/mm%3Atarget-only-branch-rerun/update" &&
+          init?.method === "POST",
+      ),
+    ).toBe(false);
   });
 
   it("preserves authoritative snapshot details when requesting a complex rerun", async () => {

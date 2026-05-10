@@ -941,10 +941,10 @@ async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) 
     assert runtime_config["providerProfile"] == "codex-provider-profile"
     assert runtime_config["profileId"] == "codex-provider-profile"
 
-async def test_run_once_rejects_task_git_target_branch_as_authored_input(
+async def test_run_once_strips_task_git_target_branch_for_in_flight_payload(
     tmp_path: Path,
 ) -> None:
-    """MM-668: task.git.targetBranch must not reach runtime preparation as input."""
+    """MM-668: in-flight task.git.targetBranch must not become active input."""
 
     job = ClaimedJob(
         id=uuid4(),
@@ -977,11 +977,12 @@ async def test_run_once_rejects_task_git_target_branch_as_authored_input(
     processed = await worker.run_once()
 
     assert processed is True
-    assert len(queue.failed) == 1
-    assert "targetBranch" in queue.failed[0]
-    assert queue.completed == []
+    assert queue.failed == []
+    assert len(queue.completed) == 1
     task_context_path = tmp_path / str(job.id) / "artifacts" / "task_context.json"
-    assert not task_context_path.exists()
+    task_context = json.loads(task_context_path.read_text(encoding="utf-8"))
+    assert task_context["resolved"]["targetBranch"]["explicit"] is False
+    assert "legacy-target" not in json.dumps(task_context)
 
 async def test_run_once_passes_runtime_inheritance_args_to_batch_pr_resolver_skill(
     tmp_path: Path,

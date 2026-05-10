@@ -4333,7 +4333,6 @@ class CodexWorker:
                 or authored_branch_input
                 or None
             )
-            new_branch_input = None
             starting_branch = starting_branch_input or default_branch
 
             if publish_mode == "branch" and authored_branch_input:
@@ -4463,7 +4462,7 @@ class CodexWorker:
                     },
                     "targetBranch": {
                         "value": new_branch,
-                        "explicit": new_branch_input is not None,
+                        "explicit": False,
                     },
                     "workingBranch": working_branch,
                 },

@@ -563,10 +563,6 @@ class TaskGitSelection(BaseModel):
         if not isinstance(value, Mapping):
             return value
         payload = dict(value)
-        if _clean_optional_str(payload.get("targetBranch")):
-            raise TaskContractError(
-                "task.git.targetBranch is not supported; use task.git.branch"
-            )
         payload.pop("targetBranch", None)
         return payload
 
