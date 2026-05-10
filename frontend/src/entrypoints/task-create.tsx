@@ -6691,6 +6691,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       isSelfManagedPublishSkill(effectivePublishSkillId)
         ? "none"
         : normalizedPublishMode;
+    if (effectivePublishMode === "branch" && !effectiveBranch) {
+      setSubmitMessage(
+        "Choose a branch before saving or rerunning this publish-mode task.",
+      );
+      clearSubmitBusy();
+      return;
+    }
     const primarySkillArgsRaw = primaryStepIsSkill && showAdvancedStepOptions
       ? String(primaryStep?.skillArgs || "").trim()
       : "";

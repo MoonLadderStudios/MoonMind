@@ -563,10 +563,7 @@ class TaskGitSelection(BaseModel):
         if not isinstance(value, Mapping):
             return value
         payload = dict(value)
-        if "targetBranch" in payload and not payload.get("branch"):
-            payload["branch"] = payload.pop("targetBranch")
-        elif "targetBranch" in payload:
-            payload.pop("targetBranch")
+        payload.pop("targetBranch", None)
         return payload
 
     @field_validator("branch", "starting_branch", mode="before")

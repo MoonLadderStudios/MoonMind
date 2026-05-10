@@ -975,7 +975,7 @@ def test_fr009_empty_depends_on_normalized_to_none() -> None:
     assert spec.depends_on is None
 
 
-# FR-010/011: task.git.branch is the canonical field; targetBranch normalized away
+# FR-010/011: task.git.branch is the canonical field; targetBranch is stripped.
 
 def test_fr010_branch_is_canonical_authored_field() -> None:
     """MM-638 FR-010: task.git.branch is accepted and present in canonical output."""
@@ -986,15 +986,16 @@ def test_fr010_branch_is_canonical_authored_field() -> None:
     assert result["task"]["git"]["branch"] == "feature/my-branch"
 
 
-def test_fr011_target_branch_normalized_to_branch_in_canonical_output() -> None:
-    """MM-638 FR-011: targetBranch is normalized to branch; canonical output has branch set."""
+def test_mm668_target_branch_is_not_active_authored_branch_input() -> None:
+    """MM-668: targetBranch must not be normalized into active authored branch."""
     result = build_canonical_task_view(
         job_type="task",
-        payload=_canonical_task_payload({"git": {"targetBranch": "feature/legacy"}}),
+        payload=_canonical_task_payload({
+            "git": {"targetBranch": "feature/legacy"},
+        }),
     )
-    git = result["task"]["git"]
-    assert git.get("branch") == "feature/legacy"
-    assert "targetBranch" not in git
+    assert result["task"]["git"]["branch"] is None
+    assert "targetBranch" not in result["task"]["git"]
 
 
 # SC-001: Full resume_from_failed_step acceptance scenario
