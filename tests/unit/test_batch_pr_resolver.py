@@ -872,7 +872,8 @@ def test_submit_jobs_adds_task_workflow_header_when_in_managed_session(
 
     headers = captured_headers["seen"]
     assert headers.get("X-MoonMind-Task-Workflow-Id") == "mm:parent-task"
-    assert headers.get("X-MoonMind-Task-Run-Id") == "task-run-9"
+    assert headers.get("X-MoonMind-Task-Run-Identifier") == "task-run-9"
+    assert "X-MoonMind-Task-Run-Id" not in headers
 
 
 def test_submit_jobs_omits_task_headers_without_env(monkeypatch: Any) -> None:
@@ -924,3 +925,4 @@ def test_submit_jobs_omits_task_headers_without_env(monkeypatch: Any) -> None:
     headers = captured_headers["seen"]
     assert "X-MoonMind-Task-Workflow-Id" not in headers
     assert "X-MoonMind-Task-Run-Id" not in headers
+    assert "X-MoonMind-Task-Run-Identifier" not in headers

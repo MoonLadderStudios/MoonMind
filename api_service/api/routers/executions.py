@@ -5424,6 +5424,8 @@ async def create_remediation_execution(
         "providerProfile",
         "idempotencyKey",
         "schedule",
+        "runtimeInheritance",
+        "parentWorkflowId",
     ):
         if key in body:
             request_payload[key] = body[key]

@@ -643,7 +643,7 @@ async def _submit_jobs_via_http(
         headers["X-MoonMind-Task-Workflow-Id"] = task_workflow_id
     task_run_id = _task_run_id_from_env()
     if task_run_id:
-        headers["X-MoonMind-Task-Run-Id"] = task_run_id
+        headers["X-MoonMind-Task-Run-Identifier"] = task_run_id
     base = moonmind_url.rstrip("/")
     async with httpx.AsyncClient(
         base_url=base, timeout=30.0, headers=headers

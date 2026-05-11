@@ -8,8 +8,6 @@ from typing import Any
 import pytest
 
 from moonmind.workflows.tasks.runtime_inheritance import (
-    INHERIT_CALLER,
-    INHERIT_PARENT,
     SCOPE_CREATE_CHILD,
     SCOPE_INHERIT_RUNTIME,
     ExecutionPrincipal,
