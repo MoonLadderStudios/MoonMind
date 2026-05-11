@@ -441,6 +441,83 @@ function facetForFilterField(field: FilterField | null): ExecutionFacetResponse[
   return null;
 }
 
+type PillMultiSelectProps = {
+  id?: string;
+  values: string[];
+  options: string[];
+  formatValue?: (value: string) => string;
+  disabled?: boolean;
+  ariaLabelAdd: string;
+  ariaLabelSelected: string;
+  addPlaceholder?: string;
+  emptyMessage?: string;
+  onChange: (next: string[]) => void;
+};
+
+function FilterPillMultiSelect({
+  id,
+  values,
+  options,
+  formatValue,
+  disabled,
+  ariaLabelAdd,
+  ariaLabelSelected,
+  addPlaceholder = 'Add value',
+  emptyMessage = 'No values selected',
+  onChange,
+}: PillMultiSelectProps) {
+  const fmt = formatValue || ((value: string) => value);
+  const available = options.filter((option) => !values.includes(option));
+  const noneSelected = values.length === 0;
+  return (
+    <div className="task-list-pill-multiselect">
+      <ul
+        className={`task-list-pill-list${noneSelected ? ' is-empty' : ''}`}
+        aria-label={ariaLabelSelected}
+      >
+        {noneSelected ? (
+          <li className="task-list-pill-empty small">{emptyMessage}</li>
+        ) : (
+          values.map((value) => (
+            <li key={value} className="task-list-pill">
+              <span className="task-list-pill-label">{fmt(value)}</span>
+              <button
+                type="button"
+                className="task-list-pill-remove"
+                disabled={disabled}
+                aria-label={`Remove ${fmt(value)}`}
+                onClick={() => onChange(values.filter((entry) => entry !== value))}
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            </li>
+          ))
+        )}
+      </ul>
+      <select
+        id={id}
+        aria-label={ariaLabelAdd}
+        value=""
+        disabled={disabled || available.length === 0}
+        onChange={(event) => {
+          const next = event.target.value;
+          if (!next) return;
+          onChange(uniqueValues([...values, next]));
+        }}
+      >
+        <option value="">
+          {available.length === 0 ? 'All values selected' : addPlaceholder}
+        </option>
+        {available.map((option) => (
+          <option key={option} value={option}>
+            {fmt(option)}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 function filterSummary(field: FilterField, filters: ColumnFilters): string {
   const summarizeValues = (filter: ValueFilter, formatter = (value: string) => value) => {
     if (filter.blank === 'include' && filter.values.length === 0) return 'blank';
@@ -965,28 +1042,21 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               <option value="exclude">Exclude selected</option>
             </select>
           </label>
-          <label>
-            {labelPrefix}Status filter value
-            <select
-              multiple
-              value={draft.values}
-              size={Math.min(TEMPORAL_STATUSES.length, 8)}
-              disabled={!listEnabled}
-              onChange={(event) => {
-                const next = Array.from(event.target.selectedOptions).map((option) =>
-                  option.value.toLowerCase(),
-                );
-                if (isMobile) applyMobileValues('status', next);
-                else updateDraftValues('status', next);
-              }}
-            >
-              {TEMPORAL_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {formatStatusLabel(status)}
-                </option>
-              ))}
-            </select>
-          </label>
+          <FilterPillMultiSelect
+            values={draft.values}
+            options={[...TEMPORAL_STATUSES]}
+            formatValue={formatStatusLabel}
+            disabled={!listEnabled}
+            ariaLabelAdd={`${labelPrefix}Status filter value`}
+            ariaLabelSelected={`${labelPrefix}Selected status filters`}
+            addPlaceholder="Add status"
+            emptyMessage="No status filters selected"
+            onChange={(next) => {
+              const normalized = next.map((value) => value.toLowerCase());
+              if (isMobile) applyMobileValues('status', normalized);
+              else updateDraftValues('status', normalized);
+            }}
+          />
           {renderFacetNotice('status')}
         </div>
       );
@@ -1061,26 +1131,20 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               <option value="exclude">Exclude selected</option>
             </select>
           </label>
-          <label>
-            {labelPrefix}Runtime filter value
-            <select
-              multiple
-              value={draft.values}
-              size={Math.min(Math.max(runtimeOptions.length, 1), 8)}
-              disabled={!listEnabled}
-              onChange={(event) => {
-                const next = Array.from(event.target.selectedOptions).map((option) => option.value);
-                if (isMobile) applyMobileValues('targetRuntime', next);
-                else updateDraftValues('targetRuntime', next);
-              }}
-            >
-              {runtimeOptions.map((runtime) => (
-                <option key={runtime} value={runtime}>
-                  {formatRuntimeLabel(runtime)}
-                </option>
-              ))}
-            </select>
-          </label>
+          <FilterPillMultiSelect
+            values={draft.values}
+            options={runtimeOptions}
+            formatValue={formatRuntimeLabel}
+            disabled={!listEnabled}
+            ariaLabelAdd={`${labelPrefix}Runtime filter value`}
+            ariaLabelSelected={`${labelPrefix}Selected runtime filters`}
+            addPlaceholder="Add runtime"
+            emptyMessage="No runtime filters selected"
+            onChange={(next) => {
+              if (isMobile) applyMobileValues('targetRuntime', next);
+              else updateDraftValues('targetRuntime', next);
+            }}
+          />
           {renderFacetNotice('targetRuntime')}
         </div>
       );
@@ -1106,26 +1170,19 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               <option value="exclude">Exclude selected</option>
             </select>
           </label>
-          <label>
-            {labelPrefix}Skill filter value
-            <select
-              multiple
-              value={draft.values}
-              size={Math.min(Math.max(skillOptions.length, 1), 8)}
-              disabled={!listEnabled}
-              onChange={(event) => {
-                const next = Array.from(event.target.selectedOptions).map((option) => option.value);
-                if (isMobile) applyMobileValues('targetSkill', next);
-                else updateDraftValues('targetSkill', next);
-              }}
-            >
-              {skillOptions.map((skill) => (
-                <option key={skill} value={skill}>
-                  {skill}
-                </option>
-              ))}
-            </select>
-          </label>
+          <FilterPillMultiSelect
+            values={draft.values}
+            options={skillOptions}
+            disabled={!listEnabled}
+            ariaLabelAdd={`${labelPrefix}Skill filter value`}
+            ariaLabelSelected={`${labelPrefix}Selected skill filters`}
+            addPlaceholder="Add skill"
+            emptyMessage="No skill filters selected"
+            onChange={(next) => {
+              if (isMobile) applyMobileValues('targetSkill', next);
+              else updateDraftValues('targetSkill', next);
+            }}
+          />
           {renderFacetNotice('targetSkill')}
         </div>
       );
