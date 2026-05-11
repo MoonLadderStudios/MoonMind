@@ -484,6 +484,35 @@ def test_apply_inherited_runtime_skips_execution_profile_ref_when_explicit_profi
     assert "executionProfileRef" not in task_payload["runtime"]
 
 
+def test_apply_inherited_runtime_skips_profile_backfill_when_child_sets_execution_profile_ref() -> None:
+    """Explicit child executionProfileRef counts as a profile selector.
+
+    Backfilling the parent's profileId on top of the child's
+    executionProfileRef would leave the merged runtime block carrying a
+    stale parent profileId — confusing for consumers that read it, even
+    though downstream selection prefers executionProfileRef.
+    """
+
+    payload: dict[str, Any] = {
+        "task": {"runtime": {"executionProfileRef": "child-explicit"}}
+    }
+    task_payload = payload["task"]
+    inherited = InheritedRuntime(
+        target_runtime="codex_cli",
+        profile_id="parent-default",
+        execution_profile_ref="parent-default",
+    )
+
+    apply_inherited_runtime_to_payload(
+        payload=payload,
+        task_payload=task_payload,
+        inherited=inherited,
+    )
+
+    assert task_payload["runtime"]["executionProfileRef"] == "child-explicit"
+    assert "profileId" not in task_payload["runtime"]
+
+
 def test_apply_inherited_runtime_skips_execution_profile_ref_for_top_level_provider_profile() -> None:
     payload: dict[str, Any] = {"providerProfile": "child-explicit", "task": {}}
     task_payload = payload["task"]

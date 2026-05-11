@@ -414,6 +414,7 @@ def apply_inherited_runtime_to_payload(
     explicit_profile_id = (
         _coerce_str(runtime_block.get("profileId"))
         or _coerce_str(runtime_block.get("providerProfile"))
+        or _coerce_str(runtime_block.get("executionProfileRef"))
         or _coerce_str(payload.get("profileId"))
         or _coerce_str(payload.get("providerProfile"))
         or _coerce_str(task_payload.get("profileId"))
