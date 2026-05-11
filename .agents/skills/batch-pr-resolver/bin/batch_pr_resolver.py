@@ -433,6 +433,33 @@ def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
         provider_profile=runtime_provider_profile,
     )
 
+def _task_workflow_id_from_env() -> str | None:
+    """Return the parent task workflow id when the skill is running inside one.
+
+    Presence of ``MOONMIND_TASK_WORKFLOW_ID`` indicates the managed-session
+    runtime exposed a task-scoped credential.  Callers use it to opt into
+    the server-side ``runtimeInheritance="caller"`` contract.
+    """
+
+    for env_key in (
+        "MOONMIND_TASK_WORKFLOW_ID",
+        "MOONMIND_WORKFLOW_ID",
+        "TEMPORAL_WORKFLOW_ID",
+    ):
+        value = _runtime_text(os.getenv(env_key))
+        if value:
+            return value
+    return None
+
+
+def _task_run_id_from_env() -> str | None:
+    for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
+        value = _runtime_text(os.getenv(env_key))
+        if value:
+            return value
+    return None
+
+
 def _build_queue_request(
     repo: str,
     pr_number: int | str,
@@ -445,6 +472,7 @@ def _build_queue_request(
     max_attempts: int,
     batch_scope: str | None = None,
     skill_version: str = "1.0",
+    inherit_runtime_from_caller: bool = False,
 ) -> dict[str, Any]:
     publish_mode = resolve_publish_mode_for_skill("pr-resolver", "none")
     runtime_payload: dict[str, Any] = {}
@@ -489,6 +517,14 @@ def _build_queue_request(
     )
     if idempotency_key:
         payload_dict["idempotencyKey"] = idempotency_key
+
+    # Server-side inheritance contract: when running inside a task with a
+    # task-scoped credential, opt into runtimeInheritance="caller" so the
+    # API copies the parent's effective runtime/provider profile.  The
+    # explicit targetRuntime/task.runtime fallback below is preserved for
+    # deployments that do not yet honour the inheritance contract.
+    if inherit_runtime_from_caller:
+        payload_dict["runtimeInheritance"] = "caller"
 
     if runtime.mode:
         payload_dict["targetRuntime"] = runtime.mode
@@ -598,6 +634,16 @@ async def _submit_jobs_via_http(
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if worker_token:
         headers["X-MoonMind-Worker-Token"] = worker_token
+    # Assert task identity so the executions API can grant the
+    # runtime-inheritance scopes when the request includes
+    # runtimeInheritance="caller".  The server verifies the workflow id
+    # against the OIDC user before honouring the claim.
+    task_workflow_id = _task_workflow_id_from_env()
+    if task_workflow_id:
+        headers["X-MoonMind-Task-Workflow-Id"] = task_workflow_id
+    task_run_id = _task_run_id_from_env()
+    if task_run_id:
+        headers["X-MoonMind-Task-Run-Identifier"] = task_run_id
     base = moonmind_url.rstrip("/")
     async with httpx.AsyncClient(
         base_url=base, timeout=30.0, headers=headers
@@ -693,6 +739,7 @@ def _build_request_records(
 
     open_prs_sorted = sorted(open_prs, key=_get_pr_number)
     batch_scope = _parent_run_scope(args.task_context_path)
+    inherit_from_caller = _task_workflow_id_from_env() is not None
 
     for pr in open_prs_sorted:
         number = pr.get("number")
@@ -712,6 +759,7 @@ def _build_request_records(
             max_attempts=args.max_attempts,
             batch_scope=batch_scope,
             skill_version=args.skill_version,
+            inherit_runtime_from_caller=inherit_from_caller,
         )
         queue_requests.append(
             JobSubmission(queue_request=queue_request, pr_number=number, branch=branch)

@@ -10321,7 +10321,11 @@ export interface operations {
     create_remediation_execution_api_executions__workflow_id__remediation_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-MoonMind-Task-Workflow-Id"?: string | null;
+                "X-MoonMind-Task-Run-Id"?: string | null;
+                "X-MoonMind-Task-Run-Identifier"?: string | null;
+            };
             path: {
                 workflow_id: string;
             };
@@ -10488,7 +10492,11 @@ export interface operations {
     create_execution_api_executions_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-MoonMind-Task-Workflow-Id"?: string | null;
+                "X-MoonMind-Task-Run-Id"?: string | null;
+                "X-MoonMind-Task-Run-Identifier"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
