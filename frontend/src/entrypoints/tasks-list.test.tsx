@@ -252,8 +252,13 @@ describe('Tasks List Entrypoint', () => {
     fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
 
     const runtimeFilter = screen.getByLabelText('Runtime filter value') as HTMLSelectElement;
-    expect(runtimeFilter.multiple).toBe(true);
-    expect(Array.from(runtimeFilter.options).map((option) => option.value)).toEqual([
+    expect(runtimeFilter.multiple).toBe(false);
+    // Skip the leading placeholder option that prompts the user to add a value.
+    expect(
+      Array.from(runtimeFilter.options)
+        .map((option) => option.value)
+        .filter((value) => value !== ''),
+    ).toEqual([
       'codex_cli',
       'codex',
       'claude_code',
@@ -550,10 +555,15 @@ describe('Tasks List Entrypoint', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
     const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
-    const options = Array.from(statusFilter.options).map((option) => option.value);
-    const optionLabels = Array.from(statusFilter.options).map((option) => option.textContent);
+    // Skip the leading placeholder option that prompts the user to add a value.
+    const options = Array.from(statusFilter.options)
+      .map((option) => option.value)
+      .filter((value) => value !== '');
+    const optionLabels = Array.from(statusFilter.options)
+      .filter((option) => option.value !== '')
+      .map((option) => option.textContent);
 
-    expect(statusFilter.multiple).toBe(true);
+    expect(statusFilter.multiple).toBe(false);
     expect(options).toEqual([
       'scheduled',
       'initializing',
@@ -596,6 +606,34 @@ describe('Tasks List Entrypoint', () => {
     expect(lastExecutionListUrl()).toBe(
       '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed',
     );
+  });
+
+  it('builds status filters as removable pills', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
+
+    fireEvent.change(statusFilter, { target: { value: 'completed' } });
+    fireEvent.change(statusFilter, { target: { value: 'failed' } });
+
+    const pillList = screen.getByLabelText('Selected status filters');
+    expect(pillList.textContent).toContain('completed');
+    expect(pillList.textContent).toContain('failed');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove completed' }));
+    expect(pillList.textContent).not.toContain('completed');
+    expect(pillList.textContent).toContain('failed');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=failed',
+      );
+    });
   });
 
   it('stages status changes until Apply and discards them on cancel, Escape, or outside click', async () => {
@@ -722,10 +760,8 @@ describe('Tasks List Entrypoint', () => {
     fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
 
     const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
-    for (const option of Array.from(statusFilter.options)) {
-      option.selected = option.value === 'completed' || option.value === 'failed';
-    }
-    fireEvent.change(statusFilter);
+    fireEvent.change(statusFilter, { target: { value: 'completed' } });
+    fireEvent.change(statusFilter, { target: { value: 'failed' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
 
     await waitFor(() => {
@@ -954,7 +990,9 @@ describe('Tasks List Entrypoint', () => {
     expect(pageSizeLabel?.classList.contains('queue-page-size-selector')).toBe(true);
     expect(pageSizeLabel?.classList.contains('queue-inline-filter')).toBe(false);
     expect(tableWrapper).toBeTruthy();
-    expect(getComputedStyle(dataSlab as HTMLElement).overflow).toBe('hidden');
+    // The slab intentionally allows overflow so the column filter popover
+    // can extend below the table without being clipped.
+    expect(getComputedStyle(dataSlab as HTMLElement).overflow).toBe('visible');
     expect(getComputedStyle(tableWrapper as HTMLElement).overflowX).toBe('auto');
     expect(getComputedStyle(tableWrapper as HTMLElement).overflowY).toBe('visible');
     expect(getComputedStyle(tableWrapper as HTMLElement).scrollPaddingTop).not.toBe('auto');
@@ -1000,7 +1038,9 @@ describe('Tasks List Entrypoint', () => {
 
     const dataSlabStyles = getComputedStyle(dataSlab);
     expect(dataSlabStyles.gap).toBe('0px');
-    expect(dataSlabStyles.overflow).toBe('hidden');
+    // The slab intentionally allows overflow so the column filter popover
+    // can extend below the table without being clipped by the data slab.
+    expect(dataSlabStyles.overflow).toBe('visible');
     expect(dataSlabStyles.paddingTop).toBe('0px');
 
     const tableWrapperStyles = getComputedStyle(tableWrapper as HTMLElement);

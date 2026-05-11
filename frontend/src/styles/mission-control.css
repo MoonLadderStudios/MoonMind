@@ -658,7 +658,7 @@ h1 {
   position: absolute;
   top: calc(100% + 0.35rem);
   left: 0;
-  z-index: 8;
+  z-index: 80;
   width: min(22rem, calc(100vw - 2rem));
   padding: 0.85rem;
   border: 1px solid rgb(var(--mm-border) / 0.84);
@@ -722,6 +722,82 @@ h1 {
   margin-top: 0.85rem;
   padding-top: 0.75rem;
   border-top: 1px solid rgb(var(--mm-border) / 0.7);
+}
+
+.task-list-pill-multiselect {
+  display: grid;
+  gap: 0.45rem;
+  width: 100%;
+}
+
+.task-list-pill-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  min-height: 2.1rem;
+  border: 1px dashed rgb(var(--mm-border) / 0.7);
+  border-radius: 0.4rem;
+  background: rgb(var(--mm-panel) / 0.6);
+}
+
+.task-list-pill-list.is-empty {
+  align-items: center;
+  border-style: dashed;
+}
+
+.task-list-pill-empty {
+  margin: 0;
+  padding: 0 0.35rem;
+  opacity: 0.7;
+}
+
+.task-list-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.25rem 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-accent) / 0.18);
+  border: 1px solid rgb(var(--mm-accent) / 0.45);
+  font-size: 0.78rem;
+  line-height: 1.25;
+  color: rgb(var(--mm-ink));
+}
+
+.task-list-pill-label {
+  white-space: nowrap;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-list-pill-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.task-list-pill-remove:hover:not(:disabled),
+.task-list-pill-remove:focus-visible {
+  background: rgb(var(--mm-accent) / 0.35);
+}
+
+.task-list-pill-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .stack {
@@ -1053,7 +1129,7 @@ tbody tr:hover {
 
 .task-list-data-slab {
   gap: 0;
-  overflow: hidden;
+  overflow: visible;
   padding: 0;
   border-color: rgb(var(--mm-border) / 0.45);
   background: rgb(var(--mm-panel) / 0.96);
@@ -1093,6 +1169,8 @@ tbody tr:hover {
 }
 
 .task-list-data-slab .task-list-results-footer {
+  position: relative;
+  z-index: 1;
   border-top: 1px solid rgb(var(--mm-border) / 0.28);
   border-bottom: 0;
 }
@@ -1152,6 +1230,8 @@ tbody tr:hover {
 }
 
 .task-list-data-slab .queue-table-wrapper {
+  position: relative;
+  z-index: 5;
   border: 0;
   border-radius: 0;
   background: transparent;

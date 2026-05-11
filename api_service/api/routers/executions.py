@@ -206,6 +206,24 @@ _TEMPORAL_STATUS_VALUES = (
     "failed",
     "canceled",
 )
+_NON_TERMINAL_MM_STATES = frozenset(
+    {
+        "scheduled",
+        "initializing",
+        "waiting_on_dependencies",
+        "planning",
+        "awaiting_slot",
+        "executing",
+        "proposals",
+        "awaiting_external",
+        "finalizing",
+    }
+)
+_TERMINAL_EXECUTION_STATUSES_BY_MM_STATE = {
+    "completed": ("Completed",),
+    "failed": ("Failed", "Terminated", "TimedOut"),
+    "canceled": ("Canceled",),
+}
 
 
 class RemediationApprovalStateModel(BaseModel):
@@ -501,6 +519,93 @@ def _any_temporal_query(attr: str, values: list[str]) -> str | None:
     ) + ")"
 
 
+def _state_include_clause(values: list[str]) -> str | None:
+    """Build a Temporal visibility clause matching the effective workflow state.
+
+    Filtering only on the ``mm_state`` search attribute is unsafe for terminal
+    states: when a workflow is canceled, terminated, or times out without
+    re-entering the workflow code, ``mm_state`` is left at whatever value the
+    workflow last published (often a non-terminal one like
+    ``waiting_on_dependencies``). The executions list serializer then derives
+    the displayed state from the Temporal ``ExecutionStatus``, which means a
+    closed workflow can leak into "AWAITING TASK" or any other non-terminal
+    filter result. Anchor non-terminal states to ``ExecutionStatus="Running"``
+    and map terminal states to their Temporal ``ExecutionStatus`` so the
+    server-side filter agrees with the rendered status.
+    """
+    if not values:
+        return None
+    deduped = list(dict.fromkeys(v for v in values if v))
+    non_terminal = [value for value in deduped if value in _NON_TERMINAL_MM_STATES]
+    terminal_statuses = list(dict.fromkeys(
+        status
+        for value in deduped
+        for status in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE.get(value, ())
+    ))
+    unknown = [
+        value
+        for value in deduped
+        if value not in _NON_TERMINAL_MM_STATES
+        and value not in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE
+    ]
+    parts: list[str] = []
+    mm_clause = _any_temporal_query("mm_state", non_terminal)
+    if mm_clause is not None:
+        parts.append(f'({mm_clause} AND ExecutionStatus="Running")')
+    status_clause = _any_temporal_query("ExecutionStatus", terminal_statuses)
+    if status_clause is not None:
+        parts.append(status_clause)
+    unknown_clause = _any_temporal_query("mm_state", unknown)
+    if unknown_clause is not None:
+        parts.append(unknown_clause)
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return "(" + " OR ".join(parts) + ")"
+
+
+def _append_state_temporal_filter(
+    query_parts: list[str],
+    *,
+    exact: str | None = None,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> None:
+    exact_value = str(exact or "").strip()
+    if exact_value:
+        if len(exact_value) > _EXECUTION_FILTER_VALUE_MAX_LENGTH:
+            raise TemporalExecutionValidationError(
+                f"mm_state exact value must be {_EXECUTION_FILTER_VALUE_MAX_LENGTH} characters or fewer."
+            )
+        clause = _state_include_clause([exact_value])
+        if clause is not None:
+            query_parts.append(clause)
+        return
+    include_clause = _state_include_clause(include or [])
+    if include_clause is not None:
+        query_parts.append(include_clause)
+    for value in exclude or []:
+        normalized = str(value or "").strip()
+        if not normalized:
+            continue
+        if normalized in _NON_TERMINAL_MM_STATES:
+            escaped = _escape_temporal_value(normalized)
+            query_parts.append(
+                f'(mm_state!="{escaped}" OR ExecutionStatus!="Running")'
+            )
+            continue
+        terminal_statuses = _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE.get(
+            normalized, ()
+        )
+        if terminal_statuses:
+            for status_value in terminal_statuses:
+                escaped = _escape_temporal_value(status_value)
+                query_parts.append(f'ExecutionStatus!="{escaped}"')
+            continue
+        query_parts.append(f'mm_state!="{_escape_temporal_value(normalized)}"')
+
+
 def _append_exact_or_multi_temporal_filter(
     query_parts: list[str],
     attr: str,
@@ -644,11 +749,12 @@ def _build_temporal_execution_query(
         )
     elif workflow_type and not scope_query:
         query_parts.append(f'WorkflowType="{_escape_temporal_value(workflow_type)}"')
+    legacy_state_exact = None
     if state and not excluded("state") and not (state_in_values or state_not_in_values):
-        query_parts.append(f'mm_state="{_escape_temporal_value(state)}"')
-    _append_exact_or_multi_temporal_filter(
+        legacy_state_exact = state
+    _append_state_temporal_filter(
         query_parts,
-        "mm_state",
+        exact=legacy_state_exact,
         include=state_in_values,
         exclude=state_not_in_values,
     )
