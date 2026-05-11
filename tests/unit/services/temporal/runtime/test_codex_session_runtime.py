@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 import sqlite3
 from pathlib import Path
@@ -759,19 +760,24 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
     )
     assert "lastAssistantText" not in handle.metadata
 
-def _write_skill_outcome(request: LaunchCodexManagedSessionRequest, payload: object) -> None:
-    spool = Path(request.artifact_spool_path)
-    spool.mkdir(parents=True, exist_ok=True)
-    (spool / "skill_outcome.json").write_text(
-        payload if isinstance(payload, str) else json.dumps(payload),
-        encoding="utf-8",
-    )
+def _spool_skill_outcome_path(request: LaunchCodexManagedSessionRequest) -> Path:
+    return Path(request.artifact_spool_path) / "skill_outcome.json"
 
 def test_runtime_no_op_signal_upgrades_empty_turn_to_completed(
     tmp_path: Path,
 ) -> None:
-    script = write_fake_app_server(tmp_path, assistant_text="")
     request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        skill_outcome_path=_spool_skill_outcome_path(request),
+        skill_outcome_payload={
+            "schema_version": 1,
+            "status": "no_op",
+            "reason": "no_open_prs_matched",
+            "evidence": {"requested": 0},
+        },
+    )
     runtime = CodexManagedSessionRuntime(
         workspace_path=request.workspace_path,
         session_workspace_path=request.session_workspace_path,
@@ -783,15 +789,6 @@ def test_runtime_no_op_signal_upgrades_empty_turn_to_completed(
         app_server_command=("python3", str(script)),
     )
     runtime.launch_session(request)
-    _write_skill_outcome(
-        request,
-        {
-            "schema_version": 1,
-            "status": "no_op",
-            "reason": "no_open_prs_matched",
-            "evidence": {"requested": 0},
-        },
-    )
 
     response = runtime.send_turn(
         SendCodexManagedSessionTurnRequest(
@@ -823,8 +820,17 @@ def test_runtime_no_op_signal_upgrades_empty_turn_to_completed(
 def test_runtime_no_op_signal_ignored_when_assistant_text_present(
     tmp_path: Path,
 ) -> None:
-    script = write_fake_app_server(tmp_path, assistant_text="all done")
     request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="all done",
+        skill_outcome_path=_spool_skill_outcome_path(request),
+        skill_outcome_payload={
+            "schema_version": 1,
+            "status": "no_op",
+            "reason": "ignored",
+        },
+    )
     runtime = CodexManagedSessionRuntime(
         workspace_path=request.workspace_path,
         session_workspace_path=request.session_workspace_path,
@@ -836,10 +842,6 @@ def test_runtime_no_op_signal_ignored_when_assistant_text_present(
         app_server_command=("python3", str(script)),
     )
     runtime.launch_session(request)
-    _write_skill_outcome(
-        request,
-        {"schema_version": 1, "status": "no_op", "reason": "ignored"},
-    )
 
     response = runtime.send_turn(
         SendCodexManagedSessionTurnRequest(
@@ -857,8 +859,17 @@ def test_runtime_no_op_signal_ignored_when_assistant_text_present(
 def test_runtime_no_op_signal_ignored_when_schema_version_wrong(
     tmp_path: Path,
 ) -> None:
-    script = write_fake_app_server(tmp_path, assistant_text="")
     request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        skill_outcome_path=_spool_skill_outcome_path(request),
+        skill_outcome_payload={
+            "schema_version": 99,
+            "status": "no_op",
+            "reason": "wrong version",
+        },
+    )
     runtime = CodexManagedSessionRuntime(
         workspace_path=request.workspace_path,
         session_workspace_path=request.session_workspace_path,
@@ -870,10 +881,6 @@ def test_runtime_no_op_signal_ignored_when_schema_version_wrong(
         app_server_command=("python3", str(script)),
     )
     runtime.launch_session(request)
-    _write_skill_outcome(
-        request,
-        {"schema_version": 99, "status": "no_op", "reason": "wrong version"},
-    )
 
     response = runtime.send_turn(
         SendCodexManagedSessionTurnRequest(
@@ -891,8 +898,13 @@ def test_runtime_no_op_signal_ignored_when_schema_version_wrong(
 def test_runtime_no_op_signal_ignored_when_malformed_json(
     tmp_path: Path,
 ) -> None:
-    script = write_fake_app_server(tmp_path, assistant_text="")
     request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        skill_outcome_path=_spool_skill_outcome_path(request),
+        skill_outcome_payload="{not valid json",
+    )
     runtime = CodexManagedSessionRuntime(
         workspace_path=request.workspace_path,
         session_workspace_path=request.session_workspace_path,
@@ -904,7 +916,6 @@ def test_runtime_no_op_signal_ignored_when_malformed_json(
         app_server_command=("python3", str(script)),
     )
     runtime.launch_session(request)
-    _write_skill_outcome(request, "{not valid json")
 
     response = runtime.send_turn(
         SendCodexManagedSessionTurnRequest(
@@ -922,8 +933,17 @@ def test_runtime_no_op_signal_ignored_when_malformed_json(
 def test_runtime_no_op_signal_ignored_when_status_not_no_op(
     tmp_path: Path,
 ) -> None:
-    script = write_fake_app_server(tmp_path, assistant_text="")
     request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        skill_outcome_path=_spool_skill_outcome_path(request),
+        skill_outcome_payload={
+            "schema_version": 1,
+            "status": "success",
+            "reason": "ignored",
+        },
+    )
     runtime = CodexManagedSessionRuntime(
         workspace_path=request.workspace_path,
         session_workspace_path=request.session_workspace_path,
@@ -935,10 +955,6 @@ def test_runtime_no_op_signal_ignored_when_status_not_no_op(
         app_server_command=("python3", str(script)),
     )
     runtime.launch_session(request)
-    _write_skill_outcome(
-        request,
-        {"schema_version": 1, "status": "success", "reason": "ignored"},
-    )
 
     response = runtime.send_turn(
         SendCodexManagedSessionTurnRequest(
@@ -952,6 +968,61 @@ def test_runtime_no_op_signal_ignored_when_status_not_no_op(
 
     assert response.status == "failed"
     assert response.metadata["failureClass"] == "transient"
+
+def test_runtime_stale_no_op_marker_from_prior_turn_does_not_upgrade_empty_turn(
+    tmp_path: Path,
+) -> None:
+    """A skill_outcome.json left in the spool by an earlier turn MUST NOT
+    upgrade a later empty turn to ``completed``. The runtime resets the
+    marker at every send_turn so cross-turn pollution cannot mask a real
+    transient failure."""
+    request = launch_request(tmp_path)
+    # Stale marker present from a prior turn (no skill writes during this run).
+    stale_path = _spool_skill_outcome_path(request)
+    stale_path.parent.mkdir(parents=True, exist_ok=True)
+    stale_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "no_op",
+                "reason": "stale_from_prior_turn",
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Make the stale marker easy to detect by date even on coarse filesystems:
+    # backdate it well outside the freshness skew window.
+    stale_mtime = stale_path.stat().st_mtime - 600.0
+    os.utime(stale_path, (stale_mtime, stale_mtime))
+
+    script = write_fake_app_server(tmp_path, assistant_text="")
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "transient"
+    assert "disposition" not in response.metadata
+    # send_turn cleared the stale marker before the turn body executed.
+    assert not stale_path.exists()
 
 def test_runtime_send_turn_fails_empty_task_complete_with_structured_error(
     tmp_path: Path,

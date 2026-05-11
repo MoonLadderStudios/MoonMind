@@ -86,6 +86,7 @@ class _TurnTerminalOutcome:
 
 _SKILL_OUTCOME_FILENAME = "skill_outcome.json"
 _SKILL_OUTCOME_SCHEMA_VERSION = 1
+_SKILL_OUTCOME_FRESHNESS_SKEW_SECONDS = 2.0
 
 @dataclass
 class _RolloutLiveMirror:
@@ -1178,22 +1179,57 @@ class CodexManagedSessionRuntime:
                     return recovered
         return None
 
-    def _read_skill_outcome(self) -> dict[str, Any] | None:
-        """Read the optional skill-declared outcome file from the spool.
+    def _reset_skill_outcome(self) -> None:
+        """Remove any stale skill-outcome marker before a new turn begins.
 
-        Returns the parsed object only when it is a valid no-op declaration:
-        single JSON object, ``schema_version == 1``, ``status == "no_op"``.
-        Any other shape (missing file, malformed JSON, wrong version, other
-        status) returns ``None`` so the caller falls back to default
-        classification. A malformed declaration cannot upgrade a failure to
-        a success.
+        The marker is scoped to a single ``send_turn``: only a marker written
+        by the skill during the current turn may upgrade an empty turn to a
+        no-op success. A leftover file from an earlier turn in the same
+        session (or from any prior session that reused this spool) would
+        otherwise mask a real transient empty-output failure.
         """
         outcome_path = self._artifact_spool_path / _SKILL_OUTCOME_FILENAME
         try:
-            raw = outcome_path.read_text(encoding="utf-8")
+            outcome_path.unlink()
         except FileNotFoundError:
-            return None
+            return
         except OSError:
+            return
+
+    def _read_skill_outcome(
+        self,
+        *,
+        turn_started_at: float | None,
+    ) -> dict[str, Any] | None:
+        """Read the optional skill-declared outcome file from the spool.
+
+        Returns the parsed object only when it is a valid no-op declaration
+        produced during the current turn: single JSON object,
+        ``schema_version == 1``, ``status == "no_op"``, and file ``mtime``
+        at or after ``turn_started_at`` (minus a small skew tolerance for
+        filesystem granularity). ``send_turn`` removes any pre-existing
+        marker at turn start; this freshness check is defense in depth.
+
+        Any other shape (missing file, malformed JSON, wrong version, other
+        status, stale mtime, or no turn-start timestamp) returns ``None`` so
+        the caller falls back to default classification. A malformed or
+        stale declaration cannot upgrade a failure to a success.
+        """
+        if turn_started_at is None:
+            return None
+        outcome_path = self._artifact_spool_path / _SKILL_OUTCOME_FILENAME
+        try:
+            stat_result = outcome_path.stat()
+        except (FileNotFoundError, OSError):
+            return None
+        freshness_floor = (
+            float(turn_started_at) - _SKILL_OUTCOME_FRESHNESS_SKEW_SECONDS
+        )
+        if stat_result.st_mtime < freshness_floor:
+            return None
+        try:
+            raw = outcome_path.read_text(encoding="utf-8")
+        except (FileNotFoundError, OSError):
             return None
         try:
             payload = json.loads(raw)
@@ -1212,6 +1248,7 @@ class CodexManagedSessionRuntime:
         scan: _RolloutTurnScan,
         *,
         vendor_turn_id: str,
+        turn_started_at: float | None,
     ) -> _TurnTerminalOutcome | None:
         if scan.error_text:
             return _TurnTerminalOutcome(
@@ -1229,7 +1266,7 @@ class CodexManagedSessionRuntime:
                     error_text=recovered_error,
                     failure_class="permanent",
                 )
-            no_op = self._read_skill_outcome()
+            no_op = self._read_skill_outcome(turn_started_at=turn_started_at)
             if no_op is not None:
                 return _TurnTerminalOutcome(
                     status="completed",
@@ -1277,7 +1314,9 @@ class CodexManagedSessionRuntime:
                     error_text=recovered_error,
                     failure_class="permanent",
                 )
-            no_op = self._read_skill_outcome()
+            no_op = self._read_skill_outcome(
+                turn_started_at=state.last_control_at,
+            )
             if no_op is not None:
                 return _TurnTerminalOutcome(
                     status="completed",
@@ -1289,7 +1328,7 @@ class CodexManagedSessionRuntime:
                 error_text="codex app-server task_complete produced no assistant output",
                 failure_class="transient",
             )
-        no_op = self._read_skill_outcome()
+        no_op = self._read_skill_outcome(turn_started_at=state.last_control_at)
         if no_op is not None:
             return _TurnTerminalOutcome(
                 status="completed",
@@ -1406,6 +1445,7 @@ class CodexManagedSessionRuntime:
         rollout_outcome = self._rollout_terminal_outcome_from_scan(
             rollout_scan,
             vendor_turn_id=vendor_turn_id,
+            turn_started_at=state.last_control_at,
         )
         if rollout_outcome is not None:
             return rollout_outcome
@@ -1800,6 +1840,9 @@ class CodexManagedSessionRuntime:
         state.last_control_action = "send_turn"
         state.last_control_at = time.time()
         rollout_mirror.turn_started_at = state.last_control_at
+        # Clear any stale skill-outcome marker so only a file written during
+        # this turn can upgrade an empty output to a no-op success.
+        self._reset_skill_outcome()
         self._save_state(state)
         self._append_spool("stdout", f"turn started: {vendor_turn_id}\n")
         try:
