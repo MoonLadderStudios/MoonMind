@@ -157,7 +157,16 @@ async def test_caller_inheritance_copies_parent_runtime() -> None:
 
 
 @pytest.mark.asyncio
-async def test_explicit_child_runtime_short_circuits_inheritance() -> None:
+async def test_directive_runs_inheritance_alongside_explicit_runtime_fields() -> None:
+    """An explicit targetRuntime must not block inheritance for other fields.
+
+    When a caller sends ``runtimeInheritance="caller"`` together with a
+    partial explicit runtime (e.g. ``targetRuntime`` only), inheritance still
+    runs so that missing fields like ``model`` and ``effort`` are copied
+    from the parent.  ``apply_inherited_runtime_to_payload`` preserves the
+    caller's explicit fields.
+    """
+
     service = _FakeService({"mm:parent": _parent_record()})
     principal = ExecutionPrincipal(
         user_id="user-1",
@@ -177,7 +186,12 @@ async def test_explicit_child_runtime_short_circuits_inheritance() -> None:
         service=service,
     )
 
-    assert inherited is None
+    assert inherited is not None
+    # Parent's model/effort/profile are surfaced regardless of the
+    # caller's explicit targetRuntime override.
+    assert inherited.model == "gpt-5.4"
+    assert inherited.effort == "high"
+    assert inherited.execution_profile_ref == "codex_default"
 
 
 @pytest.mark.asyncio
@@ -411,3 +425,61 @@ def test_apply_inherited_runtime_does_not_overwrite_existing_runtime_fields() ->
     # New fields are filled in.
     assert task_payload["runtime"]["effort"] == "high"
     assert task_payload["runtime"]["executionProfileRef"] == "codex_default"
+
+
+def test_apply_inherited_runtime_preserves_explicit_target_runtime() -> None:
+    """An explicit ``targetRuntime`` must survive inheritance."""
+
+    payload: dict[str, Any] = {
+        "targetRuntime": "claude_code",
+        "task": {"runtime": {"mode": "claude_code"}},
+    }
+    task_payload = payload["task"]
+    inherited = InheritedRuntime(
+        target_runtime="codex_cli",
+        model="gpt-5.4",
+        effort="high",
+        execution_profile_ref="codex_default",
+    )
+
+    apply_inherited_runtime_to_payload(
+        payload=payload,
+        task_payload=task_payload,
+        inherited=inherited,
+    )
+
+    assert payload["targetRuntime"] == "claude_code"
+    assert task_payload["runtime"]["mode"] == "claude_code"
+    # The other gaps still fill in from the parent.
+    assert task_payload["runtime"]["model"] == "gpt-5.4"
+    assert task_payload["runtime"]["effort"] == "high"
+    assert task_payload["runtime"]["executionProfileRef"] == "codex_default"
+
+
+def test_apply_inherited_runtime_fills_model_when_only_runtime_mode_is_explicit() -> None:
+    """Regression: parent sonnet-4-6 must carry over when child sets only mode.
+
+    Mirrors the batch-pr-resolver scenario where the request stamps
+    ``targetRuntime`` / ``task.runtime.mode`` as a fallback but leaves
+    ``model`` empty because the parent's task_context.json lacked it.
+    Inheritance should still fill in the missing model from the parent's
+    resolved parameters.
+    """
+
+    payload: dict[str, Any] = {
+        "targetRuntime": "claude_code",
+        "task": {"runtime": {"mode": "claude_code"}},
+    }
+    task_payload = payload["task"]
+    inherited = InheritedRuntime(
+        target_runtime="claude_code",
+        model="sonnet-4-6",
+    )
+
+    apply_inherited_runtime_to_payload(
+        payload=payload,
+        task_payload=task_payload,
+        inherited=inherited,
+    )
+
+    assert task_payload["runtime"]["model"] == "sonnet-4-6"
