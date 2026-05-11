@@ -104,6 +104,15 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
 from moonmind.workflows.tasks.model_resolver import resolve_effective_model
 from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.tasks.runtime_inheritance import (
+    RuntimeInheritanceError,
+    apply_inherited_runtime_to_payload,
+    resolve_child_runtime_inheritance,
+)
+from api_service.api.execution_principal import (
+    execution_principal_dependency,
+    resolve_execution_principal,
+)
 from moonmind.workflows.tasks.task_contract import (
     TaskContractError,
     TaskInputAttachmentRef,
@@ -4646,6 +4655,7 @@ async def _create_execution_from_task_request(
     service: TemporalExecutionService,
     user: User,
     session: Any = None,
+    principal_context: dict[str, Any] | None = None,
 ) -> ExecutionModel | ScheduleCreatedResponse:
     if str(request.type).strip().lower() != "task":
         raise _invalid_task_request(
@@ -4657,6 +4667,37 @@ async def _create_execution_from_task_request(
     if not task_payload:
         raise _invalid_task_request(
             "Task-shaped Temporal submit requests require payload.task."
+        )
+
+    # Resolve child-task runtime inheritance before downstream normalization
+    # consumes targetRuntime / task.runtime fields.  When inheritance applies,
+    # we stamp the parent's effective runtime onto the request payload so the
+    # rest of the create path sees it exactly as it would an explicit request.
+    principal = await resolve_execution_principal(
+        user=user,
+        service=service,
+        request=(principal_context or {}).get("request"),
+        workflow_id_header=(principal_context or {}).get("workflow_id_header"),
+        run_id_header=(principal_context or {}).get("run_id_header"),
+        task_run_id_header=(principal_context or {}).get("task_run_id_header"),
+    )
+    try:
+        inherited = await resolve_child_runtime_inheritance(
+            request_payload=payload,
+            task_payload=task_payload,
+            principal=principal,
+            service=service,
+        )
+    except RuntimeInheritanceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    if inherited is not None:
+        apply_inherited_runtime_to_payload(
+            payload=payload,
+            task_payload=task_payload,
+            inherited=inherited,
         )
 
     # --- Schedule routing ---
@@ -5325,6 +5366,7 @@ async def create_remediation_execution(
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
+    principal_context: dict[str, Any] = Depends(execution_principal_dependency),
 ) -> ExecutionModel | ScheduleCreatedResponse:
     body = payload if isinstance(payload, dict) else {}
     task_payload = (
@@ -5401,6 +5443,7 @@ async def create_remediation_execution(
         service=service,
         user=user,
         session=session,
+        principal_context=principal_context,
     )
 
 def _bounded_string_list(value: Any) -> list[str] | None:
@@ -5573,6 +5616,7 @@ async def create_execution(
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
+    principal_context: dict[str, Any] = Depends(execution_principal_dependency),
 ) -> ExecutionModel | ScheduleCreatedResponse:
     from moonmind.config.settings import settings
 
@@ -5595,6 +5639,7 @@ async def create_execution(
                 service=service,
                 user=user,
                 session=session,
+                principal_context=principal_context,
             )
 
         request = CreateExecutionRequest.model_validate(payload)

@@ -780,3 +780,147 @@ def test_build_queue_request_skill_version_passthrough() -> None:
     req = _build_request(module, skill_version="2.3")
     skill = req["payload"]["task"]["skill"]
     assert skill.get("version") == "2.3"
+
+
+# ---------------------------------------------------------------------------
+# Runtime inheritance opt-in
+# ---------------------------------------------------------------------------
+
+
+def test_build_queue_request_omits_runtime_inheritance_by_default() -> None:
+    """Without a task-scoped credential, no inheritance flag is emitted."""
+    module = _load_module()
+    req = _build_request(module)
+    assert "runtimeInheritance" not in req["payload"]
+    # Explicit stamping fallback must still be present so deployments that do
+    # not yet honour the inheritance contract continue to receive runtime
+    # information.
+    assert req["payload"]["targetRuntime"] == "codex"
+    assert req["payload"]["task"]["runtime"]["mode"] == "codex"
+
+
+def test_build_queue_request_emits_runtime_inheritance_caller_when_opted_in() -> None:
+    """When inherit_runtime_from_caller=True, request opts into the contract."""
+    module = _load_module()
+    req = _build_request(module, inherit_runtime_from_caller=True)
+    payload = req["payload"]
+    assert payload["runtimeInheritance"] == "caller"
+    # The explicit stamping fallback is still emitted for deployments that
+    # do not yet support task-principal inheritance.
+    assert payload["targetRuntime"] == "codex"
+    assert payload["task"]["runtime"]["mode"] == "codex"
+
+
+def test_task_workflow_id_from_env_reads_canonical_env_var(monkeypatch: Any) -> None:
+    module = _load_module()
+    task_workflow_id_from_env = module["_task_workflow_id_from_env"]
+
+    for env_key in (
+        "MOONMIND_TASK_WORKFLOW_ID",
+        "MOONMIND_WORKFLOW_ID",
+        "TEMPORAL_WORKFLOW_ID",
+    ):
+        monkeypatch.delenv(env_key, raising=False)
+
+    assert task_workflow_id_from_env() is None
+
+    monkeypatch.setenv("MOONMIND_TASK_WORKFLOW_ID", " mm:parent ")
+    assert task_workflow_id_from_env() == "mm:parent"
+
+
+def test_submit_jobs_adds_task_workflow_header_when_in_managed_session(
+    monkeypatch: Any,
+) -> None:
+    """HTTP submission propagates X-MoonMind-Task-Workflow-Id when set."""
+    module = _load_module()
+    submit_jobs_via_http = module["_submit_jobs_via_http"]
+
+    monkeypatch.setenv("MOONMIND_TASK_WORKFLOW_ID", "mm:parent-task")
+    monkeypatch.setenv("MOONMIND_TASK_RUN_ID", "task-run-9")
+
+    captured_headers: dict[str, dict[str, str]] = {}
+    fake_response = MagicMock()
+    fake_response.raise_for_status = MagicMock()
+    fake_response.json = MagicMock(
+        return_value={"workflowId": "mm:wf-9", "status": "queued"}
+    )
+
+    import httpx
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            captured_headers["seen"] = dict(kwargs.get("headers") or {})
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+        async def post(self, _path: str, **_kwargs: Any) -> Any:
+            return fake_response
+
+    with patch.object(httpx, "AsyncClient", FakeAsyncClient):
+        submission = _make_submission(module)
+        asyncio.run(
+            submit_jobs_via_http(
+                [submission],
+                moonmind_url="http://api:8000",
+                worker_token=None,
+            )
+        )
+
+    headers = captured_headers["seen"]
+    assert headers.get("X-MoonMind-Task-Workflow-Id") == "mm:parent-task"
+    assert headers.get("X-MoonMind-Task-Run-Id") == "task-run-9"
+
+
+def test_submit_jobs_omits_task_headers_without_env(monkeypatch: Any) -> None:
+    module = _load_module()
+    submit_jobs_via_http = module["_submit_jobs_via_http"]
+
+    for env_key in (
+        "MOONMIND_TASK_WORKFLOW_ID",
+        "MOONMIND_WORKFLOW_ID",
+        "TEMPORAL_WORKFLOW_ID",
+        "MOONMIND_TASK_RUN_ID",
+        "MOONMIND_RUN_ID",
+        "TASK_RUN_ID",
+    ):
+        monkeypatch.delenv(env_key, raising=False)
+
+    captured_headers: dict[str, dict[str, str]] = {}
+    fake_response = MagicMock()
+    fake_response.raise_for_status = MagicMock()
+    fake_response.json = MagicMock(
+        return_value={"workflowId": "mm:wf-9", "status": "queued"}
+    )
+
+    import httpx
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            captured_headers["seen"] = dict(kwargs.get("headers") or {})
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+        async def post(self, _path: str, **_kwargs: Any) -> Any:
+            return fake_response
+
+    with patch.object(httpx, "AsyncClient", FakeAsyncClient):
+        submission = _make_submission(module)
+        asyncio.run(
+            submit_jobs_via_http(
+                [submission],
+                moonmind_url="http://api:8000",
+                worker_token=None,
+            )
+        )
+
+    headers = captured_headers["seen"]
+    assert "X-MoonMind-Task-Workflow-Id" not in headers
+    assert "X-MoonMind-Task-Run-Id" not in headers
