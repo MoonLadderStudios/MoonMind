@@ -61,12 +61,12 @@
 - **FR-002**: System MUST discover MM-640's currently available workflow transitions before performing any mutation.
 - **FR-003**: System MUST select a transition whose target workflow status name equals `In Progress` (case-insensitive, trimmed) and whose identity among the available transitions is unambiguous.
 - **FR-004**: System MUST execute the selected transition exclusively through MoonMind's trusted Jira tool surface, never through ad-hoc HTTP calls or raw Jira credentials in the agent runtime.
-- **FR-005**: System MUST verify the post-transition status by re-reading MM-640 and report the verified final status.
+- **FR-005**: System MUST verify the post-transition status by re-reading MM-640, report the verified final status, and treat any mismatch with the target status as a failure.
 - **FR-006**: System MUST treat the case where MM-640 is already in workflow status `In Progress` as a successful no-op, reporting the current status without invoking a redundant transition.
 - **FR-007**: System MUST stop with an explicit, named error and perform no mutation when (a) no available transition leads to a target status named `In Progress`, (b) more than one available transition leads to a target status named `In Progress`, (c) MM-640 cannot be located by the configured Jira credentials, or (d) Jira reports required transition fields whose values were not supplied.
 - **FR-008**: System MUST NOT modify any field on MM-640 other than its workflow status, and MUST NOT modify any Jira issue other than MM-640.
 - **FR-009**: System MUST NOT emit Jira credentials, API tokens, auth headers, cookies, or full environment dumps in any user-visible output, log, or artifact, including failure reports.
-- **FR-010**: System MUST report, on completion, the issue key, the prior status, the chosen transition (if any), the action taken (transitioned, no-op, or stopped with reason), and the verified final status.
+- **FR-010**: System MUST report, on completion, the issue key, the prior status, the chosen transition (if any), the action taken (transitioned, no-op, or stopped with reason), the verified final status, and any candidate transitions if stopped due to ambiguity or no match.
 
 ### Key Entities
 
