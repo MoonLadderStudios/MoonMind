@@ -66,6 +66,28 @@ class _CompletedTurnInspection:
     assistant_text: str = ""
     rollout_scan: _RolloutTurnScan | None = None
 
+@dataclass(frozen=True)
+class _TurnTerminalOutcome:
+    """Classification of a terminal codex turn.
+
+    ``failure_class`` distinguishes transient failures (safe to retry at the
+    activity boundary) from permanent failures. It is ``None`` for non-failure
+    outcomes (``completed``, ``interrupted``).
+
+    ``disposition`` carries a positive intentional-no-op signal from the
+    skill. When set (currently only ``"no_op"``), ``status`` MUST be
+    ``"completed"`` and ``error_text`` carries the skill-declared reason.
+    """
+
+    status: str
+    error_text: str | None = None
+    failure_class: str | None = None
+    disposition: str | None = None
+
+_SKILL_OUTCOME_FILENAME = "skill_outcome.json"
+_SKILL_OUTCOME_SCHEMA_VERSION = 1
+_SKILL_OUTCOME_FRESHNESS_SKEW_SECONDS = 2.0
+
 @dataclass
 class _RolloutLiveMirror:
     path: str | None = None
@@ -77,7 +99,7 @@ class _RolloutLiveMirror:
 class CodexSessionRuntimeState(BaseModel):
     """Persisted logical-to-vendor session mapping for one container session."""
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     session_id: str = Field(..., alias="sessionId")
     session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
@@ -93,9 +115,8 @@ class CodexSessionRuntimeState(BaseModel):
     last_turn_id: str | None = Field(None, alias="lastTurnId")
     last_turn_status: str | None = Field(None, alias="lastTurnStatus")
     last_turn_error: str | None = Field(None, alias="lastTurnError")
-    last_assistant_text_missing: bool = Field(
-        False, alias="lastAssistantTextMissing"
-    )
+    last_failure_class: str | None = Field(None, alias="lastFailureClass")
+    last_disposition: str | None = Field(None, alias="lastDisposition")
 
 class CodexAppServerRpcClient:
     """Minimal JSON-RPC stdio client for ``codex app-server``."""
@@ -503,8 +524,10 @@ class CodexManagedSessionRuntime:
             merged.setdefault("lastTurnStatus", state.last_turn_status)
         if state.last_turn_error:
             merged.setdefault("lastTurnError", state.last_turn_error)
-        if state.last_assistant_text_missing:
-            merged.setdefault("assistantTextMissing", True)
+        if state.last_failure_class:
+            merged.setdefault("failureClass", state.last_failure_class)
+        if state.last_disposition:
+            merged.setdefault("disposition", state.last_disposition)
         return CodexManagedSessionHandle(
             sessionState=self._session_state(state),
             status=status,
@@ -1156,26 +1179,107 @@ class CodexManagedSessionRuntime:
                     return recovered
         return None
 
+    def _reset_skill_outcome(self) -> None:
+        """Remove any stale skill-outcome marker before a new turn begins.
+
+        The marker is scoped to a single ``send_turn``: only a marker written
+        by the skill during the current turn may upgrade an empty turn to a
+        no-op success. A leftover file from an earlier turn in the same
+        session (or from any prior session that reused this spool) would
+        otherwise mask a real transient empty-output failure.
+        """
+        outcome_path = self._artifact_spool_path / _SKILL_OUTCOME_FILENAME
+        try:
+            outcome_path.unlink()
+        except FileNotFoundError:
+            return
+        except OSError:
+            return
+
+    def _read_skill_outcome(
+        self,
+        *,
+        turn_started_at: float | None,
+    ) -> dict[str, Any] | None:
+        """Read the optional skill-declared outcome file from the spool.
+
+        Returns the parsed object only when it is a valid no-op declaration
+        produced during the current turn: single JSON object,
+        ``schema_version == 1``, ``status == "no_op"``, and file ``mtime``
+        at or after ``turn_started_at`` (minus a small skew tolerance for
+        filesystem granularity). ``send_turn`` removes any pre-existing
+        marker at turn start; this freshness check is defense in depth.
+
+        Any other shape (missing file, malformed JSON, wrong version, other
+        status, stale mtime, or no turn-start timestamp) returns ``None`` so
+        the caller falls back to default classification. A malformed or
+        stale declaration cannot upgrade a failure to a success.
+        """
+        if turn_started_at is None:
+            return None
+        outcome_path = self._artifact_spool_path / _SKILL_OUTCOME_FILENAME
+        try:
+            stat_result = outcome_path.stat()
+        except (FileNotFoundError, OSError):
+            return None
+        freshness_floor = (
+            float(turn_started_at) - _SKILL_OUTCOME_FRESHNESS_SKEW_SECONDS
+        )
+        if stat_result.st_mtime < freshness_floor:
+            return None
+        try:
+            raw = outcome_path.read_text(encoding="utf-8")
+        except (FileNotFoundError, OSError):
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("schema_version") != _SKILL_OUTCOME_SCHEMA_VERSION:
+            return None
+        if payload.get("status") != "no_op":
+            return None
+        return payload
+
     def _rollout_terminal_outcome_from_scan(
         self,
         scan: _RolloutTurnScan,
         *,
         vendor_turn_id: str,
-    ) -> tuple[str, str | None] | None:
+        turn_started_at: float | None,
+    ) -> _TurnTerminalOutcome | None:
         if scan.error_text:
-            return "failed", scan.error_text
+            return _TurnTerminalOutcome(
+                status="failed",
+                error_text=scan.error_text,
+                failure_class="permanent",
+            )
         if scan.saw_task_complete:
             if scan.assistant_text:
-                return "completed", None
+                return _TurnTerminalOutcome(status="completed")
             recovered_error = self._extract_turn_error_from_logs(vendor_turn_id)
             if recovered_error:
-                return "failed", recovered_error
-            return (
-                "completed",
-                "codex app-server task_complete produced no assistant output",
+                return _TurnTerminalOutcome(
+                    status="failed",
+                    error_text=recovered_error,
+                    failure_class="permanent",
+                )
+            no_op = self._read_skill_outcome(turn_started_at=turn_started_at)
+            if no_op is not None:
+                return _TurnTerminalOutcome(
+                    status="completed",
+                    error_text=str(no_op.get("reason") or "").strip() or None,
+                    disposition="no_op",
+                )
+            return _TurnTerminalOutcome(
+                status="failed",
+                error_text="codex app-server task_complete produced no assistant output",
+                failure_class="transient",
             )
         if scan.assistant_text:
-            return "completed", None
+            return _TurnTerminalOutcome(status="completed")
         return None
 
     def _completed_turn_without_assistant_outcome(
@@ -1185,7 +1289,7 @@ class CodexManagedSessionRuntime:
         thread_payload: Mapping[str, Any],
         vendor_turn_id: str,
         rollout_scan: _RolloutTurnScan | None = None,
-    ) -> tuple[str, str | None]:
+    ) -> _TurnTerminalOutcome:
         if rollout_scan is None:
             vendor_thread_path = self._resolved_rollout_path(
                 state=state,
@@ -1197,16 +1301,45 @@ class CodexManagedSessionRuntime:
                 turn_started_at=state.last_control_at,
             )
         if rollout_scan.error_text:
-            return "failed", rollout_scan.error_text
+            return _TurnTerminalOutcome(
+                status="failed",
+                error_text=rollout_scan.error_text,
+                failure_class="permanent",
+            )
         if rollout_scan.saw_task_complete:
             recovered_error = self._extract_turn_error_from_logs(vendor_turn_id)
             if recovered_error:
-                return "failed", recovered_error
-            return (
-                "completed",
-                "codex app-server task_complete produced no assistant output",
+                return _TurnTerminalOutcome(
+                    status="failed",
+                    error_text=recovered_error,
+                    failure_class="permanent",
+                )
+            no_op = self._read_skill_outcome(
+                turn_started_at=state.last_control_at,
             )
-        return "completed", "codex app-server turn/completed produced no assistant output"
+            if no_op is not None:
+                return _TurnTerminalOutcome(
+                    status="completed",
+                    error_text=str(no_op.get("reason") or "").strip() or None,
+                    disposition="no_op",
+                )
+            return _TurnTerminalOutcome(
+                status="failed",
+                error_text="codex app-server task_complete produced no assistant output",
+                failure_class="transient",
+            )
+        no_op = self._read_skill_outcome(turn_started_at=state.last_control_at)
+        if no_op is not None:
+            return _TurnTerminalOutcome(
+                status="completed",
+                error_text=str(no_op.get("reason") or "").strip() or None,
+                disposition="no_op",
+            )
+        return _TurnTerminalOutcome(
+            status="failed",
+            error_text="codex app-server turn/completed produced no assistant output",
+            failure_class="transient",
+        )
 
     def _resolved_rollout_path(
         self,
@@ -1296,9 +1429,9 @@ class CodexManagedSessionRuntime:
         state: CodexSessionRuntimeState,
         thread_payload: Mapping[str, Any],
         vendor_turn_id: str,
-    ) -> tuple[str, str | None] | None:
+    ) -> _TurnTerminalOutcome | None:
         thread_outcome = self._terminal_thread_outcome(thread_payload)
-        if thread_outcome is not None and thread_outcome[0] != "completed":
+        if thread_outcome is not None and thread_outcome.status != "completed":
             return thread_outcome
 
         vendor_thread_path = self._resolved_rollout_path(
@@ -1312,6 +1445,7 @@ class CodexManagedSessionRuntime:
         rollout_outcome = self._rollout_terminal_outcome_from_scan(
             rollout_scan,
             vendor_turn_id=vendor_turn_id,
+            turn_started_at=state.last_control_at,
         )
         if rollout_outcome is not None:
             return rollout_outcome
@@ -1327,7 +1461,7 @@ class CodexManagedSessionRuntime:
         vendor_thread_id: str,
         vendor_turn_id: str,
         rollout_mirror: _RolloutLiveMirror,
-    ) -> tuple[Mapping[str, Any], tuple[str, str | None]]:
+    ) -> tuple[Mapping[str, Any], _TurnTerminalOutcome]:
         deadline = time.monotonic() + self._turn_completion_timeout_seconds
         while True:
             thread_payload = client.request("thread/read", {"threadId": vendor_thread_id})
@@ -1437,33 +1571,48 @@ class CodexManagedSessionRuntime:
     def _terminal_turn_outcome(
         cls,
         turn_payload: Mapping[str, Any],
-    ) -> tuple[str, str | None] | None:
+    ) -> _TurnTerminalOutcome | None:
         raw_status = str(turn_payload.get("status") or "").strip().lower()
         error_text = cls._error_text_from_value(turn_payload.get("error"))
         if raw_status == "completed":
-            return "completed", None
+            return _TurnTerminalOutcome(status="completed")
         if raw_status in {"failed", "error"}:
-            return "failed", error_text
+            return _TurnTerminalOutcome(
+                status="failed",
+                error_text=error_text,
+                failure_class="permanent",
+            )
         if raw_status in {"interrupted", "canceled", "cancelled"}:
-            return "interrupted", error_text or raw_status
+            return _TurnTerminalOutcome(
+                status="interrupted",
+                error_text=error_text or raw_status,
+            )
         if error_text:
-            return "failed", error_text
+            return _TurnTerminalOutcome(
+                status="failed",
+                error_text=error_text,
+                failure_class="permanent",
+            )
         return None
 
     @classmethod
     def _terminal_thread_outcome(
         cls,
         thread_payload: Mapping[str, Any],
-    ) -> tuple[str, str | None] | None:
+    ) -> _TurnTerminalOutcome | None:
         status_type = cls._thread_status_type(thread_payload)
         if status_type == "idle":
-            return "completed", None
+            return _TurnTerminalOutcome(status="completed")
         if status_type in {"failed", "error"}:
-            return "failed", cls._thread_status_reason(thread_payload)
+            return _TurnTerminalOutcome(
+                status="failed",
+                error_text=cls._thread_status_reason(thread_payload),
+                failure_class="permanent",
+            )
         if status_type in {"interrupted", "cancelled", "canceled"}:
-            return (
-                "interrupted",
-                cls._thread_status_reason(thread_payload) or status_type,
+            return _TurnTerminalOutcome(
+                status="interrupted",
+                error_text=cls._thread_status_reason(thread_payload) or status_type,
             )
         return None
 
@@ -1476,15 +1625,19 @@ class CodexManagedSessionRuntime:
         assistant_text: str | None = None,
         error_text: str | None = None,
         append_assistant_to_spool: bool = True,
-        assistant_text_missing: bool = False,
+        failure_class: str | None = None,
+        disposition: str | None = None,
     ) -> None:
         previous_status = state.last_turn_status
         state.active_turn_id = None
         state.last_turn_id = turn_id
         state.last_turn_status = status
         state.last_turn_error = error_text
-        state.last_assistant_text_missing = bool(
-            status == "completed" and assistant_text_missing
+        state.last_failure_class = (
+            failure_class if status == "failed" else None
+        )
+        state.last_disposition = (
+            disposition if status == "completed" else None
         )
         if status == "completed":
             state.last_assistant_text = assistant_text or None
@@ -1549,7 +1702,9 @@ class CodexManagedSessionRuntime:
             if outcome is None:
                 return state
 
-        status, error_text = outcome
+        status = outcome.status
+        error_text = outcome.error_text
+        failure_class = outcome.failure_class
         assistant_text = ""
         completed_turn_inspection: _CompletedTurnInspection | None = None
         if status == "completed":
@@ -1560,7 +1715,7 @@ class CodexManagedSessionRuntime:
             )
             assistant_text = completed_turn_inspection.assistant_text
         if status == "completed" and not assistant_text:
-            status, error_text = self._completed_turn_without_assistant_outcome(
+            empty_outcome = self._completed_turn_without_assistant_outcome(
                 state=state,
                 thread_payload=thread_payload,
                 vendor_turn_id=active_turn_id,
@@ -1570,15 +1725,20 @@ class CodexManagedSessionRuntime:
                     else None
                 ),
             )
+            status = empty_outcome.status
+            error_text = empty_outcome.error_text
+            failure_class = empty_outcome.failure_class
+            disposition = empty_outcome.disposition
+        else:
+            disposition = None
         self._finalize_turn(
             state=state,
             turn_id=active_turn_id,
             status=status,
             assistant_text=assistant_text,
             error_text=error_text,
-            assistant_text_missing=(
-                status == "completed" and not assistant_text and bool(error_text)
-            ),
+            failure_class=failure_class,
+            disposition=disposition,
         )
         return state
 
@@ -1680,16 +1840,22 @@ class CodexManagedSessionRuntime:
         state.last_control_action = "send_turn"
         state.last_control_at = time.time()
         rollout_mirror.turn_started_at = state.last_control_at
+        # Clear any stale skill-outcome marker so only a file written during
+        # this turn can upgrade an empty output to a no-op success.
+        self._reset_skill_outcome()
         self._save_state(state)
         self._append_spool("stdout", f"turn started: {vendor_turn_id}\n")
         try:
-            thread_payload, (status, error_text) = self._wait_for_turn_completion(
+            thread_payload, outcome = self._wait_for_turn_completion(
                 state=state,
                 client=client,
                 vendor_thread_id=vendor_thread_id,
                 vendor_turn_id=vendor_turn_id,
                 rollout_mirror=rollout_mirror,
             )
+            status = outcome.status
+            error_text = outcome.error_text
+            failure_class = outcome.failure_class
         except RuntimeError as exc:
             message = str(exc).strip()
             if message.startswith(
@@ -1706,16 +1872,18 @@ class CodexManagedSessionRuntime:
                 turn_id=vendor_turn_id,
                 status="failed",
                 error_text=message,
+                failure_class="permanent",
             )
             return CodexManagedSessionTurnResponse(
                 sessionState=self._session_state(state),
                 turnId=vendor_turn_id,
                 status="failed",
-                metadata={"reason": message},
+                metadata={"reason": message, "failureClass": "permanent"},
             )
 
         assistant_text = ""
         metadata: dict[str, Any] = {}
+        disposition: str | None = None
         completed_turn_inspection: _CompletedTurnInspection | None = None
         if status == "completed":
             completed_turn_inspection = self._inspect_completed_turn(
@@ -1725,18 +1893,24 @@ class CodexManagedSessionRuntime:
             )
             assistant_text = completed_turn_inspection.assistant_text
             if not assistant_text:
-                status, error_text = self._completed_turn_without_assistant_outcome(
+                empty_outcome = self._completed_turn_without_assistant_outcome(
                     state=state,
                     thread_payload=thread_payload,
                     vendor_turn_id=vendor_turn_id,
                     rollout_scan=completed_turn_inspection.rollout_scan,
                 )
-                if status != "failed":
-                    metadata["assistantTextMissing"] = True
+                status = empty_outcome.status
+                error_text = empty_outcome.error_text
+                failure_class = empty_outcome.failure_class
+                disposition = empty_outcome.disposition
             else:
                 metadata["assistantText"] = assistant_text
         if error_text:
             metadata["reason"] = error_text
+        if status == "failed" and failure_class:
+            metadata["failureClass"] = failure_class
+        if disposition:
+            metadata["disposition"] = disposition
         self._finalize_turn(
             state=state,
             turn_id=vendor_turn_id,
@@ -1746,7 +1920,8 @@ class CodexManagedSessionRuntime:
             append_assistant_to_spool=(
                 assistant_text.strip() not in rollout_mirror.emitted_assistant_texts
             ),
-            assistant_text_missing=bool(metadata.get("assistantTextMissing")),
+            failure_class=failure_class,
+            disposition=disposition,
         )
         return CodexManagedSessionTurnResponse(
             sessionState=self._session_state(state),
@@ -1904,7 +2079,8 @@ class CodexManagedSessionRuntime:
                 "lastTurnId": state.last_turn_id,
                 "lastTurnStatus": state.last_turn_status,
                 "lastTurnError": state.last_turn_error,
-                "assistantTextMissing": state.last_assistant_text_missing,
+                "failureClass": state.last_failure_class,
+                "disposition": state.last_disposition,
             },
         )
 

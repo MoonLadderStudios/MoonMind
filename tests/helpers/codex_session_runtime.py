@@ -19,6 +19,8 @@ def write_fake_app_server(
     start_thread_id: str = "vendor-thread-1",
     start_thread_path: str | None = "/tmp/vendor-thread-1.jsonl",
     rollout_entries_on_read: list[dict] | None = None,
+    skill_outcome_path: Path | str | None = None,
+    skill_outcome_payload: dict | str | None = None,
     steer_record_path: Path | None = None,
     interrupt_record_path: Path | None = None,
     codex_home_record_path: Path | None = None,
@@ -56,6 +58,9 @@ ASSISTANT_TEXT = __ASSISTANT_TEXT__
 THREAD_STATUS_TYPE = __THREAD_STATUS_TYPE__
 THREAD_STATUS_REASON = __THREAD_STATUS_REASON__
 ROLLOUT_ENTRIES_ON_READ = __ROLLOUT_ENTRIES_ON_READ__
+SKILL_OUTCOME_PATH = __SKILL_OUTCOME_PATH__
+SKILL_OUTCOME_PAYLOAD = __SKILL_OUTCOME_PAYLOAD__
+SKILL_OUTCOME_PAYLOAD_IS_RAW = __SKILL_OUTCOME_PAYLOAD_IS_RAW__
 turn_completed = False
 
 for line in sys.stdin:
@@ -214,6 +219,16 @@ __COMPLETION_BLOCK__
             with open(START_THREAD_PATH, "a", encoding="utf-8") as rollout_handle:
                 for rollout_entry in ROLLOUT_ENTRIES_ON_READ:
                     rollout_handle.write(json.dumps(rollout_entry) + "\\n")
+        if SKILL_OUTCOME_PATH and SKILL_OUTCOME_PAYLOAD is not None:
+            outcome_dir = os.path.dirname(SKILL_OUTCOME_PATH)
+            if outcome_dir:
+                os.makedirs(outcome_dir, exist_ok=True)
+            if SKILL_OUTCOME_PAYLOAD_IS_RAW:
+                serialized = SKILL_OUTCOME_PAYLOAD
+            else:
+                serialized = json.dumps(SKILL_OUTCOME_PAYLOAD)
+            with open(SKILL_OUTCOME_PATH, "w", encoding="utf-8") as marker_handle:
+                marker_handle.write(serialized)
         turn_status = "completed" if turn_completed else "inProgress"
         turn_items = []
         if turn_completed:
@@ -301,6 +316,18 @@ __COMPLETION_BLOCK__
         .replace("__THREAD_STATUS_TYPE__", repr(thread_status_type))
         .replace("__THREAD_STATUS_REASON__", repr(thread_status_reason))
         .replace("__ROLLOUT_ENTRIES_ON_READ__", repr(rollout_entries_on_read or []))
+        .replace(
+            "__SKILL_OUTCOME_PATH__",
+            repr(str(skill_outcome_path) if skill_outcome_path is not None else ""),
+        )
+        .replace(
+            "__SKILL_OUTCOME_PAYLOAD__",
+            repr(skill_outcome_payload),
+        )
+        .replace(
+            "__SKILL_OUTCOME_PAYLOAD_IS_RAW__",
+            "True" if isinstance(skill_outcome_payload, str) else "False",
+        )
         .replace("__COMPLETION_BLOCK__", completion_block),
         encoding="utf-8",
     )

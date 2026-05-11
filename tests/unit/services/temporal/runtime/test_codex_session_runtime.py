@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 import sqlite3
 from pathlib import Path
@@ -405,8 +406,8 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
         )
     )
 
-    assert response.status == "completed"
-    assert response.metadata["assistantTextMissing"] is True
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "transient"
     assert (
         response.metadata["reason"]
         == "codex app-server turn/completed produced no assistant output"
@@ -420,9 +421,8 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
             threadId="logical-thread-1",
         )
     )
-    assert handle.status == "ready"
-    assert handle.metadata["lastTurnStatus"] == "completed"
-    assert handle.metadata["assistantTextMissing"] is True
+    assert handle.status == "failed"
+    assert handle.metadata["lastTurnStatus"] == "failed"
     assert (
         handle.metadata["lastTurnError"]
         == "codex app-server turn/completed produced no assistant output"
@@ -438,11 +438,9 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
         state_payload.get("lastTurnError")
         == "codex app-server turn/completed produced no assistant output"
     )
-    assert state_payload.get("lastAssistantTextMissing") is True
     stderr_path = Path(request.artifact_spool_path) / "stderr.log"
-    assert not stderr_path.exists() or "turn completed without assistant output" not in stderr_path.read_text(
-        encoding="utf-8"
-    )
+    assert stderr_path.exists()
+    assert "turn failed:" in stderr_path.read_text(encoding="utf-8")
 
 def test_runtime_send_turn_accepts_item_completed_notification_contract(
     tmp_path: Path,
@@ -740,9 +738,9 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
         )
     )
 
-    assert response.status == "completed"
+    assert response.status == "failed"
     assert response.metadata == {
-        "assistantTextMissing": True,
+        "failureClass": "transient",
         "reason": "codex app-server task_complete produced no assistant output",
     }
     handle = runtime.session_status(
@@ -753,14 +751,278 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
             threadId="logical-thread-1",
         )
     )
-    assert handle.status == "ready"
-    assert handle.metadata["lastTurnStatus"] == "completed"
-    assert handle.metadata["assistantTextMissing"] is True
+    assert handle.status == "failed"
+    assert handle.metadata["lastTurnStatus"] == "failed"
+    assert handle.metadata["failureClass"] == "transient"
     assert (
         handle.metadata["lastTurnError"]
         == "codex app-server task_complete produced no assistant output"
     )
     assert "lastAssistantText" not in handle.metadata
+
+def _spool_skill_outcome_path(request: LaunchCodexManagedSessionRequest) -> Path:
+    return Path(request.artifact_spool_path) / "skill_outcome.json"
+
+def test_runtime_no_op_signal_upgrades_empty_turn_to_completed(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        skill_outcome_path=_spool_skill_outcome_path(request),
+        skill_outcome_payload={
+            "schema_version": 1,
+            "status": "no_op",
+            "reason": "no_open_prs_matched",
+            "evidence": {"requested": 0},
+        },
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.metadata["disposition"] == "no_op"
+    assert response.metadata["reason"] == "no_open_prs_matched"
+    assert "failureClass" not in response.metadata
+
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "ready"
+    assert handle.metadata["lastTurnStatus"] == "completed"
+    assert handle.metadata["disposition"] == "no_op"
+
+def test_runtime_no_op_signal_ignored_when_assistant_text_present(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="all done",
+        skill_outcome_path=_spool_skill_outcome_path(request),
+        skill_outcome_payload={
+            "schema_version": 1,
+            "status": "no_op",
+            "reason": "ignored",
+        },
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert "disposition" not in response.metadata
+
+def test_runtime_no_op_signal_ignored_when_schema_version_wrong(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        skill_outcome_path=_spool_skill_outcome_path(request),
+        skill_outcome_payload={
+            "schema_version": 99,
+            "status": "no_op",
+            "reason": "wrong version",
+        },
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "transient"
+
+def test_runtime_no_op_signal_ignored_when_malformed_json(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        skill_outcome_path=_spool_skill_outcome_path(request),
+        skill_outcome_payload="{not valid json",
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "transient"
+
+def test_runtime_no_op_signal_ignored_when_status_not_no_op(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        skill_outcome_path=_spool_skill_outcome_path(request),
+        skill_outcome_payload={
+            "schema_version": 1,
+            "status": "success",
+            "reason": "ignored",
+        },
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "transient"
+
+def test_runtime_stale_no_op_marker_from_prior_turn_does_not_upgrade_empty_turn(
+    tmp_path: Path,
+) -> None:
+    """A skill_outcome.json left in the spool by an earlier turn MUST NOT
+    upgrade a later empty turn to ``completed``. The runtime resets the
+    marker at every send_turn so cross-turn pollution cannot mask a real
+    transient failure."""
+    request = launch_request(tmp_path)
+    # Stale marker present from a prior turn (no skill writes during this run).
+    stale_path = _spool_skill_outcome_path(request)
+    stale_path.parent.mkdir(parents=True, exist_ok=True)
+    stale_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "no_op",
+                "reason": "stale_from_prior_turn",
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Make the stale marker easy to detect by date even on coarse filesystems:
+    # backdate it well outside the freshness skew window.
+    stale_mtime = stale_path.stat().st_mtime - 600.0
+    os.utime(stale_path, (stale_mtime, stale_mtime))
+
+    script = write_fake_app_server(tmp_path, assistant_text="")
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "transient"
+    assert "disposition" not in response.metadata
+    # send_turn cleared the stale marker before the turn body executed.
+    assert not stale_path.exists()
 
 def test_runtime_send_turn_fails_empty_task_complete_with_structured_error(
     tmp_path: Path,
@@ -967,9 +1229,10 @@ def test_runtime_session_status_fails_empty_task_complete_after_running_turn(
         )
     )
 
-    assert handle.status == "ready"
+    assert handle.status == "failed"
     assert handle.session_state.active_turn_id is None
-    assert handle.metadata["lastTurnStatus"] == "completed"
+    assert handle.metadata["lastTurnStatus"] == "failed"
+    assert handle.metadata["failureClass"] == "transient"
     assert (
         handle.metadata["lastTurnError"]
         == "codex app-server task_complete produced no assistant output"
@@ -1318,8 +1581,8 @@ def test_runtime_send_turn_ignores_stale_terminal_rollout_without_turn_reference
         )
     )
 
-    assert response.status == "completed"
-    assert response.metadata["assistantTextMissing"] is True
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "transient"
     assert (
         response.metadata["reason"]
         == "codex app-server turn/completed produced no assistant output"
@@ -1332,8 +1595,9 @@ def test_runtime_send_turn_ignores_stale_terminal_rollout_without_turn_reference
             threadId="logical-thread-1",
         )
     )
-    assert handle.status == "ready"
-    assert handle.metadata["lastTurnStatus"] == "completed"
+    assert handle.status == "failed"
+    assert handle.metadata["lastTurnStatus"] == "failed"
+    assert handle.metadata["failureClass"] == "transient"
 
 def test_runtime_send_turn_fails_when_rollout_only_has_other_turn_output(
     tmp_path: Path,
@@ -1398,8 +1662,8 @@ def test_runtime_send_turn_fails_when_rollout_only_has_other_turn_output(
         )
     )
 
-    assert response.status == "completed"
-    assert response.metadata["assistantTextMissing"] is True
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "transient"
     assert (
         response.metadata["reason"]
         == "codex app-server turn/completed produced no assistant output"
@@ -1412,8 +1676,8 @@ def test_runtime_send_turn_fails_when_rollout_only_has_other_turn_output(
             threadId="logical-thread-1",
         )
     )
-    assert handle.status == "ready"
-    assert handle.metadata["lastTurnStatus"] == "completed"
+    assert handle.status == "failed"
+    assert handle.metadata["lastTurnStatus"] == "failed"
 
 def test_runtime_send_turn_ignores_rollout_paths_outside_codex_sessions(
     tmp_path: Path,
@@ -1469,8 +1733,8 @@ def test_runtime_send_turn_ignores_rollout_paths_outside_codex_sessions(
         )
     )
 
-    assert response.status == "completed"
-    assert response.metadata["assistantTextMissing"] is True
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == "transient"
     assert (
         response.metadata["reason"]
         == "codex app-server turn/completed produced no assistant output"
