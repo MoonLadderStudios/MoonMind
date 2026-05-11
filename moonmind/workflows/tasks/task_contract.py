@@ -2016,6 +2016,193 @@ def has_attachment_mutation_fields(payload: Mapping[str, Any] | None) -> bool:
                 return True
     return False
 
+
+def _snapshot_safe(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _snapshot_safe(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_snapshot_safe(item) for item in value]
+    return value
+
+
+def _snapshot_mapping(value: object) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    safe = _snapshot_safe(value)
+    return safe if isinstance(safe, dict) else {}
+
+
+def _snapshot_list(value: object) -> list[Any]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    safe = _snapshot_safe(value)
+    return safe if isinstance(safe, list) else []
+
+
+def _task_steps(task_payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        _snapshot_mapping(step)
+        for step in _snapshot_list(task_payload.get("steps"))
+        if isinstance(step, Mapping)
+    ]
+
+
+def _detect_jira_issue_key(task_payload: Mapping[str, Any]) -> str | None:
+    try:
+        serialized = json.dumps(_snapshot_safe(task_payload), sort_keys=True)
+    except TypeError:
+        serialized = str(task_payload)
+    match = re.search(r"\b[A-Z][A-Z0-9]+-\d+\b", serialized)
+    return match.group(0) if match else None
+
+
+def _step_identifier(step: Mapping[str, Any], ordinal: int) -> str:
+    return (
+        _clean_optional_str(step.get("id"))
+        or _clean_optional_str(step.get("stepId"))
+        or f"step-{ordinal + 1}"
+    )
+
+
+def _include_tree_summary(
+    task_payload: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    for template in _snapshot_list(task_payload.get("appliedStepTemplates")):
+        if not isinstance(template, Mapping):
+            continue
+        parent_slug = _clean_optional_str(
+            template.get("slug") or template.get("presetSlug")
+        )
+        parent_version = _clean_optional_str(
+            template.get("version") or template.get("presetVersion")
+        )
+        composition = template.get("composition")
+        candidates: list[Any] = []
+        if isinstance(composition, Mapping):
+            candidates.extend(_snapshot_list(composition.get("includes")))
+        candidates.extend(_snapshot_list(template.get("includes")))
+        for include in candidates:
+            if not isinstance(include, Mapping):
+                continue
+            summary.append(
+                {
+                    "presetSlug": parent_slug,
+                    "presetVersion": parent_version,
+                    "includedSlug": _clean_optional_str(
+                        include.get("slug") or include.get("presetSlug")
+                    ),
+                    "includedVersion": _clean_optional_str(
+                        include.get("version") or include.get("presetVersion")
+                    ),
+                }
+            )
+    return summary
+
+
+def build_authoritative_task_input_snapshot(
+    *,
+    task_payload: Mapping[str, Any],
+    repository: object = None,
+    target_runtime: object = None,
+    required_capabilities: object = None,
+    dependency_declarations: object = None,
+    attachment_refs: object = None,
+) -> dict[str, Any]:
+    """Build explicit authored fields for durable task input reconstruction."""
+
+    task = _snapshot_mapping(task_payload)
+    git = _snapshot_mapping(task.get("git"))
+    steps = _task_steps(task)
+    repository_value = (
+        _clean_optional_str(git.get("repository"))
+        or _clean_optional_str(repository)
+        or None
+    )
+    branch_value = (
+        _clean_optional_str(task.get("branch"))
+        or _clean_optional_str(git.get("branch"))
+        or _clean_optional_str(git.get("startingBranch"))
+        or None
+    )
+    authored_steps: list[dict[str, Any]] = []
+    final_order: list[dict[str, Any]] = []
+    provenance: list[dict[str, Any]] = []
+    detachment: list[dict[str, Any]] = []
+    for ordinal, step in enumerate(steps):
+        step_id = _step_identifier(step, ordinal)
+        final_order.append({"stepId": step_id, "ordinal": ordinal})
+        authored_steps.append(
+            {
+                "id": step_id,
+                "title": _clean_optional_str(step.get("title")),
+                "instructions": _clean_optional_str(step.get("instructions")) or "",
+                "inputAttachments": _snapshot_list(step.get("inputAttachments")),
+                "dependencies": _snapshot_list(
+                    step.get("dependsOn") or step.get("dependencies")
+                ),
+                "templateStepId": _clean_optional_str(step.get("templateStepId")),
+                "stepType": _clean_optional_str(step.get("type")),
+                "presetProvenance": _snapshot_mapping(step.get("presetProvenance")),
+            }
+        )
+        if isinstance(step.get("presetProvenance"), Mapping):
+            provenance.append(
+                {
+                    "stepId": step_id,
+                    "ordinal": ordinal,
+                    "presetProvenance": _snapshot_mapping(
+                        step.get("presetProvenance")
+                    ),
+                }
+            )
+        detached = bool(
+            step.get("detachedFromPreset")
+            or step.get("detached")
+            or step.get("isDetached")
+        )
+        if detached:
+            detachment.append(
+                {"stepId": step_id, "ordinal": ordinal, "detached": True}
+            )
+    issue_key = _detect_jira_issue_key(task)
+    return {
+        "traceability": {
+            **({"jiraIssueKey": issue_key} if issue_key else {}),
+        },
+        "objective": {
+            "instructions": _clean_optional_str(task.get("instructions")) or "",
+            "inputAttachments": _snapshot_list(task.get("inputAttachments")),
+        },
+        "steps": authored_steps,
+        "runtime": _snapshot_mapping(task.get("runtime"))
+        or (
+            {"mode": _clean_optional_str(target_runtime)}
+            if _clean_optional_str(target_runtime)
+            else {}
+        ),
+        "publish": _snapshot_mapping(task.get("publish")),
+        "repository": repository_value,
+        "branch": branch_value,
+        "singleAuthoredBranch": branch_value,
+        "requiredCapabilities": _snapshot_list(required_capabilities),
+        "dependencyDeclarations": _snapshot_list(
+            task.get("dependencies")
+            or task.get("dependsOn")
+            or dependency_declarations
+        ),
+        "presetApplicationMetadata": _snapshot_list(
+            task.get("appliedStepTemplates")
+        ),
+        "pinnedPresetBindings": _snapshot_list(task.get("authoredPresets")),
+        "includeTreeSummary": _include_tree_summary(task),
+        "perStepProvenance": provenance,
+        "detachmentState": detachment,
+        "finalSubmittedOrder": final_order,
+        "attachmentRefs": _snapshot_list(attachment_refs),
+    }
+
+
 def build_task_stage_plan(canonical_payload: Mapping[str, Any]) -> list[str]:
     """Return ordered stage identifiers for canonical task execution."""
 
@@ -2043,6 +2230,7 @@ __all__ = [
     "TaskRecoveryProvenance",
     "ResumeFromFailedStepRef",
     "TaskStepSource",
+    "build_authoritative_task_input_snapshot",
     "build_task_stage_plan",
     "build_canonical_task_view",
     "has_attachment_mutation_fields",

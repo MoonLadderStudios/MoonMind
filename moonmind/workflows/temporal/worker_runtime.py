@@ -77,6 +77,9 @@ from moonmind.workflows.temporal.workers import (
     describe_configured_worker,
     list_registered_workflow_types,
 )
+from moonmind.workflows.tasks.task_contract import (
+    build_authoritative_task_input_snapshot,
+)
 from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow as MoonMindProviderProfileManager
 from moonmind.workflows.temporal.workflows.manifest_ingest import (
     MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
@@ -336,6 +339,14 @@ def _build_child_run_task_input_snapshot_payload(
             "targetRuntime": parameters.get("targetRuntime"),
             "requiredCapabilities": list(parameters.get("requiredCapabilities") or []),
             "task": dict(task_payload),
+            "authoredTaskInput": build_authoritative_task_input_snapshot(
+                task_payload=task_payload,
+                repository=parameters.get("repository"),
+                target_runtime=parameters.get("targetRuntime"),
+                required_capabilities=parameters.get("requiredCapabilities"),
+                dependency_declarations=parameters.get("dependencies"),
+                attachment_refs=[],
+            ),
         },
         "largeContentRefs": {},
         "attachmentRefs": [],

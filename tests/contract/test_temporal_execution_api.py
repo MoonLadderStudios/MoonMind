@@ -865,7 +865,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                         "targetRuntime": "codex",
                         "requiredCapabilities": ["git"],
                         "task": {
-                            "instructions": "Implement Temporal submit redirect coverage.",
+                            "instructions": "Implement Temporal submit redirect coverage for MM-639.",
                             "inputAttachments": [
                                 {
                                     "artifactId": objective_artifact,
@@ -875,9 +875,11 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                                 }
                             ],
                             "steps": [
-                                {
-                                    "instructions": "Review the step screenshot.",
-                                    "inputAttachments": [
+                                    {
+                                        "id": "step-review-screenshot",
+                                        "instructions": "Review the step screenshot.",
+                                        "dependsOn": ["MM-638"],
+                                        "inputAttachments": [
                                         {
                                             "artifactId": step_artifact,
                                             "filename": "same-name.png",
@@ -894,6 +896,10 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                             },
                             "inputArtifactRef": input_artifact_ref,
                             "publish": {"mode": "branch"},
+                            "git": {
+                                "repository": "MoonLadderStudios/MoonMind",
+                                "branch": "feature/mm-639",
+                            },
                         },
                     },
                 },
@@ -915,7 +921,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
             assert snapshot["artifactRef"]
             assert (
                 body["memo"]["summary"]
-                == "Implement Temporal submit redirect coverage."
+                == "Implement Temporal submit redirect coverage for MM-639."
             )
 
             async with db_base.async_session_maker() as session:
@@ -999,6 +1005,29 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                         "sizeBytes": 20,
                     }
                 ]
+                authored = snapshot_payload["draft"]["authoredTaskInput"]
+                assert authored["traceability"]["jiraIssueKey"] == "MM-639"
+                assert authored["objective"]["instructions"] == (
+                    "Implement Temporal submit redirect coverage for MM-639."
+                )
+                assert authored["objective"]["inputAttachments"][0][
+                    "artifactId"
+                ] == objective_artifact
+                assert authored["runtime"] == {
+                    "mode": "codex_cli",
+                    "model": "gpt-5.3-codex",
+                    "effort": "high",
+                }
+                assert authored["publish"] == {"mode": "branch"}
+                assert authored["repository"] == "MoonLadderStudios/MoonMind"
+                assert authored["branch"] == "feature/mm-639"
+                assert authored["steps"][0]["dependencies"] == ["MM-638"]
+                assert authored["finalSubmittedOrder"] == [
+                    {"stepId": "step-review-screenshot", "ordinal": 0}
+                ]
+                assert authored["steps"][0]["inputAttachments"][0][
+                    "artifactId"
+                ] == step_artifact
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
