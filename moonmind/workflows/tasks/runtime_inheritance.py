@@ -308,15 +308,20 @@ async def resolve_child_runtime_inheritance(
     Returns the ``InheritedRuntime`` to apply, or ``None`` when the
     existing default runtime resolution should run unchanged.
 
-    Resolution order (matches the story's contract):
+    Resolution order:
 
-    1. If the request carries any explicit runtime selector, inheritance
-       is skipped – the existing path validates the selector.
-    2. If ``runtimeInheritance = "caller"`` and the principal is a task
+    1. If ``runtimeInheritance = "caller"`` and the principal is a task
        principal with the required scopes, copy the caller task's runtime.
-    3. If ``runtimeInheritance = "parent"`` and ``parentWorkflowId`` is
+    2. If ``runtimeInheritance = "parent"`` and ``parentWorkflowId`` is
        provided, copy the parent's runtime after verifying ownership.
-    4. Otherwise return ``None``.
+    3. Otherwise return ``None``.
+
+    The inherited runtime is applied non-destructively by
+    ``apply_inherited_runtime_to_payload`` – explicit fields on the request
+    are preserved and inheritance only fills in the gaps. This means a
+    caller that opts into inheritance via the directive will pick up the
+    parent's model, effort, and provider profile even when it has stamped
+    an explicit ``targetRuntime`` or partial ``task.runtime`` block.
     """
 
     if task_payload is None and isinstance(request_payload, Mapping):
@@ -326,9 +331,6 @@ async def resolve_child_runtime_inheritance(
             else {}
         )
     task_payload = task_payload or {}
-
-    if has_explicit_child_runtime(request_payload, task_payload):
-        return None
 
     directive, parent_workflow_id_hint = extract_inheritance_directive(
         request_payload, task_payload
@@ -385,29 +387,54 @@ def apply_inherited_runtime_to_payload(
 ) -> None:
     """Stamp ``inherited`` runtime fields onto a normalised task payload.
 
-    Mutates ``payload`` and ``task_payload`` in place.  The downstream
-    runtime resolution path then sees the request *as if it had explicitly
-    contained* the inherited fields (which is the contract documented in
-    the story).
-    """
+    Mutates ``payload`` and ``task_payload`` in place.  Applied strictly
+    non-destructively: any field the caller already set (``targetRuntime``,
+    ``task.runtime.{mode,model,effort,executionProfileRef,profileId,
+    providerProfile}``, or top-level ``profileId`` / ``providerProfile``)
+    is preserved; inheritance only fills in the gaps.  The downstream
+    runtime resolution path then sees the merged request.
 
-    if inherited.target_runtime:
-        payload["targetRuntime"] = inherited.target_runtime
+    Note: when the caller has supplied an explicit profile selector
+    (``profileId`` / ``providerProfile`` anywhere in the payload),
+    ``executionProfileRef`` is *also* left blank.  Downstream selection
+    prefers ``executionProfileRef`` over ``profileId``/``providerProfile``
+    (see ``run.py``), so backfilling the parent's ref would silently
+    override the child's explicit profile.
+    """
 
     runtime_block = (
         dict(task_payload.get("runtime"))
         if isinstance(task_payload.get("runtime"), Mapping)
         else {}
     )
-    if inherited.target_runtime:
+
+    explicit_target_runtime = _coerce_str(
+        payload.get("targetRuntime")
+    ) or _coerce_str(runtime_block.get("mode"))
+    explicit_profile_id = (
+        _coerce_str(runtime_block.get("profileId"))
+        or _coerce_str(runtime_block.get("providerProfile"))
+        or _coerce_str(runtime_block.get("executionProfileRef"))
+        or _coerce_str(payload.get("profileId"))
+        or _coerce_str(payload.get("providerProfile"))
+        or _coerce_str(task_payload.get("profileId"))
+        or _coerce_str(task_payload.get("providerProfile"))
+    )
+
+    if inherited.target_runtime and not explicit_target_runtime:
+        payload["targetRuntime"] = inherited.target_runtime
         runtime_block["mode"] = inherited.target_runtime
-    if inherited.model and not runtime_block.get("model"):
+    if inherited.model and not _coerce_str(runtime_block.get("model")):
         runtime_block["model"] = inherited.model
-    if inherited.effort and not runtime_block.get("effort"):
+    if inherited.effort and not _coerce_str(runtime_block.get("effort")):
         runtime_block["effort"] = inherited.effort
-    if inherited.execution_profile_ref and not runtime_block.get("executionProfileRef"):
+    if (
+        inherited.execution_profile_ref
+        and not _coerce_str(runtime_block.get("executionProfileRef"))
+        and not explicit_profile_id
+    ):
         runtime_block["executionProfileRef"] = inherited.execution_profile_ref
-    if inherited.profile_id and not runtime_block.get("profileId"):
+    if inherited.profile_id and not explicit_profile_id:
         runtime_block["profileId"] = inherited.profile_id
 
     if runtime_block:
