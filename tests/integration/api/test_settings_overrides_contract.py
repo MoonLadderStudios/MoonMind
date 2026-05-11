@@ -4,10 +4,10 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api_service.api.routers import settings as settings_router
 from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
 from api_service.db.models import Base
@@ -18,18 +18,13 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 SETTINGS_USER_DEP = get_current_user()
 
 
-@pytest.fixture
-def settings_contract_db(tmp_path):
+@pytest_asyncio.fixture
+async def settings_contract_db(tmp_path):
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{tmp_path}/settings-contract.db"
     )
-
-    async def _setup():
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
-    asyncio_run = __import__("asyncio").run
-    asyncio_run(_setup())
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     original = db_base.async_session_maker
     db_base.async_session_maker = session_maker
@@ -51,7 +46,7 @@ def settings_contract_db(tmp_path):
     finally:
         app.dependency_overrides.pop(SETTINGS_USER_DEP, None)
         db_base.async_session_maker = original
-        asyncio_run(engine.dispose())
+        await engine.dispose()
 
 
 async def test_settings_override_contract_round_trips_and_resets(

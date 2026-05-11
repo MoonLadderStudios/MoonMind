@@ -67,11 +67,20 @@ _UNSAFE_STRING_TOKENS = (
     "oauth_session",
     "decrypted_credential",
     "generated_config",
+    "token=",
+    "secret=",
+    "api_key=",
+    "apikey=",
     "password=",
     "private_key",
     "large_artifact",
     "workflow_payload",
     "command_history",
+)
+_UNSAFE_PROFILE_REF_ASSIGNMENT_RE = re.compile(
+    r"(secret|token|password|api_key|apikey|credential|private_key|refresh|oauth|"
+    r"workflow_payload|artifact|command_history|operational_history|decrypted|"
+    r"generated_config|large_artifact)\w*\s*[:=]"
 )
 
 SETTINGS_PERMISSION_NAMES: frozenset[str] = frozenset(
@@ -1719,7 +1728,11 @@ class SettingsCatalogService:
     def _validate_override_value(self, entry: SettingRegistryEntry, value: Any) -> None:
         if self._override_value_size(value) > _MAX_OVERRIDE_VALUE_BYTES:
             raise ValueError("invalid_setting_value")
-        if self._contains_unsafe_payload(value):
+        if self._contains_unsafe_payload(
+            value,
+            allow_profile_ref_string_tokens=entry.key
+            == "workflow.default_provider_profile_ref",
+        ):
             raise ValueError("invalid_setting_value")
         if value is None:
             return
@@ -1760,9 +1773,18 @@ class SettingsCatalogService:
             ).encode("utf-8")
         )
 
-    def _contains_unsafe_payload(self, value: Any) -> bool:
+    def _contains_unsafe_payload(
+        self,
+        value: Any,
+        *,
+        allow_profile_ref_string_tokens: bool = False,
+    ) -> bool:
         if isinstance(value, str):
             normalized = value.lower()
+            if allow_profile_ref_string_tokens:
+                return any(prefix in value for prefix in _SECRET_PREFIXES) or bool(
+                    _UNSAFE_PROFILE_REF_ASSIGNMENT_RE.search(normalized)
+                )
             return any(prefix in value for prefix in _SECRET_PREFIXES) or any(
                 token in normalized for token in _UNSAFE_STRING_TOKENS
             )

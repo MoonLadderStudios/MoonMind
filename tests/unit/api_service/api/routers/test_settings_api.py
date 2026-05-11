@@ -586,6 +586,10 @@ async def test_unsafe_override_payload_classes_are_rejected_and_redacted(
         "oauth_session_blob={...}",
         "decrypted_credential_file=/tmp/credential.json",
         "generated_config password=plaintext",
+        "token=plaintext",
+        "secret=plaintext",
+        "api_key=plaintext",
+        "apikey=plaintext",
         "large_artifact:" + ("x" * 20000),
         "workflow_payload={\"steps\": []}",
         "operational command_history: rm -rf /",
@@ -604,6 +608,29 @@ async def test_unsafe_override_payload_classes_are_rejected_and_redacted(
             assert rejected.status_code == 400
             assert rejected.json()["error"] == "invalid_setting_value"
             assert unsafe_value[:32] not in rejected.text
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_ref_allows_literal_profile_ids_with_sensitive_words(
+    settings_api_db,
+):
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        accepted = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {
+                    "workflow.default_provider_profile_ref": "oauth_session-prod"
+                },
+                "expected_versions": {"workflow.default_provider_profile_ref": 1},
+            },
+        )
+
+    assert accepted.status_code == 200
+    assert accepted.json()["values"]["workflow.default_provider_profile_ref"]["value"] == (
+        "oauth_session-prod"
+    )
 
 
 @pytest.mark.asyncio
