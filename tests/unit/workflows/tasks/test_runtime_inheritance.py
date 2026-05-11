@@ -456,6 +456,54 @@ def test_apply_inherited_runtime_preserves_explicit_target_runtime() -> None:
     assert task_payload["runtime"]["executionProfileRef"] == "codex_default"
 
 
+def test_apply_inherited_runtime_skips_execution_profile_ref_when_explicit_profile_id() -> None:
+    """Explicit child profileId must not be silently overridden by the parent ref.
+
+    Downstream selection prefers ``executionProfileRef`` over
+    ``profileId``/``providerProfile``, so backfilling the parent's ref
+    when the child supplied an explicit profile selector would route the
+    child to the wrong provider profile.
+    """
+
+    payload: dict[str, Any] = {"task": {"runtime": {"profileId": "child-explicit"}}}
+    task_payload = payload["task"]
+    inherited = InheritedRuntime(
+        target_runtime="codex_cli",
+        model="gpt-5.4",
+        profile_id="parent-default",
+        execution_profile_ref="parent-default",
+    )
+
+    apply_inherited_runtime_to_payload(
+        payload=payload,
+        task_payload=task_payload,
+        inherited=inherited,
+    )
+
+    assert task_payload["runtime"]["profileId"] == "child-explicit"
+    assert "executionProfileRef" not in task_payload["runtime"]
+
+
+def test_apply_inherited_runtime_skips_execution_profile_ref_for_top_level_provider_profile() -> None:
+    payload: dict[str, Any] = {"providerProfile": "child-explicit", "task": {}}
+    task_payload = payload["task"]
+    inherited = InheritedRuntime(
+        target_runtime="codex_cli",
+        profile_id="parent-default",
+        execution_profile_ref="parent-default",
+    )
+
+    apply_inherited_runtime_to_payload(
+        payload=payload,
+        task_payload=task_payload,
+        inherited=inherited,
+    )
+
+    runtime = task_payload.get("runtime", {})
+    assert "executionProfileRef" not in runtime
+    assert "profileId" not in runtime
+
+
 def test_apply_inherited_runtime_fills_model_when_only_runtime_mode_is_explicit() -> None:
     """Regression: parent sonnet-4-6 must carry over when child sets only mode.
 

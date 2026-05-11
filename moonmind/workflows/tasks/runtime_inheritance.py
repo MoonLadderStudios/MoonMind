@@ -393,6 +393,13 @@ def apply_inherited_runtime_to_payload(
     providerProfile}``, or top-level ``profileId`` / ``providerProfile``)
     is preserved; inheritance only fills in the gaps.  The downstream
     runtime resolution path then sees the merged request.
+
+    Note: when the caller has supplied an explicit profile selector
+    (``profileId`` / ``providerProfile`` anywhere in the payload),
+    ``executionProfileRef`` is *also* left blank.  Downstream selection
+    prefers ``executionProfileRef`` over ``profileId``/``providerProfile``
+    (see ``run.py``), so backfilling the parent's ref would silently
+    override the child's explicit profile.
     """
 
     runtime_block = (
@@ -420,8 +427,10 @@ def apply_inherited_runtime_to_payload(
         runtime_block["model"] = inherited.model
     if inherited.effort and not _coerce_str(runtime_block.get("effort")):
         runtime_block["effort"] = inherited.effort
-    if inherited.execution_profile_ref and not _coerce_str(
-        runtime_block.get("executionProfileRef")
+    if (
+        inherited.execution_profile_ref
+        and not _coerce_str(runtime_block.get("executionProfileRef"))
+        and not explicit_profile_id
     ):
         runtime_block["executionProfileRef"] = inherited.execution_profile_ref
     if inherited.profile_id and not explicit_profile_id:
