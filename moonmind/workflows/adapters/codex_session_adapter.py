@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from temporalio.exceptions import ActivityError, ApplicationError
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -407,17 +408,73 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     workspace_path=workspace_path,
                 )
             )
-            turn_response = await self._coerce_turn_response(
-                self._send_turn(
-                    SendCodexManagedSessionTurnRequest(
-                        sessionId=current_locator.session_id,
-                        sessionEpoch=current_locator.session_epoch,
-                        containerId=current_locator.container_id,
-                        threadId=current_locator.thread_id,
-                        instructions=instructions,
+            try:
+                turn_response = await self._coerce_turn_response(
+                    self._send_turn(
+                        SendCodexManagedSessionTurnRequest(
+                            sessionId=current_locator.session_id,
+                            sessionEpoch=current_locator.session_epoch,
+                            containerId=current_locator.container_id,
+                            threadId=current_locator.thread_id,
+                            instructions=instructions,
+                        )
                     )
                 )
-            )
+            except ActivityError as exc:
+                turn_error = exc.cause if isinstance(exc.cause, ApplicationError) else None
+                if turn_error is None or turn_error.type not in (
+                    "CodexTransientTurnError",
+                    "CodexPermanentTurnError",
+                ):
+                    raise
+                raw_reason = str(turn_error.message or "").strip() or None
+                reason = _clamp_agent_run_result_summary(
+                    raw_reason,
+                    default="Codex managed-session turn failed",
+                )
+                publication = await self._publish_failure_artifacts(
+                    locator=current_locator,
+                    managed_run_id=binding.task_run_id,
+                    run_id=run_id,
+                )
+                failure_result = self._persist_failed_run_state(
+                    run_id=run_id,
+                    agent_id=request.agent_id,
+                    managed_run_id=binding.task_run_id,
+                    binding=binding,
+                    workspace_path=workspace_path,
+                    locator=current_locator.model_dump(mode="json", by_alias=True),
+                    active_turn_id=current_active_turn_id,
+                    summary=raw_reason,
+                    default_summary=reason,
+                    output_refs=(
+                        publication.published_artifact_refs
+                        if publication is not None
+                        else ()
+                    ),
+                    started_at=started_at,
+                    finished_at=_current_time(),
+                    instruction_ref=original_instruction_ref,
+                    resolved_skillset_ref=original_skillset_ref,
+                    turn_id=None,
+                    profile_id=launch_context.profile_id or None,
+                    session_artifacts=(
+                        publication.model_dump(mode="json", by_alias=True)
+                        if publication is not None
+                        else None
+                    ),
+                    turn_status="failed",
+                    turn_metadata={
+                        "reason": raw_reason,
+                        "failureClass": (
+                            "permanent"
+                            if turn_error.type == "CodexPermanentTurnError"
+                            else "transient"
+                        ),
+                    },
+                )
+                failed_state_persisted = True
+                raise CodexSessionRunFailedError(reason, result=failure_result) from exc
             turn_id = turn_response.turn_id
             current_locator = self._locator_from_state(
                 session_state=turn_response.session_state,
@@ -498,27 +555,42 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     )
                 )
 
+                disposition = turn_response.metadata.get("disposition")
+                disposition_reason = turn_response.metadata.get("reason")
+                if disposition == "no_op":
+                    default_summary = (
+                        f"Codex skill declared no-op: {disposition_reason}"
+                        if disposition_reason
+                        else "Codex skill declared no-op."
+                    )
+                else:
+                    default_summary = "Codex managed-session turn completed."
                 assistant_text = _clamp_agent_run_result_summary(
                     turn_response.metadata.get("assistantText")
                     or summary.metadata.get("lastAssistantText"),
-                    default="Codex managed-session turn completed.",
+                    default=default_summary,
                 )
                 output_refs = self._merge_output_refs(
                     turn_response.output_refs,
                     publication.published_artifact_refs,
                 )
+                result_metadata: dict[str, Any] = {
+                    **_result_ref_metadata(
+                        instruction_ref=original_instruction_ref,
+                        resolved_skillset_ref=original_skillset_ref,
+                    ),
+                    "sessionSummary": summary.model_dump(mode="json", by_alias=True),
+                    "sessionArtifacts": publication.model_dump(mode="json", by_alias=True),
+                    "turnId": turn_id,
+                }
+                if disposition:
+                    result_metadata["outcomeDisposition"] = disposition
+                    if disposition_reason:
+                        result_metadata["outcomeReason"] = disposition_reason
                 result = AgentRunResult(
                     outputRefs=output_refs,
                     summary=assistant_text,
-                    metadata={
-                        **_result_ref_metadata(
-                            instruction_ref=original_instruction_ref,
-                            resolved_skillset_ref=original_skillset_ref,
-                        ),
-                        "sessionSummary": summary.model_dump(mode="json", by_alias=True),
-                        "sessionArtifacts": publication.model_dump(mode="json", by_alias=True),
-                        "turnId": turn_id,
-                    },
+                    metadata=result_metadata,
                 )
                 jira_blocker_summary = _jira_skill_blocker_summary(
                     parameters=request.parameters,

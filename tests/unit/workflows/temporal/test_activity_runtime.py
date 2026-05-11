@@ -2202,7 +2202,7 @@ async def test_agent_runtime_publish_artifacts_fails_required_report_on_publish_
                     )
                 )
 
-async def test_agent_runtime_send_turn_disables_catalog_retries(
+async def test_agent_runtime_send_turn_retries_transient_failures(
     tmp_path: Path,
 ) -> None:
     async with temporal_db(tmp_path) as session_maker:
@@ -2211,7 +2211,12 @@ async def test_agent_runtime_send_turn_disables_catalog_retries(
 
             send_turn = catalog.resolve_activity("agent_runtime.send_turn")
 
-            assert send_turn.retries.max_attempts == 1
+            assert send_turn.retries.max_attempts == 5
+            assert send_turn.retries.max_interval_seconds == 600
+            assert (
+                "CodexPermanentTurnError"
+                in send_turn.retries.non_retryable_error_codes
+            )
             assert send_turn.timeouts.start_to_close_seconds == 3600
             assert send_turn.timeouts.schedule_to_close_seconds == 3900
             assert send_turn.timeouts.heartbeat_timeout_seconds == 30

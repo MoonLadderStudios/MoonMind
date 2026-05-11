@@ -780,3 +780,78 @@ def test_build_queue_request_skill_version_passthrough() -> None:
     req = _build_request(module, skill_version="2.3")
     skill = req["payload"]["task"]["skill"]
     assert skill.get("version") == "2.3"
+
+def test_write_run_artifacts_emits_no_op_when_zero_queued_no_errors(tmp_path: Path) -> None:
+    """A genuine no-op run writes skill_outcome.json declaring status=no_op."""
+    module = _load_module()
+    write = module["_write_run_artifacts"]
+
+    payload = {
+        "timestamp": "2026-05-11T00:00:00+00:00",
+        "actor": "test",
+        "repository": "owner/repo",
+        "state": "open",
+        "runtime": {"mode": "codex", "model": None, "effort": None, "executionProfileRef": None},
+        "requested": 3,
+        "created": 0,
+        "queued": [],
+        "skipped": [{"pr": 1, "branch": "feature/x", "reason": "fork-pr"}],
+        "errors": [],
+        "message": "No matching PRs were queued.",
+    }
+    write(tmp_path, payload)
+
+    result_file = tmp_path / "batch_pr_resolver_result.json"
+    outcome_file = tmp_path / "skill_outcome.json"
+    assert result_file.exists()
+    assert outcome_file.exists()
+    outcome = json.loads(outcome_file.read_text())
+    assert outcome["schema_version"] == 1
+    assert outcome["status"] == "no_op"
+    assert outcome["reason"] == "no_open_prs_matched"
+    assert outcome["evidence"]["requested"] == 3
+    assert outcome["evidence"]["skipped"][0]["pr"] == 1
+
+def test_write_run_artifacts_skips_no_op_when_errors_present(tmp_path: Path) -> None:
+    """A run that hit submission errors must NOT declare itself a no-op."""
+    module = _load_module()
+    write = module["_write_run_artifacts"]
+
+    payload = {
+        "timestamp": "2026-05-11T00:00:00+00:00",
+        "actor": "test",
+        "repository": "owner/repo",
+        "state": "open",
+        "runtime": {"mode": "codex", "model": None, "effort": None, "executionProfileRef": None},
+        "requested": 2,
+        "created": 0,
+        "queued": [],
+        "skipped": [],
+        "errors": [{"pr": 7, "branch": "feature/y", "error": "post failed"}],
+    }
+    write(tmp_path, payload)
+
+    assert (tmp_path / "batch_pr_resolver_result.json").exists()
+    assert not (tmp_path / "skill_outcome.json").exists()
+
+def test_write_run_artifacts_skips_no_op_when_executions_queued(tmp_path: Path) -> None:
+    """When real work was queued, no skill_outcome.json is written."""
+    module = _load_module()
+    write = module["_write_run_artifacts"]
+
+    payload = {
+        "timestamp": "2026-05-11T00:00:00+00:00",
+        "actor": "test",
+        "repository": "owner/repo",
+        "state": "open",
+        "runtime": {"mode": "codex", "model": None, "effort": None, "executionProfileRef": None},
+        "requested": 1,
+        "created": 1,
+        "queued": [{"jobId": "mm:abc", "pr": 9, "branch": "feature/z"}],
+        "skipped": [],
+        "errors": [],
+    }
+    write(tmp_path, payload)
+
+    assert (tmp_path / "batch_pr_resolver_result.json").exists()
+    assert not (tmp_path / "skill_outcome.json").exists()

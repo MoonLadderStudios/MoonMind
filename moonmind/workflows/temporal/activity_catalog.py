@@ -871,7 +871,11 @@ def build_default_activity_catalog(
                 SEND_TURN_ACTIVITY_SCHEDULE_TO_CLOSE_SECONDS,
                 heartbeat_timeout_seconds=SEND_TURN_ACTIVITY_HEARTBEAT_TIMEOUT_SECONDS,
             ),
-            retries=_activity_retries(max_attempts=1, max_interval_seconds=60),
+            retries=_activity_retries(
+                max_attempts=5,
+                max_interval_seconds=600,
+                non_retryable=("CodexPermanentTurnError",),
+            ),
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.steer_turn",

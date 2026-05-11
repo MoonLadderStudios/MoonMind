@@ -432,6 +432,23 @@ def _docker_workflow_mode_forbidden_failure(*, workflow_docker_mode: str, tool_n
         non_retryable=True,
     )
 
+CODEX_TRANSIENT_TURN_ERROR_TYPE = "CodexTransientTurnError"
+CODEX_PERMANENT_TURN_ERROR_TYPE = "CodexPermanentTurnError"
+
+def _codex_transient_turn_failure(reason: str) -> temporal_exceptions.ApplicationError:
+    return temporal_exceptions.ApplicationError(
+        reason or "codex turn produced no assistant output",
+        type=CODEX_TRANSIENT_TURN_ERROR_TYPE,
+        non_retryable=False,
+    )
+
+def _codex_permanent_turn_failure(reason: str) -> temporal_exceptions.ApplicationError:
+    return temporal_exceptions.ApplicationError(
+        reason or "codex turn failed",
+        type=CODEX_PERMANENT_TURN_ERROR_TYPE,
+        non_retryable=True,
+    )
+
 @dataclass(frozen=True, slots=True)
 class ArtifactCreateActivityResult:
     """Result from ``artifact.create``."""
@@ -5136,11 +5153,19 @@ class TemporalAgentRuntimeActivities:
                 "threadId": validated.thread_id,
             },
         )
-        return self._validate_session_response(
+        validated_response = self._validate_session_response(
             response,
             activity_type="agent_runtime.send_turn",
             model_type=CodexManagedSessionTurnResponse,
         )
+        if validated_response.status == "failed":
+            metadata = validated_response.metadata or {}
+            reason = str(metadata.get("reason") or "").strip()
+            failure_class = str(metadata.get("failureClass") or "").strip()
+            if failure_class == "transient":
+                raise _codex_transient_turn_failure(reason)
+            raise _codex_permanent_turn_failure(reason)
+        return validated_response
 
     async def agent_runtime_steer_turn(
         self,
