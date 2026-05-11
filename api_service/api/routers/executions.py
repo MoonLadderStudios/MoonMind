@@ -535,16 +535,19 @@ def _state_include_clause(values: list[str]) -> str | None:
     """
     if not values:
         return None
-    deduped: list[str] = []
-    for value in values:
-        if value and value not in deduped:
-            deduped.append(value)
+    deduped = list(dict.fromkeys(v for v in values if v))
     non_terminal = [value for value in deduped if value in _NON_TERMINAL_MM_STATES]
-    terminal_statuses: list[str] = []
-    for value in deduped:
-        for status_value in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE.get(value, ()):  # noqa: E501
-            if status_value not in terminal_statuses:
-                terminal_statuses.append(status_value)
+    terminal_statuses = list(dict.fromkeys(
+        status
+        for value in deduped
+        for status in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE.get(value, ())
+    ))
+    unknown = [
+        value
+        for value in deduped
+        if value not in _NON_TERMINAL_MM_STATES
+        and value not in _TERMINAL_EXECUTION_STATUSES_BY_MM_STATE
+    ]
     parts: list[str] = []
     mm_clause = _any_temporal_query("mm_state", non_terminal)
     if mm_clause is not None:
@@ -552,6 +555,9 @@ def _state_include_clause(values: list[str]) -> str | None:
     status_clause = _any_temporal_query("ExecutionStatus", terminal_statuses)
     if status_clause is not None:
         parts.append(status_clause)
+    unknown_clause = _any_temporal_query("mm_state", unknown)
+    if unknown_clause is not None:
+        parts.append(unknown_clause)
     if not parts:
         return None
     if len(parts) == 1:

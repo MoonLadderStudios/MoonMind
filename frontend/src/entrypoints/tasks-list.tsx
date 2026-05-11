@@ -502,7 +502,7 @@ function FilterPillMultiSelect({
         onChange={(event) => {
           const next = event.target.value;
           if (!next) return;
-          onChange(uniqueValues([...values, next]));
+          onChange([...values, next]);
         }}
       >
         <option value="">
