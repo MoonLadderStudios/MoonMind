@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -44,6 +45,7 @@ SettingActivationState = Literal[
 SettingMigrationState = Literal["renamed", "deprecated", "removed", "type_changed"]
 _DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
 _PERSISTED_SCOPES: set[SettingScope] = {"user", "workspace"}
+_MAX_OVERRIDE_VALUE_BYTES = 16 * 1024
 _SECRET_PREFIXES = ("ghp_", "github_pat_", "AIza", "AKIA")
 _UNSAFE_FIELD_TOKENS = (
     "secret",
@@ -60,6 +62,16 @@ _UNSAFE_FIELD_TOKENS = (
     "command_history",
     "operational_history",
     "decrypted",
+)
+_UNSAFE_STRING_TOKENS = (
+    "oauth_session",
+    "decrypted_credential",
+    "generated_config",
+    "password=",
+    "private_key",
+    "large_artifact",
+    "workflow_payload",
+    "command_history",
 )
 
 SETTINGS_PERMISSION_NAMES: frozenset[str] = frozenset(
@@ -1705,6 +1717,8 @@ class SettingsCatalogService:
         return f"Resolved from {source}."
 
     def _validate_override_value(self, entry: SettingRegistryEntry, value: Any) -> None:
+        if self._override_value_size(value) > _MAX_OVERRIDE_VALUE_BYTES:
+            raise ValueError("invalid_setting_value")
         if self._contains_unsafe_payload(value):
             raise ValueError("invalid_setting_value")
         if value is None:
@@ -1735,9 +1749,23 @@ class SettingsCatalogService:
         else:
             raise ValueError("invalid_setting_value")
 
+    def _override_value_size(self, value: Any) -> int:
+        return len(
+            json.dumps(
+                value,
+                default=str,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        )
+
     def _contains_unsafe_payload(self, value: Any) -> bool:
         if isinstance(value, str):
-            return any(prefix in value for prefix in _SECRET_PREFIXES)
+            normalized = value.lower()
+            return any(prefix in value for prefix in _SECRET_PREFIXES) or any(
+                token in normalized for token in _UNSAFE_STRING_TOKENS
+            )
         if isinstance(value, dict):
             for key, nested in value.items():
                 normalized = str(key).lower()

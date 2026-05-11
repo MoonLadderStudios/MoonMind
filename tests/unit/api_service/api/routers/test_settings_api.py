@@ -553,6 +553,60 @@ async def test_secret_ref_reference_allowed_but_raw_secret_rejected(settings_api
 
 
 @pytest.mark.asyncio
+async def test_oversized_override_payload_rejected_and_effective_value_unchanged(
+    settings_api_db,
+):
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        rejected = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.default_provider_profile_ref": "x" * 20000},
+                "expected_versions": {"workflow.default_provider_profile_ref": 1},
+            },
+        )
+        effective = await client.get(
+            "/api/v1/settings/effective/workflow.default_provider_profile_ref",
+            params={"scope": "workspace"},
+        )
+
+    assert rejected.status_code == 400
+    assert rejected.json()["error"] == "invalid_setting_value"
+    assert "x" * 64 not in rejected.text
+    assert effective.status_code == 200
+    assert effective.json()["source"] in {"config_or_default", "environment", "default"}
+
+
+@pytest.mark.asyncio
+async def test_unsafe_override_payload_classes_are_rejected_and_redacted(
+    settings_api_db,
+):
+    unsafe_values = [
+        "oauth_session_blob={...}",
+        "decrypted_credential_file=/tmp/credential.json",
+        "generated_config password=plaintext",
+        "large_artifact:" + ("x" * 20000),
+        "workflow_payload={\"steps\": []}",
+        "operational command_history: rm -rf /",
+    ]
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        for unsafe_value in unsafe_values:
+            rejected = await client.patch(
+                "/api/v1/settings/workspace",
+                json={
+                    "changes": {"workflow.default_provider_profile_ref": unsafe_value},
+                    "expected_versions": {"workflow.default_provider_profile_ref": 1},
+                },
+            )
+            assert rejected.status_code == 400
+            assert rejected.json()["error"] == "invalid_setting_value"
+            assert unsafe_value[:32] not in rejected.text
+
+
+@pytest.mark.asyncio
 async def test_settings_catalog_requires_catalog_read_permission(settings_user_override):
     settings_user_override(permissions={"settings.effective.read"})
 
