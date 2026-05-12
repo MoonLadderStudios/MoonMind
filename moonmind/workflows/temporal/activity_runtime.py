@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel, ValidationError
 from temporalio import exceptions as temporal_exceptions
@@ -119,10 +119,6 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.plan_validation import validate_plan_payload
 
-if TYPE_CHECKING:
-    from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
-    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-    from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 from moonmind.workflows.skills.skill_dispatcher import execute_skill_activity
 from moonmind.workflows.skills.skill_plan_contracts import (
     ActivityExecutionContext,
@@ -6844,13 +6840,6 @@ class TemporalAgentRuntimeActivities:
 
                         retry_metadata["rebase_status"] = "rebased"
                         retry_remote_sha = remote_sha_after_fetch
-                        if retry_remote_sha is None:
-                            retry_remote_sha = await self._resolve_workspace_ref_sha(
-                                workspace=workspace,
-                                ref=remote_tracking_ref,
-                                run_id=run_id,
-                                env=command_env,
-                            )
                         retry_push_proc = await asyncio.create_subprocess_exec(
                             *self._workspace_git_command(
                                 workspace,
