@@ -13617,6 +13617,9 @@ describe("Task Create MM-578 Preset expansion", () => {
       );
     });
     const submittedStep = latestCreateTaskSteps()[0];
+    if (!submittedStep) {
+      throw new Error("Expected submitted first step");
+    }
     expect(submittedStep.instructions).toBe("Edited generated MM-578 step.");
     expect(submittedStep.source).toMatchObject({
       kind: "detached",
