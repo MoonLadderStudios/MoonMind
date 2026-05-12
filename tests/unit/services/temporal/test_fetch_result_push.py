@@ -596,6 +596,89 @@ class TestPushWorkspaceBranch:
         assert "Permission denied" in result["push_error"]
 
     @pytest.mark.asyncio
+    async def test_push_rebases_and_retries_once_after_lease_conflict(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+        recorded_calls: list[tuple[object, ...]] = []
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            recorded_calls.append(args)
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse --abbrev-ref HEAD
+                proc.communicate = AsyncMock(return_value=(b"feature/retry-push\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # remote branch sha before first push
+                proc.communicate = AsyncMock(return_value=(b"old-remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # first push loses its lease
+                proc.communicate = AsyncMock(
+                    return_value=(
+                        b"",
+                        b"! [rejected] feature/retry-push -> feature/retry-push (stale info)",
+                    )
+                )
+                proc.returncode = 1
+            elif call_count == 6:  # fetch updated remote branch
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 7:  # local HEAD after fetch
+                proc.communicate = AsyncMock(return_value=(b"local-head-before-rebase\n", b""))
+                proc.returncode = 0
+            elif call_count == 8:  # updated remote tracking sha
+                proc.communicate = AsyncMock(return_value=(b"new-remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 9:  # rebase onto updated remote branch
+                proc.communicate = AsyncMock(return_value=(b"Successfully rebased\n", b""))
+                proc.returncode = 0
+            elif call_count == 10:  # retry push with updated lease
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 11:  # final HEAD
+                proc.communicate = AsyncMock(return_value=(b"rebased-head-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 12:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"2\n", b""))
+                proc.returncode = 0
+            else:
+                raise AssertionError(f"Unexpected subprocess call #{call_count}: {args!r}")
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "pushed"
+        assert result["push_branch"] == "feature/retry-push"
+        assert result["push_retry_count"] == 1
+        assert result["fetch_status"] == "fetched"
+        assert result["rebase_status"] == "rebased"
+        assert result["push_commit_count"] == 2
+        assert result["push_head_sha"] == "rebased-head-sha"
+
+        push_calls = [call for call in recorded_calls if "push" in call]
+        assert len(push_calls) == 2
+        assert any(
+            "--force-with-lease=refs/heads/feature/retry-push:old-remote-sha" in call
+            for call in push_calls
+        )
+        assert any(
+            "--force-with-lease=refs/heads/feature/retry-push:new-remote-sha" in call
+            for call in push_calls
+        )
+        assert any(
+            list(call[-2:]) == ["rebase", "refs/remotes/origin/feature/retry-push"]
+            for call in recorded_calls
+        )
+
+    @pytest.mark.asyncio
     async def test_push_branch_detection_failure(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)

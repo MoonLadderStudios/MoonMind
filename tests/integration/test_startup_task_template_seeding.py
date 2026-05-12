@@ -123,7 +123,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "moonspec-implement" in jira_orchestrate_steps
         assert "moonspec-verify" in jira_orchestrate_steps
         assert jira_orchestrate_steps[-1] == "jira-issue-updater"
-        assert len(jira_orchestrate_steps) == 13
+        assert len(jira_orchestrate_steps) == 15
+        assert jira_orchestrate_steps.count("moonspec-implement") == 2
+        assert jira_orchestrate_steps.count("moonspec-verify") == 2
         blocker_step = jira_orchestrate_template.latest_version.steps[1]
         assert blocker_step["title"] == "Check Jira blockers before implementation"
         assert blocker_step["type"] == "tool"
@@ -135,12 +137,28 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "non-blocker" in blocker_step["instructions"]
         assert "status cannot be determined" in blocker_step["instructions"]
         assert "stop the orchestration immediately" in blocker_step["instructions"]
+        remediation_step = next(
+            step
+            for step in jira_orchestrate_template.latest_version.steps
+            if step["title"] == "Remediate verification gaps"
+        )
+        assert remediation_step["skill"]["id"] == "moonspec-implement"
+        assert "ADDITIONAL_WORK_NEEDED" in remediation_step["instructions"]
+        assert "verification report's gaps" in remediation_step["instructions"]
+        remediation_verify_step = next(
+            step
+            for step in jira_orchestrate_template.latest_version.steps
+            if step["title"] == "Verify remediation"
+        )
+        assert remediation_verify_step["skill"]["id"] == "moonspec-verify"
+        assert "controlling verification gate" in remediation_verify_step["instructions"]
         pr_step = next(
             step
             for step in jira_orchestrate_template.latest_version.steps
             if step["title"] == "Create pull request"
         )
         assert "pull request" in pr_step["instructions"]
+        assert "post-remediation moonspec-verify" in pr_step["instructions"]
         assert "parent workflow must use the pull request URL" in pr_step["instructions"]
         assert "explicit PR-publication step" in pr_step["instructions"]
         assert "controlling instruction for this step only" in pr_step["instructions"]

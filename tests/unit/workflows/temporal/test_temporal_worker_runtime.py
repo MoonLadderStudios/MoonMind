@@ -1387,17 +1387,21 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
             )
 
     task = expanded_parameters["task"]
-    assert expanded_parameters["stepCount"] == 13
-    assert len(task["steps"]) == 13
+    assert expanded_parameters["stepCount"] == 15
+    assert len(task["steps"]) == 15
     assert task["steps"][0]["title"] == "Move Jira issue to In Progress"
     assert task["steps"][0]["skill"]["id"] == "jira-issue-updater"
     assert "MM-501" in task["steps"][0]["instructions"]
     assert task["steps"][7]["skill"]["id"] == "moonspec-tasks"
     assert task["steps"][9]["skill"]["id"] == "moonspec-implement"
-    assert task["steps"][11]["title"] == "Create pull request"
-    assert task["steps"][12]["title"] == "Move Jira issue to Code Review"
+    assert task["steps"][11]["title"] == "Remediate verification gaps"
+    assert task["steps"][11]["skill"]["id"] == "moonspec-implement"
+    assert task["steps"][12]["title"] == "Verify remediation"
+    assert task["steps"][12]["skill"]["id"] == "moonspec-verify"
+    assert task["steps"][13]["title"] == "Create pull request"
+    assert task["steps"][14]["title"] == "Move Jira issue to Code Review"
     assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
-    assert len(task["appliedStepTemplates"][0]["stepIds"]) == 13
+    assert len(task["appliedStepTemplates"][0]["stepIds"]) == 15
     assert task["authoredPresets"][0]["presetSlug"] == "jira-orchestrate"
     assert task["authoredPresets"][0]["presetVersion"] == "1.0.0"
     assert "authoredPresets" not in task["appliedStepTemplates"][0]
@@ -2265,6 +2269,58 @@ def test_runtime_planner_preserves_jira_orchestrate_pr_handoff_instructions():
         not in pr_node["inputs"]["instructions"]
     )
     assert "commit your work" not in pr_node["inputs"]["instructions"]
+
+
+@pytest.mark.parametrize("step_index", [12, 13])
+def test_runtime_planner_preserves_jira_orchestrate_pr_handoff_step_id_fallback(
+    step_index,
+):
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Run Jira Orchestrate for THOR-352.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "appliedStepTemplates": [{"slug": "jira-orchestrate"}],
+                "steps": [
+                    {
+                        "id": "tpl:jira-orchestrate:1.0.0:11:verify",
+                        "title": "Verify completion",
+                        "tool": {"type": "skill", "name": "moonspec-verify"},
+                        "instructions": "Verify the Jira issue.",
+                    },
+                    {
+                        "id": f"tpl:jira-orchestrate:1.0.0:{step_index:02d}:create-pr",
+                        "title": "Create pull request",
+                        "instructions": (
+                            "Create a pull request and record pull_request_url."
+                        ),
+                    },
+                    {
+                        "id": "tpl:jira-orchestrate:1.0.0:14:code-review",
+                        "title": "Move Jira issue to Code Review",
+                        "tool": {"type": "skill", "name": "jira-issue-updater"},
+                        "instructions": "Move the Jira issue to Code Review.",
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    pr_node = plan["nodes"][1]
+    assert pr_node["inputs"]["title"] == "Create pull request"
+    assert "Create a pull request" in pr_node["inputs"]["instructions"]
+    assert (
+        "Do NOT push or create a pull request"
+        not in pr_node["inputs"]["instructions"]
+    )
+    assert "commit your work" not in pr_node["inputs"]["instructions"]
+
 
 def test_runtime_planner_publish_pr_skips_gh_suffix_for_jules():
     """Jules uses API automationMode AUTO_CREATE_PR; do not inject gh CLI text."""

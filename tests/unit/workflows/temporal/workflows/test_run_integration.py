@@ -10,6 +10,7 @@ from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import (
     INTEGRATION_POLL_LOOP_PATCH,
     NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+    NATIVE_PR_LEASE_CONFLICT_GATE_PATCH,
     NATIVE_PR_PUSH_STATUS_GATE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
@@ -1134,6 +1135,34 @@ def test_native_pr_push_status_gate_blocks_protected_branch_when_patched(
     ) is True
     assert mock_run_workflow._publish_status == "failed"
     assert "feature/existing" in (mock_run_workflow._publish_reason or "")
+
+def test_native_pr_push_status_gate_blocks_unrecovered_lease_conflict(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == NATIVE_PR_LEASE_CONFLICT_GATE_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={
+            "outputs": {
+                "push_status": "lease_conflict",
+                "push_branch": "feature/existing",
+                "push_error": "! [rejected] feature/existing (stale info)",
+            }
+        },
+    )
+
+    assert mock_run_workflow._native_pr_push_status_blocks_creation(
+        "lease_conflict"
+    ) is True
+    assert mock_run_workflow._publish_status == "failed"
+    assert "remote branch 'feature/existing' changed" in (
+        mock_run_workflow._publish_reason or ""
+    )
 
 def test_record_execution_context_resets_last_step_fields_when_current_node_has_no_summary(
     mock_run_workflow: MoonMindRunWorkflow,

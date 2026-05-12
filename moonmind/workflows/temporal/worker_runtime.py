@@ -923,7 +923,14 @@ def _is_jira_orchestrate_pr_handoff_node(
         role = str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
         if role == "pull-request-handoff":
             return True
-    return _template_step_id_matches(node, slug="jira-orchestrate", step_index=12)
+    return any(
+        _template_step_id_matches(
+            node,
+            slug="jira-orchestrate",
+            step_index=step_index,
+        )
+        for step_index in (12, 13)
+    )
 
 
 def _append_story_breakdown_instructions(

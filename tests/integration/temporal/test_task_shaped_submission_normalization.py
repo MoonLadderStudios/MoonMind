@@ -36,7 +36,7 @@ def _client() -> tuple[TestClient, AsyncMock]:
     return TestClient(app), service
 
 
-def test_task_shaped_submission_boundary_exposes_canonical_task_parameters(
+def test_mm641_task_shaped_submission_boundary_exposes_canonical_task_parameters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
@@ -67,11 +67,11 @@ def test_task_shaped_submission_boundary_exposes_canonical_task_parameters(
                     "repository": "Moon/Mind",
                     "targetRuntime": "codex",
                     "task": {
-                        "instructions": "Preserve MM-627 task shape.",
+                        "instructions": "Preserve MM-641 task shape.",
                         "dependsOn": ["mm:parent"],
                         "runtime": {"mode": "codex", "model": "gpt-5-codex"},
                         "publish": {"mode": "pr"},
-                        "git": {"branch": "feature/mm-627"},
+                        "git": {"branch": "feature/mm-641"},
                         "inputAttachments": [
                             {
                                 "artifactId": "art_01MM627INTOBJECTIVE00000",
@@ -84,7 +84,7 @@ def test_task_shaped_submission_boundary_exposes_canonical_task_parameters(
                             {
                                 "id": "step-1",
                                 "instructions": "Run first step.",
-                                "jiraOrchestration": {"issueKey": "MM-627"},
+                                "jiraOrchestration": {"issueKey": "MM-641"},
                                 "inputAttachments": [
                                     {
                                         "artifactId": "art_01MM627INTSTEP0000000000",
@@ -106,14 +106,34 @@ def test_task_shaped_submission_boundary_exposes_canonical_task_parameters(
 
     assert response.status_code == 201
     task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
-    assert task["git"] == {"branch": "feature/mm-627"}
+    assert task["instructions"] == "Preserve MM-641 task shape."
+    assert task["dependsOn"] == ["mm:parent"]
+    assert task["runtime"] == {"mode": "codex_cli", "model": "gpt-5-codex"}
+    assert task["publish"] == {"mode": "pr"}
+    assert task["git"] == {"branch": "feature/mm-641"}
     assert "targetBranch" not in task
     assert "targetBranch" not in task["git"]
+    assert task["inputAttachments"] == [
+        {
+            "artifactId": "art_01MM627INTOBJECTIVE00000",
+            "filename": "objective.png",
+            "contentType": "image/png",
+            "sizeBytes": 10,
+        }
+    ]
     assert task["authoredPresets"] == [{"slug": "jira-orchestrate"}]
     assert task["appliedStepTemplates"] == [
         {"slug": "jira-implementation", "stepIds": ["step-1"]}
     ]
-    assert task["steps"][0]["jiraOrchestration"] == {"issueKey": "MM-627"}
+    assert task["steps"][0]["inputAttachments"] == [
+        {
+            "artifactId": "art_01MM627INTSTEP0000000000",
+            "filename": "step.png",
+            "contentType": "image/png",
+            "sizeBytes": 20,
+        }
+    ]
+    assert task["steps"][0]["jiraOrchestration"] == {"issueKey": "MM-641"}
 
 def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
     monkeypatch: pytest.MonkeyPatch,
@@ -191,6 +211,7 @@ def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
                                         "parent-flow@1.0.0",
                                         "quality:child-checks@1.0.0",
                                     ],
+                                    "originalStepId": "lint-target",
                                 },
                             }
                         ],
@@ -218,6 +239,8 @@ def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
         "parent-flow@1.0.0",
         "quality:child-checks@1.0.0",
     ]
+    assert task["steps"][0]["source"]["originalStepId"] == "lint-target"
+    assert all(step.get("kind") != "include" for step in task["steps"])
     assert all(step.get("type") != "preset" for step in task["steps"])
 
 

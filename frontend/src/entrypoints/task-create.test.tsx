@@ -12644,6 +12644,299 @@ describe.skip("Task Create Entrypoint", () => {
   });
 });
 
+describe("Task Create MM-641 authoring validation", () => {
+  let fetchSpy: MockInstance;
+
+  function latestCreateRequest(): Record<string, unknown> {
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    expect(executionCall).toBeTruthy();
+    return JSON.parse(String(executionCall?.[1]?.body || "{}")) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  beforeEach(() => {
+    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    vi.mocked(navigateTo).mockReset();
+    fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/tasks/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: { worker: ["moonspec-orchestrate", "pr-resolver"] },
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/github/branches")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                { value: "main", label: "main", source: "github" },
+                {
+                  value: "feature/mm-641-create-page",
+                  label: "feature/mm-641-create-page",
+                  source: "github",
+                },
+              ],
+              defaultBranch: "main",
+              error: null,
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/v1/provider-profiles")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [
+              {
+                profile_id: "profile:codex-default",
+                account_label: "Codex Default",
+                is_default: true,
+              },
+            ],
+          } as Response);
+        }
+        if (url.startsWith("/api/task-step-templates")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        if (
+          url.startsWith(
+            "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run",
+          )
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  taskId: "mm:dep-641",
+                  workflowType: "MoonMind.Run",
+                  entry: "run",
+                  title: "Prepare MM-641 source brief",
+                  state: "completed",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:workflow-641",
+              runId: "run-641",
+              state: "queued",
+            }),
+          } as Response);
+        }
+        if (url === "/api/artifacts") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              artifact_ref: {
+                artifact_id: "art-mm641",
+              },
+              upload: {
+                mode: "single",
+                upload_url: "/api/artifacts/art-mm641/content",
+                expires_at: "2026-05-12T00:00:00Z",
+                max_size_bytes: 100000,
+                required_headers: {},
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/art-mm641/content") {
+          return Promise.resolve({
+            ok: true,
+            text: async () => "",
+          } as Response);
+        }
+        if (url === "/api/artifacts/art-mm641/complete") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ artifactId: "art-mm641", status: "complete" }),
+          } as Response);
+        }
+        return Promise.reject(new Error(`Unhandled fetch ${url}`));
+      });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("renders repository branch and publish mode in the Submit floating bar", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    const stepsSection = await waitFor(() => {
+      const section = document.querySelector<HTMLElement>(
+        '[data-canonical-create-section="Steps"]',
+      );
+      expect(section).not.toBeNull();
+      return section as HTMLElement;
+    });
+    const submitSection = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Submit"]',
+    );
+    const createButton = screen.getByRole("button", { name: "Create" });
+    const repoInput = await screen.findByLabelText("GitHub Repo");
+    const branchInput = screen.getByLabelText("Branch");
+    const publishModeSelect = screen.getByLabelText("Publish Mode");
+    const floatingBar = createButton.closest(".queue-floating-bar");
+    const floatingBarRow = createButton.closest(".queue-floating-bar-row");
+
+    expect(floatingBar).not.toBeNull();
+    expect(floatingBarRow).not.toBeNull();
+    expect(repoInput.closest(".queue-floating-bar")).toBe(floatingBar);
+    expect(branchInput.closest(".queue-floating-bar")).toBe(floatingBar);
+    expect(publishModeSelect.closest(".queue-floating-bar")).toBe(floatingBar);
+    expect(repoInput.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
+    expect(branchInput.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
+    expect(publishModeSelect.closest(".queue-floating-bar-row")).toBe(
+      floatingBarRow,
+    );
+    expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBe(
+      submitSection,
+    );
+    expect(branchInput.closest('[data-canonical-create-section="Submit"]')).toBe(
+      submitSection,
+    );
+    expect(
+      publishModeSelect.closest('[data-canonical-create-section="Submit"]'),
+    ).toBe(submitSection);
+    expect(repoInput.closest('[data-canonical-create-section="Steps"]')).toBeNull();
+    expect(branchInput.closest('[data-canonical-create-section="Steps"]')).toBeNull();
+    expect(
+      publishModeSelect.closest('[data-canonical-create-section="Steps"]'),
+    ).toBeNull();
+    expect(createButton.closest('[data-canonical-create-section="Submit"]')).toBe(
+      submitSection,
+    );
+    expect(stepsSection).not.toBeNull();
+  });
+
+  it("blocks invalid MM-641 authoring drafts before creating executions", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Implement MM-641 validation." },
+    });
+    fireEvent.change(screen.getByLabelText("GitHub Repo"), {
+      target: { value: "invalid repo with spaces" },
+    });
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "branch" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Repository must be owner/repo, https://<host>/<path>, or git@<host>:<path> (token-free).",
+        ),
+      ).toBeTruthy();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
+  it("submits a combined valid MM-641 draft without targetBranch", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    const stepsSection = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Steps"]',
+    );
+    const repoInput = await screen.findByLabelText("GitHub Repo");
+    const branchInput = screen.getByLabelText("Branch");
+    const publishModeSelect = screen.getByLabelText("Publish Mode");
+    expect(repoInput.closest('[data-canonical-create-section="Steps"]')).toBe(
+      stepsSection,
+    );
+    expect(branchInput.closest('[data-canonical-create-section="Steps"]')).toBe(
+      stepsSection,
+    );
+    expect(
+      publishModeSelect.closest('[data-canonical-create-section="Steps"]'),
+    ).toBe(stepsSection);
+
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Implement MM-641 from the Jira preset brief." },
+    });
+    fireEvent.change(repoInput, {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+    await waitFor(() => {
+      expect((branchInput as HTMLInputElement).disabled).toBe(false);
+    });
+    fireEvent.change(branchInput, {
+      target: { value: "feature/mm-641-create-page" },
+    });
+    fireEvent.change(publishModeSelect, { target: { value: "branch" } });
+    fireEvent.change(screen.getByLabelText("Existing run"), {
+      target: { value: "mm:dep-641" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
+    await waitFor(() => {
+      expect(screen.getByText(/Prepare MM-641 source brief/)).toBeTruthy();
+    });
+    const step = (await screen.findByText("Step 1")).closest("section");
+    expect(step).not.toBeNull();
+    fireEvent.change(within(step as HTMLElement).getByLabelText("Instructions"), {
+      target: { value: "Move repository branch publish controls into Steps." },
+    });
+    fireEvent.change(
+      within(step as HTMLElement).getByLabelText("Step 1 attachment file picker"),
+      {
+        target: {
+          files: [new File(["wireframe"], "mm641.png", { type: "image/png" })],
+        },
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest();
+    const task = (request.payload as { task: Record<string, unknown> }).task;
+    expect(task.instructions).toBe(
+      "Move repository branch publish controls into Steps.",
+    );
+    expect(task.git).toEqual({ branch: "feature/mm-641-create-page" });
+    expect(task.publish).toEqual({ mode: "branch" });
+    expect(task.dependsOn).toEqual(["mm:dep-641"]);
+    expect((task.steps as Array<Record<string, unknown>>)[0]).toMatchObject({
+      instructions: "Move repository branch publish controls into Steps.",
+      inputAttachments: [
+        {
+          artifactId: "art-mm641",
+          filename: "mm641.png",
+          contentType: "image/png",
+        },
+      ],
+    });
+    expect(JSON.stringify(task)).not.toContain("targetBranch");
+    expect(JSON.stringify(task)).not.toContain("startingBranch");
+  });
+});
+
 describe("Task Create submit arrow animation", () => {
   let css: string;
 
@@ -13673,6 +13966,27 @@ describe("Task Create MM-578 Preset expansion", () => {
       target: { value: "Edited generated MM-578 step." },
     });
     expect(screen.getByDisplayValue("Edited generated MM-578 step.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const submittedStep = latestCreateTaskSteps()[0];
+    if (!submittedStep) {
+      throw new Error("Expected submitted first step");
+    }
+    expect(submittedStep.instructions).toBe("Edited generated MM-578 step.");
+    expect(submittedStep.source).toMatchObject({
+      kind: "detached",
+      presetId: "mm-578-preset",
+      presetVersion: "1.0.0",
+      includePath: ["root", "fetch"],
+      originalStepId: "fetch-jira-issue",
+    });
   });
 
   it("submits applied preset-generated Tool and Skill steps with executable binding and provenance", async () => {

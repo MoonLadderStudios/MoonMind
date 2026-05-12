@@ -378,6 +378,7 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
                 ],
                 steps=[
                     {
+                        "id": "lint-target",
                         "title": "Lint target",
                         "instructions": "Lint {{ inputs.target }}",
                         "source": {"kind": "manual"},
@@ -388,6 +389,7 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
                         },
                     },
                     {
+                        "id": "test-target",
                         "title": "Test target",
                         "instructions": "Test {{ inputs.target }}",
                     },
@@ -449,6 +451,7 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
     assert provenance["root"] == {"slug": "parent-flow", "version": "1.0.0"}
     assert provenance["source"]["slug"] == "child-checks"
     assert provenance["source"]["version"] == "1.0.0"
+    assert provenance["source"]["originalStepId"] == "lint-target"
     assert provenance["alias"] == "quality"
     assert provenance["path"] == [
         "parent-flow@1.0.0",
@@ -489,8 +492,103 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
             "parent-flow@1.0.0",
             "quality:child-checks@1.0.0",
         ],
+        "originalStepId": "lint-target",
     }
-    assert expanded["steps"][0]["source"]["kind"] != "manual"
+    assert expanded["steps"][1]["presetProvenance"]["source"][
+        "originalStepId"
+    ] == "test-target"
+    assert expanded["steps"][1]["source"] == {
+        "kind": "preset-derived",
+        "presetSlug": "child-checks",
+        "presetVersion": "1.0.0",
+        "includePath": [
+            "parent-flow@1.0.0",
+            "quality:child-checks@1.0.0",
+        ],
+        "originalStepId": "test-target",
+    }
+    assert expanded["steps"][0]["source"]["kind"] == "preset-derived"
+    assert expanded["steps"][0]["source"]["presetSlug"] == "child-checks"
+    assert expanded["steps"][0]["source"]["originalStepId"] == "lint-target"
+    for step in expanded["steps"]:
+        assert "originalStepId" not in step
+        assert step["source"]["originalStepId"]
+        assert step["presetProvenance"]["source"]["originalStepId"]
+
+
+async def test_expand_template_preserves_explicit_original_step_id_over_step_id(
+    tmp_path,
+):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="explicit-original-id",
+                title="Explicit Original Id",
+                description="Preserves source id.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "id": "current-step-id",
+                        "originalStepId": "source-step-id",
+                        "title": "Run check",
+                        "instructions": "Run check",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+
+            expanded = await service.expand_template(
+                slug="explicit-original-id",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={},
+                context={},
+            )
+
+    step = expanded["steps"][0]
+    assert step["source"]["originalStepId"] == "source-step-id"
+    assert step["presetProvenance"]["source"]["originalStepId"] == "source-step-id"
+    assert "originalStepId" not in step
+
+
+async def test_expand_template_omits_original_step_id_when_source_step_has_no_id(
+    tmp_path,
+):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="generated-step",
+                title="Generated Step",
+                description="No source id.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[{"title": "Generated", "instructions": "Generated"}],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+
+            expanded = await service.expand_template(
+                slug="generated-step",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={},
+                context={},
+            )
+
+    assert "originalStepId" not in expanded["steps"][0]["source"]
+    assert "originalStepId" not in expanded["steps"][0]["presetProvenance"]["source"]
 
 async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -564,6 +662,174 @@ async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
     ]
     assert first["composition"]["stepIds"] == [
         step["id"] for step in first["steps"]
+    ]
+
+
+async def test_expand_template_flattens_multi_level_include_tree_with_provenance(
+    tmp_path,
+):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="deep-child",
+                title="Deep Child",
+                description="Deep child.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[
+                    {
+                        "name": "target",
+                        "label": "Target",
+                        "type": "text",
+                        "required": True,
+                    }
+                ],
+                steps=[
+                    {
+                        "id": "deep-child-step",
+                        "title": "Deep child step",
+                        "instructions": "Check {{ inputs.target }}",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+            await service.create_template(
+                slug="middle-flow",
+                title="Middle Flow",
+                description="Middle include.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[
+                    {
+                        "name": "target",
+                        "label": "Target",
+                        "type": "text",
+                        "required": True,
+                    }
+                ],
+                steps=[
+                    {
+                        "title": "Middle manual before",
+                        "instructions": "Middle manual before",
+                    },
+                    {
+                        "kind": "include",
+                        "slug": "deep-child",
+                        "version": "1.0.0",
+                        "alias": "deep",
+                        "scope": "global",
+                        "inputMapping": {"target": "{{ inputs.target }}"},
+                    },
+                    {
+                        "title": "Middle manual after",
+                        "instructions": "Middle manual after",
+                    },
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+            await service.create_template(
+                slug="parent-flow",
+                title="Parent Flow",
+                description="Parent include.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[
+                    {
+                        "name": "feature",
+                        "label": "Feature",
+                        "type": "text",
+                        "required": True,
+                    }
+                ],
+                steps=[
+                    {
+                        "title": "Parent manual before",
+                        "instructions": "Parent manual before",
+                    },
+                    {
+                        "kind": "include",
+                        "slug": "middle-flow",
+                        "version": "1.0.0",
+                        "alias": "middle",
+                        "scope": "global",
+                        "inputMapping": {"target": "{{ inputs.feature }}"},
+                    },
+                    {
+                        "title": "Parent manual after",
+                        "instructions": "Parent manual after",
+                    },
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+
+            expanded = await service.expand_template(
+                slug="parent-flow",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={"feature": "recursive provenance"},
+                context={},
+            )
+
+    assert [step["title"] for step in expanded["steps"]] == [
+        "Parent manual before",
+        "Middle manual before",
+        "Deep child step",
+        "Middle manual after",
+        "Parent manual after",
+    ]
+    deep_step = expanded["steps"][2]
+    assert deep_step["source"] == {
+        "kind": "preset-derived",
+        "presetSlug": "deep-child",
+        "presetVersion": "1.0.0",
+        "includePath": [
+            "parent-flow@1.0.0",
+            "middle:middle-flow@1.0.0",
+            "deep:deep-child@1.0.0",
+        ],
+        "originalStepId": "deep-child-step",
+    }
+    assert expanded["authoredPresets"] == [
+        {
+            "presetSlug": "parent-flow",
+            "presetVersion": "1.0.0",
+            "scope": "global",
+            "includePath": ["parent-flow@1.0.0"],
+        },
+        {
+            "presetSlug": "middle-flow",
+            "presetVersion": "1.0.0",
+            "alias": "middle",
+            "scope": "global",
+            "includePath": [
+                "parent-flow@1.0.0",
+                "middle:middle-flow@1.0.0",
+            ],
+            "inputMapping": {"target": "recursive provenance"},
+        },
+        {
+            "presetSlug": "deep-child",
+            "presetVersion": "1.0.0",
+            "alias": "deep",
+            "scope": "global",
+            "includePath": [
+                "parent-flow@1.0.0",
+                "middle:middle-flow@1.0.0",
+                "deep:deep-child@1.0.0",
+            ],
+            "inputMapping": {"target": "recursive provenance"},
+        },
     ]
 
 async def test_expand_template_rejects_duplicate_include_aliases(tmp_path):
@@ -643,7 +909,7 @@ async def test_expand_template_rejects_missing_include_target(tmp_path):
             with pytest.raises(
                 TaskTemplateValidationError,
                 match="missing:missing-child@1.0.0",
-            ):
+            ) as excinfo:
                 await service.expand_template(
                     slug="missing-target-parent",
                     scope="global",
@@ -652,6 +918,72 @@ async def test_expand_template_rejects_missing_include_target(tmp_path):
                     inputs={},
                     context={},
                 )
+
+    assert excinfo.value.errors[0]["code"] == "preset_include_missing"
+    assert excinfo.value.errors[0]["includePath"] == [
+        "missing-target-parent@1.0.0",
+        "missing:missing-child@1.0.0",
+    ]
+
+
+async def test_expand_template_rejects_include_version_mismatch_with_explicit_error(
+    tmp_path,
+):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="child-checks",
+                title="Child Checks",
+                description="Reusable child.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[{"instructions": "child"}],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+            await service.create_template(
+                slug="version-mismatch-parent",
+                title="Version Mismatch Parent",
+                description="Requests unavailable version.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "child-checks",
+                        "version": "2.0.0",
+                        "alias": "child",
+                        "scope": "global",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+
+            with pytest.raises(TaskTemplateValidationError) as excinfo:
+                await service.expand_template(
+                    slug="version-mismatch-parent",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={},
+                    context={},
+                )
+
+    assert "version mismatch" in str(excinfo.value).lower()
+    assert "child:child-checks@2.0.0" in str(excinfo.value)
+    assert excinfo.value.errors[0]["code"] == "preset_include_version_mismatch"
+    assert excinfo.value.errors[0]["includePath"] == [
+        "version-mismatch-parent@1.0.0",
+        "child:child-checks@2.0.0",
+    ]
 
 async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
     tmp_path,
@@ -829,7 +1161,7 @@ async def test_expand_template_rejects_global_parent_personal_include(tmp_path):
             with pytest.raises(
                 TaskTemplateValidationError,
                 match="Global presets cannot include personal presets.*private:personal-child@1.0.0",
-            ):
+            ) as excinfo:
                 await service.expand_template(
                     slug="global-parent",
                     scope="global",
@@ -839,6 +1171,8 @@ async def test_expand_template_rejects_global_parent_personal_include(tmp_path):
                     context={},
                     options=ExpandOptions(),
                 )
+
+    assert excinfo.value.errors[0]["code"] == "preset_include_scope_violation"
 
 async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -890,7 +1224,7 @@ async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
             with pytest.raises(
                 TaskTemplateValidationError,
                 match="Preset include cycle detected.*preset-a@1.0.0.*b:preset-b@1.0.0.*a:preset-a@1.0.0",
-            ):
+            ) as excinfo:
                 await service.expand_template(
                     slug="preset-a",
                     scope="global",
@@ -900,6 +1234,8 @@ async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
                     context={},
                     options=ExpandOptions(),
                 )
+
+    assert excinfo.value.errors[0]["code"] == "preset_include_cycle"
 
 async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -985,7 +1321,7 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
             with pytest.raises(
                 TaskTemplateValidationError,
                 match="inactive.*inactive:inactive-child@1.0.0",
-            ):
+            ) as inactive_excinfo:
                 await service.expand_template(
                     slug="bad-parent",
                     scope="global",
@@ -999,7 +1335,7 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
             with pytest.raises(
                 TaskTemplateValidationError,
                 match="requires-topic:input-child@1.0.0.*Missing required template input 'topic'",
-            ):
+            ) as input_excinfo:
                 await service.expand_template(
                     slug="input-parent",
                     scope="global",
@@ -1009,6 +1345,11 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
                     context={},
                     options=ExpandOptions(),
                 )
+
+    assert inactive_excinfo.value.errors[0]["code"] == "preset_include_inactive"
+    assert input_excinfo.value.errors[0]["code"] == (
+        "preset_include_input_mapping_invalid"
+    )
 
 async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -1467,6 +1808,44 @@ async def test_import_seed_templates_skips_existing(tmp_path):
             )
             assert created_count_second == 0
 
+
+async def test_sync_seed_templates_preserves_step_original_step_id(tmp_path):
+    seed_dir = tmp_path / "seeds"
+    _write_seed_template(
+        seed_dir,
+        {
+            "slug": "seeded-preset",
+            "title": "Seeded Preset",
+            "description": "Seed carries source ids.",
+            "scope": "global",
+            "version": "1.0.0",
+            "steps": [
+                {
+                    "id": "current-id",
+                    "originalStepId": "seed-source-id",
+                    "instructions": "Run seeded step",
+                }
+            ],
+        },
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            expanded = await service.expand_template(
+                slug="seeded-preset",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={},
+                context={},
+            )
+
+    assert expanded["steps"][0]["source"]["originalStepId"] == "seed-source-id"
+    assert "originalStepId" not in expanded["steps"][0]
+
 async def test_seed_catalog_includes_jira_breakdown_preset(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1862,6 +2241,8 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 "moonspec-align",
                 "moonspec-implement",
                 "moonspec-verify",
+                "moonspec-implement",
+                "moonspec-verify",
                 "auto",
                 "jira-issue-updater",
             ]
@@ -1881,7 +2262,7 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 context={},
             )
 
-            assert len(expanded["steps"]) == 13
+            assert len(expanded["steps"]) == 15
             assert expanded["steps"][0]["skill"]["id"] == "jira-issue-updater"
             assert "MM-328" in expanded["steps"][0]["instructions"]
             assert "In Progress" in expanded["steps"][0]["instructions"]
@@ -1918,35 +2299,47 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             ]
             assert "Jira preset brief" in expanded["steps"][2]["instructions"]
             assert "Keep the scope narrow." in expanded["steps"][3]["instructions"]
-            assert expanded["steps"][11]["title"] == "Create pull request"
-            assert expanded["steps"][11]["annotations"] == {
+            assert expanded["steps"][11]["title"] == "Remediate verification gaps"
+            assert expanded["steps"][11]["skill"]["id"] == "moonspec-implement"
+            assert "ADDITIONAL_WORK_NEEDED" in expanded["steps"][11]["instructions"]
+            assert "verification report's gaps" in expanded["steps"][11]["instructions"]
+            assert expanded["steps"][12]["title"] == "Verify remediation"
+            assert expanded["steps"][12]["skill"]["id"] == "moonspec-verify"
+            assert "controlling verification gate" in expanded["steps"][12][
+                "instructions"
+            ]
+            assert expanded["steps"][13]["title"] == "Create pull request"
+            assert expanded["steps"][13]["annotations"] == {
                 "jiraOrchestrateRole": "pull-request-handoff"
             }
-            assert "pull request title must include MM-328" in expanded["steps"][11][
+            assert "post-remediation moonspec-verify" in expanded["steps"][13][
                 "instructions"
             ]
-            assert "parent workflow must use the pull request URL" in expanded["steps"][11][
+            assert "pull request title must include MM-328" in expanded["steps"][13][
                 "instructions"
             ]
-            assert "explicit PR-publication step" in expanded["steps"][11][
+            assert "parent workflow must use the pull request URL" in expanded["steps"][13][
                 "instructions"
             ]
-            assert "controlling instruction for this step only" in expanded["steps"][11][
+            assert "explicit PR-publication step" in expanded["steps"][13][
                 "instructions"
             ]
-            assert "merge automation" in expanded["steps"][11]["instructions"]
-            assert "non-draft pull request" in expanded["steps"][11]["instructions"]
-            assert "isDraft value is false" in expanded["steps"][11]["instructions"]
-            assert "confirmed non-draft" in expanded["steps"][11]["instructions"]
-            assert "artifacts/jira-orchestrate-pr.json" in expanded["steps"][11][
+            assert "controlling instruction for this step only" in expanded["steps"][13][
                 "instructions"
             ]
-            assert expanded["steps"][12]["skill"]["id"] == "jira-issue-updater"
-            assert "pull_request_url" in expanded["steps"][12]["instructions"]
-            assert "stop without changing Jira" in expanded["steps"][12][
+            assert "merge automation" in expanded["steps"][13]["instructions"]
+            assert "non-draft pull request" in expanded["steps"][13]["instructions"]
+            assert "isDraft value is false" in expanded["steps"][13]["instructions"]
+            assert "confirmed non-draft" in expanded["steps"][13]["instructions"]
+            assert "artifacts/jira-orchestrate-pr.json" in expanded["steps"][13][
                 "instructions"
             ]
-            assert "Code Review" in expanded["steps"][12]["instructions"]
+            assert expanded["steps"][14]["skill"]["id"] == "jira-issue-updater"
+            assert "pull_request_url" in expanded["steps"][14]["instructions"]
+            assert "stop without changing Jira" in expanded["steps"][14][
+                "instructions"
+            ]
+            assert "Code Review" in expanded["steps"][14]["instructions"]
             assert all(
                 step["title"] != "Return Jira orchestration report"
                 for step in expanded["steps"]

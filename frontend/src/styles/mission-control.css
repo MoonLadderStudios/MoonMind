@@ -3472,6 +3472,33 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding-left: 2.35rem;
 }
 
+.queue-step-authoring-controls {
+  display: grid;
+  gap: 0.45rem;
+  padding-block-start: 0.15rem;
+}
+
+.queue-authoring-controls-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns:
+    minmax(12rem, 1.65fr)
+    minmax(10rem, 1.45fr)
+    minmax(8rem, 1fr);
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.queue-authoring-controls-status {
+  margin: 0;
+  padding: 0.1rem 0.2rem;
+}
+
+.queue-step-authoring-controls .queue-inline-selector select,
+.queue-step-authoring-controls .queue-inline-selector input {
+  background: var(--mm-input-well);
+}
+
 .queue-floating-bar {
   position: fixed;
   left: 50%;
@@ -3544,13 +3571,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   display: grid;
   width: 100%;
   justify-self: stretch;
-  grid-template-columns:
-    minmax(12rem, 1.65fr)
-    minmax(10rem, 1.45fr)
-    minmax(8rem, 1fr)
-    auto;
+  grid-template-columns: auto;
   gap: 0.5rem;
   align-items: center;
+  justify-content: end;
 }
 
 .queue-floating-bar-status {
@@ -3733,12 +3757,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 @media (max-width: 640px) {
-  .queue-floating-bar-row {
-    grid-template-columns: minmax(0, 1fr) minmax(9.5rem, 0.8fr) auto;
+  .queue-authoring-controls-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .queue-floating-bar-row .queue-inline-selector--repo {
-    grid-column: 1 / -1;
+  .queue-floating-bar-row {
+    justify-content: stretch;
+  }
+
+  .queue-floating-bar-row .queue-submit-primary {
+    justify-self: end;
   }
 }
 
