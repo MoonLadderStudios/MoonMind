@@ -34,7 +34,7 @@ Traceability: MM-656.
 Run focused unit tests during implementation:
 
 ```bash
-pytest tests/unit/services/test_settings_catalog.py tests/unit/api_service/api/routers/test_settings_api.py -q
+pytest tests/unit/services/test_settings_catalog.py tests/unit/api_service/api/routers/test_settings_api.py tests/unit/specs/test_mm656_traceability.py -q
 ```
 
 Run focused hermetic integration tests during implementation:

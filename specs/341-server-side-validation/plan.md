@@ -53,7 +53,7 @@ MM-656 requires the Settings System to reject unsafe setting changes through a s
 **Language/Version**: Python 3.12; TypeScript/React remains present but is not expected unless diagnostics UI needs follow-up in later stages  
 **Primary Dependencies**: FastAPI, Pydantic v2, SQLAlchemy async ORM, existing settings catalog service, existing provider profile and managed secret models  
 **Storage**: Existing `settings_overrides`, `settings_audit_events`, `managed_secrets`, and `managed_agent_provider_profiles`; no new persistent table planned  
-**Unit Testing**: `./tools/test_unit.sh` for final unit verification; focused iteration with `pytest tests/unit/services/test_settings_catalog.py tests/unit/api_service/api/routers/test_settings_api.py`  
+**Unit Testing**: `./tools/test_unit.sh` for final unit verification; focused iteration with `pytest tests/unit/services/test_settings_catalog.py tests/unit/api_service/api/routers/test_settings_api.py tests/unit/specs/test_mm656_traceability.py -q`  
 **Integration Testing**: `./tools/test_integration.sh` for required hermetic integration; focused iteration with `pytest tests/integration/api/test_settings_overrides_contract.py tests/integration/api/test_settings_effective_values_contract.py -m 'integration_ci'`  
 **Target Platform**: Linux server containers running the MoonMind API and workers  
 **Project Type**: FastAPI web service with shared backend service contracts and Mission Control consumers  
