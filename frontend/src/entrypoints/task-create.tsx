@@ -8853,90 +8853,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               </button>
             </div>
 
-            <div
-              className="queue-step-authoring-controls"
-              role="group"
-              aria-label="Repository, branch, and publish mode"
-            >
-              {branchStatusMessage ? (
-                <p
-                  className={
-                    branchOptionsQuery.isError || selectedBranchIsStale
-                      ? "queue-authoring-controls-status notice error"
-                      : "queue-authoring-controls-status small"
-                  }
-                >
-                  {branchStatusMessage}
-                </p>
-              ) : null}
-              <div className="queue-authoring-controls-row">
-                <div
-                  className="queue-inline-selector queue-inline-selector--repo"
-                  title={repositoryTooltip}
-                >
-                  <RepoIcon />
-                  <input
-                    name="repository"
-                    aria-label="GitHub Repo"
-                    title={repositoryTooltip}
-                    list={REPOSITORY_OPTIONS_DATALIST_ID}
-                    value={repository}
-                    placeholder="owner/repo"
-                    onChange={(event) =>
-                      handleRepositoryChange(event.target.value)
-                    }
-                  />
-                </div>
-                <div
-                  className="queue-inline-selector queue-inline-selector--branch"
-                  title={branchTooltip}
-                >
-                  <BranchIcon />
-                  <input
-                    name="branch"
-                    aria-label="Branch"
-                    title={branchTooltip}
-                    list={BRANCH_OPTIONS_DATALIST_ID}
-                    value={branch}
-                    placeholder={
-                      branchOptionsQuery.isLoading
-                        ? "Loading branches..."
-                        : "Branch"
-                    }
-                    disabled={branchControlDisabled}
-                    onChange={(event) => {
-                      setBranchTouched(true);
-                      setBranch(event.target.value);
-                    }}
-                  />
-                </div>
-                <div
-                  className="queue-inline-selector queue-inline-selector--publish"
-                  title={publishModeTooltip}
-                >
-                  <PublishIcon />
-                  <select
-                    name="publishMode"
-                    aria-label="Publish Mode"
-                    title={publishModeTooltip}
-                    value={publishMode}
-                    onChange={(event) => setPublishMode(event.target.value)}
-                    disabled={!mergeAutomationAvailable}
-                  >
-                    <option value="none">None</option>
-                    <option value="branch">Branch</option>
-                    <option value="pr">PR</option>
-                    <option
-                      value={PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}
-                      disabled={!mergeAutomationAvailable}
-                    >
-                      PR with Merge Automation
-                    </option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
           </div>
         </section>
 
@@ -9358,7 +9274,82 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           role="group"
           aria-label="Task submission controls"
         >
+          {branchStatusMessage ? (
+            <p
+              className={
+                branchOptionsQuery.isError || selectedBranchIsStale
+                  ? "queue-authoring-controls-status notice error"
+                  : "queue-authoring-controls-status small"
+              }
+            >
+              {branchStatusMessage}
+            </p>
+          ) : null}
           <div className="queue-floating-bar-row">
+            <div
+              className="queue-inline-selector queue-inline-selector--repo"
+              title={repositoryTooltip}
+            >
+              <RepoIcon />
+              <input
+                name="repository"
+                aria-label="GitHub Repo"
+                title={repositoryTooltip}
+                list={REPOSITORY_OPTIONS_DATALIST_ID}
+                value={repository}
+                placeholder="owner/repo"
+                onChange={(event) =>
+                  handleRepositoryChange(event.target.value)
+                }
+              />
+            </div>
+            <div
+              className="queue-inline-selector queue-inline-selector--branch"
+              title={branchTooltip}
+            >
+              <BranchIcon />
+              <input
+                name="branch"
+                aria-label="Branch"
+                title={branchTooltip}
+                list={BRANCH_OPTIONS_DATALIST_ID}
+                value={branch}
+                placeholder={
+                  branchOptionsQuery.isLoading
+                    ? "Loading branches..."
+                    : "Branch"
+                }
+                disabled={branchControlDisabled}
+                onChange={(event) => {
+                  setBranchTouched(true);
+                  setBranch(event.target.value);
+                }}
+              />
+            </div>
+            <div
+              className="queue-inline-selector queue-inline-selector--publish"
+              title={publishModeTooltip}
+            >
+              <PublishIcon />
+              <select
+                name="publishMode"
+                aria-label="Publish Mode"
+                title={publishModeTooltip}
+                value={publishMode}
+                onChange={(event) => setPublishMode(event.target.value)}
+                disabled={!mergeAutomationAvailable}
+              >
+                <option value="none">None</option>
+                <option value="branch">Branch</option>
+                <option value="pr">PR</option>
+                <option
+                  value={PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}
+                  disabled={!mergeAutomationAvailable}
+                >
+                  PR with Merge Automation
+                </option>
+              </select>
+            </div>
             <button
               type="submit"
               ref={submitButtonRef}
