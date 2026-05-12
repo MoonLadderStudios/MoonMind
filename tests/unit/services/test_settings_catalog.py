@@ -785,6 +785,35 @@ async def test_provider_profile_reference_reports_missing_and_disabled_diagnosti
 
 
 @pytest.mark.asyncio
+async def test_provider_profile_override_preserves_resettable_source(
+    settings_session_maker,
+) -> None:
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+
+        response = await service.apply_overrides(
+            scope="workspace",
+            changes={"workflow.default_provider_profile_ref": "missing-profile"},
+            expected_versions={"workflow.default_provider_profile_ref": 1},
+        )
+        effective = response.values["workflow.default_provider_profile_ref"]
+        descriptor = next(
+            item
+            for item in (
+                await service.catalog_async(section="user-workspace", scope="workspace")
+            ).categories["Workflow"]
+            if item.key == "workflow.default_provider_profile_ref"
+        )
+
+    assert effective.value == "missing-profile"
+    assert effective.source == "workspace_override"
+    assert effective.diagnostics[0].code == "provider_profile_not_found"
+    assert descriptor.effective_value == "missing-profile"
+    assert descriptor.source == "workspace_override"
+    assert descriptor.diagnostics[0].code == "provider_profile_not_found"
+
+
+@pytest.mark.asyncio
 async def test_late_diagnostics_report_restored_reference_gaps_without_plaintext(
     settings_session_maker,
 ) -> None:
@@ -1811,7 +1840,7 @@ async def test_mm655_reference_sources_remain_secret_safe(settings_session_maker
     assert github.source == "secret_ref"
     assert github.diagnostics == []
     assert "active-secret-plaintext" not in github.model_dump_json()
-    assert provider.source == "provider_profile"
+    assert provider.source == "workspace_override"
     assert provider.diagnostics[0].code == "provider_profile_not_found"
     assert "secret_refs" not in provider.model_dump_json()
 

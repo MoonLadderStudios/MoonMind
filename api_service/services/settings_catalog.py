@@ -1332,6 +1332,7 @@ class SettingsCatalogService:
             entry.key == "workflow.default_provider_profile_ref"
             and isinstance(value, str)
             and value.strip()
+            and source not in {"workspace_override", "user_override"}
         ):
             return "provider_profile"
         return source
