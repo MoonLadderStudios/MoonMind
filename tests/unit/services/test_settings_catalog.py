@@ -18,9 +18,14 @@ from api_service.db.models import (
 from api_service.services.settings_catalog import (
     SETTINGS_PERMISSION_NAMES,
     SettingAuditPolicy,
+    SettingDependency,
     SettingMigrationRule,
+    SettingConstraints,
+    SettingValidationIssue,
     SettingsCatalogBuilder,
     SettingsCatalogService,
+    SettingsValidationError,
+    SettingsWorkspacePolicy,
     SettingsRegistry,
     SettingRegistryEntry,
     _CATALOG_KEY_LEDGER,
@@ -82,6 +87,653 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
         for descriptor in descriptors
     }
     assert "workflow.github_token" not in all_keys
+
+
+# ---------------------------------------------------------------------------
+# MM-656: server-side validation and cross-setting policy enforcement
+# ---------------------------------------------------------------------------
+
+
+def _mm656_registry() -> tuple[SettingRegistryEntry, ...]:
+    return (
+        SettingRegistryEntry(
+            key="test.boolean",
+            title="Boolean",
+            category="MM-656",
+            section="user-workspace",
+            value_type="boolean",
+            ui="toggle",
+            scopes=("workspace",),
+            default_value=False,
+            order=1,
+        ),
+        SettingRegistryEntry(
+            key="test.string",
+            title="String",
+            category="MM-656",
+            section="user-workspace",
+            value_type="string",
+            ui="input",
+            scopes=("workspace",),
+            default_value="safe",
+            constraints=SettingConstraints(min_length=2, max_length=8, pattern=r"^[a-z]+$"),
+            order=2,
+        ),
+        SettingRegistryEntry(
+            key="test.integer",
+            title="Integer",
+            category="MM-656",
+            section="user-workspace",
+            value_type="integer",
+            ui="number",
+            scopes=("workspace",),
+            default_value=1,
+            constraints=SettingConstraints(minimum=0, maximum=10),
+            order=3,
+        ),
+        SettingRegistryEntry(
+            key="test.number",
+            title="Number",
+            category="MM-656",
+            section="user-workspace",
+            value_type="number",
+            ui="number",
+            scopes=("workspace",),
+            default_value=1.5,
+            constraints=SettingConstraints(minimum=0, maximum=10),
+            order=4,
+        ),
+        SettingRegistryEntry(
+            key="test.enum",
+            title="Enum",
+            category="MM-656",
+            section="user-workspace",
+            value_type="enum",
+            ui="select",
+            scopes=("workspace",),
+            default_value="one",
+            options=(("one", "One"), ("two", "Two")),
+            order=5,
+        ),
+        SettingRegistryEntry(
+            key="test.list",
+            title="List",
+            category="MM-656",
+            section="user-workspace",
+            value_type="list",
+            ui="multi",
+            scopes=("workspace",),
+            default_value=[],
+            constraints=SettingConstraints(min_items=1, max_items=2),
+            order=6,
+        ),
+        SettingRegistryEntry(
+            key="test.object",
+            title="Object",
+            category="MM-656",
+            section="user-workspace",
+            value_type="object",
+            ui="json",
+            scopes=("workspace",),
+            default_value={"mode": "safe"},
+            constraints=SettingConstraints(
+                required_keys=["mode"],
+                allowed_keys=["mode", "enabled"],
+            ),
+            order=7,
+        ),
+        SettingRegistryEntry(
+            key="test.secret_ref",
+            title="SecretRef",
+            category="MM-656",
+            section="user-workspace",
+            value_type="secret_ref",
+            ui="secret_ref_picker",
+            scopes=("workspace",),
+            default_value=None,
+            order=8,
+        ),
+        SettingRegistryEntry(
+            key="test.operation_mode",
+            title="Operation Mode",
+            category="MM-656",
+            section="operations",
+            value_type="enum",
+            ui="select",
+            scopes=("workspace",),
+            default_value="idle",
+            options=(("idle", "Idle"), ("repair", "Repair")),
+            apply_mode="manual_operation",
+            applies_to=("operations",),
+            order=9,
+        ),
+    )
+
+
+def _assert_validation_issue(
+    exc: pytest.ExceptionInfo[SettingsValidationError],
+    *,
+    key: str,
+    code: str,
+    boundary: str = "write_request",
+    blocks: str = "persistence",
+) -> None:
+    issue = exc.value.issues[0]
+    assert issue.key == key
+    assert issue.code == code
+    assert issue.boundary == boundary
+    assert blocks in issue.blocks
+    assert issue.message
+    dumped = issue.model_dump_json()
+    assert ("gh" + "p_raw_plaintext") not in dumped
+    assert "active-secret-plaintext" not in dumped
+
+
+@pytest.mark.asyncio
+async def test_mm656_value_type_matrix_accepts_and_rejects_supported_categories(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            ManagedSecret(
+                slug="active-token",
+                ciphertext="active-secret-plaintext",
+                status=SecretStatus.ACTIVE,
+                details={},
+            )
+        )
+        await settings_session.commit()
+        service = SettingsCatalogService(
+            env={"ENV_TOKEN": "redacted"},
+            registry=_mm656_registry(),
+            session=settings_session,
+        )
+
+        accepted = await service.apply_overrides(
+            scope="workspace",
+            changes={
+                "test.boolean": True,
+                "test.string": "valid",
+                "test.integer": 7,
+                "test.number": 2.5,
+                "test.enum": "two",
+                "test.list": ["one"],
+                "test.object": {"mode": "safe", "enabled": True},
+                "test.secret_ref": "db://active-token",
+            },
+            expected_versions={
+                "test.boolean": 1,
+                "test.string": 1,
+                "test.integer": 1,
+                "test.number": 1,
+                "test.enum": 1,
+                "test.list": 1,
+                "test.object": 1,
+                "test.secret_ref": 1,
+            },
+        )
+
+        assert accepted.values["test.boolean"].value is True
+        assert accepted.values["test.number"].value == 2.5
+        assert accepted.values["test.list"].value == ["one"]
+        assert accepted.values["test.object"].value["mode"] == "safe"
+        assert accepted.values["test.secret_ref"].diagnostics == []
+
+        invalid_cases = [
+            ("test.boolean", "yes", "type_mismatch"),
+            ("test.string", "INVALID", "string_constraint_failed"),
+            ("test.integer", True, "type_mismatch"),
+            ("test.number", "2.5", "type_mismatch"),
+            ("test.enum", "three", "enum_value_invalid"),
+            ("test.list", [], "list_constraint_failed"),
+            ("test.object", {"enabled": True}, "object_constraint_failed"),
+            ("test.secret_ref", "gh" + "p_raw_plaintext", "unsafe_setting_payload"),
+        ]
+        for key, value, code in invalid_cases:
+            with pytest.raises(SettingsValidationError) as exc:
+                await service.apply_overrides(
+                    scope="workspace",
+                    changes={key: value},
+                    expected_versions={key: accepted.values.get(key, SimpleNamespace(value_version=1)).value_version},
+                )
+            _assert_validation_issue(exc, key=key, code=code)
+
+
+@pytest.mark.asyncio
+async def test_mm656_references_policy_boundaries_and_atomicity(settings_session_maker):
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            ManagedSecret(
+                slug="disabled-token",
+                ciphertext="disabled-secret-plaintext",
+                status=SecretStatus.DISABLED,
+                details={},
+            )
+        )
+        settings_session.add(
+            ManagedAgentProviderProfile(
+                profile_id="disabled-profile",
+                runtime_id="codex",
+                provider_id="openai",
+                enabled=False,
+            )
+        )
+        await settings_session.commit()
+        service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            workspace_policy=SettingsWorkspacePolicy(
+                allowed_runtimes=("codex", "codex_cli"),
+                skills_canary_enabled=False,
+                allowed_publication_modes=("none", "pr"),
+                allowed_secret_ref_backends=("db",),
+                maintenance_mode=True,
+                allowed_operation_modes_during_maintenance=("normal",),
+            ),
+        )
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"skills.canary_percent": 0},
+            expected_versions={"skills.canary_percent": 1},
+        )
+
+        invalid_cases = [
+            (
+                {"integrations.github.token_ref": "env://MISSING"},
+                {"integrations.github.token_ref": 1},
+                "integrations.github.token_ref",
+                "secret_ref_backend_policy_denied",
+            ),
+            (
+                {"integrations.github.token_ref": "db://missing-token"},
+                {"integrations.github.token_ref": 1},
+                "integrations.github.token_ref",
+                "secret_ref_unresolved",
+            ),
+            (
+                {"integrations.github.token_ref": "db://disabled-token"},
+                {"integrations.github.token_ref": 1},
+                "integrations.github.token_ref",
+                "secret_ref_unresolved",
+            ),
+            (
+                {"workflow.default_provider_profile_ref": "missing-profile"},
+                {"workflow.default_provider_profile_ref": 1},
+                "workflow.default_provider_profile_ref",
+                "provider_profile_not_found",
+            ),
+            (
+                {"workflow.default_provider_profile_ref": "disabled-profile"},
+                {"workflow.default_provider_profile_ref": 1},
+                "workflow.default_provider_profile_ref",
+                "provider_profile_disabled",
+            ),
+            (
+                {"workflow.default_task_runtime": "jules"},
+                {"workflow.default_task_runtime": 1},
+                "workflow.default_task_runtime",
+                "runtime_policy_denied",
+            ),
+            (
+                {"skills.canary_percent": 50},
+                {"skills.canary_percent": 1},
+                "skills.canary_percent",
+                "feature_disabled_canary_percent",
+            ),
+            (
+                {"workflow.default_publish_mode": "branch"},
+                {"workflow.default_publish_mode": 1},
+                "workflow.default_publish_mode",
+                "publication_mode_policy_denied",
+            ),
+            (
+                {"workflow.operation_mode": "maintenance"},
+                {"workflow.operation_mode": 1},
+                "workflow.operation_mode",
+                "maintenance_mode_conflict",
+            ),
+        ]
+        for changes, versions, key, code in invalid_cases:
+            with pytest.raises(SettingsValidationError) as exc:
+                await service.apply_overrides(
+                    scope="workspace",
+                    changes=changes,
+                    expected_versions=versions,
+                )
+            _assert_validation_issue(exc, key=key, code=code)
+
+        valid = await service.apply_overrides(
+            scope="workspace",
+            changes={"workflow.default_publish_mode": "none"},
+            expected_versions={"workflow.default_publish_mode": 1},
+        )
+        with pytest.raises(SettingsValidationError) as exc:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={
+                    "workflow.default_publish_mode": "branch",
+                    "skills.canary_percent": 25,
+                },
+                expected_versions={
+                    "workflow.default_publish_mode": valid.values[
+                        "workflow.default_publish_mode"
+                    ].value_version,
+                    "skills.canary_percent": 1,
+                },
+            )
+        _assert_validation_issue(
+            exc,
+            key="workflow.default_publish_mode",
+            code="publication_mode_policy_denied",
+        )
+        unchanged = await service.effective_value_async(
+            "workflow.default_publish_mode", scope="workspace"
+        )
+        canary = await service.effective_value_async(
+            "skills.canary_percent", scope="workspace"
+        )
+        assert unchanged.value == "none"
+        assert canary.value != 25
+
+
+@pytest.mark.asyncio
+async def test_mm656_secret_ref_backend_policy_applies_to_all_secret_ref_settings(
+    settings_session_maker,
+):
+    extra_secret_ref = SettingRegistryEntry(
+        key="integrations.secondary_token_ref",
+        title="Secondary Token Reference",
+        category="Integrations",
+        section="user-workspace",
+        value_type="secret_ref",
+        ui="secret_ref_picker",
+        scopes=("workspace",),
+        default_value=None,
+        order=999,
+    )
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            registry=(*_REGISTRY, extra_secret_ref),
+            session=settings_session,
+            workspace_policy=SettingsWorkspacePolicy(
+                allowed_secret_ref_backends=("db",),
+            ),
+        )
+
+        with pytest.raises(SettingsValidationError) as exc:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"integrations.secondary_token_ref": "env://TOKEN"},
+                expected_versions={"integrations.secondary_token_ref": 1},
+            )
+
+    _assert_validation_issue(
+        exc,
+        key="integrations.secondary_token_ref",
+        code="secret_ref_backend_policy_denied",
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm656_persisted_overrides_surface_policy_diagnostics_after_policy_change(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        enabled_service = SettingsCatalogService(env={}, session=settings_session)
+        await enabled_service.apply_overrides(
+            scope="workspace",
+            changes={
+                "workflow.default_publish_mode": "branch",
+                "skills.canary_percent": 50,
+            },
+            expected_versions={
+                "workflow.default_publish_mode": 1,
+                "skills.canary_percent": 1,
+            },
+        )
+
+        restricted_service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            workspace_policy=SettingsWorkspacePolicy(
+                skills_canary_enabled=False,
+                allowed_publication_modes=("none",),
+            ),
+        )
+        publish_mode = await restricted_service.effective_value_async(
+            "workflow.default_publish_mode", scope="workspace"
+        )
+        canary = await restricted_service.effective_value_async(
+            "skills.canary_percent", scope="workspace"
+        )
+
+    assert [diagnostic.code for diagnostic in publish_mode.diagnostics] == [
+        "publication_mode_policy_denied"
+    ]
+    assert [diagnostic.code for diagnostic in canary.diagnostics] == [
+        "feature_disabled_canary_percent"
+    ]
+
+
+def test_mm656_settings_error_details_omit_top_level_fields():
+    issue = SettingValidationIssue(
+        key="workflow.default_publish_mode",
+        scope="workspace",
+        code="publication_mode_policy_denied",
+        message="workflow.default_publish_mode is not allowed by workspace policy.",
+        boundary="write_request",
+        rule="allowed_publication_modes",
+        blocks=["persistence"],
+        details={"allowed": ["none"]},
+    )
+
+    error = SettingsValidationError([issue]).to_settings_error()
+
+    assert error.key == "workflow.default_publish_mode"
+    assert error.scope == "workspace"
+    assert error.message == (
+        "workflow.default_publish_mode is not allowed by workspace policy."
+    )
+    assert "key" not in error.details
+    assert "scope" not in error.details
+    assert "message" not in error.details
+    assert error.details["code"] == "publication_mode_policy_denied"
+    assert error.details["details"] == {"allowed": ["none"]}
+
+
+def test_mm656_boundary_validation_helpers_return_structured_issues():
+    service = SettingsCatalogService(
+        env={},
+        workspace_policy=SettingsWorkspacePolicy(
+            allowed_runtimes=("codex",),
+            allowed_publication_modes=("none",),
+        ),
+    )
+
+    descriptor_issues = service.validate_descriptor_generation()
+    preview_issues = service.validate_effective_preview(
+        "workflow.default_task_runtime",
+        "jules",
+        scope="workspace",
+    )
+    launch_issues = service.validate_launch_execution(
+        {"workflow.default_publish_mode": "pr"},
+        scope="workspace",
+    )
+    operation_issues = service.validate_operation_execution(
+        {"workflow.default_publish_mode": "pr"},
+        scope="workspace",
+    )
+    readiness = service.readiness_diagnostics(
+        {"workflow.default_publish_mode": "pr"},
+        scope="workspace",
+    )
+
+    assert descriptor_issues == []
+    assert preview_issues[0].boundary == "effective_preview"
+    assert preview_issues[0].blocks == ["preview"]
+    assert launch_issues[0].boundary == "launch_execution"
+    assert launch_issues[0].blocks == ["launch", "readiness"]
+    assert operation_issues[0].boundary == "operation_execution"
+    assert operation_issues[0].blocks == ["operation"]
+    assert readiness["workflow.default_publish_mode"][0].boundary == (
+        "readiness_diagnostics"
+    )
+    assert readiness["workflow.default_publish_mode"][0].blocks == ["readiness"]
+
+
+@pytest.mark.asyncio
+async def test_mm656_dependency_validation_runs_at_all_boundaries(settings_session_maker):
+    entry_type = SettingsCatalogService(env={})._registry[0].__class__
+    registry = (
+        entry_type(
+            key="test.feature_enabled",
+            title="Feature Enabled",
+            category="MM-656",
+            section="user-workspace",
+            value_type="boolean",
+            ui="toggle",
+            scopes=("workspace",),
+            default_value=False,
+            order=1,
+        ),
+        entry_type(
+            key="test.feature_mode",
+            title="Feature Mode",
+            category="MM-656",
+            section="user-workspace",
+            value_type="string",
+            ui="input",
+            scopes=("workspace",),
+            default_value="off",
+            depends_on=(
+                SettingDependency(
+                    key="test.feature_enabled",
+                    required_value=True,
+                    reason="feature mode requires enablement",
+                ),
+            ),
+            order=2,
+        ),
+    )
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            registry=registry,
+            session=settings_session,
+        )
+        with pytest.raises(SettingsValidationError) as write_exc:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"test.feature_mode": "on"},
+                expected_versions={"test.feature_mode": 1},
+            )
+        _assert_validation_issue(
+            write_exc,
+            key="test.feature_mode",
+            code="dependency_not_satisfied",
+        )
+
+        response = await service.apply_overrides(
+            scope="workspace",
+            changes={"test.feature_enabled": True, "test.feature_mode": "on"},
+            expected_versions={"test.feature_enabled": 1, "test.feature_mode": 1},
+        )
+
+    assert response.values["test.feature_mode"].value == "on"
+
+    helper_service = SettingsCatalogService(env={}, registry=registry)
+    assert helper_service.validate_effective_preview(
+        "test.feature_mode",
+        "on",
+        scope="workspace",
+    )[0].code == "dependency_not_satisfied"
+    assert helper_service.validate_launch_execution(
+        {"test.feature_mode": "on"},
+        scope="workspace",
+    )[0].boundary == "launch_execution"
+    assert helper_service.validate_operation_execution(
+        {"test.feature_mode": "on"},
+        scope="workspace",
+    )[0].boundary == "operation_execution"
+    assert helper_service.readiness_diagnostics(
+        {"test.feature_mode": "on"},
+        scope="workspace",
+    )["test.feature_mode"][0].code == "dependency_not_satisfied"
+
+
+@pytest.mark.asyncio
+async def test_mm656_write_validates_unchanged_effective_companion(settings_session_maker):
+    async with settings_session_maker() as settings_session:
+        enabled_service = SettingsCatalogService(env={}, session=settings_session)
+        await enabled_service.apply_overrides(
+            scope="workspace",
+            changes={"skills.canary_percent": 50},
+            expected_versions={"skills.canary_percent": 1},
+        )
+
+        disabled_service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            workspace_policy=SettingsWorkspacePolicy(skills_canary_enabled=False),
+        )
+        with pytest.raises(SettingsValidationError) as exc:
+            await disabled_service.apply_overrides(
+                scope="workspace",
+                changes={"workflow.default_publish_mode": "branch"},
+                expected_versions={"workflow.default_publish_mode": 1},
+            )
+
+    _assert_validation_issue(
+        exc,
+        key="skills.canary_percent",
+        code="feature_disabled_canary_percent",
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm656_pre_persistence_boundary_blocks_rows_and_audit(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        original_validate_values = service._validate_values
+
+        def fail_pre_persistence(values, *, scope, boundary):
+            if boundary == "pre_persistence":
+                return [
+                    service._validation_issue(
+                        service._entries_by_key["workflow.default_publish_mode"],
+                        scope,
+                        code="pre_persistence_rejected",
+                        message="Rejected before persistence.",
+                        boundary=boundary,
+                        rule="test_injected_boundary",
+                    )
+                ]
+            return original_validate_values(values, scope=scope, boundary=boundary)
+
+        service._validate_values = fail_pre_persistence  # type: ignore[method-assign]
+        with pytest.raises(SettingsValidationError) as exc:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"workflow.default_publish_mode": "branch"},
+                expected_versions={"workflow.default_publish_mode": 1},
+            )
+        row_count = (
+            await settings_session.execute(select(SettingsOverride))
+        ).scalars().all()
+        audit_count = await service.audit_event_count()
+
+    _assert_validation_issue(
+        exc,
+        key="workflow.default_publish_mode",
+        code="pre_persistence_rejected",
+        boundary="pre_persistence",
+    )
+    assert row_count == []
+    assert audit_count == 0
 
 
 def test_catalog_rejects_descriptor_without_apply_mode():
@@ -765,23 +1417,21 @@ async def test_provider_profile_reference_reports_missing_and_disabled_diagnosti
         await settings_session.commit()
 
         service = SettingsCatalogService(env={}, session=settings_session)
-        missing = await service.apply_overrides(
-            scope="workspace",
-            changes={"workflow.default_provider_profile_ref": "missing-profile"},
-            expected_versions={"workflow.default_provider_profile_ref": 1},
-        )
-        missing_value = missing.values["workflow.default_provider_profile_ref"]
-        assert missing_value.diagnostics[0].code == "provider_profile_not_found"
-        assert missing_value.diagnostics[0].details["launch_blocker"] is True
+        with pytest.raises(SettingsValidationError) as missing:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"workflow.default_provider_profile_ref": "missing-profile"},
+                expected_versions={"workflow.default_provider_profile_ref": 1},
+            )
+        assert missing.value.issues[0].code == "provider_profile_not_found"
 
-        disabled = await service.apply_overrides(
-            scope="workspace",
-            changes={"workflow.default_provider_profile_ref": "disabled-profile"},
-            expected_versions={"workflow.default_provider_profile_ref": 1},
-        )
-        disabled_value = disabled.values["workflow.default_provider_profile_ref"]
-        assert disabled_value.diagnostics[0].code == "provider_profile_disabled"
-        assert disabled_value.diagnostics[0].details["launch_blocker"] is True
+        with pytest.raises(SettingsValidationError) as disabled:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"workflow.default_provider_profile_ref": "disabled-profile"},
+                expected_versions={"workflow.default_provider_profile_ref": 1},
+            )
+        assert disabled.value.issues[0].code == "provider_profile_disabled"
 
 
 @pytest.mark.asyncio
@@ -789,11 +1439,20 @@ async def test_provider_profile_override_preserves_resettable_source(
     settings_session_maker,
 ) -> None:
     async with settings_session_maker() as settings_session:
+        settings_session.add(
+            ManagedAgentProviderProfile(
+                profile_id="codex-default",
+                runtime_id="codex_cli",
+                provider_id="openai",
+                enabled=True,
+            )
+        )
+        await settings_session.commit()
         service = SettingsCatalogService(env={}, session=settings_session)
 
         response = await service.apply_overrides(
             scope="workspace",
-            changes={"workflow.default_provider_profile_ref": "missing-profile"},
+            changes={"workflow.default_provider_profile_ref": "codex-default"},
             expected_versions={"workflow.default_provider_profile_ref": 1},
         )
         effective = response.values["workflow.default_provider_profile_ref"]
@@ -805,12 +1464,12 @@ async def test_provider_profile_override_preserves_resettable_source(
             if item.key == "workflow.default_provider_profile_ref"
         )
 
-    assert effective.value == "missing-profile"
+    assert effective.value == "codex-default"
     assert effective.source == "workspace_override"
-    assert effective.diagnostics[0].code == "provider_profile_not_found"
-    assert descriptor.effective_value == "missing-profile"
+    assert effective.diagnostics == []
+    assert descriptor.effective_value == "codex-default"
     assert descriptor.source == "workspace_override"
-    assert descriptor.diagnostics[0].code == "provider_profile_not_found"
+    assert descriptor.diagnostics == []
 
 
 @pytest.mark.asyncio
@@ -865,6 +1524,7 @@ async def test_late_diagnostics_report_restored_reference_gaps_without_plaintext
         "ref_scheme": "db",
         "status": "disabled",
         "launch_blocker": True,
+        "blocks": ["launch", "readiness"],
     }
     assert github.pending_value is None
     assert "restored-secret-plaintext" not in github.model_dump_json()
@@ -1518,13 +2178,30 @@ async def test_settings_diagnostics_include_source_restart_and_recent_change(
     settings_session_maker,
 ):
     async with settings_session_maker() as settings_session:
-        service = SettingsCatalogService(env={}, session=settings_session)
-        await service.apply_overrides(
-            scope="workspace",
-            changes={"integrations.github.token_ref": "db://missing-token"},
-            expected_versions={"integrations.github.token_ref": 1},
-            reason="wire github token",
+        settings_session.add(
+            SettingsOverride(
+                scope="workspace",
+                workspace_id=UUID("00000000-0000-0000-0000-000000000000"),
+                user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                key="integrations.github.token_ref",
+                value_json="db://missing-token",
+                value_version=1,
+            )
         )
+        settings_session.add(
+            SettingsAuditEvent(
+                event_type="settings.override.updated",
+                key="integrations.github.token_ref",
+                scope="workspace",
+                workspace_id=UUID("00000000-0000-0000-0000-000000000000"),
+                user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                new_value_json="db://missing-token",
+                redacted=True,
+                reason="wire github token",
+            )
+        )
+        await settings_session.commit()
+        service = SettingsCatalogService(env={}, session=settings_session)
 
         diagnostics = await service.diagnostics(scope="workspace")
 
@@ -1821,6 +2498,14 @@ async def test_mm655_reference_sources_remain_secret_safe(settings_session_maker
                 details={},
             )
         )
+        settings_session.add(
+            ManagedAgentProviderProfile(
+                profile_id="codex-default",
+                runtime_id="codex",
+                provider_id="openai",
+                enabled=True,
+            )
+        )
         await settings_session.commit()
 
         service = SettingsCatalogService(env={}, session=settings_session)
@@ -1831,7 +2516,7 @@ async def test_mm655_reference_sources_remain_secret_safe(settings_session_maker
         )
         provider_ref = await service.apply_overrides(
             scope="workspace",
-            changes={"workflow.default_provider_profile_ref": "missing-profile"},
+            changes={"workflow.default_provider_profile_ref": "codex-default"},
             expected_versions={"workflow.default_provider_profile_ref": 1},
         )
 
@@ -1841,7 +2526,7 @@ async def test_mm655_reference_sources_remain_secret_safe(settings_session_maker
     assert github.diagnostics == []
     assert "active-secret-plaintext" not in github.model_dump_json()
     assert provider.source == "workspace_override"
-    assert provider.diagnostics[0].code == "provider_profile_not_found"
+    assert provider.diagnostics == []
     assert "secret_refs" not in provider.model_dump_json()
 
 
@@ -1929,12 +2614,12 @@ def test_settings_registry_migration_gate_skipped_when_no_ledger():
 
 def test_settings_registry_default_uses_catalog_key_ledger():
     assert "workflow.default_task_runtime" in _CATALOG_KEY_LEDGER
-    assert len(_CATALOG_KEY_LEDGER) == 7
+    assert len(_CATALOG_KEY_LEDGER) == 8
 
 
 def test_settings_registry_default_registry_passes_ledger_check():
     registry = SettingsRegistry(_REGISTRY)
-    assert len(registry.entries) == 7
+    assert len(registry.entries) == 8
 
 
 def test_settings_catalog_builder_filters_by_section():

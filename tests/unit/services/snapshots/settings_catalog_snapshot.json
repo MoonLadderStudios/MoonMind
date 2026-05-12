@@ -49,5 +49,12 @@
     ],
     "section": "user-workspace",
     "type": "enum"
+  },
+  "workflow.operation_mode": {
+    "scopes": [
+      "workspace"
+    ],
+    "section": "operations",
+    "type": "enum"
   }
 }

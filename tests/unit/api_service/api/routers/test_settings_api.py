@@ -10,7 +10,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.auth_providers import get_current_user
 from api_service.api.routers import settings as settings_router
 from api_service.db import base as db_base
-from api_service.db.models import Base, ManagedSecret, SecretStatus, SettingsOverride
+from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    ManagedSecret,
+    SecretStatus,
+    SettingsOverride,
+)
 from api_service.main import app
 from api_service.services.settings_catalog import (
     SettingMigrationRule,
@@ -554,6 +560,89 @@ async def test_secret_ref_reference_allowed_but_raw_secret_rejected(settings_api
 
 
 @pytest.mark.asyncio
+async def test_mm656_patch_settings_returns_structured_validation_error_and_no_mutation(
+    settings_api_db,
+):
+    raw_secret_value = "gh" + "p_raw_plaintext"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        accepted = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.default_publish_mode": "branch"},
+                "expected_versions": {"workflow.default_publish_mode": 1},
+            },
+        )
+        rejected = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {
+                    "workflow.default_publish_mode": "not-supported",
+                    "integrations.github.token_ref": raw_secret_value,
+                },
+                "expected_versions": {
+                    "workflow.default_publish_mode": accepted.json()["values"][
+                        "workflow.default_publish_mode"
+                    ]["value_version"],
+                    "integrations.github.token_ref": 1,
+                },
+            },
+        )
+        publish_mode = await client.get(
+            "/api/v1/settings/effective/workflow.default_publish_mode",
+            params={"scope": "workspace"},
+        )
+        token_ref = await client.get(
+            "/api/v1/settings/effective/integrations.github.token_ref",
+            params={"scope": "workspace"},
+        )
+
+    body = rejected.json()
+    assert accepted.status_code == 200
+    assert rejected.status_code == 400
+    assert body["error"] == "invalid_setting_value"
+    assert body["key"] == "workflow.default_publish_mode"
+    assert body["scope"] == "workspace"
+    assert body["details"]["code"] == "enum_value_invalid"
+    assert body["details"]["boundary"] == "write_request"
+    assert "persistence" in body["details"]["blocks"]
+    assert raw_secret_value not in rejected.text
+    assert publish_mode.json()["value"] == "branch"
+    assert token_ref.json()["value"] != raw_secret_value
+
+
+@pytest.mark.asyncio
+async def test_mm656_patch_settings_rejects_missing_secret_ref_with_sanitized_details(
+    settings_api_db,
+):
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        rejected = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"integrations.github.token_ref": "db://missing-token"},
+                "expected_versions": {"integrations.github.token_ref": 1},
+            },
+        )
+
+    body = rejected.json()
+    assert rejected.status_code == 400
+    assert body["error"] == "invalid_setting_value"
+    assert body["key"] == "integrations.github.token_ref"
+    assert body["details"]["code"] == "secret_ref_unresolved"
+    assert body["details"]["boundary"] == "write_request"
+    assert body["details"]["details"] == {
+        "ref_scheme": "db",
+        "status": "missing",
+        "launch_blocker": True,
+        "blocks": ["launch", "readiness"],
+    }
+    assert "missing-token" not in rejected.text
+
+
+@pytest.mark.asyncio
 async def test_oversized_override_payload_rejected_and_effective_value_unchanged(
     settings_api_db,
 ):
@@ -615,6 +704,17 @@ async def test_unsafe_override_payload_classes_are_rejected_and_redacted(
 async def test_provider_profile_ref_allows_literal_profile_ids_with_sensitive_words(
     settings_api_db,
 ):
+    async with settings_api_db() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="oauth_session-prod",
+                runtime_id="codex",
+                provider_id="openai",
+                enabled=True,
+            )
+        )
+        await session.commit()
+
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -744,6 +844,25 @@ async def test_settings_audit_endpoint_scopes_rows_to_current_workspace_and_user
     settings_api_db,
     settings_user_override,
 ):
+    async with settings_api_db() as session:
+        session.add_all(
+            [
+                ManagedAgentProviderProfile(
+                    profile_id="codex-default",
+                    runtime_id="codex",
+                    provider_id="openai",
+                    enabled=True,
+                ),
+                ManagedAgentProviderProfile(
+                    profile_id="other-profile",
+                    runtime_id="codex",
+                    provider_id="openai",
+                    enabled=True,
+                ),
+            ]
+        )
+        await session.commit()
+
     workspace_id = uuid4()
     user_id = uuid4()
     settings_user_override(
@@ -839,7 +958,7 @@ async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
-        await client.patch(
+        rejected = await client.patch(
             "/api/v1/settings/workspace",
             json={
                 "changes": {"integrations.github.token_ref": "db://missing-token"},
@@ -852,10 +971,12 @@ async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output
             params={"scope": "workspace", "key": "integrations.github.token_ref"},
         )
 
+    assert rejected.status_code == 400
+    assert rejected.json()["details"]["code"] == "secret_ref_unresolved"
     assert response.status_code == 200
     value = response.json()["values"]["integrations.github.token_ref"]
-    assert value["source"] == "secret_ref"
-    assert value["recent_change"]["reason"] == "select managed secret"
+    assert value["source"] in {"config_file", "environment", "default"}
+    assert value["recent_change"] is None
     assert value["apply_mode"] == "next_launch"
     assert value["activation_state"] == "active"
     assert value["active"] is True
@@ -863,8 +984,7 @@ async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output
         "New launches will use this value the next time they start."
     )
     assert value["affected_process_or_worker"] == "github, integrations"
-    assert value["diagnostics"][0]["code"] == "unresolved_secret_ref"
-    assert value["diagnostics"][0]["details"]["launch_blocker"] is True
+    assert value["diagnostics"][0]["code"] == "inherited_null"
     assert "missing-token" not in response.text
 
 
@@ -941,52 +1061,31 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
                 "changes": {
                     "integrations.github.token_ref": "db://missing-github-token"
                 },
-                "expected_versions": {"integrations.github.token_ref": 2},
+                "expected_versions": {"integrations.github.token_ref": 1},
             },
         )
 
     active_value = active.json()["values"]["integrations.github.token_ref"]
-    disabled_value = disabled.json()["values"]["integrations.github.token_ref"]
-    missing_value = missing.json()["values"]["integrations.github.token_ref"]
-
     assert active.status_code == 200
     assert active_value["diagnostics"] == []
     assert "active-plaintext" not in active.text
-    assert disabled.status_code == 200
-    assert disabled_value["pending_value"] == "db://disabled-github-token"
-    assert disabled_value["diagnostics"] == [
-        {
-            "code": "unresolved_secret_ref",
-            "message": (
-                "integrations.github.token_ref references a managed secret "
-                "that is disabled."
-            ),
-                "severity": "error",
-                "details": {
-                    "ref_scheme": "db",
-                    "status": "disabled",
-                    "launch_blocker": True,
-                },
-        }
-    ]
+    assert disabled.status_code == 400
+    assert disabled.json()["details"]["code"] == "secret_ref_unresolved"
+    assert disabled.json()["details"]["details"] == {
+        "ref_scheme": "db",
+        "status": "disabled",
+        "launch_blocker": True,
+        "blocks": ["launch", "readiness"],
+    }
     assert "disabled-plaintext" not in disabled.text
-    assert missing.status_code == 200
-    assert missing_value["pending_value"] == "db://missing-github-token"
-    assert missing_value["diagnostics"] == [
-        {
-            "code": "unresolved_secret_ref",
-            "message": (
-                "integrations.github.token_ref references a managed secret "
-                "that does not exist."
-            ),
-                "severity": "error",
-                "details": {
-                    "ref_scheme": "db",
-                    "status": "missing",
-                    "launch_blocker": True,
-            },
-        }
-    ]
+    assert missing.status_code == 400
+    assert missing.json()["details"]["code"] == "secret_ref_unresolved"
+    assert missing.json()["details"]["details"] == {
+        "ref_scheme": "db",
+        "status": "missing",
+        "launch_blocker": True,
+        "blocks": ["launch", "readiness"],
+    }
 
 
 @pytest.mark.asyncio

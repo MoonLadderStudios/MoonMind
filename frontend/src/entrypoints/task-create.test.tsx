@@ -8298,7 +8298,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
   });
 
-  it("keeps step authoring inside Steps and submission controls in one Submit floating bar", async () => {
+  it("keeps step authoring and branch controls inside Steps with one Submit floating bar", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const primaryStepLabel = await screen.findByText("Step 1");
@@ -8327,10 +8327,12 @@ describe.skip("Task Create Entrypoint", () => {
     const stepExtension = addStepButton.closest(".queue-step-extension");
     const floatingBar = createButton.closest(".queue-floating-bar");
     const floatingBarRow = createButton.closest(".queue-floating-bar-row");
+    const authoringControlsRow = repoInput.closest(".queue-authoring-controls-row");
 
     expect(stepExtension).not.toBeNull();
     expect(floatingBar).not.toBeNull();
     expect(floatingBarRow).not.toBeNull();
+    expect(authoringControlsRow).not.toBeNull();
     expect(addStepButton.closest('[data-canonical-create-section="Steps"]')).toBe(
       stepsSection,
     );
@@ -8340,11 +8342,18 @@ describe.skip("Task Create Entrypoint", () => {
     expect(floatingBar?.classList.contains("queue-step-submit-actions")).toBe(
       true,
     );
-    expect(repoInput.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
-    expect(branchSelect.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
-    expect(publishModeSelect.closest(".queue-floating-bar-row")).toBe(
-      floatingBarRow,
+    expect(repoInput.closest(".queue-authoring-controls-row")).toBe(
+      authoringControlsRow,
     );
+    expect(branchSelect.closest(".queue-authoring-controls-row")).toBe(
+      authoringControlsRow,
+    );
+    expect(publishModeSelect.closest(".queue-authoring-controls-row")).toBe(
+      authoringControlsRow,
+    );
+    expect(repoInput.closest(".queue-floating-bar-row")).toBeNull();
+    expect(branchSelect.closest(".queue-floating-bar-row")).toBeNull();
+    expect(publishModeSelect.closest(".queue-floating-bar-row")).toBeNull();
     expect(reportToggle.closest(".queue-floating-bar")).toBeNull();
     expect(createButton.closest('[data-canonical-create-section="Submit"]')).toBe(
       submitSection,
@@ -8352,15 +8361,11 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       reportToggle.closest('[data-canonical-create-section="Execution controls"]'),
     ).not.toBeNull();
-    expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBe(
-      submitSection,
-    );
-    expect(branchSelect.closest('[data-canonical-create-section="Submit"]')).toBe(
-      submitSection,
-    );
+    expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBeNull();
+    expect(branchSelect.closest('[data-canonical-create-section="Submit"]')).toBeNull();
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Submit"]'),
-    ).toBe(submitSection);
+    ).toBeNull();
     expect(createButton.classList.contains("queue-submit-primary--icon")).toBe(
       true,
     );
@@ -8368,7 +8373,13 @@ describe.skip("Task Create Entrypoint", () => {
     expect(createButton.getAttribute("title")).toBe("Create this task");
     expect(
       repoInput.closest('[data-canonical-create-section="Steps"]'),
-    ).toBeNull();
+    ).toBe(stepsSection);
+    expect(
+      branchSelect.closest('[data-canonical-create-section="Steps"]'),
+    ).toBe(stepsSection);
+    expect(
+      publishModeSelect.closest('[data-canonical-create-section="Steps"]'),
+    ).toBe(stepsSection);
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Execution context"]'),
     ).toBeNull();
@@ -12777,7 +12788,7 @@ describe("Task Create MM-641 authoring validation", () => {
     fetchSpy.mockRestore();
   });
 
-  it("renders repository branch and publish mode in the Submit floating bar", async () => {
+  it("renders repository branch and publish mode inside the Steps card", async () => {
     renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
 
     const stepsSection = await waitFor(() => {
@@ -12796,31 +12807,41 @@ describe("Task Create MM-641 authoring validation", () => {
     const publishModeSelect = screen.getByLabelText("Publish Mode");
     const floatingBar = createButton.closest(".queue-floating-bar");
     const floatingBarRow = createButton.closest(".queue-floating-bar-row");
+    const authoringControls = repoInput.closest(".queue-step-authoring-controls");
+    const authoringControlsRow = repoInput.closest(".queue-authoring-controls-row");
 
     expect(floatingBar).not.toBeNull();
     expect(floatingBarRow).not.toBeNull();
-    expect(repoInput.closest(".queue-floating-bar")).toBe(floatingBar);
-    expect(branchInput.closest(".queue-floating-bar")).toBe(floatingBar);
-    expect(publishModeSelect.closest(".queue-floating-bar")).toBe(floatingBar);
-    expect(repoInput.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
-    expect(branchInput.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
-    expect(publishModeSelect.closest(".queue-floating-bar-row")).toBe(
-      floatingBarRow,
+    expect(authoringControls).not.toBeNull();
+    expect(authoringControlsRow).not.toBeNull();
+    expect(repoInput.closest(".queue-floating-bar")).toBeNull();
+    expect(branchInput.closest(".queue-floating-bar")).toBeNull();
+    expect(publishModeSelect.closest(".queue-floating-bar")).toBeNull();
+    expect(repoInput.closest(".queue-authoring-controls-row")).toBe(
+      authoringControlsRow,
     );
-    expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBe(
-      submitSection,
+    expect(branchInput.closest(".queue-authoring-controls-row")).toBe(
+      authoringControlsRow,
     );
-    expect(branchInput.closest('[data-canonical-create-section="Submit"]')).toBe(
-      submitSection,
+    expect(publishModeSelect.closest(".queue-authoring-controls-row")).toBe(
+      authoringControlsRow,
     );
+    expect(createButton.closest(".queue-floating-bar")).toBe(floatingBar);
+    expect(createButton.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
+    expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBeNull();
+    expect(branchInput.closest('[data-canonical-create-section="Submit"]')).toBeNull();
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Submit"]'),
-    ).toBe(submitSection);
-    expect(repoInput.closest('[data-canonical-create-section="Steps"]')).toBeNull();
-    expect(branchInput.closest('[data-canonical-create-section="Steps"]')).toBeNull();
+    ).toBeNull();
+    expect(repoInput.closest('[data-canonical-create-section="Steps"]')).toBe(
+      stepsSection,
+    );
+    expect(branchInput.closest('[data-canonical-create-section="Steps"]')).toBe(
+      stepsSection,
+    );
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Steps"]'),
-    ).toBeNull();
+    ).toBe(stepsSection);
     expect(createButton.closest('[data-canonical-create-section="Submit"]')).toBe(
       submitSection,
     );
