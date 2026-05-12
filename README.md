@@ -7,7 +7,7 @@
     </picture>
 </p>
 
-MoonMind is an open-source platform that orchestrates leading AI agents out of the box — Claude Code, Codex, and more coming soon — adding safety, resiliency, and observability.
+MoonMind is an open-source platform that orchestrates Claude Code, Codex, and other agents, adding safety, resiliency, and observability.
 
 ## Quick Start
 
