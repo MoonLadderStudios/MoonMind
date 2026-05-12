@@ -144,10 +144,10 @@ SettingValidationBoundary = Literal[
 
 _VALIDATION_BLOCKS_BY_BOUNDARY: dict[SettingValidationBoundary, list[str]] = {
     "descriptor_generation": ["catalog"],
-    "write_request": ["persistence"],
-    "pre_persistence": ["persistence"],
+    "write_request": ["persistence", "preview"],
+    "pre_persistence": ["persistence", "preview"],
     "effective_preview": ["preview"],
-    "launch_execution": ["launch"],
+    "launch_execution": ["launch", "readiness"],
     "operation_execution": ["operation"],
     "readiness_diagnostics": ["readiness"],
 }
@@ -197,6 +197,7 @@ class SettingsWorkspacePolicy(BaseModel):
     allowed_runtimes: tuple[str, ...] | None = None
     allowed_provider_profile_ids: tuple[str, ...] | None = None
     skills_canary_enabled: bool = True
+    max_canary_percent: int = 100
     allowed_publication_modes: tuple[str, ...] | None = None
     allowed_secret_ref_backends: tuple[str, ...] = ("env", "db")
     maintenance_mode: bool = False
@@ -400,6 +401,7 @@ _CATALOG_KEY_LEDGER: frozenset[str] = frozenset(
         "workflow.default_task_runtime",
         "workflow.default_publish_mode",
         "workflow.default_provider_profile_ref",
+        "workflow.operation_mode",
         "skills.policy_mode",
         "skills.canary_percent",
         "live_sessions.default_enabled",
@@ -578,6 +580,26 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         applies_to=("task_creation", "workflow_runtime", "provider_profiles"),
         order=70,
     ),
+    SettingRegistryEntry(
+        key="workflow.operation_mode",
+        title="Operation Mode",
+        description="Operational mode used when workspace operations are invoked.",
+        category="Workflow",
+        section="operations",
+        value_type="enum",
+        ui="select",
+        scopes=("workspace",),
+        default_value="normal",
+        env_aliases=("MOONMIND_OPERATION_MODE",),
+        apply_mode="manual_operation",
+        options=(
+            ("normal", "Normal"),
+            ("maintenance", "Maintenance"),
+            ("read_only", "Read Only"),
+        ),
+        applies_to=("operations",),
+        order=80,
+    ),
 )
 
 
@@ -607,7 +629,7 @@ class SettingsRegistry:
     def _validate(self) -> None:
         seen: set[str] = set()
         for entry in self._entries:
-            if not _SETTING_KEY_RE.match(entry.key):
+            if not _SETTING_KEY_RE.fullmatch(entry.key):
                 raise ValueError(f"invalid_key_format: {entry.key!r}")
             if entry.key in seen:
                 raise ValueError(f"duplicate_key: {entry.key!r}")
@@ -863,12 +885,27 @@ class SettingsCatalogService:
         if scope not in entry.scopes:
             raise ValueError(scope)
         value, source = self._resolve_value(entry)
+        proposed_values = self._current_effective_values(scope=scope)
+        self._prime_referenced_resources_sync(proposed_values)
+        validation_by_key: dict[str, list[SettingValidationIssue]] = {}
+        for issue in self._validate_values(
+            proposed_values,
+            scope=scope,
+            boundary="effective_preview",
+        ):
+            validation_by_key.setdefault(issue.key, []).append(issue)
         diagnostics = self._diagnostics_for_override(
             entry,
             value,
             False,
             scope=scope,
             boundary="effective_preview",
+        )
+        existing_codes = {diagnostic.code for diagnostic in diagnostics}
+        diagnostics.extend(
+            self._diagnostic_from_validation_issue(issue)
+            for issue in validation_by_key.get(entry.key, [])
+            if not self._diagnostic_code_present(issue.code, existing_codes)
         )
         activation = self._activation_metadata(entry, value)
         return EffectiveSettingValue(
@@ -974,21 +1011,43 @@ class SettingsCatalogService:
             raise KeyError(key)
         if scope not in entry.scopes:
             raise ValueError(scope)
-        overrides = await self._get_effective_overrides(scope=scope, keys=[entry.key])
-        value, source, version, override_present = self._resolve_value_from_overrides(
-            entry,
+        entries = self._entries_for_scope(scope)
+        overrides = await self._get_effective_overrides(
             scope=scope,
-            overrides=overrides,
+            keys=[item.key for item in entries],
         )
-        await self._prime_managed_secret_statuses([value])
-        if entry.key == "workflow.default_provider_profile_ref":
-            await self._prime_provider_profile_statuses([value])
+        resolved_values = {
+            item.key: self._resolve_value_from_overrides(
+                item,
+                scope=scope,
+                overrides=overrides,
+            )
+            for item in entries
+        }
+        value, source, version, override_present = resolved_values[entry.key]
+        proposed_values = {
+            item_key: data[0] for item_key, data in resolved_values.items()
+        }
+        await self._prime_referenced_resources(proposed_values)
+        validation_by_key: dict[str, list[SettingValidationIssue]] = {}
+        for issue in self._validate_values(
+            proposed_values,
+            scope=scope,
+            boundary="effective_preview",
+        ):
+            validation_by_key.setdefault(issue.key, []).append(issue)
         diagnostics = self._diagnostics_for_override(
             entry,
             value,
             override_present,
             scope=scope,
             boundary="effective_preview",
+        )
+        existing_codes = {diagnostic.code for diagnostic in diagnostics}
+        diagnostics.extend(
+            self._diagnostic_from_validation_issue(issue)
+            for issue in validation_by_key.get(entry.key, [])
+            if not self._diagnostic_code_present(issue.code, existing_codes)
         )
         return EffectiveSettingValue(
             key=entry.key,
@@ -1029,6 +1088,14 @@ class SettingsCatalogService:
             for entry, data in resolved.values()
             if entry.key == "workflow.default_provider_profile_ref"
         )
+        proposed_values = {entry.key: data[0] for entry, data in resolved.values()}
+        validation_by_key: dict[str, list[SettingValidationIssue]] = {}
+        for issue in self._validate_values(
+            proposed_values,
+            scope=scope,
+            boundary="effective_preview",
+        ):
+            validation_by_key.setdefault(issue.key, []).append(issue)
         values = {}
         for key, (entry, data) in resolved.items():
             diagnostics = self._diagnostics_for_override(
@@ -1037,6 +1104,12 @@ class SettingsCatalogService:
                 data[3],
                 scope=scope,
                 boundary="effective_preview",
+            )
+            existing_codes = {diagnostic.code for diagnostic in diagnostics}
+            diagnostics.extend(
+                self._diagnostic_from_validation_issue(issue)
+                for issue in validation_by_key.get(entry.key, [])
+                if not self._diagnostic_code_present(issue.code, existing_codes)
             )
             values[key] = EffectiveSettingValue(
                 key=entry.key,
@@ -1060,16 +1133,22 @@ class SettingsCatalogService:
         if self._session is None:
             raise RuntimeError("settings override persistence requires a DB session")
         if scope not in _PERSISTED_SCOPES:
-            raise ValueError("invalid_scope")
+            raise SettingsValidationError(
+                [
+                    self._validation_issue_for_key(
+                        next(iter(changes), "*"),
+                        scope if scope in {"user", "workspace"} else "workspace",
+                        code="unsupported_scope",
+                        message=f"Setting writes are not available at scope {scope}.",
+                        boundary="write_request",
+                        rule="scope",
+                    )
+                ]
+            )
         expected_versions = expected_versions or {}
         entries: dict[str, SettingRegistryEntry] = {}
         validated: dict[str, Any] = {}
         validation_issues: list[SettingValidationIssue] = []
-        current_rows = await self._get_overrides(
-            scope=scope,
-            keys=changes.keys(),
-            for_update=True,
-        )
 
         for key, value in changes.items():
             migration_rule = self._rules_by_old_key.get(key)
@@ -1078,56 +1157,93 @@ class SettingsCatalogService:
                 "deprecated",
                 "removed",
             }:
-                raise PermissionError(migration_rule.message)
+                validation_issues.append(
+                    self._validation_issue_for_key(
+                        key,
+                        scope,
+                        code="setting_not_exposed",
+                        message=migration_rule.message,
+                        boundary="write_request",
+                        rule="migration_state",
+                    )
+                )
+                continue
             entry = self._entries_by_key.get(key)
             if entry is None:
-                raise KeyError(key)
+                validation_issues.append(
+                    self._validation_issue_for_key(
+                        key,
+                        scope,
+                        code="setting_not_exposed",
+                        message=f"Setting {key} is not exposed through the Settings API.",
+                        boundary="write_request",
+                        rule="exposed_setting",
+                    )
+                )
+                continue
             if scope not in entry.scopes:
-                raise ValueError("invalid_scope")
+                validation_issues.append(
+                    self._validation_issue(
+                        entry,
+                        scope,
+                        code="unsupported_scope",
+                        message=f"Setting {key} is not available at scope {scope}.",
+                        boundary="write_request",
+                        rule="scope",
+                    )
+                )
+                continue
             if self._read_only(entry):
-                raise PermissionError(
-                    self._read_only_reason(entry) or "Setting is read-only."
+                validation_issues.append(
+                    self._validation_issue(
+                        entry,
+                        scope,
+                        code="locked_setting",
+                        message=self._read_only_reason(entry) or "Setting is read-only.",
+                        boundary="write_request",
+                        rule="write_lock",
+                    )
                 )
-            validation_issues.extend(
-                self._validation_issues_for_value(
-                    entry,
-                    value,
-                    scope=scope,
-                    boundary="write_request",
-                )
-            )
+                continue
+            entries[key] = entry
+            validated[key] = value
+        if validation_issues:
+            raise SettingsValidationError(validation_issues)
+
+        current_rows = await self._get_overrides(
+            scope=scope,
+            keys=validated.keys(),
+            for_update=True,
+        )
+        for key in validated:
             row = current_rows.get((scope, key))
             current_version = row.value_version if row is not None else 1
             expected = expected_versions.get(key)
             if expected is not None and expected != current_version:
                 raise ValueError("version_conflict")
-            entries[key] = entry
-            validated[key] = value
-        if not validation_issues:
-            await self._prime_managed_secret_statuses(validated.values())
-            await self._prime_provider_profile_statuses(
-                value
-                for key, value in validated.items()
-                if key == "workflow.default_provider_profile_ref"
+
+        proposed_values = await self._proposed_effective_values(
+            scope=scope,
+            changes=validated,
+        )
+        await self._prime_referenced_resources(proposed_values)
+        validation_issues.extend(
+            self._validate_values(
+                proposed_values,
+                scope=scope,
+                boundary="write_request",
             )
-            validation_issues.extend(
-                self._policy_issues_for_changes(
-                    validated,
-                    scope=scope,
-                    boundary="write_request",
-                )
-            )
-            for key, value in validated.items():
-                validation_issues.extend(
-                    self._reference_validation_issues(
-                        entries[key],
-                        value,
-                        scope=scope,
-                        boundary="write_request",
-                    )
-                )
+        )
         if validation_issues:
             raise SettingsValidationError(validation_issues)
+
+        pre_persistence_issues = self._validate_values(
+            proposed_values,
+            scope=scope,
+            boundary="pre_persistence",
+        )
+        if pre_persistence_issues:
+            raise SettingsValidationError(pre_persistence_issues)
 
         for key, value in validated.items():
             entry = entries[key]
@@ -1315,6 +1431,14 @@ class SettingsCatalogService:
             for entry, data in resolved.values()
             if entry.key == "workflow.default_provider_profile_ref"
         )
+        proposed_values = {entry.key: data[0] for entry, data in resolved.values()}
+        validation_by_key: dict[str, list[SettingValidationIssue]] = {}
+        for issue in self._validate_values(
+            proposed_values,
+            scope=scope,
+            boundary="readiness_diagnostics",
+        ):
+            validation_by_key.setdefault(issue.key, []).append(issue)
         recent_changes = await self._recent_changes([entry.key for entry in entries])
         values = {}
         for entry, data in resolved.values():
@@ -1326,6 +1450,12 @@ class SettingsCatalogService:
                     scope=scope,
                     boundary="readiness_diagnostics",
                 )
+            )
+            existing_codes = {diagnostic.code for diagnostic in diagnostics}
+            diagnostics.extend(
+                self._diagnostic_from_validation_issue(issue)
+                for issue in validation_by_key.get(entry.key, [])
+                if not self._diagnostic_code_present(issue.code, existing_codes)
             )
             metadata = self._effective_metadata(entry, data[0], data[1], data[3], diagnostics)
             if metadata["read_only"]:
@@ -1701,6 +1831,17 @@ class SettingsCatalogService:
             details=details,
         )
 
+    def _diagnostic_code_present(
+        self,
+        issue_code: str,
+        existing_codes: set[str],
+    ) -> bool:
+        if issue_code in existing_codes:
+            return True
+        return issue_code == "secret_ref_unresolved" and (
+            "unresolved_secret_ref" in existing_codes
+        )
+
     async def _deprecated_override_diagnostics(
         self,
         *,
@@ -2055,7 +2196,61 @@ class SettingsCatalogService:
 
     def validate_descriptor_generation(self) -> list[SettingValidationIssue]:
         issues: list[SettingValidationIssue] = []
+        supported_types = {
+            "enum",
+            "integer",
+            "number",
+            "boolean",
+            "secret_ref",
+            "string",
+            "list",
+            "object",
+        }
+        supported_scopes = {"user", "workspace", "system", "operator"}
+        supported_apply_modes = {
+            "immediate",
+            "next_request",
+            "next_task",
+            "next_launch",
+            "worker_reload",
+            "process_restart",
+            "manual_operation",
+        }
         for entry in self._registry:
+            if not _SETTING_KEY_RE.fullmatch(entry.key):
+                issues.append(
+                    self._validation_issue(
+                        entry,
+                        None,
+                        code="descriptor_constraint_invalid",
+                        message=f"{entry.key} has an invalid setting key format.",
+                        boundary="descriptor_generation",
+                        rule="key_format",
+                    )
+                )
+            if entry.value_type not in supported_types:
+                issues.append(
+                    self._validation_issue(
+                        entry,
+                        None,
+                        code="descriptor_constraint_invalid",
+                        message=f"{entry.key} uses unsupported setting type.",
+                        boundary="descriptor_generation",
+                        rule="value_type",
+                        details={"value_type": entry.value_type},
+                    )
+                )
+            if not entry.scopes or any(scope not in supported_scopes for scope in entry.scopes):
+                issues.append(
+                    self._validation_issue(
+                        entry,
+                        None,
+                        code="descriptor_constraint_invalid",
+                        message=f"{entry.key} declares invalid scopes.",
+                        boundary="descriptor_generation",
+                        rule="scopes",
+                    )
+                )
             if entry.value_type == "enum" and not entry.options:
                 issues.append(
                     self._validation_issue(
@@ -2067,6 +2262,118 @@ class SettingsCatalogService:
                         rule="descriptor_options",
                     )
                 )
+            if entry.value_type == "enum" and entry.options:
+                option_values = [value for value, _label in entry.options]
+                if len(option_values) != len(set(option_values)):
+                    issues.append(
+                        self._validation_issue(
+                            entry,
+                            None,
+                            code="descriptor_constraint_invalid",
+                            message=f"{entry.key} enum descriptor has duplicate options.",
+                            boundary="descriptor_generation",
+                            rule="descriptor_options",
+                        )
+                    )
+            constraints = entry.constraints
+            if constraints is not None:
+                if (
+                    constraints.minimum is not None
+                    and constraints.maximum is not None
+                    and constraints.minimum > constraints.maximum
+                ):
+                    issues.append(
+                        self._validation_issue(
+                            entry,
+                            None,
+                            code="descriptor_constraint_invalid",
+                            message=f"{entry.key} numeric constraints are incoherent.",
+                            boundary="descriptor_generation",
+                            rule="numeric_constraints",
+                        )
+                    )
+                if (
+                    constraints.min_length is not None
+                    and constraints.max_length is not None
+                    and constraints.min_length > constraints.max_length
+                ):
+                    issues.append(
+                        self._validation_issue(
+                            entry,
+                            None,
+                            code="descriptor_constraint_invalid",
+                            message=f"{entry.key} string constraints are incoherent.",
+                            boundary="descriptor_generation",
+                            rule="string_constraints",
+                        )
+                    )
+                if (
+                    constraints.min_items is not None
+                    and constraints.max_items is not None
+                    and constraints.min_items > constraints.max_items
+                ):
+                    issues.append(
+                        self._validation_issue(
+                            entry,
+                            None,
+                            code="descriptor_constraint_invalid",
+                            message=f"{entry.key} list constraints are incoherent.",
+                            boundary="descriptor_generation",
+                            rule="list_constraints",
+                        )
+                    )
+                if constraints.allowed_keys is not None and constraints.required_keys is not None:
+                    extra_required = set(constraints.required_keys) - set(
+                        constraints.allowed_keys
+                    )
+                    if extra_required:
+                        issues.append(
+                            self._validation_issue(
+                                entry,
+                                None,
+                                code="descriptor_constraint_invalid",
+                                message=(
+                                    f"{entry.key} requires fields not in allowed keys."
+                                ),
+                                boundary="descriptor_generation",
+                                rule="object_constraints",
+                            )
+                        )
+            if entry.apply_mode not in supported_apply_modes:
+                issues.append(
+                    self._validation_issue(
+                        entry,
+                        None,
+                        code="descriptor_constraint_invalid",
+                        message=f"{entry.key} has an invalid apply mode.",
+                        boundary="descriptor_generation",
+                        rule="apply_mode",
+                    )
+                )
+            if entry.apply_mode != "immediate" and not entry.applies_to:
+                issues.append(
+                    self._validation_issue(
+                        entry,
+                        None,
+                        code="descriptor_constraint_invalid",
+                        message=f"{entry.key} non-immediate apply mode requires affected systems.",
+                        boundary="descriptor_generation",
+                        rule="affected_systems",
+                    )
+                )
+            for dependency in entry.depends_on:
+                if dependency.key not in self._entries_by_key:
+                    issues.append(
+                        self._validation_issue(
+                            entry,
+                            None,
+                            code="descriptor_constraint_invalid",
+                            message=f"{entry.key} depends on an unknown setting.",
+                            boundary="descriptor_generation",
+                            rule="dependency_reference",
+                            details={"dependency_key": dependency.key},
+                        )
+                    )
         return issues
 
     def validate_effective_preview(
@@ -2076,14 +2383,11 @@ class SettingsCatalogService:
         *,
         scope: SettingScope,
     ) -> list[SettingValidationIssue]:
-        entry = self._entries_by_key[key]
-        return self._validation_issues_for_value(
-            entry,
-            value,
-            scope=scope,
-            boundary="effective_preview",
-        ) + self._policy_issues_for_changes(
-            {key: value},
+        proposed_values = self._current_effective_values(scope=scope)
+        proposed_values[key] = value
+        self._prime_referenced_resources_sync(proposed_values)
+        return self._validate_values(
+            proposed_values,
             scope=scope,
             boundary="effective_preview",
         )
@@ -2135,9 +2439,115 @@ class SettingsCatalogService:
         scope: SettingScope,
         boundary: SettingValidationBoundary,
     ) -> list[SettingValidationIssue]:
+        proposed_values = self._current_effective_values(scope=scope)
+        proposed_values.update(values)
+        self._prime_referenced_resources_sync(proposed_values)
+        return self._validate_values(
+            proposed_values,
+            scope=scope,
+            boundary=boundary,
+        )
+
+    def _validate_override_value(
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+        *,
+        scope: SettingScope,
+    ) -> None:
+        issues = self._validation_issues_for_value(
+            entry,
+            value,
+            scope=scope,
+            boundary="write_request",
+        )
+        if issues:
+            raise SettingsValidationError(issues)
+
+    async def _proposed_effective_values(
+        self,
+        *,
+        scope: SettingScope,
+        changes: dict[str, Any],
+    ) -> dict[str, Any]:
+        entries = self._entries_for_scope(scope)
+        overrides = await self._get_effective_overrides(
+            scope=scope,
+            keys=[entry.key for entry in entries],
+        )
+        proposed_values = {
+            entry.key: self._resolve_value_from_overrides(
+                entry,
+                scope=scope,
+                overrides=overrides,
+            )[0]
+            for entry in entries
+        }
+        proposed_values.update(changes)
+        return proposed_values
+
+    def _current_effective_values(self, *, scope: SettingScope) -> dict[str, Any]:
+        return {
+            entry.key: self._resolve_value(entry)[0]
+            for entry in self._entries_for_scope(scope)
+        }
+
+    async def _prime_referenced_resources(self, values: dict[str, Any]) -> None:
+        await self._prime_managed_secret_statuses(values.values())
+        await self._prime_provider_profile_statuses(
+            value
+            for key, value in values.items()
+            if key == "workflow.default_provider_profile_ref"
+        )
+
+    def _prime_referenced_resources_sync(self, values: dict[str, Any]) -> None:
+        for value in values.values():
+            if isinstance(value, str) and value.startswith("db://"):
+                self._managed_secret_status_by_slug.setdefault(
+                    value.removeprefix("db://"),
+                    None,
+                )
+        provider_profile = values.get("workflow.default_provider_profile_ref")
+        if isinstance(provider_profile, str) and provider_profile.strip():
+            self._provider_profile_enabled_by_id.setdefault(
+                provider_profile.strip(),
+                None,
+            )
+
+    def _validate_values(
+        self,
+        values: dict[str, Any],
+        *,
+        scope: SettingScope,
+        boundary: SettingValidationBoundary,
+    ) -> list[SettingValidationIssue]:
         issues: list[SettingValidationIssue] = []
         for key, value in values.items():
-            entry = self._entries_by_key[key]
+            entry = self._entries_by_key.get(key)
+            if entry is None:
+                issues.append(
+                    self._validation_issue_for_key(
+                        key,
+                        scope,
+                        code="setting_not_exposed",
+                        message=f"Setting {key} is not exposed through the Settings API.",
+                        boundary=boundary,
+                        rule="exposed_setting",
+                    )
+                )
+                continue
+            if scope not in entry.scopes:
+                issues.append(
+                    self._validation_issue(
+                        entry,
+                        scope,
+                        code="unsupported_scope",
+                        message=f"Setting {key} is not available at scope {scope}.",
+                        boundary=boundary,
+                        rule="scope",
+                    )
+                )
+                continue
             issues.extend(
                 self._validation_issues_for_value(
                     entry,
@@ -2146,18 +2556,26 @@ class SettingsCatalogService:
                     boundary=boundary,
                 )
             )
-        issues.extend(self._policy_issues_for_changes(values, scope=scope, boundary=boundary))
-        return issues
-
-    def _validate_override_value(self, entry: SettingRegistryEntry, value: Any) -> None:
-        issues = self._validation_issues_for_value(
-            entry,
-            value,
-            scope="workspace",
-            boundary="write_request",
+            issues.extend(
+                self._dependency_issues_for_values(
+                    entry,
+                    values,
+                    scope=scope,
+                    boundary=boundary,
+                )
+            )
+            issues.extend(
+                self._reference_validation_issues(
+                    entry,
+                    value,
+                    scope=scope,
+                    boundary=boundary,
+                )
+            )
+        issues.extend(
+            self._policy_issues_for_changes(values, scope=scope, boundary=boundary)
         )
-        if issues:
-            raise SettingsValidationError(issues)
+        return issues
 
     def _validation_issue(
         self,
@@ -2178,8 +2596,61 @@ class SettingsCatalogService:
             boundary=boundary,
             rule=rule,
             blocks=list(_VALIDATION_BLOCKS_BY_BOUNDARY[boundary]),
-            details=details or {},
+            details=self._redact_validation_details(details or {}),
         )
+
+    def _validation_issue_for_key(
+        self,
+        key: str,
+        scope: SettingScope,
+        *,
+        code: str,
+        message: str,
+        boundary: SettingValidationBoundary,
+        rule: str,
+        details: dict[str, Any] | None = None,
+    ) -> SettingValidationIssue:
+        return SettingValidationIssue(
+            key=key,
+            scope=scope,
+            code=code,
+            message=message,
+            boundary=boundary,
+            rule=rule,
+            blocks=list(_VALIDATION_BLOCKS_BY_BOUNDARY[boundary]),
+            details=self._redact_validation_details(details or {}),
+        )
+
+    def _redact_validation_details(self, details: dict[str, Any]) -> dict[str, Any]:
+        safe: dict[str, Any] = {}
+        for key, value in details.items():
+            key_text = str(key).lower()
+            if key_text == "profile_id" and isinstance(value, str) and len(value) > 128:
+                safe[key] = "[redacted]"
+                continue
+            if any(token in key_text for token in _SECRET_LIKE_SUBSTRINGS):
+                if key in {"ref_scheme", "status", "launch_blocker", "operation_blocker", "blocks"}:
+                    safe[key] = value
+                else:
+                    safe[key] = "[redacted]"
+                continue
+            if isinstance(value, str) and (
+                any(prefix in value for prefix in _SECRET_PREFIXES)
+                or any(token in value.lower() for token in _UNSAFE_STRING_TOKENS)
+            ):
+                safe[key] = "[redacted]"
+            elif isinstance(value, dict):
+                safe[key] = self._redact_validation_details(value)
+            elif isinstance(value, list):
+                safe[key] = [
+                    self._redact_validation_details(item)
+                    if isinstance(item, dict)
+                    else item
+                    for item in value
+                ]
+            else:
+                safe[key] = value
+        return safe
 
     def _validation_issues_for_value(
         self,
@@ -2386,7 +2857,7 @@ class SettingsCatalogService:
                     details={"max_length": constraints.max_length},
                 )
             ]
-        if constraints.pattern is not None and not re.match(constraints.pattern, value):
+        if constraints.pattern is not None and not re.fullmatch(constraints.pattern, value):
             return [
                 self._validation_issue(
                     entry,
@@ -2474,7 +2945,98 @@ class SettingsCatalogService:
                         details={"unsupported_keys": extra},
                     )
                 ]
+        unsafe_nested = self._unsafe_object_paths(value)
+        if unsafe_nested:
+            return [
+                self._validation_issue(
+                    entry,
+                    scope,
+                    code="object_constraint_failed",
+                    message=f"{entry.key} contains unsafe object fields.",
+                    boundary=boundary,
+                    rule="unsafe_object_fields",
+                    details={"unsafe_paths": unsafe_nested},
+                )
+            ]
         return []
+
+    def _unsafe_object_paths(
+        self,
+        value: dict[str, Any],
+        *,
+        prefix: str = "",
+    ) -> list[str]:
+        unsafe: list[str] = []
+        for key, nested in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            normalized = str(key).lower()
+            if any(token in normalized for token in _UNSAFE_FIELD_TOKENS):
+                unsafe.append(path)
+                continue
+            if normalized in {"command", "commands", "script", "template", "shell"}:
+                unsafe.append(path)
+                continue
+            if isinstance(nested, dict):
+                unsafe.extend(self._unsafe_object_paths(nested, prefix=path))
+            elif isinstance(nested, list):
+                for index, item in enumerate(nested):
+                    if isinstance(item, dict):
+                        unsafe.extend(
+                            self._unsafe_object_paths(item, prefix=f"{path}.{index}")
+                        )
+                    elif isinstance(item, str) and self._contains_unsafe_payload(item):
+                        unsafe.append(f"{path}.{index}")
+            elif isinstance(nested, str) and self._contains_unsafe_payload(nested):
+                unsafe.append(path)
+        return unsafe
+
+    def _dependency_issues_for_values(
+        self,
+        entry: SettingRegistryEntry,
+        values: dict[str, Any],
+        *,
+        scope: SettingScope,
+        boundary: SettingValidationBoundary,
+    ) -> list[SettingValidationIssue]:
+        issues: list[SettingValidationIssue] = []
+        for dependency in entry.depends_on:
+            dependency_entry = self._entries_by_key.get(dependency.key)
+            if dependency_entry is None:
+                issues.append(
+                    self._validation_issue(
+                        entry,
+                        scope,
+                        code="dependency_not_satisfied",
+                        message=f"{entry.key} depends on an unavailable setting.",
+                        boundary=boundary,
+                        rule="dependency",
+                        details={"dependency_key": dependency.key},
+                    )
+                )
+                continue
+            if scope not in dependency_entry.scopes:
+                continue
+            actual = values.get(dependency.key)
+            required = dependency.required_value
+            satisfied = bool(actual) if required is None else actual == required
+            if not satisfied:
+                details: dict[str, Any] = {"dependency_key": dependency.key}
+                if required is not None and not self._contains_unsafe_payload(required):
+                    details["required_value"] = required
+                if dependency.reason:
+                    details["reason"] = dependency.reason
+                issues.append(
+                    self._validation_issue(
+                        entry,
+                        scope,
+                        code="dependency_not_satisfied",
+                        message=f"{entry.key} dependency is not satisfied.",
+                        boundary=boundary,
+                        rule="dependency",
+                        details=details,
+                    )
+                )
+        return issues
 
     def _policy_issues_for_changes(
         self,
@@ -2532,6 +3094,21 @@ class SettingsCatalogService:
                         rule="feature_enabled",
                     )
                 )
+            if canary > policy.max_canary_percent:
+                issues.append(
+                    self._validation_issue(
+                        self._entries_by_key["skills.canary_percent"],
+                        scope,
+                        code="max_canary_percent_exceeded",
+                        message=(
+                            "skills.canary_percent exceeds the workspace policy "
+                            "maximum."
+                        ),
+                        boundary=boundary,
+                        rule="max_canary_percent",
+                        details={"maximum": policy.max_canary_percent},
+                    )
+                )
         token_ref = changes.get("integrations.github.token_ref")
         if isinstance(token_ref, str) and "://" in token_ref:
             scheme = token_ref.split("://", 1)[0]
@@ -2564,7 +3141,7 @@ class SettingsCatalogService:
                     rule="allowed_provider_profiles",
                 )
             )
-        operation_mode = changes.get("test.operation_mode")
+        operation_mode = changes.get("workflow.operation_mode")
         if (
             policy.maintenance_mode
             and isinstance(operation_mode, str)
@@ -2572,10 +3149,10 @@ class SettingsCatalogService:
         ):
             issues.append(
                 self._validation_issue(
-                    self._entries_by_key["test.operation_mode"],
+                    self._entries_by_key["workflow.operation_mode"],
                     scope,
                     code="maintenance_mode_conflict",
-                    message="test.operation_mode is not allowed during maintenance mode.",
+                    message="workflow.operation_mode is not allowed during maintenance mode.",
                     boundary=boundary,
                     rule="maintenance_mode",
                 )
@@ -2593,7 +3170,10 @@ class SettingsCatalogService:
         if value is None:
             return []
         if entry.value_type == "secret_ref" and isinstance(value, str):
-            if value.startswith("env://"):
+            if value.startswith("env://") and boundary in {
+                "write_request",
+                "pre_persistence",
+            }:
                 return []
             diagnostic = self._secret_ref_diagnostic(entry, value)
             if diagnostic is None:
@@ -2601,7 +3181,14 @@ class SettingsCatalogService:
             details = {
                 key: item
                 for key, item in diagnostic.details.items()
-                if key in {"ref_scheme", "status"}
+                if key
+                in {
+                    "ref_scheme",
+                    "status",
+                    "launch_blocker",
+                    "operation_blocker",
+                    "blocks",
+                }
             }
             return [
                 self._validation_issue(
@@ -2622,6 +3209,17 @@ class SettingsCatalogService:
             diagnostic = self._provider_profile_ref_diagnostic(entry, value)
             if diagnostic is None:
                 return []
+            details = {
+                key: item
+                for key, item in diagnostic.details.items()
+                if key
+                in {
+                    "profile_id",
+                    "launch_blocker",
+                    "operation_blocker",
+                    "blocks",
+                }
+            }
             return [
                 self._validation_issue(
                     entry,
@@ -2630,7 +3228,7 @@ class SettingsCatalogService:
                     message=diagnostic.message,
                     boundary=boundary,
                     rule="referenced_resource",
-                    details={"profile_id": value.strip()},
+                    details=details,
                 )
             ]
         return []
@@ -2772,7 +3370,11 @@ class SettingsCatalogService:
                     f"{entry.key} references a provider profile that does not exist."
                 ),
                 severity="error",
-                details={"profile_id": profile_id, "launch_blocker": True},
+                details={
+                    "profile_id": profile_id,
+                    "launch_blocker": True,
+                    "blocks": ["launch", "readiness"],
+                },
             )
         if enabled is False:
             return SettingDiagnostic(
@@ -2781,7 +3383,11 @@ class SettingsCatalogService:
                     f"{entry.key} references a disabled provider profile."
                 ),
                 severity="error",
-                details={"profile_id": profile_id, "launch_blocker": True},
+                details={
+                    "profile_id": profile_id,
+                    "launch_blocker": True,
+                    "blocks": ["launch", "readiness"],
+                },
             )
         return None
 
@@ -2798,7 +3404,11 @@ class SettingsCatalogService:
                         "not available."
                     ),
                     severity="error",
-                    details={"ref_scheme": "env"},
+                    details={
+                        "ref_scheme": "env",
+                        "launch_blocker": True,
+                        "blocks": ["launch", "readiness"],
+                    },
                 )
         elif value.startswith("db://"):
             slug = value.removeprefix("db://")
@@ -2817,6 +3427,7 @@ class SettingsCatalogService:
                         "ref_scheme": "db",
                         "status": "missing",
                         "launch_blocker": True,
+                        "blocks": ["launch", "readiness"],
                     },
                 )
             if status != SecretStatus.ACTIVE.value:
@@ -2831,6 +3442,7 @@ class SettingsCatalogService:
                         "ref_scheme": "db",
                         "status": status,
                         "launch_blocker": True,
+                        "blocks": ["launch", "readiness"],
                     },
                 )
         elif "://" not in value:

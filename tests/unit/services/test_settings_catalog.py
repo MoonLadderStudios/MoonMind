@@ -18,6 +18,7 @@ from api_service.db.models import (
 from api_service.services.settings_catalog import (
     SETTINGS_PERMISSION_NAMES,
     SettingAuditPolicy,
+    SettingDependency,
     SettingMigrationRule,
     SettingConstraints,
     SettingsCatalogBuilder,
@@ -321,13 +322,18 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
             env={},
             session=settings_session,
             workspace_policy=SettingsWorkspacePolicy(
-                allowed_runtimes=("codex",),
+                allowed_runtimes=("codex", "codex_cli"),
                 skills_canary_enabled=False,
-                allowed_publication_modes=("none",),
+                allowed_publication_modes=("none", "pr"),
                 allowed_secret_ref_backends=("db",),
                 maintenance_mode=True,
-                allowed_operation_modes_during_maintenance=("idle",),
+                allowed_operation_modes_during_maintenance=("normal",),
             ),
+        )
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"skills.canary_percent": 0},
+            expected_versions={"skills.canary_percent": 1},
         )
 
         invalid_cases = [
@@ -374,7 +380,7 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
                 "feature_disabled_canary_percent",
             ),
             (
-                {"workflow.default_publish_mode": "pr"},
+                {"workflow.default_publish_mode": "branch"},
                 {"workflow.default_publish_mode": 1},
                 "workflow.default_publish_mode",
                 "publication_mode_policy_denied",
@@ -455,13 +461,166 @@ def test_mm656_boundary_validation_helpers_return_structured_issues():
     assert preview_issues[0].boundary == "effective_preview"
     assert preview_issues[0].blocks == ["preview"]
     assert launch_issues[0].boundary == "launch_execution"
-    assert launch_issues[0].blocks == ["launch"]
+    assert launch_issues[0].blocks == ["launch", "readiness"]
     assert operation_issues[0].boundary == "operation_execution"
     assert operation_issues[0].blocks == ["operation"]
     assert readiness["workflow.default_publish_mode"][0].boundary == (
         "readiness_diagnostics"
     )
     assert readiness["workflow.default_publish_mode"][0].blocks == ["readiness"]
+
+
+@pytest.mark.asyncio
+async def test_mm656_dependency_validation_runs_at_all_boundaries(settings_session_maker):
+    entry_type = SettingsCatalogService(env={})._registry[0].__class__
+    registry = (
+        entry_type(
+            key="test.feature_enabled",
+            title="Feature Enabled",
+            category="MM-656",
+            section="user-workspace",
+            value_type="boolean",
+            ui="toggle",
+            scopes=("workspace",),
+            default_value=False,
+            order=1,
+        ),
+        entry_type(
+            key="test.feature_mode",
+            title="Feature Mode",
+            category="MM-656",
+            section="user-workspace",
+            value_type="string",
+            ui="input",
+            scopes=("workspace",),
+            default_value="off",
+            depends_on=(
+                SettingDependency(
+                    key="test.feature_enabled",
+                    required_value=True,
+                    reason="feature mode requires enablement",
+                ),
+            ),
+            order=2,
+        ),
+    )
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            registry=registry,
+            session=settings_session,
+        )
+        with pytest.raises(SettingsValidationError) as write_exc:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"test.feature_mode": "on"},
+                expected_versions={"test.feature_mode": 1},
+            )
+        _assert_validation_issue(
+            write_exc,
+            key="test.feature_mode",
+            code="dependency_not_satisfied",
+        )
+
+        response = await service.apply_overrides(
+            scope="workspace",
+            changes={"test.feature_enabled": True, "test.feature_mode": "on"},
+            expected_versions={"test.feature_enabled": 1, "test.feature_mode": 1},
+        )
+
+    assert response.values["test.feature_mode"].value == "on"
+
+    helper_service = SettingsCatalogService(env={}, registry=registry)
+    assert helper_service.validate_effective_preview(
+        "test.feature_mode",
+        "on",
+        scope="workspace",
+    )[0].code == "dependency_not_satisfied"
+    assert helper_service.validate_launch_execution(
+        {"test.feature_mode": "on"},
+        scope="workspace",
+    )[0].boundary == "launch_execution"
+    assert helper_service.validate_operation_execution(
+        {"test.feature_mode": "on"},
+        scope="workspace",
+    )[0].boundary == "operation_execution"
+    assert helper_service.readiness_diagnostics(
+        {"test.feature_mode": "on"},
+        scope="workspace",
+    )["test.feature_mode"][0].code == "dependency_not_satisfied"
+
+
+@pytest.mark.asyncio
+async def test_mm656_write_validates_unchanged_effective_companion(settings_session_maker):
+    async with settings_session_maker() as settings_session:
+        enabled_service = SettingsCatalogService(env={}, session=settings_session)
+        await enabled_service.apply_overrides(
+            scope="workspace",
+            changes={"skills.canary_percent": 50},
+            expected_versions={"skills.canary_percent": 1},
+        )
+
+        disabled_service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            workspace_policy=SettingsWorkspacePolicy(skills_canary_enabled=False),
+        )
+        with pytest.raises(SettingsValidationError) as exc:
+            await disabled_service.apply_overrides(
+                scope="workspace",
+                changes={"workflow.default_publish_mode": "branch"},
+                expected_versions={"workflow.default_publish_mode": 1},
+            )
+
+    _assert_validation_issue(
+        exc,
+        key="skills.canary_percent",
+        code="feature_disabled_canary_percent",
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm656_pre_persistence_boundary_blocks_rows_and_audit(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        original_validate_values = service._validate_values
+
+        def fail_pre_persistence(values, *, scope, boundary):
+            if boundary == "pre_persistence":
+                return [
+                    service._validation_issue(
+                        service._entries_by_key["workflow.default_publish_mode"],
+                        scope,
+                        code="pre_persistence_rejected",
+                        message="Rejected before persistence.",
+                        boundary=boundary,
+                        rule="test_injected_boundary",
+                    )
+                ]
+            return original_validate_values(values, scope=scope, boundary=boundary)
+
+        service._validate_values = fail_pre_persistence  # type: ignore[method-assign]
+        with pytest.raises(SettingsValidationError) as exc:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"workflow.default_publish_mode": "branch"},
+                expected_versions={"workflow.default_publish_mode": 1},
+            )
+        row_count = (
+            await settings_session.execute(select(SettingsOverride))
+        ).scalars().all()
+        audit_count = await service.audit_event_count()
+
+    _assert_validation_issue(
+        exc,
+        key="workflow.default_publish_mode",
+        code="pre_persistence_rejected",
+        boundary="pre_persistence",
+    )
+    assert row_count == []
+    assert audit_count == 0
 
 
 def test_catalog_rejects_descriptor_without_apply_mode():
@@ -1252,6 +1411,7 @@ async def test_late_diagnostics_report_restored_reference_gaps_without_plaintext
         "ref_scheme": "db",
         "status": "disabled",
         "launch_blocker": True,
+        "blocks": ["launch", "readiness"],
     }
     assert github.pending_value is None
     assert "restored-secret-plaintext" not in github.model_dump_json()
@@ -2341,12 +2501,12 @@ def test_settings_registry_migration_gate_skipped_when_no_ledger():
 
 def test_settings_registry_default_uses_catalog_key_ledger():
     assert "workflow.default_task_runtime" in _CATALOG_KEY_LEDGER
-    assert len(_CATALOG_KEY_LEDGER) == 7
+    assert len(_CATALOG_KEY_LEDGER) == 8
 
 
 def test_settings_registry_default_registry_passes_ledger_check():
     registry = SettingsRegistry(_REGISTRY)
-    assert len(registry.entries) == 7
+    assert len(registry.entries) == 8
 
 
 def test_settings_catalog_builder_filters_by_section():

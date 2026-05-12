@@ -636,6 +636,8 @@ async def test_mm656_patch_settings_rejects_missing_secret_ref_with_sanitized_de
     assert body["details"]["details"] == {
         "ref_scheme": "db",
         "status": "missing",
+        "launch_blocker": True,
+        "blocks": ["launch", "readiness"],
     }
     assert "missing-token" not in rejected.text
 
@@ -1072,6 +1074,8 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
     assert disabled.json()["details"]["details"] == {
         "ref_scheme": "db",
         "status": "disabled",
+        "launch_blocker": True,
+        "blocks": ["launch", "readiness"],
     }
     assert "disabled-plaintext" not in disabled.text
     assert missing.status_code == 400
@@ -1079,6 +1083,8 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
     assert missing.json()["details"]["details"] == {
         "ref_scheme": "db",
         "status": "missing",
+        "launch_blocker": True,
+        "blocks": ["launch", "readiness"],
     }
 
 

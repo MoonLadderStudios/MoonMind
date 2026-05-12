@@ -53,6 +53,7 @@ Current MM-656 validation codes:
 - `invalid_secret_ref`
 - `list_constraint_failed`
 - `maintenance_mode_conflict`
+- `max_canary_percent_exceeded`
 - `numeric_constraint_failed`
 - `object_constraint_failed`
 - `provider_policy_denied`
@@ -67,6 +68,10 @@ Current MM-656 validation codes:
 - `unsafe_setting_payload`
 - `unsupported_setting_type`
 - `value_size_limit_exceeded`
+- `dependency_not_satisfied`
+- `locked_setting`
+- `setting_not_exposed`
+- `unsupported_scope`
 
 ## Diagnostic Shape
 
