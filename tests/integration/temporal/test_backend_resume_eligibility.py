@@ -119,3 +119,144 @@ async def test_accepted_resume_carries_canonical_recovery_and_resume_refs(
         "planDigest": "sha256:plan",
     }
     assert "taskRunId" not in resumed.parameters
+
+
+async def test_generic_rerun_does_not_carry_resume_reference_fields(
+    tmp_path: Path,
+) -> None:
+    async with _db(tmp_path) as maker:
+        async with maker() as session:
+            service = TemporalExecutionService(session, client_adapter=AsyncMock())
+            created = await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title="Resume source",
+                input_artifact_ref="artifact://input/source",
+                plan_artifact_ref="artifact://plan/source",
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "resumeSource": {
+                        "sourceWorkflowId": "mm:old",
+                        "sourceRunId": "run-old",
+                    },
+                    "resumeCheckpointRef": "artifact://checkpoint/old",
+                    "preservedSteps": [{"logicalStepId": "plan"}],
+                    "completedSteps": [{"logicalStepId": "plan"}],
+                    "task": {
+                        "title": "Resume source",
+                        "instructions": "Original",
+                        "recovery": {
+                            "kind": "resume_from_failed_step",
+                            "sourceWorkflowId": "mm:old",
+                            "sourceRunId": "run-old",
+                        },
+                        "resume": {
+                            "kind": "resume_from_failed_step",
+                            "sourceWorkflowId": "mm:old",
+                            "sourceRunId": "run-old",
+                            "failedStepId": "implement",
+                            "resumeCheckpointRef": "artifact://checkpoint/old",
+                            "taskInputSnapshotRef": "artifact://snapshot/old",
+                        },
+                    },
+                },
+                idempotency_key=None,
+            )
+            created.state = MoonMindWorkflowState.FAILED
+            created.close_status = TemporalExecutionCloseStatus.FAILED
+            await session.commit()
+
+            result = await service.update_execution(
+                workflow_id=created.workflow_id,
+                update_name="RequestRerun",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                parameters_patch=None,
+                title=None,
+                new_manifest_artifact_ref=None,
+                mode=None,
+                max_concurrency=None,
+                node_ids=None,
+                idempotency_key="rerun-mm-643",
+            )
+            rerun = await service.describe_execution(created.workflow_id)
+
+    assert result["continue_as_new_cause"] == "manual_rerun"
+    assert "resumeSource" not in rerun.parameters
+    assert "resumeCheckpointRef" not in rerun.parameters
+    assert "preservedSteps" not in rerun.parameters
+    assert "completedSteps" not in rerun.parameters
+    assert rerun.parameters["task"] == {
+        "title": "Resume source",
+        "instructions": "Original",
+    }
+
+
+async def test_edited_full_retry_does_not_carry_resume_reference_fields(
+    tmp_path: Path,
+) -> None:
+    async with _db(tmp_path) as maker:
+        async with maker() as session:
+            service = TemporalExecutionService(session, client_adapter=AsyncMock())
+            created = await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title="Resume source",
+                input_artifact_ref="artifact://input/source",
+                plan_artifact_ref="artifact://plan/source",
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "resumeSource": {
+                        "sourceWorkflowId": "mm:old",
+                        "sourceRunId": "run-old",
+                    },
+                    "resumeCheckpointRef": "artifact://checkpoint/old",
+                    "preservedSteps": [{"logicalStepId": "plan"}],
+                    "completedSteps": [{"logicalStepId": "plan"}],
+                    "task": {
+                        "title": "Resume source",
+                        "instructions": "Original",
+                        "recovery": {
+                            "kind": "resume_from_failed_step",
+                            "sourceWorkflowId": "mm:old",
+                            "sourceRunId": "run-old",
+                        },
+                        "resume": {
+                            "kind": "resume_from_failed_step",
+                            "sourceWorkflowId": "mm:old",
+                            "sourceRunId": "run-old",
+                            "failedStepId": "implement",
+                            "resumeCheckpointRef": "artifact://checkpoint/old",
+                            "taskInputSnapshotRef": "artifact://snapshot/old",
+                        },
+                    },
+                },
+                idempotency_key=None,
+            )
+
+            result = await service.update_execution(
+                workflow_id=created.workflow_id,
+                update_name="UpdateInputs",
+                input_artifact_ref=None,
+                plan_artifact_ref="artifact://plan/replacement",
+                parameters_patch=None,
+                title=None,
+                new_manifest_artifact_ref=None,
+                mode=None,
+                max_concurrency=None,
+                node_ids=None,
+                idempotency_key="edited-retry-mm-643",
+            )
+            edited_retry = await service.describe_execution(created.workflow_id)
+
+    assert result["continue_as_new_cause"] == "major_reconfiguration"
+    assert "resumeSource" not in edited_retry.parameters
+    assert "resumeCheckpointRef" not in edited_retry.parameters
+    assert "preservedSteps" not in edited_retry.parameters
+    assert "completedSteps" not in edited_retry.parameters
+    assert edited_retry.parameters["task"] == {
+        "title": "Resume source",
+        "instructions": "Original",
+    }

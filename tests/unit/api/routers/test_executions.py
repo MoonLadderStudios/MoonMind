@@ -7182,7 +7182,69 @@ def test_describe_execution_rejects_stale_resume_evidence(
     assert body["resume"]["disabledReason"] == "stale_resume_evidence"
 
 
-def test_failed_step_resume_request_rejects_edited_task_payload_fields() -> None:
+@pytest.mark.parametrize(
+    ("payload_fields", "expected_fields"),
+    [
+        (
+            {
+                "task": {"instructions": "change the task"},
+                "runtime": {"model": "gpt-5.4"},
+            },
+            ["runtime", "task"],
+        ),
+        (
+            {
+                "instructions": "changed",
+                "steps": [{"id": "new-step"}],
+                "attachments": ["artifact://new"],
+                "inputAttachments": [{"artifactRef": "artifact://new"}],
+            },
+            ["attachments", "inputAttachments", "instructions", "steps"],
+        ),
+        (
+            {
+                "publishMode": "draft-pr",
+                "branch": "feature/new",
+                "startingBranch": "main",
+                "targetBranch": "main",
+                "presets": ["runtime"],
+                "dependencies": ["mm:upstream"],
+            },
+            [
+                "branch",
+                "dependencies",
+                "presets",
+                "publishMode",
+                "startingBranch",
+                "targetBranch",
+            ],
+        ),
+        (
+            {
+                "model": "gpt-5.4",
+                "requestedModel": "gpt-5.4",
+                "effort": "high",
+                "parametersPatch": {"task": {"instructions": "changed"}},
+                "inputArtifactRef": "artifact://input/new",
+                "planArtifactRef": "artifact://plan/new",
+                "manifestArtifactRef": "artifact://manifest/new",
+            },
+            [
+                "effort",
+                "inputArtifactRef",
+                "manifestArtifactRef",
+                "model",
+                "parametersPatch",
+                "planArtifactRef",
+                "requestedModel",
+            ],
+        ),
+    ],
+)
+def test_failed_step_resume_request_rejects_edited_task_payload_fields(
+    payload_fields: dict[str, object],
+    expected_fields: list[str],
+) -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -7198,15 +7260,14 @@ def test_failed_step_resume_request_rejects_edited_task_payload_fields() -> None
             "/api/executions/mm:wf-1/resume-from-failed-step",
             json={
                 "idempotencyKey": "resume-1",
-                "task": {"instructions": "change the task"},
-                "runtime": {"model": "gpt-5.4"},
+                **payload_fields,
             },
         )
 
     assert response.status_code == 400
     body = response.json()["detail"]
     assert body["code"] == "resume_payload_not_allowed"
-    assert body["fields"] == ["runtime", "task"]
+    assert body["fields"] == expected_fields
 
 
 def test_failed_step_resume_hydrates_checkpoint_artifact(

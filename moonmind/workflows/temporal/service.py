@@ -2434,6 +2434,9 @@ class TemporalExecutionService:
                 major_reconfiguration = True
 
         if major_reconfiguration:
+            record.parameters = self._strip_resume_reference_parameters(
+                record.parameters
+            )
             self._continue_as_new(
                 record,
                 summary="Applied input update via Continue-As-New.",
@@ -2583,13 +2586,31 @@ class TemporalExecutionService:
         }
 
     @staticmethod
-    def _full_rerun_parameters(
+    def _strip_resume_reference_parameters(
         parameters: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         params = dict(parameters or {})
-        for key in TASK_RUN_ID_PARAM_KEYS:
-            params.pop(key, None)
         for key in FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS:
+            params.pop(key, None)
+
+        task_payload = params.get("task")
+        if isinstance(task_payload, Mapping):
+            task_params = dict(task_payload)
+            task_params.pop("recovery", None)
+            task_params.pop("resume", None)
+            if task_params:
+                params["task"] = task_params
+            else:
+                params.pop("task", None)
+        return params
+
+    @classmethod
+    def _full_rerun_parameters(
+        cls,
+        parameters: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        params = cls._strip_resume_reference_parameters(parameters)
+        for key in TASK_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
 
         task_payload = params.get("task")
