@@ -266,6 +266,8 @@ Key diagnostics:
 - Existing Temporal execution records, canonical execution memo/search/projection records, Temporal artifact metadata/content store; no new persistent database tables planned (339-authoritative-task-snapshot-durability)
 - Python 3.12 + FastAPI, Pydantic v2, SQLAlchemy async ORM, Alembic, pytest, httpx ASGI test transport (339-sparse-settings-overrides)
 - Existing SQLAlchemy/Alembic database tables `settings_overrides` and `settings_audit_events`; no new persistent table expected (339-sparse-settings-overrides)
+- Python 3.12; TypeScript/React remains present but is not expected unless diagnostics UI needs follow-up in later stages + FastAPI, Pydantic v2, SQLAlchemy async ORM, existing settings catalog service, existing provider profile and managed secret models (341-server-side-validation)
+- Existing `settings_overrides`, `settings_audit_events`, `managed_secrets`, and `managed_agent_provider_profiles`; no new persistent table planned (341-server-side-validation)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
