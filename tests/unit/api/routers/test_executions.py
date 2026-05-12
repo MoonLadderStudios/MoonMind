@@ -7147,7 +7147,146 @@ def test_describe_execution_requires_complete_resume_evidence(
     assert body["resume"]["available"] is False
     assert body["resume"]["disabledReason"] == expected_reason
 
-def test_failed_step_resume_request_rejects_edited_task_payload_fields() -> None:
+
+def test_describe_execution_rejects_stale_resume_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.memo = {
+        **record.memo,
+        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "resume_failed_step_id": "implement",
+        "resume_completed_step_refs": ["artifact://completed/plan"],
+        "resume_workspace_checkpoint_ref": "artifact://workspace/before-implement",
+        "resume_plan_digest": "sha256:resume-plan",
+        "resume_evidence_stale": True,
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["actions"]["canResumeFromFailedStep"] is False
+    assert body["actions"]["disabledReasons"]["canResumeFromFailedStep"] == "stale_resume_evidence"
+    assert body["resume"]["available"] is False
+    assert body["resume"]["disabledReason"] == "stale_resume_evidence"
+
+
+def test_failed_step_resume_submission_rejects_stale_resume_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.memo = {
+        **canonical.memo,
+        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "resume_evidence_stale": True,
+    }
+    mock_service.describe_execution.return_value = canonical
+
+    class Session:
+        async def get(self, model, key):
+            return canonical
+
+        async def commit(self):
+            return None
+
+    artifact_service = SimpleNamespace(read=AsyncMock())
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: Session()
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/resume-from-failed-step",
+            json={"idempotencyKey": "resume-1"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "stale_resume_evidence"
+    artifact_service.read.assert_not_awaited()
+    mock_service.create_failed_step_resume_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("payload_fields", "expected_fields"),
+    [
+        (
+            {
+                "task": {"instructions": "change the task"},
+                "runtime": {"model": "gpt-5.4"},
+            },
+            ["runtime", "task"],
+        ),
+        (
+            {
+                "instructions": "changed",
+                "steps": [{"id": "new-step"}],
+                "attachments": ["artifact://new"],
+                "inputAttachments": [{"artifactRef": "artifact://new"}],
+            },
+            ["attachments", "inputAttachments", "instructions", "steps"],
+        ),
+        (
+            {
+                "publishMode": "draft-pr",
+                "branch": "feature/new",
+                "startingBranch": "main",
+                "targetBranch": "main",
+                "presets": ["runtime"],
+                "dependencies": ["mm:upstream"],
+            },
+            [
+                "branch",
+                "dependencies",
+                "presets",
+                "publishMode",
+                "startingBranch",
+                "targetBranch",
+            ],
+        ),
+        (
+            {
+                "model": "gpt-5.4",
+                "requestedModel": "gpt-5.4",
+                "effort": "high",
+                "parametersPatch": {"task": {"instructions": "changed"}},
+                "inputArtifactRef": "artifact://input/new",
+                "planArtifactRef": "artifact://plan/new",
+                "manifestArtifactRef": "artifact://manifest/new",
+            },
+            [
+                "effort",
+                "inputArtifactRef",
+                "manifestArtifactRef",
+                "model",
+                "parametersPatch",
+                "planArtifactRef",
+                "requestedModel",
+            ],
+        ),
+    ],
+)
+def test_failed_step_resume_request_rejects_edited_task_payload_fields(
+    payload_fields: dict[str, object],
+    expected_fields: list[str],
+) -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -7163,15 +7302,14 @@ def test_failed_step_resume_request_rejects_edited_task_payload_fields() -> None
             "/api/executions/mm:wf-1/resume-from-failed-step",
             json={
                 "idempotencyKey": "resume-1",
-                "task": {"instructions": "change the task"},
-                "runtime": {"model": "gpt-5.4"},
+                **payload_fields,
             },
         )
 
     assert response.status_code == 400
     body = response.json()["detail"]
     assert body["code"] == "resume_payload_not_allowed"
-    assert body["fields"] == ["runtime", "task"]
+    assert body["fields"] == expected_fields
 
 
 def test_failed_step_resume_hydrates_checkpoint_artifact(

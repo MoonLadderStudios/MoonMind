@@ -2407,6 +2407,7 @@ class TemporalExecutionService:
     ) -> dict[str, Any]:
         updated = False
         major_reconfiguration = False
+        strip_resume_references = False
 
         if input_artifact_ref and input_artifact_ref != record.input_ref:
             record.input_ref = input_artifact_ref
@@ -2418,6 +2419,7 @@ class TemporalExecutionService:
 
         if plan_artifact_ref and plan_artifact_ref != record.plan_ref:
             major_reconfiguration = bool(record.plan_ref)
+            strip_resume_references = major_reconfiguration
             record.plan_ref = plan_artifact_ref
             updated = True
             refs = list(record.artifact_refs or [])
@@ -2432,8 +2434,20 @@ class TemporalExecutionService:
             updated = True
             if parameters_patch.get("request_continue_as_new") is True:
                 major_reconfiguration = True
+                patch_without_rollover_flag = {
+                    key: value
+                    for key, value in parameters_patch.items()
+                    if key != "request_continue_as_new"
+                }
+                strip_resume_references = strip_resume_references or bool(
+                    patch_without_rollover_flag
+                )
 
         if major_reconfiguration:
+            if strip_resume_references:
+                record.parameters = self._strip_resume_reference_parameters(
+                    record.parameters
+                )
             self._continue_as_new(
                 record,
                 summary="Applied input update via Continue-As-New.",
@@ -2583,22 +2597,36 @@ class TemporalExecutionService:
         }
 
     @staticmethod
-    def _full_rerun_parameters(
+    def _strip_resume_reference_parameters(
         parameters: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         params = dict(parameters or {})
-        for key in TASK_RUN_ID_PARAM_KEYS:
-            params.pop(key, None)
         for key in FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS:
             params.pop(key, None)
 
         task_payload = params.get("task")
         if isinstance(task_payload, Mapping):
             task_params = dict(task_payload)
-            task_params.pop("dependsOn", None)
+            task_params.pop("recovery", None)
+            task_params.pop("resume", None)
             if task_params:
                 params["task"] = task_params
             else:
+                params.pop("task", None)
+        return params
+
+    @classmethod
+    def _full_rerun_parameters(
+        cls,
+        parameters: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        params = cls._strip_resume_reference_parameters(parameters)
+        for key in TASK_RUN_ID_PARAM_KEYS:
+            params.pop(key, None)
+
+        if isinstance(params.get("task"), Mapping):
+            params["task"].pop("dependsOn", None)
+            if not params["task"]:
                 params.pop("task", None)
         params.pop("dependsOn", None)
         return params
@@ -2710,7 +2738,29 @@ class TemporalExecutionService:
             preservedSteps=checkpoint.preserved_steps,
         ).model_dump(by_alias=True, mode="json")
 
-        task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
+        task_payload = params.get("task")
+        task_params = dict(task_payload) if isinstance(task_payload, Mapping) else {}
+        task_params["recovery"] = {
+            "kind": "resume_from_failed_step",
+            "sourceWorkflowId": record.workflow_id,
+            "sourceRunId": source_run_id,
+        }
+        resume_ref = {
+            "kind": "resume_from_failed_step",
+            "sourceWorkflowId": record.workflow_id,
+            "sourceRunId": source_run_id,
+            "failedStepId": failed_step_id,
+            "failedStepAttempt": failed_step_attempt,
+            "resumeCheckpointRef": checkpoint_ref,
+            "taskInputSnapshotRef": source_snapshot_ref,
+        }
+        plan_ref = checkpoint.plan_ref or source_plan_ref
+        if plan_ref:
+            resume_ref["planRef"] = plan_ref
+        if checkpoint.plan_digest:
+            resume_ref["planDigest"] = checkpoint.plan_digest
+        task_params["resume"] = resume_ref
+        params["task"] = task_params
         title = (
             str(task_params.get("title") or "").strip()
             or str((record.memo or {}).get("title") or "").strip()

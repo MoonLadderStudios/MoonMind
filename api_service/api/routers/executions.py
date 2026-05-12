@@ -2220,7 +2220,32 @@ def _resume_plan_identity_from_record(record) -> str | None:
         resume_block.get("source_plan_digest"),
     )
 
+
+def _resume_evidence_marked_stale(record) -> bool:
+    memo = dict(getattr(record, "memo", None) or {})
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
+    resume_block = dict(_resume_source_block_from_record(record) or {})
+    for value in (
+        memo.get("resume_evidence_stale"),
+        memo.get("resumeEvidenceStale"),
+        search_attributes.get("mm_resume_evidence_stale"),
+        resume_block.get("resumeEvidenceStale"),
+        resume_block.get("resume_evidence_stale"),
+    ):
+        if isinstance(value, bool):
+            if value:
+                return True
+            continue
+        if value is None:
+            continue
+        if str(value).strip().lower() in {"1", "true", "yes", "stale"}:
+            return True
+    return False
+
+
 def _resume_evidence_disabled_reason(record) -> str | None:
+    if _resume_evidence_marked_stale(record):
+        return "stale_resume_evidence"
     if not _resume_checkpoint_ref_from_record(record):
         return "resume_checkpoint_missing"
     if not _resume_failed_step_id_from_record(record):
@@ -7030,6 +7055,15 @@ async def resume_execution_from_failed_step(
     checkpoint_ref = request.resume_checkpoint_ref or _resume_checkpoint_ref_from_record(
         canonical
     )
+    if _resume_evidence_marked_stale(canonical):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Failed-step Resume is not available for this execution.",
+                "reason": "stale_resume_evidence",
+            },
+        )
     checkpoint_payload = await _hydrate_resume_checkpoint_payload(
         session=session,
         user=user,
