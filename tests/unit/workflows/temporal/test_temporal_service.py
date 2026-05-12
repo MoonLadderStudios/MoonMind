@@ -3586,6 +3586,80 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
 
 
 @pytest.mark.asyncio
+async def test_update_inputs_continue_as_new_preserves_resume_provenance_for_rollover_only(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/original",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "resumeSource": {"workflowId": "mm:source", "runId": "run-old"},
+                "resumeCheckpointRef": "artifact://checkpoint/old",
+                "preservedSteps": [{"id": "step-1"}],
+                "completedSteps": [{"id": "step-0"}],
+                "task": {
+                    "instructions": "Original task",
+                    "recovery": {
+                        "kind": "resume_from_failed_step",
+                        "sourceWorkflowId": "mm:source",
+                        "sourceRunId": "run-old",
+                    },
+                    "resume": {
+                        "kind": "resume_from_failed_step",
+                        "sourceWorkflowId": "mm:source",
+                        "sourceRunId": "run-old",
+                        "failedStepId": "implement",
+                        "resumeCheckpointRef": "artifact://checkpoint/old",
+                        "taskInputSnapshotRef": "artifact://snapshot/old",
+                    },
+                },
+            },
+            idempotency_key=None,
+        )
+
+        response = await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name="UpdateInputs",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch={"request_continue_as_new": True},
+            title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
+            idempotency_key="update-rollover-only",
+        )
+        refreshed = await service.describe_execution(created.workflow_id)
+
+        assert response["accepted"] is True
+        assert response["applied"] == "continue_as_new"
+        assert response["continue_as_new_cause"] == "major_reconfiguration"
+        assert refreshed.parameters["resumeSource"] == {
+            "workflowId": "mm:source",
+            "runId": "run-old",
+        }
+        assert refreshed.parameters["resumeCheckpointRef"] == "artifact://checkpoint/old"
+        assert refreshed.parameters["preservedSteps"] == [{"id": "step-1"}]
+        assert refreshed.parameters["completedSteps"] == [{"id": "step-0"}]
+        assert refreshed.parameters["task"]["recovery"]["kind"] == (
+            "resume_from_failed_step"
+        )
+        assert refreshed.parameters["task"]["resume"]["resumeCheckpointRef"] == (
+            "artifact://checkpoint/old"
+        )
+
+
+@pytest.mark.asyncio
 async def test_record_progress_triggers_continue_as_new_for_run_threshold(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(

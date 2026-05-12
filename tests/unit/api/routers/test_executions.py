@@ -7182,6 +7182,48 @@ def test_describe_execution_rejects_stale_resume_evidence(
     assert body["resume"]["disabledReason"] == "stale_resume_evidence"
 
 
+def test_failed_step_resume_submission_rejects_stale_resume_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    canonical = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    canonical.memo = {
+        **canonical.memo,
+        "resume_checkpoint_ref": "artifact://resume-checkpoints/source/checkpoint-v1",
+        "resume_evidence_stale": True,
+    }
+    mock_service.describe_execution.return_value = canonical
+
+    class Session:
+        async def get(self, model, key):
+            return canonical
+
+        async def commit(self):
+            return None
+
+    artifact_service = SimpleNamespace(read=AsyncMock())
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: Session()
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        lambda _session: artifact_service,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/resume-from-failed-step",
+            json={"idempotencyKey": "resume-1"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "stale_resume_evidence"
+    artifact_service.read.assert_not_awaited()
+    mock_service.create_failed_step_resume_execution.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     ("payload_fields", "expected_fields"),
     [

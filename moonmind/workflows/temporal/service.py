@@ -2407,6 +2407,7 @@ class TemporalExecutionService:
     ) -> dict[str, Any]:
         updated = False
         major_reconfiguration = False
+        strip_resume_references = False
 
         if input_artifact_ref and input_artifact_ref != record.input_ref:
             record.input_ref = input_artifact_ref
@@ -2418,6 +2419,7 @@ class TemporalExecutionService:
 
         if plan_artifact_ref and plan_artifact_ref != record.plan_ref:
             major_reconfiguration = bool(record.plan_ref)
+            strip_resume_references = major_reconfiguration
             record.plan_ref = plan_artifact_ref
             updated = True
             refs = list(record.artifact_refs or [])
@@ -2432,11 +2434,20 @@ class TemporalExecutionService:
             updated = True
             if parameters_patch.get("request_continue_as_new") is True:
                 major_reconfiguration = True
+                patch_without_rollover_flag = {
+                    key: value
+                    for key, value in parameters_patch.items()
+                    if key != "request_continue_as_new"
+                }
+                strip_resume_references = strip_resume_references or bool(
+                    patch_without_rollover_flag
+                )
 
         if major_reconfiguration:
-            record.parameters = self._strip_resume_reference_parameters(
-                record.parameters
-            )
+            if strip_resume_references:
+                record.parameters = self._strip_resume_reference_parameters(
+                    record.parameters
+                )
             self._continue_as_new(
                 record,
                 summary="Applied input update via Continue-As-New.",
@@ -2613,13 +2624,9 @@ class TemporalExecutionService:
         for key in TASK_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
 
-        task_payload = params.get("task")
-        if isinstance(task_payload, Mapping):
-            task_params = dict(task_payload)
-            task_params.pop("dependsOn", None)
-            if task_params:
-                params["task"] = task_params
-            else:
+        if isinstance(params.get("task"), Mapping):
+            params["task"].pop("dependsOn", None)
+            if not params["task"]:
                 params.pop("task", None)
         params.pop("dependsOn", None)
         return params
