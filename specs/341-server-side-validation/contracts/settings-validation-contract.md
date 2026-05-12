@@ -46,6 +46,28 @@ Rules:
 - `details.blocks` identifies the blocked target.
 - SecretRef and credential-related values are redacted.
 
+Current MM-656 validation codes:
+- `descriptor_constraint_invalid`
+- `enum_value_invalid`
+- `feature_disabled_canary_percent`
+- `invalid_secret_ref`
+- `list_constraint_failed`
+- `maintenance_mode_conflict`
+- `numeric_constraint_failed`
+- `object_constraint_failed`
+- `provider_policy_denied`
+- `provider_profile_disabled`
+- `provider_profile_not_found`
+- `publication_mode_policy_denied`
+- `runtime_policy_denied`
+- `secret_ref_backend_policy_denied`
+- `secret_ref_unresolved`
+- `string_constraint_failed`
+- `type_mismatch`
+- `unsafe_setting_payload`
+- `unsupported_setting_type`
+- `value_size_limit_exceeded`
+
 ## Diagnostic Shape
 
 Settings diagnostics continue to use `SettingDiagnostic` entries, with the same stable codes and redaction rules as write errors.

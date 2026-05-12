@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
-from api_service.db.models import Base
+from api_service.db.models import Base, ManagedAgentProviderProfile, ManagedSecret, SecretStatus
 from api_service.main import app
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -177,3 +177,63 @@ async def test_settings_override_contract_rejects_stale_unsafe_and_oversized_wri
     assert "oauth_session_blob" not in unsafe.text
     assert publish_mode.json()["value"] == "branch"
     assert canary.json()["value"] == 25
+
+
+async def test_mm656_settings_override_contract_rejects_invalid_references_and_policy(
+    settings_contract_db,
+):
+    async with settings_contract_db() as session:
+        session.add(
+            ManagedSecret(
+                slug="disabled-token",
+                ciphertext="disabled-secret-plaintext",
+                status=SecretStatus.DISABLED,
+                details={},
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="disabled-profile",
+                runtime_id="codex",
+                provider_id="openai",
+                enabled=False,
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        invalid_secret = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"integrations.github.token_ref": "db://disabled-token"},
+                "expected_versions": {"integrations.github.token_ref": 1},
+            },
+        )
+        missing_profile = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.default_provider_profile_ref": "missing-profile"},
+                "expected_versions": {"workflow.default_provider_profile_ref": 1},
+            },
+        )
+        invalid_combo = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.default_task_runtime": "unsupported-runtime"},
+                "expected_versions": {"workflow.default_task_runtime": 1},
+            },
+        )
+
+    assert invalid_secret.status_code == 400
+    assert invalid_secret.json()["details"]["code"] == "secret_ref_unresolved"
+    assert invalid_secret.json()["details"]["boundary"] == "write_request"
+    assert "disabled-secret-plaintext" not in invalid_secret.text
+    assert missing_profile.status_code == 400
+    assert missing_profile.json()["details"]["code"] == "provider_profile_not_found"
+    assert invalid_combo.status_code == 400
+    assert invalid_combo.json()["details"]["code"] in {
+        "enum_value_invalid",
+        "runtime_policy_denied",
+    }

@@ -8,6 +8,7 @@ from api_service.main import app
 from api_service.services.settings_catalog import (
     SettingRegistryEntry,
     SettingsCatalogService,
+    SettingsWorkspacePolicy,
 )
 
 
@@ -81,3 +82,43 @@ async def test_effective_values_contract_reports_metadata_and_operator_lock(monk
     locked = diagnostics.json()["values"]["test.locked"]
     assert locked["source"] == "operator_lock"
     assert locked["read_only"] is True
+
+
+@pytest.mark.asyncio
+async def test_mm656_effective_preview_and_readiness_share_validation_details(monkeypatch):
+    def _factory(*args, **kwargs):
+        kwargs["env"] = {}
+        kwargs["workspace_policy"] = SettingsWorkspacePolicy(
+            allowed_runtimes=("codex",),
+            allowed_publication_modes=("none",),
+        )
+        return SettingsCatalogService(*args, **kwargs)
+
+    monkeypatch.setattr(settings_router, "SettingsCatalogService", _factory)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        effective = await client.get(
+            "/api/v1/settings/effective/workflow.default_publish_mode",
+            params={"scope": "workspace"},
+        )
+        diagnostics = await client.get(
+            "/api/v1/settings/diagnostics",
+            params={"scope": "workspace", "key": "workflow.default_publish_mode"},
+        )
+
+    assert effective.status_code == 200
+    assert effective.json()["diagnostics"][0]["code"] == (
+        "publication_mode_policy_denied"
+    )
+    assert effective.json()["diagnostics"][0]["details"]["boundary"] == (
+        "effective_preview"
+    )
+    assert diagnostics.status_code == 200
+    diagnostic = diagnostics.json()["values"]["workflow.default_publish_mode"][
+        "diagnostics"
+    ][0]
+    assert diagnostic["code"] == "publication_mode_policy_denied"
+    assert diagnostic["details"]["boundary"] == "readiness_diagnostics"
+    assert "readiness" in diagnostic["details"]["blocks"]
