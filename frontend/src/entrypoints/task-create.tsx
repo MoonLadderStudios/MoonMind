@@ -787,10 +787,12 @@ function compactSourceFromPresetProvenance(
     : [];
   const presetSlug = String(source.slug || "").trim();
   const presetVersion = String(source.version || "").trim();
+  const originalStepId = String(source.originalStepId || "").trim();
   const compact: Record<string, unknown> = { kind: "preset-derived" };
   if (presetSlug) compact.presetSlug = presetSlug;
   if (presetVersion) compact.presetVersion = presetVersion;
   if (path.length > 0) compact.includePath = path;
+  if (originalStepId) compact.originalStepId = originalStepId;
   return Object.keys(compact).length > 1 ? compact : undefined;
 }
 
@@ -7249,6 +7251,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               ));
           const submittedStepType: Exclude<StepType, "preset"> =
             sourceStep.stepType === "tool" ? "tool" : "skill";
+          const sourceInstructionsChanged =
+            Boolean(sourceStep.templateStepId) &&
+            String(entry.payload.instructions || sourceStep.instructions) !==
+              sourceStep.templateInstructions;
+          const submittedSource =
+            sourceStep.source && Object.keys(sourceStep.source).length > 0
+              ? {
+                  ...sourceStep.source,
+                  ...(sourceInstructionsChanged
+                    ? { kind: "detached" }
+                    : {}),
+                }
+              : undefined;
           const hasPayloadContent = Object.entries(entry.payload).some(
             ([key, value]) =>
               !(
@@ -7263,7 +7278,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             Boolean(sourceStep.title.trim()) ||
             Boolean(sourceStep.storyOutput) ||
             Boolean(
-              sourceStep.source && Object.keys(sourceStep.source).length > 0,
+              submittedSource && Object.keys(submittedSource).length > 0,
             ) ||
             Boolean(
               sourceStep.jiraOrchestration &&
@@ -7286,8 +7301,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             ...(sourceStep.storyOutput
               ? { storyOutput: sourceStep.storyOutput }
               : {}),
-            ...(sourceStep.source && Object.keys(sourceStep.source).length > 0
-              ? { source: sourceStep.source }
+            ...(submittedSource && Object.keys(submittedSource).length > 0
+              ? { source: submittedSource }
               : {}),
             ...(sourceStep.jiraOrchestration &&
             Object.keys(sourceStep.jiraOrchestration).length > 0
