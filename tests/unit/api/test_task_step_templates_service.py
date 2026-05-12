@@ -2014,7 +2014,7 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
-                    "jira_project_key": "TOOL",
+                    "jira_project_key": "MM",
                     "jira_issue_type": "Story",
                     "jira_dependency_mode": "linear_blocker_chain",
                     "publish_mode": "pr",
