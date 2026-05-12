@@ -14,7 +14,7 @@ Fields:
 - `inputAttachments`: objective-scoped attachment refs.
 - `step.inputAttachments`: step-scoped attachment refs.
 - `dependencies`: direct prerequisite execution IDs.
-- `authoredPresets` and `appliedStepTemplates`: provenance and reconstruction metadata.
+- `authoredPresets` and `appliedStepTemplates`: provenance and reconstruction metadata; final verification also preserves original Jira coverage ID DESIGN-REQ-007 as artifact traceability.
 
 Validation rules:
 - Repository is required when no system default repository exists.

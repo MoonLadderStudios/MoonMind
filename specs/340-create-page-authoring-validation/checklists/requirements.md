@@ -37,5 +37,5 @@
 ## Notes
 
 - PASS: The spec defines exactly one user story for MM-641 and preserves the original Jira preset brief for downstream verification.
-- PASS: Source design requirements DESIGN-REQ-001 through DESIGN-REQ-005 are mapped to functional requirements.
+- PASS: Source design requirements DESIGN-REQ-001 through DESIGN-REQ-005 plus original Jira coverage ID DESIGN-REQ-007 are mapped to functional requirements.
 - PASS: No clarification markers remain.

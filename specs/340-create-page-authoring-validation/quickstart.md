@@ -66,4 +66,4 @@ Manual or automated story validation should confirm:
 - Publish Mode semantics are unchanged after visual relocation.
 - Invalid drafts are blocked before submission.
 - Valid drafts produce canonical task-shaped payloads preserving authored intent.
-- `MM-641` and the original Jira preset brief remain traceable in MoonSpec artifacts and final verification evidence.
+- `MM-641`, the original Jira preset brief, local DESIGN-REQ-001 through DESIGN-REQ-005, and original Jira coverage ID DESIGN-REQ-007 remain traceable in MoonSpec artifacts and final verification evidence.

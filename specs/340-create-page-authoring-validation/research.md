@@ -56,13 +56,13 @@ Rationale: Visual placement is explicitly not a semantic change, so tests must c
 Alternatives considered: Moving publish behavior into branch-specific code was rejected because Publish Mode remains independent submission data.
 Test implications: unit + integration.
 
-## FR-011 Authoring Provenance
+## FR-011 / DESIGN-REQ-007 Authoring Provenance and Original Jira Coverage
 
-Decision: implemented_unverified. Authored presets, applied step templates, Jira provenance, and step source metadata are already modeled and tested, but MM-641 needs combined preservation evidence.
-Evidence: `frontend/src/entrypoints/task-create.tsx` `authoredPresetsFromAppliedTemplates`; `api_service/api/routers/executions.py` preserves `authoredPresets` and `appliedStepTemplates`; related frontend tests around Jira Orchestrate and schema presets.
-Rationale: The requirement is not new storage; it is preservation through draft normalization and submission.
-Alternatives considered: Treating provenance as out of scope was rejected because it is explicit in the Jira preset brief.
-Test implications: unit.
+Decision: implemented_unverified. Authored presets, applied step templates, Jira provenance, step source metadata, and original Jira coverage ID DESIGN-REQ-007 are already represented in artifacts or code, but MM-641 needs combined preservation evidence.
+Evidence: `spec.md` preserves the MM-641 Jira preset brief with Coverage IDs DESIGN-REQ-001 and DESIGN-REQ-007; `frontend/src/entrypoints/task-create.tsx` `authoredPresetsFromAppliedTemplates`; `api_service/api/routers/executions.py` preserves `authoredPresets` and `appliedStepTemplates`; related frontend tests around Jira Orchestrate and schema presets.
+Rationale: The requirement is not new storage; it is preservation through draft normalization, submission, and verification traceability.
+Alternatives considered: Treating original Jira coverage ID DESIGN-REQ-007 as only archival was rejected because final verification needs to compare implementation evidence against the preserved preset brief.
+Test implications: unit + integration.
 
 ## FR-012 / SC-005 Traceability
 

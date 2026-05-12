@@ -173,6 +173,7 @@ Implement Create page layout/validation; route validated drafts through the cano
 - **DESIGN-REQ-003**: Source `docs/Tasks/TaskArchitecture.md`, section 5.1 Authoring and validation. Repository, Branch, and Publish Mode are rendered together in the Steps card, while Publish Mode remains submission data. Scope: in scope. Maps to FR-004 and FR-009.
 - **DESIGN-REQ-004**: Source `docs/Tasks/TaskArchitecture.md`, task contract invariants. The submitted task uses `task.git.branch` as the single authored branch field, excludes `targetBranch`, and preserves Publish Mode semantics separately from visual placement. Scope: in scope. Maps to FR-008, FR-009, and FR-010.
 - **DESIGN-REQ-005**: Source `docs/Tasks/TaskArchitecture.md`, task contract invariants. Authored preset metadata, step source metadata, and attachment references are task contract data used for reconstruction, audit, diagnostics, and rerun behavior. Scope: in scope. Maps to FR-005, FR-007, and FR-011.
+- **DESIGN-REQ-007**: Source `MM-641` original Jira preset brief, Coverage IDs and Acceptance Criteria. User authoring intent from text, presets, Jira imports, attachments, and dependencies round-trips into the normalized task payload. Scope: in scope. Maps to FR-007 and FR-011.
 
 ## Requirements *(mandatory)*
 
@@ -207,4 +208,4 @@ Implement Create page layout/validation; route validated drafts through the cano
 - **SC-002**: In validation, 100% of tested invalid repository, runtime, publish-mode/branch, dependency, and attachment-policy drafts are blocked before submission with actionable feedback.
 - **SC-003**: In validation, 100% of tested valid drafts produce a task-shaped payload containing `task.git.branch` and no `targetBranch`.
 - **SC-004**: In validation, valid drafts containing presets, Jira imports, attachments, and dependencies preserve those authoring inputs through normalization and submission.
-- **SC-005**: Final verification can trace `MM-641`, the original Jira preset brief, and DESIGN-REQ-001 through DESIGN-REQ-005 through the MoonSpec artifacts and implementation evidence.
+- **SC-005**: Final verification can trace `MM-641`, the original Jira preset brief, local source mappings DESIGN-REQ-001 through DESIGN-REQ-005, and original Jira coverage ID DESIGN-REQ-007 through the MoonSpec artifacts and implementation evidence.

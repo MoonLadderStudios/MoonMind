@@ -40,6 +40,7 @@ MM-641 requires the Create page to keep task authoring task-first while moving R
 | DESIGN-REQ-003 | partial | controls are grouped together but not inside Steps card | move controls into Steps card | unit |
 | DESIGN-REQ-004 | implemented_verified | canonical branch payload and `targetBranch` rejection are covered | keep invariant | final verify |
 | DESIGN-REQ-005 | implemented_unverified | metadata and attachment references are preserved in code and tests | verify combined provenance after layout change | unit + integration |
+| DESIGN-REQ-007 | implemented_unverified | original MM-641 Jira coverage ID preserved in `spec.md`; combined round-trip evidence still needed | verify authoring intent round-trips through normalized payload | unit + integration |
 
 ## Technical Context
 

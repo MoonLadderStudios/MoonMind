@@ -52,7 +52,7 @@ Rules:
 - New submissions do not include `targetBranch` in `payload.task`, `payload.task.git`, or equivalent new task-shaped output.
 - `payload.task.publish.mode` retains the selected publish semantics after existing self-managed-publish adjustments.
 - Attachment refs remain bound to objective or step targets.
-- Preset and Jira provenance remain traceable through supported metadata fields.
+- Preset and Jira provenance remain traceable through supported metadata fields, including original Jira coverage ID DESIGN-REQ-007 in verification artifacts.
 
 ## Test Contract
 
