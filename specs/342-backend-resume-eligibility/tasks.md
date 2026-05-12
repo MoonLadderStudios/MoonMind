@@ -68,10 +68,10 @@ Each task below uses `- [ ] T###` with optional `[P]` for independent work in di
 ### Integration Tests (write first)
 
 - [ ] T012 [P] Add contract or API integration test for `GET /api/executions/{workflow_id}` recovery action serialization in `tests/contract/test_temporal_execution_api.py` covering FR-001, FR-002, FR-003, SCN-001, SC-001, and `contracts/recovery-eligibility.md`.
-- [ ] T013 [P] Add hermetic integration test for complete backend Resume evidence enabling `canResumeFromFailedStep` in `tests/integration/temporal/test_backend_resume_eligibility.py` covering FR-007, SCN-001, SC-003, SC-003, DESIGN-REQ-002, and DESIGN-REQ-005.
+- [ ] T013 [P] Add hermetic integration test for complete backend Resume evidence enabling `canResumeFromFailedStep` in `tests/integration/temporal/test_backend_resume_eligibility.py` covering FR-007, SCN-001, SC-003, DESIGN-REQ-002, and DESIGN-REQ-005.
 - [ ] T014 [P] Add hermetic integration test for invalid Resume evidence rejecting before a resumed execution is created in `tests/integration/temporal/test_backend_resume_eligibility.py` covering FR-008, SCN-003, SC-002, SC-004, DESIGN-REQ-002, and DESIGN-REQ-005.
 - [ ] T015 [P] Add hermetic integration test proving generic rerun and edited full retry do not populate Resume reference fields in `tests/integration/temporal/test_backend_resume_eligibility.py` covering FR-004, FR-009, SCN-004, SCN-006, SC-004, SC-005, and DESIGN-REQ-004.
-- [ ] T016 [P] Add integration boundary test for accepted Resume provenance and failed-step reference fields in `tests/integration/api/test_task_contract_normalization.py` or `tests/integration/temporal/test_backend_resume_eligibility.py` covering FR-005, FR-006, SCN-005, SC-003, and DESIGN-REQ-003.
+- [ ] T016 [P] Add integration boundary test for accepted Resume provenance and failed-step reference fields in `tests/integration/temporal/test_backend_resume_eligibility.py` covering FR-005, FR-006, SCN-005, SC-003, and DESIGN-REQ-003.
 
 ### Red-First Confirmation
 
@@ -88,7 +88,7 @@ Each task below uses `- [ ] T###` with optional `[P]` for independent work in di
 - [ ] T024 If T009 or T015 fails, update full rerun and edited retry sanitization in `moonmind/workflows/temporal/service.py` so generic rerun and edited full retry cannot carry Resume reference fields for FR-004, SCN-004, SC-004, and DESIGN-REQ-004.
 - [ ] T025 If T008 fails, update Resume request validation in `api_service/api/routers/executions.py` so all edited task payload field categories are rejected before checkpoint hydration or execution creation for FR-009, SCN-006, SC-005, DESIGN-REQ-001, and DESIGN-REQ-005.
 - [ ] T026 If T011 fails, update Task Detail recovery action rendering in `frontend/src/entrypoints/task-detail.tsx` so Resume visibility and unavailable reason copy come only from backend action fields for FR-001, FR-002, FR-009, SCN-001, SCN-006, SC-001, and SC-005.
-- [ ] T027 If contract tests reveal stale generated API types, update generated or schema-facing recovery action types in `frontend/src/entrypoints/task-detail.tsx` or the relevant generated type file for `contracts/recovery-eligibility.md`, FR-003, FR-005, and FR-006.
+- [ ] T027 If contract tests reveal stale generated API types, update generated or schema-facing recovery action types in `frontend/src/entrypoints/task-detail.tsx` and `frontend/src/generated/openapi.ts` for `contracts/recovery-eligibility.md`, FR-003, FR-005, and FR-006.
 
 ### Story Validation
 
