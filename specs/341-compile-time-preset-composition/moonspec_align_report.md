@@ -10,11 +10,12 @@
 | --- | --- | --- | --- |
 | Source preservation | PASS | `spec.md` preserves `MM-642`, the canonical Jira preset brief, and source coverage IDs `DESIGN-REQ-010` and `DESIGN-REQ-011`. | None |
 | Single-story gate | PASS | `spec.md` contains exactly one `## User Story - Compile-Time Preset Composition`. | None |
-| Plan coverage | PASS | `plan.md` maps FR-001 through FR-008, acceptance scenarios, and DESIGN-REQ-010/011 to code and test evidence. | None |
-| Task coverage | PASS | `tasks.md` covers setup, verification-first evidence, fallback implementation, focused validation, full unit validation, integration blocker recording, and final verification. | None |
+| Requirement coverage | PASS | `plan.md` maps FR-001 through FR-008, SC-001 through SC-007, and DESIGN-REQ-010/011 to code and test evidence. | Added explicit SC-001 through SC-007 rows to `plan.md`. |
+| Research traceability | PASS | `research.md` explains the verification-first status for functional requirements and source design requirements. | Added a success-criteria coverage section mapping SC-001 through SC-007 to existing evidence. |
+| Task coverage | PASS | `tasks.md` covers setup, verification-first evidence, fallback implementation, focused validation, full unit validation, integration blocker recording, and final verification. | Expanded success-criteria references from ranges into explicit IDs for downstream checks. |
+| Quickstart consistency | PASS | `quickstart.md` lists focused and required validation commands. | Added an explicit SC-001 through SC-007 traceability check. |
 | Constitution alignment | PASS | `plan.md` records PASS for all constitution principles and no complexity exceptions. | None |
-| Test command alignment | PASS | `quickstart.md`, `plan.md`, and `tasks.md` reference the same focused and required test commands. | None |
 
 ## Decision
 
-No artifact remediation was required after alignment. The MM-642 artifact set is intentionally separate from `specs/324-compile-recursive-presets` because that earlier feature preserves Jira key `MM-630`, while this run must preserve `MM-642` for downstream traceability.
+Alignment chose conservative artifact-only remediation: preserve the existing single-story MM-642 scope and add explicit success-criteria traceability rows/references. No production code, tests, or downstream artifact regeneration was required because the underlying plan status and task strategy did not change.

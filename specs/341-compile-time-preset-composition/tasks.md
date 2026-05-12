@@ -7,7 +7,7 @@
 
 ## Source Traceability
 
-MM-642 and the canonical Jira preset brief are preserved in `spec.md`. This task list covers exactly one story: Compile-Time Preset Composition. Traceability spans FR-001 through FR-008, acceptance scenarios 1-6, edge cases, SC-001 through SC-007, DESIGN-REQ-010, and DESIGN-REQ-011.
+MM-642 and the canonical Jira preset brief are preserved in `spec.md`. This task list covers exactly one story: Compile-Time Preset Composition. Traceability spans FR-001 through FR-008, acceptance scenarios 1-6, edge cases, SC-001, SC-002, SC-003, SC-004, SC-005, SC-006, SC-007, DESIGN-REQ-010, and DESIGN-REQ-011.
 
 Requirement status from `plan.md`: FR-001 through FR-007, DESIGN-REQ-010, and DESIGN-REQ-011 are implemented_verified by existing production code and focused tests. FR-008 is implemented_unverified until this artifact set and final verification preserve MM-642 end to end. No production code changes are planned unless verification exposes drift.
 
@@ -29,7 +29,7 @@ Requirement status from `plan.md`: FR-001 through FR-007, DESIGN-REQ-010, and DE
 
 **Independent Test**: Submit a task draft containing manual steps plus recursive preset-derived steps, then verify before execution starts that the submitted task has deterministic flattened steps, preserved `authoredPresets`, preserved `steps[].source`, and a worker-facing payload that does not require the live preset catalog.
 
-**Traceability IDs**: FR-001 through FR-008; acceptance scenarios 1-6; SC-001 through SC-007; DESIGN-REQ-010; DESIGN-REQ-011.
+**Traceability IDs**: FR-001 through FR-008; acceptance scenarios 1-6; SC-001, SC-002, SC-003, SC-004, SC-005, SC-006, SC-007; DESIGN-REQ-010; DESIGN-REQ-011.
 
 **Unit Test Plan**: Verify catalog expansion and validation, task contract provenance validation, worker runtime resolved payload handling, API task-shaped normalization, manual-only regression, and Create page submission provenance.
 
@@ -61,16 +61,16 @@ Requirement status from `plan.md`: FR-001 through FR-007, DESIGN-REQ-010, and DE
 
 - [X] T020 Run focused backend unit tests with `python -m pytest tests/unit/api/test_task_step_templates_service.py tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/api/routers/test_executions.py -q` (FR-001 through FR-007)
 - [X] T021 Run focused Create page validation with `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` (FR-003, FR-004)
-- [X] T022 Run focused hermetic integration validation with `python -m pytest tests/integration/temporal/test_task_shaped_submission_normalization.py -q -m integration_ci` (FR-001 through FR-007, SC-001 through SC-006)
+- [X] T022 Run focused hermetic integration validation with `python -m pytest tests/integration/temporal/test_task_shaped_submission_normalization.py -q -m integration_ci` (FR-001 through FR-007, SC-001, SC-002, SC-003, SC-004, SC-005, SC-006)
 - [X] T023 Verify the task preset composition contract remains satisfied by comparing implementation behavior against `specs/341-compile-time-preset-composition/contracts/task-preset-composition-contract.md` (FR-001 through FR-007)
 - [X] T024 Verify `MM-642`, DESIGN-REQ-010, DESIGN-REQ-011, and the canonical Jira preset brief remain preserved in `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/task-preset-composition-contract.md`, `quickstart.md`, and `tasks.md` (FR-008, SC-007)
 
 ## Final Phase: Polish And Verification
 
 - [X] T025 Run the full required unit suite with `./tools/test_unit.sh` (FR-001 through FR-008)
-- [X] T026 Run the required hermetic integration suite with `./tools/test_integration.sh` or record the exact environmental blocker if Docker is unavailable: Docker returned `403 Forbidden` after the buildx warning in this managed environment (SC-001 through SC-006)
+- [X] T026 Run the required hermetic integration suite with `./tools/test_integration.sh` or record the exact environmental blocker if Docker is unavailable: Docker returned `403 Forbidden` after the buildx warning in this managed environment (SC-001, SC-002, SC-003, SC-004, SC-005, SC-006)
 - [X] T027 Confirm no provider verification or credentialed tests are required for MM-642 and document skipped provider checks in `specs/341-compile-time-preset-composition/verification.md`
-- [X] T028 Run `/moonspec-verify` after implementation and tests pass or are blocked with exact reasons, ensuring verification covers MM-642, the preserved Jira preset brief, FR-001 through FR-008, SC-001 through SC-007, DESIGN-REQ-010, DESIGN-REQ-011, commands run, and remaining risks
+- [X] T028 Run `/moonspec-verify` after implementation and tests pass or are blocked with exact reasons, ensuring verification covers MM-642, the preserved Jira preset brief, FR-001 through FR-008, SC-001, SC-002, SC-003, SC-004, SC-005, SC-006, SC-007, DESIGN-REQ-010, DESIGN-REQ-011, commands run, and remaining risks
 
 ## Dependencies And Execution Order
 

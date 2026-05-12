@@ -27,6 +27,13 @@ MM-642 requires task preset composition to be finalized in the control plane bef
 | SCN-006 | implemented_verified | integration and snapshot metadata assertions cover catalog-independent reconstruction semantics | no new implementation | integration_ci |
 | DESIGN-REQ-010 | implemented_verified | source invariant is represented by catalog compilation, task contract validation, worker runtime behavior, and tests | no new implementation | unit + integration_ci |
 | DESIGN-REQ-011 | implemented_verified | source invariant is represented by snapshot/provenance tests and contract helpers | no new implementation | unit + integration_ci |
+| SC-001 | implemented_verified | focused integration and catalog validation cover submitted tasks with recursive preset includes being validated before execution finalization | no new implementation | integration_ci |
+| SC-002 | implemented_verified | catalog/API/frontend/integration evidence covers deterministic final order for equivalent valid draft inputs | no new implementation | unit + integration_ci |
+| SC-003 | implemented_verified | task contract, API, frontend, and integration tests preserve source provenance for preset-derived and detached steps | no new implementation | unit + integration_ci |
+| SC-004 | implemented_verified | worker runtime, task contract, and focused integration evidence show compiled tasks execute without live catalog lookup | no new implementation | unit + integration_ci |
+| SC-005 | implemented_verified | task-shaped submission integration and snapshot metadata evidence cover reconstruction after live catalog changes | no new implementation | integration_ci |
+| SC-006 | implemented_verified | API route and integration manual-only regressions preserve zero-preset behavior | no new implementation | unit + integration_ci |
+| SC-007 | implemented_verified | `spec.md`, generated design artifacts, `tasks.md`, alignment report, and verification report preserve `MM-642`, the canonical brief, DESIGN-REQ-010, and DESIGN-REQ-011 | no new implementation | final verify |
 
 ## Technical Context
 

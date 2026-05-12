@@ -33,3 +33,5 @@ Run required final suites when available:
 2. Confirm `plan.md`, `research.md`, `data-model.md`, this quickstart, contract, tasks, and verification evidence reference `MM-642`.
 3. Confirm source coverage IDs `DESIGN-REQ-010` and `DESIGN-REQ-011` map to compile-time composition and provenance durability.
 4. Confirm manual-only submission tests still show no fabricated preset metadata.
+
+5. Confirm SC-001, SC-002, SC-003, SC-004, SC-005, SC-006, and SC-007 remain covered by the focused unit, frontend, integration, and final verification evidence.

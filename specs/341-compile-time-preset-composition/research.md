@@ -55,3 +55,19 @@ Evidence: `spec.md` preserves the full orchestration input, and this plan refere
 Rationale: Final verification and PR metadata need a durable source trace independent of later Jira or catalog changes.
 Alternatives considered: Reuse the related MM-630 artifacts. Rejected because they preserve a different Jira source key and cannot serve as MM-642 traceability evidence.
 Test implications: Final MoonSpec verification must inspect artifacts for `MM-642`, DESIGN-REQ-010, and DESIGN-REQ-011.
+
+## Success Criteria Coverage
+
+Decision: Treat SC-001 through SC-007 as implemented and verified by the same focused evidence that verifies FR-001 through FR-008 and DESIGN-REQ-010 through DESIGN-REQ-011.
+Evidence: `tests/unit/api/test_task_step_templates_service.py`, `tests/unit/workflows/tasks/test_task_contract.py`, `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, `tests/unit/api/routers/test_executions.py`, `frontend/src/entrypoints/task-create.test.tsx`, `tests/integration/temporal/test_task_shaped_submission_normalization.py`, and the preserved MM-642 artifact set.
+Rationale: The success criteria are measurable expressions of the same compile-time composition, provenance durability, worker independence, manual-only regression, and traceability behavior mapped in the functional requirements.
+Alternatives considered: Create separate success-criteria-only tests. Rejected because existing unit and integration tests already exercise the observable outcomes directly.
+Test implications: Rerun focused unit, frontend, and integration checks plus final MoonSpec verification when validating the story.
+
+- SC-001 maps to FR-001 and FR-002 validation-before-finalization evidence.
+- SC-002 maps to FR-003 deterministic order evidence.
+- SC-003 maps to FR-004 provenance preservation evidence.
+- SC-004 maps to FR-005 worker-facing payload independence evidence.
+- SC-005 maps to FR-006 reconstruction metadata evidence.
+- SC-006 maps to FR-007 manual-only regression evidence.
+- SC-007 maps to FR-008 traceability preservation evidence.
