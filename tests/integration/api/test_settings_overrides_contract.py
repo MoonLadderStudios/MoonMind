@@ -170,7 +170,7 @@ async def test_settings_override_contract_rejects_stale_unsafe_and_oversized_wri
     assert conflict.status_code == 409
     assert conflict.json()["error"] == "version_conflict"
     assert oversized.status_code == 400
-    assert oversized.json()["error"] == "invalid_setting_value"
+    assert oversized.json()["error"] == "constraint_violation"
     assert "x" * 64 not in oversized.text
     assert unsafe.status_code == 400
     assert unsafe.json()["error"] == "invalid_setting_value"

@@ -19,6 +19,7 @@ from api_service.services.settings_catalog import (
     SettingSection,
     SettingsCatalogService,
     SettingsError,
+    SettingsValidationError,
     has_settings_permission,
     settings_error,
     settings_permissions_for_user,
@@ -500,6 +501,17 @@ async def patch_settings(
                 expected_versions=payload.expected_versions,
                 reason=payload.reason,
             )
+    except SettingsValidationError as exc:
+        return _error_response(
+            400,
+            settings_error(
+                exc.code,
+                exc.message,
+                key=exc.key,
+                scope=exc.scope or resolved_scope,
+                details=exc.details,
+            ),
+        )
     except ValueError as exc:
         if str(exc) == "version_conflict":
             status_code = 409

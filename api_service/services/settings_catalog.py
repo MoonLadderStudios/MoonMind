@@ -164,6 +164,35 @@ class SettingMigrationRule:
             raise ValueError("expected_schema_version must be positive")
 
 
+@dataclass(frozen=True)
+class SettingsWorkspacePolicy:
+    allowed_task_runtimes: frozenset[str] | None = None
+    allowed_publish_modes: frozenset[str] | None = None
+    max_canary_percent: int | None = None
+    skills_enabled: bool = True
+    allowed_secret_ref_backends: frozenset[str] | None = None
+    maintenance_mode: bool = False
+    allowed_operations_during_maintenance: frozenset[str] = frozenset()
+
+
+class SettingsValidationError(ValueError):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        key: str | None = None,
+        scope: SettingScope | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(code)
+        self.code = code
+        self.message = message
+        self.key = key
+        self.scope = scope
+        self.details = details or {}
+
+
 class SettingDescriptor(BaseModel):
     key: str
     title: str
@@ -653,6 +682,463 @@ class SettingsCatalogBuilder:
         return SettingsCatalogResponse(section=section, scope=scope, categories=categories)
 
 
+class SettingsValidator:
+    """Server-side validator for setting values, dependencies, and policies."""
+
+    def __init__(
+        self,
+        *,
+        workspace_policy: SettingsWorkspacePolicy | None = None,
+        managed_secret_status_by_slug: dict[str, str | None] | None = None,
+        provider_profile_enabled_by_id: dict[str, bool | None] | None = None,
+    ) -> None:
+        self._workspace_policy = workspace_policy or SettingsWorkspacePolicy()
+        self._managed_secret_status_by_slug = managed_secret_status_by_slug or {}
+        self._provider_profile_enabled_by_id = provider_profile_enabled_by_id or {}
+
+    def validate_descriptor(self, entry: SettingRegistryEntry) -> None:
+        if not entry.apply_mode:
+            raise ValueError(f"invalid_apply_mode for setting {entry.key!r}")
+        if entry.apply_mode == "worker_reload" and not entry.requires_reload:
+            raise ValueError(
+                f"invalid_apply_mode for setting {entry.key!r}: "
+                "worker_reload requires requires_reload"
+            )
+        if entry.apply_mode == "process_restart" and not (
+            entry.requires_worker_restart or entry.requires_process_restart
+        ):
+            raise ValueError(
+                f"invalid_apply_mode for setting {entry.key!r}: "
+                "process_restart requires a restart flag"
+            )
+        if entry.apply_mode not in {"immediate"} and not entry.applies_to:
+            raise ValueError(
+                f"invalid_apply_mode for setting {entry.key!r}: "
+                "non-immediate settings require affected systems"
+            )
+
+    def validate_write(
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+        *,
+        scope: SettingScope,
+        proposed_values: dict[str, Any],
+    ) -> None:
+        self.validate_value_shape(entry, value, scope=scope)
+        self.validate_dependencies(entry, proposed_values, scope=scope)
+        self.validate_workspace_policy(entry, value, scope=scope)
+        self.validate_referenced_resources(entry, value, scope=scope)
+
+    def validate_effective(
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+        *,
+        scope: SettingScope,
+        proposed_values: dict[str, Any],
+    ) -> list[SettingDiagnostic]:
+        diagnostics: list[SettingDiagnostic] = []
+        for validation in (
+            lambda: self.validate_value_shape(entry, value, scope=scope),
+            lambda: self.validate_dependencies(entry, proposed_values, scope=scope),
+            lambda: self.validate_workspace_policy(entry, value, scope=scope),
+            lambda: self.validate_referenced_resources(entry, value, scope=scope),
+        ):
+            try:
+                validation()
+            except SettingsValidationError as exc:
+                diagnostics.append(
+                    SettingDiagnostic(
+                        code=exc.code,
+                        message=exc.message,
+                        severity="error",
+                        details=exc.details,
+                    )
+                )
+        return diagnostics
+
+    def validate_value_shape(
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+        *,
+        scope: SettingScope,
+    ) -> None:
+        if value is None:
+            return
+        if entry.value_type == "enum":
+            allowed = {option for option, _label in entry.options}
+            if not isinstance(value, str) or value not in allowed:
+                raise self._error(
+                    "invalid_enum_value",
+                    f"{entry.key} must be one of the allowed enum values.",
+                    entry=entry,
+                    scope=scope,
+                    details={"allowed_values": sorted(allowed)},
+                )
+        elif entry.value_type == "integer":
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise self._error(
+                    "invalid_type",
+                    f"{entry.key} must be an integer.",
+                    entry=entry,
+                    scope=scope,
+                    details={"expected_type": "integer"},
+                )
+            self._validate_numeric_constraints(entry, value, scope=scope)
+        elif entry.value_type == "number":
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+            ):
+                raise self._error(
+                    "invalid_type",
+                    f"{entry.key} must be a number.",
+                    entry=entry,
+                    scope=scope,
+                    details={"expected_type": "number"},
+                )
+            self._validate_numeric_constraints(entry, value, scope=scope)
+        elif entry.value_type == "boolean":
+            if not isinstance(value, bool):
+                raise self._error(
+                    "invalid_type",
+                    f"{entry.key} must be a boolean.",
+                    entry=entry,
+                    scope=scope,
+                    details={"expected_type": "boolean"},
+                )
+        elif entry.value_type == "secret_ref":
+            if not isinstance(value, str) or "://" not in value:
+                raise self._error(
+                    "invalid_secret_ref",
+                    f"{entry.key} must be a SecretRef.",
+                    entry=entry,
+                    scope=scope,
+                )
+            if any(value.startswith(prefix) for prefix in _SECRET_PREFIXES):
+                raise self._error(
+                    "invalid_secret_ref",
+                    f"{entry.key} must reference a secret, not contain one.",
+                    entry=entry,
+                    scope=scope,
+                )
+        elif entry.value_type == "string":
+            if not isinstance(value, str):
+                raise self._error(
+                    "invalid_type",
+                    f"{entry.key} must be a string.",
+                    entry=entry,
+                    scope=scope,
+                    details={"expected_type": "string"},
+                )
+            self._validate_string_constraints(entry, value, scope=scope)
+        elif entry.value_type == "list":
+            if not isinstance(value, list):
+                raise self._error(
+                    "invalid_type",
+                    f"{entry.key} must be a list.",
+                    entry=entry,
+                    scope=scope,
+                    details={"expected_type": "list"},
+                )
+            self._validate_length_constraints(entry, len(value), scope=scope)
+        elif entry.value_type == "object":
+            if not isinstance(value, dict):
+                raise self._error(
+                    "invalid_type",
+                    f"{entry.key} must be an object.",
+                    entry=entry,
+                    scope=scope,
+                    details={"expected_type": "object"},
+                )
+        else:
+            raise self._error(
+                "unsupported_setting_type",
+                f"{entry.key} uses unsupported setting type {entry.value_type}.",
+                entry=entry,
+                scope=scope,
+                details={"value_type": entry.value_type},
+            )
+
+    def validate_dependencies(
+        self,
+        entry: SettingRegistryEntry,
+        proposed_values: dict[str, Any],
+        *,
+        scope: SettingScope,
+    ) -> None:
+        for dependency in entry.depends_on:
+            actual = proposed_values.get(dependency.key)
+            expected = dependency.required_value
+            if expected is not None and actual != expected:
+                raise self._error(
+                    "dependency_not_satisfied",
+                    dependency.reason
+                    or f"{entry.key} requires {dependency.key} to be {expected!r}.",
+                    entry=entry,
+                    scope=scope,
+                    details={
+                        "dependency_key": dependency.key,
+                        "required_value": expected,
+                    },
+                )
+            if expected is None and (
+                actual is None or actual is False or actual == ""
+            ):
+                raise self._error(
+                    "dependency_not_satisfied",
+                    dependency.reason or f"{entry.key} requires {dependency.key}.",
+                    entry=entry,
+                    scope=scope,
+                    details={"dependency_key": dependency.key},
+                )
+
+    def validate_workspace_policy(
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+        *,
+        scope: SettingScope,
+    ) -> None:
+        policy = self._workspace_policy
+        if entry.key == "workflow.default_task_runtime" and isinstance(value, str):
+            allowed = policy.allowed_task_runtimes
+            if allowed is not None and value not in allowed:
+                raise self._error(
+                    "workspace_policy_violation",
+                    f"{entry.key} is not allowed by workspace runtime policy.",
+                    entry=entry,
+                    scope=scope,
+                    details={"policy": "allowed_task_runtimes"},
+                )
+        if entry.key == "workflow.default_publish_mode" and isinstance(value, str):
+            allowed = policy.allowed_publish_modes
+            if allowed is not None and value not in allowed:
+                raise self._error(
+                    "workspace_policy_violation",
+                    f"{entry.key} is not allowed by workspace publish policy.",
+                    entry=entry,
+                    scope=scope,
+                    details={"policy": "allowed_publish_modes"},
+                )
+        if entry.key == "skills.canary_percent" and isinstance(value, int):
+            if not policy.skills_enabled and value != 0:
+                raise self._error(
+                    "cross_setting_violation",
+                    f"{entry.key} must be zero when skills are disabled.",
+                    entry=entry,
+                    scope=scope,
+                    details={"requires": {"skills_enabled": True}},
+                )
+            if (
+                policy.max_canary_percent is not None
+                and value > policy.max_canary_percent
+            ):
+                raise self._error(
+                    "workspace_policy_violation",
+                    f"{entry.key} exceeds the workspace canary limit.",
+                    entry=entry,
+                    scope=scope,
+                    details={
+                        "policy": "max_canary_percent",
+                        "maximum": policy.max_canary_percent,
+                    },
+                )
+        if entry.value_type == "secret_ref" and isinstance(value, str):
+            allowed = policy.allowed_secret_ref_backends
+            scheme = value.split("://", 1)[0]
+            if allowed is not None and scheme not in allowed:
+                raise self._error(
+                    "workspace_policy_violation",
+                    f"{entry.key} uses a SecretRef backend blocked by workspace policy.",
+                    entry=entry,
+                    scope=scope,
+                    details={
+                        "policy": "allowed_secret_ref_backends",
+                        "ref_scheme": scheme,
+                    },
+                )
+        if (
+            policy.maintenance_mode
+            and entry.key == "operations.mode"
+            and isinstance(value, str)
+            and value not in policy.allowed_operations_during_maintenance
+        ):
+            raise self._error(
+                "cross_setting_violation",
+                f"{entry.key} conflicts with workspace maintenance policy.",
+                entry=entry,
+                scope=scope,
+                details={"policy": "maintenance_mode"},
+            )
+
+    def validate_referenced_resources(
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+        *,
+        scope: SettingScope,
+    ) -> None:
+        if entry.key == "workflow.default_provider_profile_ref" and isinstance(value, str):
+            profile_id = value.strip()
+            if not profile_id:
+                return
+            if profile_id not in self._provider_profile_enabled_by_id:
+                return
+            enabled = self._provider_profile_enabled_by_id.get(profile_id)
+            if enabled is None:
+                raise self._error(
+                    "provider_profile_not_found",
+                    f"{entry.key} references a provider profile that does not exist.",
+                    entry=entry,
+                    scope=scope,
+                    details={"profile_id": profile_id, "launch_blocker": True},
+                )
+            if enabled is False:
+                raise self._error(
+                    "provider_profile_disabled",
+                    f"{entry.key} references a disabled provider profile.",
+                    entry=entry,
+                    scope=scope,
+                    details={"profile_id": profile_id, "launch_blocker": True},
+                )
+        if entry.value_type != "secret_ref" or not isinstance(value, str):
+            return
+        if value.startswith("env://"):
+            env_name = value.removeprefix("env://")
+            if not env_name:
+                raise self._error(
+                    "invalid_secret_ref",
+                    f"{entry.key} is not a valid SecretRef.",
+                    entry=entry,
+                    scope=scope,
+                    details={"ref_scheme": "env"},
+                )
+            return
+        if value.startswith("db://"):
+            slug = value.removeprefix("db://")
+            if slug not in self._managed_secret_status_by_slug:
+                return
+            status = self._managed_secret_status_by_slug.get(slug)
+            if status is None:
+                raise self._error(
+                    "unresolved_secret_ref",
+                    f"{entry.key} references a managed secret that does not exist.",
+                    entry=entry,
+                    scope=scope,
+                    details={
+                        "ref_scheme": "db",
+                        "status": "missing",
+                        "launch_blocker": True,
+                    },
+                )
+            if status != SecretStatus.ACTIVE.value:
+                raise self._error(
+                    "unresolved_secret_ref",
+                    f"{entry.key} references a managed secret that is {status}.",
+                    entry=entry,
+                    scope=scope,
+                    details={
+                        "ref_scheme": "db",
+                        "status": status,
+                        "launch_blocker": True,
+                    },
+                )
+
+    def _validate_numeric_constraints(
+        self,
+        entry: SettingRegistryEntry,
+        value: int | float,
+        *,
+        scope: SettingScope,
+    ) -> None:
+        constraints = entry.constraints
+        if constraints is None:
+            return
+        if constraints.minimum is not None and value < constraints.minimum:
+            raise self._error(
+                "constraint_violation",
+                f"{entry.key} is below the allowed minimum.",
+                entry=entry,
+                scope=scope,
+                details={"minimum": constraints.minimum},
+            )
+        if constraints.maximum is not None and value > constraints.maximum:
+            raise self._error(
+                "constraint_violation",
+                f"{entry.key} exceeds the allowed maximum.",
+                entry=entry,
+                scope=scope,
+                details={"maximum": constraints.maximum},
+            )
+
+    def _validate_string_constraints(
+        self,
+        entry: SettingRegistryEntry,
+        value: str,
+        *,
+        scope: SettingScope,
+    ) -> None:
+        constraints = entry.constraints
+        if constraints is None:
+            return
+        self._validate_length_constraints(entry, len(value), scope=scope)
+        if constraints.pattern and re.fullmatch(constraints.pattern, value) is None:
+            raise self._error(
+                "constraint_violation",
+                f"{entry.key} does not match the required pattern.",
+                entry=entry,
+                scope=scope,
+                details={"pattern": constraints.pattern},
+            )
+
+    def _validate_length_constraints(
+        self,
+        entry: SettingRegistryEntry,
+        length: int,
+        *,
+        scope: SettingScope,
+    ) -> None:
+        constraints = entry.constraints
+        if constraints is None:
+            return
+        if constraints.min_length is not None and length < constraints.min_length:
+            raise self._error(
+                "constraint_violation",
+                f"{entry.key} is shorter than the allowed minimum length.",
+                entry=entry,
+                scope=scope,
+                details={"min_length": constraints.min_length},
+            )
+        if constraints.max_length is not None and length > constraints.max_length:
+            raise self._error(
+                "constraint_violation",
+                f"{entry.key} is longer than the allowed maximum length.",
+                entry=entry,
+                scope=scope,
+                details={"max_length": constraints.max_length},
+            )
+
+    def _error(
+        self,
+        code: str,
+        message: str,
+        *,
+        entry: SettingRegistryEntry,
+        scope: SettingScope,
+        details: dict[str, Any] | None = None,
+    ) -> SettingsValidationError:
+        return SettingsValidationError(
+            code,
+            message,
+            key=entry.key,
+            scope=scope,
+            details=details,
+        )
+
+
 class SettingsCatalogService:
     """Build catalog and effective settings responses from explicit metadata."""
 
@@ -666,6 +1152,7 @@ class SettingsCatalogService:
         session: AsyncSession | None = None,
         workspace_id: UUID | None = None,
         user_id: UUID | None = None,
+        workspace_policy: SettingsWorkspacePolicy | None = None,
     ) -> None:
         self._settings = settings or app_settings
         self._env = env if env is not None else os.environ
@@ -695,6 +1182,7 @@ class SettingsCatalogService:
         self._user_id = user_id or _DEFAULT_SUBJECT_ID
         self._managed_secret_status_by_slug: dict[str, str | None] = {}
         self._provider_profile_enabled_by_id: dict[str, bool | None] = {}
+        self._workspace_policy = workspace_policy or SettingsWorkspacePolicy()
 
     def catalog(
         self,
@@ -982,7 +1470,6 @@ class SettingsCatalogService:
                 raise PermissionError(
                     self._read_only_reason(entry) or "Setting is read-only."
                 )
-            self._validate_override_value(entry, value)
             row = current_rows.get((scope, key))
             current_version = row.value_version if row is not None else 1
             expected = expected_versions.get(key)
@@ -990,6 +1477,34 @@ class SettingsCatalogService:
                 raise ValueError("version_conflict")
             entries[key] = entry
             validated[key] = value
+
+        all_scope_entries = self._entries_for_scope(scope)
+        effective_overrides = await self._get_effective_overrides(
+            scope=scope,
+            keys=[entry.key for entry in all_scope_entries],
+        )
+        proposed_values = {
+            entry.key: self._resolve_value_from_overrides(
+                entry,
+                scope=scope,
+                overrides=effective_overrides,
+            )[0]
+            for entry in all_scope_entries
+        }
+        proposed_values.update(validated)
+        await self._prime_managed_secret_statuses(validated.values())
+        await self._prime_provider_profile_statuses(
+            value
+            for key, value in validated.items()
+            if entries[key].key == "workflow.default_provider_profile_ref"
+        )
+        for key, value in validated.items():
+            self._validate_override_value(
+                entries[key],
+                value,
+                scope=scope,
+                proposed_values=proposed_values,
+            )
 
         for key, value in validated.items():
             entry = entries[key]
@@ -1225,26 +1740,16 @@ class SettingsCatalogService:
 
     def _validate_apply_modes(self) -> None:
         self._validate_migration_rules()
+        validator = self._validator()
         for entry in self._registry:
-            if not entry.apply_mode:
-                raise ValueError(f"invalid_apply_mode for setting {entry.key!r}")
-            if entry.apply_mode == "worker_reload" and not entry.requires_reload:
-                raise ValueError(
-                    f"invalid_apply_mode for setting {entry.key!r}: "
-                    "worker_reload requires requires_reload"
-                )
-            if entry.apply_mode == "process_restart" and not (
-                entry.requires_worker_restart or entry.requires_process_restart
-            ):
-                raise ValueError(
-                    f"invalid_apply_mode for setting {entry.key!r}: "
-                    "process_restart requires a restart flag"
-                )
-            if entry.apply_mode not in {"immediate"} and not entry.applies_to:
-                raise ValueError(
-                    f"invalid_apply_mode for setting {entry.key!r}: "
-                    "non-immediate settings require affected systems"
-                )
+            validator.validate_descriptor(entry)
+
+    def _validator(self) -> SettingsValidator:
+        return SettingsValidator(
+            workspace_policy=self._workspace_policy,
+            managed_secret_status_by_slug=self._managed_secret_status_by_slug,
+            provider_profile_enabled_by_id=self._provider_profile_enabled_by_id,
+        )
 
     def _validate_migration_rules(self) -> None:
         seen: set[str] = set()
@@ -1859,42 +2364,39 @@ class SettingsCatalogService:
             return "Resolved from a deprecated setting override."
         return f"Resolved from {source}."
 
-    def _validate_override_value(self, entry: SettingRegistryEntry, value: Any) -> None:
+    def _validate_override_value(
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+        *,
+        scope: SettingScope,
+        proposed_values: dict[str, Any],
+    ) -> None:
         if self._override_value_size(value) > _MAX_OVERRIDE_VALUE_BYTES:
-            raise ValueError("invalid_setting_value")
+            raise SettingsValidationError(
+                "constraint_violation",
+                f"{entry.key} exceeds the maximum persisted setting size.",
+                key=entry.key,
+                scope=scope,
+                details={"maximum_bytes": _MAX_OVERRIDE_VALUE_BYTES},
+            )
         if self._contains_unsafe_payload(
             value,
             allow_profile_ref_string_tokens=entry.key
             == "workflow.default_provider_profile_ref",
         ):
-            raise ValueError("invalid_setting_value")
-        if value is None:
-            return
-        if entry.value_type == "enum":
-            allowed = {option for option, _label in entry.options}
-            if not isinstance(value, str) or value not in allowed:
-                raise ValueError("invalid_setting_value")
-        elif entry.value_type == "integer":
-            if not isinstance(value, int) or isinstance(value, bool):
-                raise ValueError("invalid_setting_value")
-            if entry.constraints is not None:
-                if entry.constraints.minimum is not None and value < entry.constraints.minimum:
-                    raise ValueError("invalid_setting_value")
-                if entry.constraints.maximum is not None and value > entry.constraints.maximum:
-                    raise ValueError("invalid_setting_value")
-        elif entry.value_type == "boolean":
-            if not isinstance(value, bool):
-                raise ValueError("invalid_setting_value")
-        elif entry.value_type == "secret_ref":
-            if not isinstance(value, str) or "://" not in value:
-                raise ValueError("invalid_setting_value")
-            if any(value.startswith(prefix) for prefix in _SECRET_PREFIXES):
-                raise ValueError("invalid_setting_value")
-        elif entry.value_type == "string":
-            if not isinstance(value, str):
-                raise ValueError("invalid_setting_value")
-        else:
-            raise ValueError("invalid_setting_value")
+            raise SettingsValidationError(
+                "invalid_setting_value",
+                f"{entry.key} contains unsafe setting payload content.",
+                key=entry.key,
+                scope=scope,
+            )
+        self._validator().validate_write(
+            entry,
+            value,
+            scope=scope,
+            proposed_values=proposed_values,
+        )
 
     def _override_value_size(self, value: Any) -> int:
         return len(

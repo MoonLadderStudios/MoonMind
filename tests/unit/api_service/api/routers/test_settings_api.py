@@ -10,7 +10,16 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.auth_providers import get_current_user
 from api_service.api.routers import settings as settings_router
 from api_service.db import base as db_base
-from api_service.db.models import Base, ManagedSecret, SecretStatus, SettingsOverride
+from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    ManagedSecret,
+    ProviderCredentialSource,
+    RuntimeMaterializationMode,
+    SecretStatus,
+    SettingsAuditEvent,
+    SettingsOverride,
+)
 from api_service.main import app
 from api_service.services.settings_catalog import (
     SettingMigrationRule,
@@ -573,7 +582,7 @@ async def test_oversized_override_payload_rejected_and_effective_value_unchanged
         )
 
     assert rejected.status_code == 400
-    assert rejected.json()["error"] == "invalid_setting_value"
+    assert rejected.json()["error"] == "constraint_violation"
     assert "x" * 64 not in rejected.text
     assert effective.status_code == 200
     assert effective.json()["source"] in {"config_file", "environment", "default"}
@@ -607,7 +616,12 @@ async def test_unsafe_override_payload_classes_are_rejected_and_redacted(
                 },
             )
             assert rejected.status_code == 400
-            assert rejected.json()["error"] == "invalid_setting_value"
+            expected_error = (
+                "constraint_violation"
+                if unsafe_value.startswith("large_artifact:")
+                else "invalid_setting_value"
+            )
+            assert rejected.json()["error"] == expected_error
             assert unsafe_value[:32] not in rejected.text
 
 
@@ -615,6 +629,19 @@ async def test_unsafe_override_payload_classes_are_rejected_and_redacted(
 async def test_provider_profile_ref_allows_literal_profile_ids_with_sensitive_words(
     settings_api_db,
 ):
+    async with settings_api_db() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="oauth_session-prod",
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                enabled=True,
+            )
+        )
+        await session.commit()
+
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -755,6 +782,28 @@ async def test_settings_audit_endpoint_scopes_rows_to_current_workspace_and_user
         user_id=user_id,
         workspace_id=workspace_id,
     )
+    async with settings_api_db() as session:
+        session.add_all(
+            [
+                ManagedAgentProviderProfile(
+                    profile_id="codex-default",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.SECRET_REF,
+                    runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                    enabled=True,
+                ),
+                ManagedAgentProviderProfile(
+                    profile_id="other-profile",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.SECRET_REF,
+                    runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                    enabled=True,
+                ),
+            ]
+        )
+        await session.commit()
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
@@ -835,18 +884,28 @@ async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output
     settings_user_override(
         permissions={"settings.workspace.write", "settings.effective.read"}
     )
+    async with settings_api_db() as session:
+        session.add(
+            SettingsOverride(
+                scope="workspace",
+                key="integrations.github.token_ref",
+                value_json="db://missing-token",
+                value_version=1,
+            )
+        )
+        session.add(
+            SettingsAuditEvent(
+                event_type="settings.override.updated",
+                key="integrations.github.token_ref",
+                scope="workspace",
+                reason="select managed secret",
+            )
+        )
+        await session.commit()
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
-        await client.patch(
-            "/api/v1/settings/workspace",
-            json={
-                "changes": {"integrations.github.token_ref": "db://missing-token"},
-                "expected_versions": {"integrations.github.token_ref": 1},
-                "reason": "select managed secret",
-            },
-        )
         response = await client.get(
             "/api/v1/settings/diagnostics",
             params={"scope": "workspace", "key": "integrations.github.token_ref"},
@@ -894,7 +953,9 @@ async def test_settings_diagnostics_endpoint_falls_back_without_db(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(settings_api_db):
+async def test_db_secret_ref_write_validation_rejects_missing_and_inactive(
+    settings_api_db,
+):
     async with settings_api_db() as session:
         session.add(
             ManagedSecret(
@@ -941,52 +1002,29 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
                 "changes": {
                     "integrations.github.token_ref": "db://missing-github-token"
                 },
-                "expected_versions": {"integrations.github.token_ref": 2},
+                "expected_versions": {"integrations.github.token_ref": 1},
             },
         )
 
     active_value = active.json()["values"]["integrations.github.token_ref"]
-    disabled_value = disabled.json()["values"]["integrations.github.token_ref"]
-    missing_value = missing.json()["values"]["integrations.github.token_ref"]
-
     assert active.status_code == 200
     assert active_value["diagnostics"] == []
     assert "active-plaintext" not in active.text
-    assert disabled.status_code == 200
-    assert disabled_value["pending_value"] == "db://disabled-github-token"
-    assert disabled_value["diagnostics"] == [
-        {
-            "code": "unresolved_secret_ref",
-            "message": (
-                "integrations.github.token_ref references a managed secret "
-                "that is disabled."
-            ),
-                "severity": "error",
-                "details": {
-                    "ref_scheme": "db",
-                    "status": "disabled",
-                    "launch_blocker": True,
-                },
-        }
-    ]
+    assert disabled.status_code == 400
+    assert disabled.json()["error"] == "unresolved_secret_ref"
+    assert disabled.json()["details"] == {
+        "ref_scheme": "db",
+        "status": "disabled",
+        "launch_blocker": True,
+    }
     assert "disabled-plaintext" not in disabled.text
-    assert missing.status_code == 200
-    assert missing_value["pending_value"] == "db://missing-github-token"
-    assert missing_value["diagnostics"] == [
-        {
-            "code": "unresolved_secret_ref",
-            "message": (
-                "integrations.github.token_ref references a managed secret "
-                "that does not exist."
-            ),
-                "severity": "error",
-                "details": {
-                    "ref_scheme": "db",
-                    "status": "missing",
-                    "launch_blocker": True,
-            },
-        }
-    ]
+    assert missing.status_code == 400
+    assert missing.json()["error"] == "unresolved_secret_ref"
+    assert missing.json()["details"] == {
+        "ref_scheme": "db",
+        "status": "missing",
+        "launch_blocker": True,
+    }
 
 
 @pytest.mark.asyncio

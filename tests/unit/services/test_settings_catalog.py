@@ -19,9 +19,12 @@ from api_service.services.settings_catalog import (
     SETTINGS_PERMISSION_NAMES,
     SettingAuditPolicy,
     SettingMigrationRule,
+    SettingConstraints,
     SettingsCatalogBuilder,
     SettingsCatalogService,
     SettingsRegistry,
+    SettingsValidationError,
+    SettingsWorkspacePolicy,
     SettingRegistryEntry,
     _CATALOG_KEY_LEDGER,
     _REGISTRY,
@@ -765,23 +768,23 @@ async def test_provider_profile_reference_reports_missing_and_disabled_diagnosti
         await settings_session.commit()
 
         service = SettingsCatalogService(env={}, session=settings_session)
-        missing = await service.apply_overrides(
-            scope="workspace",
-            changes={"workflow.default_provider_profile_ref": "missing-profile"},
-            expected_versions={"workflow.default_provider_profile_ref": 1},
-        )
-        missing_value = missing.values["workflow.default_provider_profile_ref"]
-        assert missing_value.diagnostics[0].code == "provider_profile_not_found"
-        assert missing_value.diagnostics[0].details["launch_blocker"] is True
+        with pytest.raises(SettingsValidationError) as missing_error:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"workflow.default_provider_profile_ref": "missing-profile"},
+                expected_versions={"workflow.default_provider_profile_ref": 1},
+            )
+        assert missing_error.value.code == "provider_profile_not_found"
+        assert missing_error.value.details["launch_blocker"] is True
 
-        disabled = await service.apply_overrides(
-            scope="workspace",
-            changes={"workflow.default_provider_profile_ref": "disabled-profile"},
-            expected_versions={"workflow.default_provider_profile_ref": 1},
-        )
-        disabled_value = disabled.values["workflow.default_provider_profile_ref"]
-        assert disabled_value.diagnostics[0].code == "provider_profile_disabled"
-        assert disabled_value.diagnostics[0].details["launch_blocker"] is True
+        with pytest.raises(SettingsValidationError) as disabled_error:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"workflow.default_provider_profile_ref": "disabled-profile"},
+                expected_versions={"workflow.default_provider_profile_ref": 1},
+            )
+        assert disabled_error.value.code == "provider_profile_disabled"
+        assert disabled_error.value.details["launch_blocker"] is True
 
 
 @pytest.mark.asyncio
@@ -789,11 +792,22 @@ async def test_provider_profile_override_preserves_resettable_source(
     settings_session_maker,
 ) -> None:
     async with settings_session_maker() as settings_session:
+        settings_session.add(
+            ManagedAgentProviderProfile(
+                profile_id="active-profile",
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                enabled=True,
+            )
+        )
+        await settings_session.commit()
         service = SettingsCatalogService(env={}, session=settings_session)
 
         response = await service.apply_overrides(
             scope="workspace",
-            changes={"workflow.default_provider_profile_ref": "missing-profile"},
+            changes={"workflow.default_provider_profile_ref": "active-profile"},
             expected_versions={"workflow.default_provider_profile_ref": 1},
         )
         effective = response.values["workflow.default_provider_profile_ref"]
@@ -805,12 +819,12 @@ async def test_provider_profile_override_preserves_resettable_source(
             if item.key == "workflow.default_provider_profile_ref"
         )
 
-    assert effective.value == "missing-profile"
+    assert effective.value == "active-profile"
     assert effective.source == "workspace_override"
-    assert effective.diagnostics[0].code == "provider_profile_not_found"
-    assert descriptor.effective_value == "missing-profile"
+    assert effective.diagnostics == []
+    assert descriptor.effective_value == "active-profile"
     assert descriptor.source == "workspace_override"
-    assert descriptor.diagnostics[0].code == "provider_profile_not_found"
+    assert descriptor.diagnostics == []
 
 
 @pytest.mark.asyncio
@@ -1060,7 +1074,7 @@ async def test_oversized_override_value_rejected_before_persistence(
             session=settings_session,
         )
 
-        with pytest.raises(ValueError, match="invalid_setting_value"):
+        with pytest.raises(SettingsValidationError, match="constraint_violation"):
             await service.apply_overrides(
                 scope="workspace",
                 changes={"test.large_payload": "x" * 20000},
@@ -1112,7 +1126,12 @@ async def test_unsafe_payload_classes_rejected_before_persistence(
         )
 
         for unsafe_value in unsafe_values:
-            with pytest.raises(ValueError, match="invalid_setting_value"):
+            expected_code = (
+                "constraint_violation"
+                if unsafe_value.startswith("large_artifact:")
+                else "invalid_setting_value"
+            )
+            with pytest.raises(SettingsValidationError, match=expected_code):
                 await service.apply_overrides(
                     scope="workspace",
                     changes={"test.payload_guard": unsafe_value},
@@ -1518,13 +1537,26 @@ async def test_settings_diagnostics_include_source_restart_and_recent_change(
     settings_session_maker,
 ):
     async with settings_session_maker() as settings_session:
-        service = SettingsCatalogService(env={}, session=settings_session)
-        await service.apply_overrides(
-            scope="workspace",
-            changes={"integrations.github.token_ref": "db://missing-token"},
-            expected_versions={"integrations.github.token_ref": 1},
-            reason="wire github token",
+        settings_session.add(
+            SettingsOverride(
+                scope="workspace",
+                workspace_id=UUID("00000000-0000-0000-0000-000000000000"),
+                user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                key="integrations.github.token_ref",
+                value_json="db://missing-token",
+                value_version=1,
+            )
         )
+        settings_session.add(
+            SettingsAuditEvent(
+                event_type="settings.override.updated",
+                key="integrations.github.token_ref",
+                scope="workspace",
+                reason="wire github token",
+            )
+        )
+        await settings_session.commit()
+        service = SettingsCatalogService(env={}, session=settings_session)
 
         diagnostics = await service.diagnostics(scope="workspace")
 
@@ -1821,6 +1853,16 @@ async def test_mm655_reference_sources_remain_secret_safe(settings_session_maker
                 details={},
             )
         )
+        settings_session.add(
+            ManagedAgentProviderProfile(
+                profile_id="active-profile",
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                enabled=True,
+            )
+        )
         await settings_session.commit()
 
         service = SettingsCatalogService(env={}, session=settings_session)
@@ -1831,7 +1873,7 @@ async def test_mm655_reference_sources_remain_secret_safe(settings_session_maker
         )
         provider_ref = await service.apply_overrides(
             scope="workspace",
-            changes={"workflow.default_provider_profile_ref": "missing-profile"},
+            changes={"workflow.default_provider_profile_ref": "active-profile"},
             expected_versions={"workflow.default_provider_profile_ref": 1},
         )
 
@@ -1841,8 +1883,214 @@ async def test_mm655_reference_sources_remain_secret_safe(settings_session_maker
     assert github.diagnostics == []
     assert "active-secret-plaintext" not in github.model_dump_json()
     assert provider.source == "workspace_override"
-    assert provider.diagnostics[0].code == "provider_profile_not_found"
+    assert provider.diagnostics == []
     assert "secret_refs" not in provider.model_dump_json()
+
+
+# ---------------------------------------------------------------------------
+# MM-656: server-side validation and cross-setting policy enforcement
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mm656_write_validator_covers_supported_value_shapes(
+    settings_session_maker,
+):
+    registry = (
+        SettingRegistryEntry(
+            key="test.boolean_value",
+            title="Boolean Value",
+            category="Test",
+            section="user-workspace",
+            value_type="boolean",
+            ui="toggle",
+            scopes=("workspace",),
+            order=1,
+        ),
+        SettingRegistryEntry(
+            key="test.string_value",
+            title="String Value",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="input",
+            scopes=("workspace",),
+            constraints=SettingConstraints(min_length=2, max_length=5, pattern="[a-z]+"),
+            order=2,
+        ),
+        SettingRegistryEntry(
+            key="test.number_value",
+            title="Number Value",
+            category="Test",
+            section="user-workspace",
+            value_type="number",
+            ui="number",
+            scopes=("workspace",),
+            constraints=SettingConstraints(minimum=1, maximum=10),
+            order=3,
+        ),
+        SettingRegistryEntry(
+            key="test.enum_value",
+            title="Enum Value",
+            category="Test",
+            section="user-workspace",
+            value_type="enum",
+            ui="select",
+            scopes=("workspace",),
+            options=(("one", "One"), ("two", "Two")),
+            order=4,
+        ),
+        SettingRegistryEntry(
+            key="test.list_value",
+            title="List Value",
+            category="Test",
+            section="user-workspace",
+            value_type="list",
+            ui="input",
+            scopes=("workspace",),
+            constraints=SettingConstraints(min_length=1, max_length=2),
+            order=5,
+        ),
+        SettingRegistryEntry(
+            key="test.object_value",
+            title="Object Value",
+            category="Test",
+            section="user-workspace",
+            value_type="object",
+            ui="input",
+            scopes=("workspace",),
+            order=6,
+        ),
+        SettingRegistryEntry(
+            key="test.secret_ref_value",
+            title="SecretRef Value",
+            category="Test",
+            section="user-workspace",
+            value_type="secret_ref",
+            ui="secret_ref_picker",
+            scopes=("workspace",),
+            order=7,
+        ),
+    )
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            ManagedSecret(
+                slug="active-secret",
+                ciphertext="active-secret-plaintext",
+                status=SecretStatus.ACTIVE,
+                details={},
+            )
+        )
+        await settings_session.commit()
+        service = SettingsCatalogService(
+            env={},
+            registry=registry,
+            session=settings_session,
+        )
+
+        accepted = await service.apply_overrides(
+            scope="workspace",
+            changes={
+                "test.boolean_value": True,
+                "test.string_value": "abc",
+                "test.number_value": 3.5,
+                "test.enum_value": "one",
+                "test.list_value": ["a"],
+                "test.object_value": {"safe": "value"},
+                "test.secret_ref_value": "db://active-secret",
+            },
+            expected_versions={entry.key: 1 for entry in registry},
+        )
+
+        invalid_cases = [
+            ("test.boolean_value", "true", "invalid_type"),
+            ("test.string_value", "A", "constraint_violation"),
+            ("test.number_value", 11, "constraint_violation"),
+            ("test.enum_value", "three", "invalid_enum_value"),
+            ("test.list_value", [], "constraint_violation"),
+            ("test.object_value", [], "invalid_type"),
+            ("test.secret_ref_value", "raw-secret", "invalid_secret_ref"),
+        ]
+        for key, value, code in invalid_cases:
+            with pytest.raises(SettingsValidationError) as exc_info:
+                await service.apply_overrides(
+                    scope="workspace",
+                    changes={key: value},
+                    expected_versions={key: 1},
+                )
+            assert exc_info.value.code == code
+
+    assert accepted.values["test.secret_ref_value"].value == "db://active-secret"
+    assert "active-secret-plaintext" not in accepted.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_mm656_cross_setting_policy_rejects_invalid_combinations(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            ManagedSecret(
+                slug="active-github-token",
+                ciphertext="active-secret-plaintext",
+                status=SecretStatus.ACTIVE,
+                details={},
+            )
+        )
+        await settings_session.commit()
+        service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            workspace_policy=SettingsWorkspacePolicy(
+                allowed_task_runtimes=frozenset({"codex"}),
+                max_canary_percent=20,
+                skills_enabled=False,
+                allowed_secret_ref_backends=frozenset({"db"}),
+            ),
+        )
+
+        cases = [
+            (
+                {"workflow.default_task_runtime": "jules"},
+                "workflow.default_task_runtime",
+                "workspace_policy_violation",
+            ),
+            (
+                {"skills.canary_percent": 10},
+                "skills.canary_percent",
+                "cross_setting_violation",
+            ),
+            (
+                {"integrations.github.token_ref": "env://GITHUB_TOKEN"},
+                "integrations.github.token_ref",
+                "workspace_policy_violation",
+            ),
+        ]
+        for changes, key, code in cases:
+            with pytest.raises(SettingsValidationError) as exc_info:
+                await service.apply_overrides(
+                    scope="workspace",
+                    changes=changes,
+                    expected_versions={key: 1},
+                )
+            assert exc_info.value.code == code
+            assert exc_info.value.key == key
+
+        accepted = await service.apply_overrides(
+            scope="workspace",
+            changes={
+                "workflow.default_task_runtime": "codex",
+                "skills.canary_percent": 0,
+                "integrations.github.token_ref": "db://active-github-token",
+            },
+            expected_versions={
+                "workflow.default_task_runtime": 1,
+                "skills.canary_percent": 1,
+                "integrations.github.token_ref": 1,
+            },
+        )
+
+    assert accepted.values["skills.canary_percent"].value == 0
 
 
 # ---------------------------------------------------------------------------
