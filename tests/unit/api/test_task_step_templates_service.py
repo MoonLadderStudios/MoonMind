@@ -378,6 +378,7 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
                 ],
                 steps=[
                     {
+                        "id": "lint-target",
                         "title": "Lint target",
                         "instructions": "Lint {{ inputs.target }}",
                         "source": {"kind": "manual"},
@@ -388,6 +389,7 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
                         },
                     },
                     {
+                        "id": "test-target",
                         "title": "Test target",
                         "instructions": "Test {{ inputs.target }}",
                     },
@@ -449,6 +451,7 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
     assert provenance["root"] == {"slug": "parent-flow", "version": "1.0.0"}
     assert provenance["source"]["slug"] == "child-checks"
     assert provenance["source"]["version"] == "1.0.0"
+    assert provenance["source"]["originalStepId"] == "lint-target"
     assert provenance["alias"] == "quality"
     assert provenance["path"] == [
         "parent-flow@1.0.0",
@@ -489,7 +492,9 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
             "parent-flow@1.0.0",
             "quality:child-checks@1.0.0",
         ],
+        "originalStepId": "lint-target",
     }
+    assert expanded["steps"][1]["source"]["originalStepId"] == "test-target"
     assert expanded["steps"][0]["source"]["kind"] != "manual"
 
 async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):

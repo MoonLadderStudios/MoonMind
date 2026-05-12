@@ -229,6 +229,38 @@ def test_task_steps_validate_without_resolving_source_provenance(
     else:
         assert dumped["source"] == source
 
+
+def test_task_steps_preserve_detached_template_source_provenance() -> None:
+    spec = TaskExecutionSpec.model_validate(
+        {
+            "instructions": "Run detached preset step.",
+            "steps": [
+                {
+                    "id": "detached-step",
+                    "type": "skill",
+                    "instructions": "Run the edited preset step.",
+                    "skill": {"id": "auto"},
+                    "source": {
+                        "kind": "detached",
+                        "presetSlug": "quality-flow",
+                        "presetVersion": "1.0.0",
+                        "includePath": ["root-flow@1.0.0", "quality-flow@1.0.0"],
+                        "originalStepId": "lint-target",
+                    },
+                }
+            ],
+        }
+    )
+
+    dumped = spec.model_dump(by_alias=True, exclude_none=True)["steps"][0]
+    assert dumped["source"] == {
+        "kind": "detached",
+        "presetSlug": "quality-flow",
+        "presetVersion": "1.0.0",
+        "includePath": ["root-flow@1.0.0", "quality-flow@1.0.0"],
+        "originalStepId": "lint-target",
+    }
+
 def test_task_authored_presets_accept_recursive_bindings() -> None:
     payload = CanonicalTaskPayload.model_validate(
         {

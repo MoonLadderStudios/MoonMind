@@ -95,6 +95,7 @@ _STEP_RESERVED_KEYS = frozenset(
         "scope",
         "inputMapping",
         "input_mapping",
+        "originalStepId",
         "instructions",
         "tool",
         "skill",
@@ -1719,6 +1720,14 @@ class TaskTemplateCatalogService:
                     "includePath": list(path),
                 },
             }
+            original_step_id = str(
+                rendered.get("originalStepId") or rendered.get("id") or ""
+            ).strip()
+            if original_step_id:
+                step_payload["presetProvenance"]["source"][
+                    "originalStepId"
+                ] = original_step_id
+                step_payload["source"]["originalStepId"] = original_step_id
             if alias:
                 step_payload["presetProvenance"]["alias"] = alias
             title = str(rendered.get("title") or "").strip()
