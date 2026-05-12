@@ -178,9 +178,35 @@ steps:
   - title: Verify completion
     instructions: |-
       Run moonspec-verify as the final read-only gate unless an up-to-date verification report already covers the current code and artifacts.
-      If the verdict is ADDITIONAL_WORK_NEEDED, use the report as the remaining-work list and run at most two bounded implementation and verification cycles.
+      If the verdict is ADDITIONAL_WORK_NEEDED, preserve the report as the mandatory remediation input for the next step.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context.
-      Continue to pull request creation only when the verdict is FULLY_IMPLEMENTED.
+      Do not create a pull request from this step. Pull request creation is allowed only after the post-remediation verification step reports FULLY_IMPLEMENTED.
+    skill:
+      id: moonspec-verify
+      args: {}
+  - title: Remediate verification gaps
+    instructions: |-
+      Inspect the latest moonspec-verify result for {{ inputs.jira_issue_key }} before doing any work.
+
+      If the latest verdict is FULLY_IMPLEMENTED, make no code changes and report that remediation is skipped because verification already passed.
+
+      If the latest verdict is ADDITIONAL_WORK_NEEDED, treat the verification report's gaps and remaining work as the authoritative bounded implementation backlog. Run moonspec-implement to fix the reported implementation or validation gaps, update tasks.md only for work actually completed, and run the focused unit or integration checks named by the verification report when feasible.
+
+      If the latest verdict is NO_DETERMINATION, only proceed when the missing evidence is recoverable in this runtime, such as by running a skipped command or inspecting available files. Otherwise stop and report the exact blocker.
+
+      Do not broaden the selected story scope, do not create a pull request, and do not move Jira during remediation.
+    skill:
+      id: moonspec-implement
+      args: {}
+      requiredCapabilities:
+        - git
+  - title: Verify remediation
+    instructions: |-
+      Run moonspec-verify after remediation, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+
+      This is the controlling verification gate for Jira Orchestrate publication. If the verdict is ADDITIONAL_WORK_NEEDED or NO_DETERMINATION, stop the orchestration, report the gaps or missing evidence, and do not continue to pull request creation.
+
+      Continue to pull request creation only when this post-remediation verdict is FULLY_IMPLEMENTED.
     skill:
       id: moonspec-verify
       args: {}
@@ -189,6 +215,8 @@ steps:
       jiraOrchestrateRole: pull-request-handoff
     instructions: |-
       Create a pull request for the completed work for Jira issue {{ inputs.jira_issue_key }}.
+
+      Before committing, inspect the latest post-remediation moonspec-verify result and confirm the verdict is FULLY_IMPLEMENTED. If the latest verdict is ADDITIONAL_WORK_NEEDED or NO_DETERMINATION, stop without committing, pushing, creating a pull request, or changing Jira.
 
       This Jira Orchestrate handoff step is the explicit PR-publication step for this preset. It intentionally owns pull request creation before the Jira Code Review transition so the confirmed pull request URL is available to both Jira and MoonMind publish handling. If generic managed-runtime guidance says not to push or create a pull request, treat this step-specific handoff instruction as the controlling instruction for this step only. If the task is submitted with PR merge automation enabled, the parent workflow must use the pull request URL produced by this step as the published PR and then run merge automation against that PR. If the runtime instructions, task parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Code Review and report the exact blocker.
 
