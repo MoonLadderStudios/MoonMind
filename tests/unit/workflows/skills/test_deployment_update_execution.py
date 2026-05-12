@@ -15,6 +15,7 @@ from moonmind.workflows.skills.deployment_execution import (
     _ensure_command_succeeded,
     _is_host_absolute_path,
     _remap_host_compose_path,
+    _tail_text,
     build_compose_command_plan,
     build_deployment_update_handler,
 )
@@ -537,6 +538,13 @@ def test_compose_config_validation_failure_has_normalized_class() -> None:
 
     assert exc_info.value.error_code == "DEPLOYMENT_COMMAND_FAILED"
     assert exc_info.value.details["failureClass"] == "compose_config_validation_failure"
+
+
+def test_tail_text_returns_empty_for_non_positive_limit() -> None:
+    payload = b"abcdef"
+
+    assert _tail_text(payload, max_chars=0) == ""
+    assert _tail_text(payload, max_chars=-3) == ""
 
 
 @pytest.mark.asyncio

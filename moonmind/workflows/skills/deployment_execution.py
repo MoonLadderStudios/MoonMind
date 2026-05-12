@@ -292,6 +292,8 @@ def _remap_host_compose_path(
 
 def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
     text = payload.decode("utf-8", errors="replace")
+    if max_chars <= 0:
+        return ""
     return text[-max_chars:]
 
 
