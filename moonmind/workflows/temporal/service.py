@@ -2710,7 +2710,29 @@ class TemporalExecutionService:
             preservedSteps=checkpoint.preserved_steps,
         ).model_dump(by_alias=True, mode="json")
 
-        task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
+        task_payload = params.get("task")
+        task_params = dict(task_payload) if isinstance(task_payload, Mapping) else {}
+        task_params["recovery"] = {
+            "kind": "resume_from_failed_step",
+            "sourceWorkflowId": record.workflow_id,
+            "sourceRunId": source_run_id,
+        }
+        resume_ref = {
+            "kind": "resume_from_failed_step",
+            "sourceWorkflowId": record.workflow_id,
+            "sourceRunId": source_run_id,
+            "failedStepId": failed_step_id,
+            "failedStepAttempt": failed_step_attempt,
+            "resumeCheckpointRef": checkpoint_ref,
+            "taskInputSnapshotRef": source_snapshot_ref,
+        }
+        plan_ref = checkpoint.plan_ref or source_plan_ref
+        if plan_ref:
+            resume_ref["planRef"] = plan_ref
+        if checkpoint.plan_digest:
+            resume_ref["planDigest"] = checkpoint.plan_digest
+        task_params["resume"] = resume_ref
+        params["task"] = task_params
         title = (
             str(task_params.get("title") or "").strip()
             or str((record.memo or {}).get("title") or "").strip()

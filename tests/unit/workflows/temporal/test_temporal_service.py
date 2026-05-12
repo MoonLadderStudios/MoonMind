@@ -2189,6 +2189,23 @@ async def test_failed_step_resume_creates_linked_execution_with_source_identity(
         assert resumed.parameters["resumeSource"]["preservedSteps"][0][
             "logicalStepId"
         ] == "plan"
+        task_payload = resumed.parameters["task"]
+        assert task_payload["recovery"] == {
+            "kind": "resume_from_failed_step",
+            "sourceWorkflowId": created.workflow_id,
+            "sourceRunId": created.run_id,
+        }
+        assert task_payload["resume"] == {
+            "kind": "resume_from_failed_step",
+            "sourceWorkflowId": created.workflow_id,
+            "sourceRunId": created.run_id,
+            "failedStepId": "implement",
+            "failedStepAttempt": 1,
+            "resumeCheckpointRef": "artifact://checkpoint/source",
+            "taskInputSnapshotRef": "artifact://snapshot/source",
+            "planRef": "artifact://plan/source",
+            "planDigest": "sha256:plan",
+        }
         assert "taskRunId" not in resumed.parameters
 
 

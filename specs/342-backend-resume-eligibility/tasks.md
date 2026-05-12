@@ -27,8 +27,8 @@ Each task below uses `- [ ] T###` with optional `[P]` for independent work in di
 
 **Purpose**: Confirm the MoonSpec planning artifacts and test targets are ready before test-first work begins.
 
-- [ ] T001 Confirm `specs/342-backend-resume-eligibility/spec.md`, `specs/342-backend-resume-eligibility/plan.md`, `specs/342-backend-resume-eligibility/research.md`, `specs/342-backend-resume-eligibility/data-model.md`, `specs/342-backend-resume-eligibility/contracts/recovery-eligibility.md`, and `specs/342-backend-resume-eligibility/quickstart.md` exist and describe exactly one MM-643 story.
-- [ ] T002 Confirm existing recovery-related test targets are runnable entry points in `tests/unit/api/routers/test_executions.py`, `tests/unit/workflows/tasks/test_task_contract.py`, `tests/unit/workflows/temporal/test_temporal_service.py`, `frontend/src/entrypoints/task-detail.test.tsx`, and `tests/integration/temporal/`.
+- [X] T001 Confirm `specs/342-backend-resume-eligibility/spec.md`, `specs/342-backend-resume-eligibility/plan.md`, `specs/342-backend-resume-eligibility/research.md`, `specs/342-backend-resume-eligibility/data-model.md`, `specs/342-backend-resume-eligibility/contracts/recovery-eligibility.md`, and `specs/342-backend-resume-eligibility/quickstart.md` exist and describe exactly one MM-643 story.
+- [X] T002 Confirm existing recovery-related test targets are runnable entry points in `tests/unit/api/routers/test_executions.py`, `tests/unit/workflows/tasks/test_task_contract.py`, `tests/unit/workflows/temporal/test_temporal_service.py`, `frontend/src/entrypoints/task-detail.test.tsx`, and `tests/integration/temporal/`.
 
 ---
 
@@ -71,7 +71,7 @@ Each task below uses `- [ ] T###` with optional `[P]` for independent work in di
 - [ ] T013 [P] Add hermetic integration test for complete backend Resume evidence enabling `canResumeFromFailedStep` in `tests/integration/temporal/test_backend_resume_eligibility.py` covering FR-007, SCN-001, SC-003, DESIGN-REQ-002, and DESIGN-REQ-005.
 - [ ] T014 [P] Add hermetic integration test for invalid Resume evidence rejecting before a resumed execution is created in `tests/integration/temporal/test_backend_resume_eligibility.py` covering FR-008, SCN-003, SC-002, SC-004, DESIGN-REQ-002, and DESIGN-REQ-005.
 - [ ] T015 [P] Add hermetic integration test proving generic rerun and edited full retry do not populate Resume reference fields in `tests/integration/temporal/test_backend_resume_eligibility.py` covering FR-004, FR-009, SCN-004, SCN-006, SC-004, SC-005, and DESIGN-REQ-004.
-- [ ] T016 [P] Add integration boundary test for accepted Resume provenance and failed-step reference fields in `tests/integration/temporal/test_backend_resume_eligibility.py` covering FR-005, FR-006, SCN-005, SC-003, and DESIGN-REQ-003.
+- [X] T016 [P] Add integration boundary test for accepted Resume provenance and failed-step reference fields in `tests/integration/temporal/test_backend_resume_eligibility.py` covering FR-005, FR-006, SCN-005, SC-003, and DESIGN-REQ-003.
 
 ### Red-First Confirmation
 
@@ -84,7 +84,7 @@ Each task below uses `- [ ] T###` with optional `[P]` for independent work in di
 - [ ] T020 If T006 or T012 fails, update backend action capability serialization in `api_service/api/routers/executions.py` so Edit task, Rerun, and Resume remain independent backend-computed fields for FR-001, FR-002, FR-003, SCN-001, SC-001, DESIGN-REQ-001, and DESIGN-REQ-002.
 - [ ] T021 If T007, T013, or T014 fails, update Resume evidence evaluation and bounded disabled reasons in `api_service/api/routers/executions.py` for source workflow/run, failed-step ledger identity, completed-step refs, workspace checkpoint, plan identity, stale evidence, unauthorized evidence, corrupted evidence, and inconsistent evidence covering FR-007, FR-008, SCN-002, SCN-003, SC-002, DESIGN-REQ-002, and DESIGN-REQ-005.
 - [ ] T022 If T010 or T016 fails, update canonical recovery provenance and failed-step Resume reference normalization in `moonmind/workflows/tasks/task_contract.py` covering FR-005, FR-006, SCN-005, SC-003, and DESIGN-REQ-003.
-- [ ] T023 If T010, T014, or T016 fails at the execution boundary, update accepted Resume metadata construction in `moonmind/workflows/temporal/service.py` so the resumed execution carries source workflow/run, failed step, checkpoint, snapshot, plan identity, and recovery intent consistently for FR-005, FR-006, FR-007, SCN-003, SCN-005, DESIGN-REQ-003, and DESIGN-REQ-005.
+- [X] T023 If T010, T014, or T016 fails at the execution boundary, update accepted Resume metadata construction in `moonmind/workflows/temporal/service.py` so the resumed execution carries source workflow/run, failed step, checkpoint, snapshot, plan identity, and recovery intent consistently for FR-005, FR-006, FR-007, SCN-003, SCN-005, DESIGN-REQ-003, and DESIGN-REQ-005.
 - [ ] T024 If T009 or T015 fails, update full rerun and edited retry sanitization in `moonmind/workflows/temporal/service.py` so generic rerun and edited full retry cannot carry Resume reference fields for FR-004, SCN-004, SC-004, and DESIGN-REQ-004.
 - [ ] T025 If T008 fails, update Resume request validation in `api_service/api/routers/executions.py` so all edited task payload field categories are rejected before checkpoint hydration or execution creation for FR-009, SCN-006, SC-005, DESIGN-REQ-001, and DESIGN-REQ-005.
 - [ ] T026 If T011 fails, update Task Detail recovery action rendering in `frontend/src/entrypoints/task-detail.tsx` so Resume visibility and unavailable reason copy come only from backend action fields for FR-001, FR-002, FR-009, SCN-001, SCN-006, SC-001, and SC-005.
