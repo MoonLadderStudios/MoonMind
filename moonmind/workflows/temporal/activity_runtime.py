@@ -228,7 +228,7 @@ def build_git_push_with_lease_args(
     lease = (
         f"--force-with-lease=refs/heads/{branch_name}:{remote_sha}"
         if remote_sha
-        else f"--force-with-lease=refs/heads/{branch_name}"
+        else f"--force-with-lease=refs/heads/{branch_name}:"
     )
     return ["push", "-u", lease, "origin", branch_name]
 
@@ -6696,30 +6696,12 @@ class TemporalAgentRuntimeActivities:
                     result["push_commit_count"] = final_commit_count
                 return result
 
-            remote_sha: str | None = None
-            remote_sha_proc = await asyncio.create_subprocess_exec(
-                *self._workspace_git_command(
-                    workspace,
-                    "rev-parse",
-                    "--verify",
-                    f"refs/remotes/origin/{current_branch}",
-                ),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            remote_sha = await self._resolve_workspace_remote_branch_sha(
+                workspace=workspace,
+                branch=current_branch,
+                run_id=run_id,
                 env=command_env,
             )
-            try:
-                remote_sha_stdout, _ = await asyncio.wait_for(
-                    remote_sha_proc.communicate(), timeout=10,
-                )
-            except asyncio.TimeoutError:
-                remote_sha_proc.kill()
-                await remote_sha_proc.wait()
-                raise
-            if remote_sha_proc.returncode == 0:
-                remote_sha = remote_sha_stdout.decode(
-                    "utf-8", errors="replace"
-                ).strip() or None
 
             push_proc = await asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
@@ -6761,9 +6743,16 @@ class TemporalAgentRuntimeActivities:
                 )
                 if classified.get("push_status") == "lease_conflict":
                     retry_metadata: dict[str, Any] = {"push_retry_count": 1}
+                    remote_tracking_ref = f"refs/remotes/origin/{current_branch}"
                     fetch_proc = await asyncio.create_subprocess_exec(
                         *self._workspace_git_command(
-                            workspace, "fetch", "origin", current_branch,
+                            workspace,
+                            "fetch",
+                            "origin",
+                            (
+                                f"refs/heads/{current_branch}:"
+                                f"{remote_tracking_ref}"
+                            ),
                         ),
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
@@ -6791,7 +6780,6 @@ class TemporalAgentRuntimeActivities:
                             ).strip()
                         )
                     else:
-                        remote_tracking_ref = f"refs/remotes/origin/{current_branch}"
                         local_head_after_fetch = await self._resolve_workspace_head_sha(
                             workspace=workspace,
                             run_id=run_id,
@@ -6803,6 +6791,15 @@ class TemporalAgentRuntimeActivities:
                             run_id=run_id,
                             env=command_env,
                         )
+                        if not remote_sha_after_fetch:
+                            remote_sha_after_fetch = (
+                                await self._resolve_workspace_remote_branch_sha(
+                                    workspace=workspace,
+                                    branch=current_branch,
+                                    run_id=run_id,
+                                    env=command_env,
+                                )
+                            )
                         if (
                             local_head_after_fetch
                             and remote_sha_after_fetch
@@ -6916,6 +6913,78 @@ class TemporalAgentRuntimeActivities:
                 "push_status": "failed",
                 "push_error": str(exc),
             }
+
+    async def _resolve_workspace_remote_branch_sha(
+        self,
+        *,
+        workspace: str,
+        branch: str,
+        run_id: str,
+        env: Mapping[str, str],
+    ) -> str | None:
+        """Resolve a remote branch SHA without requiring a tracking ref.
+
+        Managed workspaces may not fetch every task branch into
+        ``refs/remotes/origin``. A force-with-lease push must still pin the
+        current remote value when the branch exists, otherwise Git reports
+        ``stale info`` even though the operation is safe to retry.
+        """
+
+        branch_name = str(branch or "").strip()
+        if not branch_name:
+            return None
+        remote_ref = f"refs/remotes/origin/{branch_name}"
+        remote_sha = await self._resolve_workspace_ref_sha(
+            workspace=workspace,
+            ref=remote_ref,
+            run_id=run_id,
+            env=env,
+        )
+        if remote_sha:
+            return remote_sha
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *self._workspace_git_command(
+                    workspace,
+                    "ls-remote",
+                    "origin",
+                    f"refs/heads/{branch_name}",
+                ),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    proc.communicate(), timeout=30,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return None
+            if proc.returncode != 0:
+                logger.debug(
+                    "Could not resolve remote branch SHA for run %s: %s",
+                    run_id,
+                    stderr_bytes.decode("utf-8", errors="replace").strip(),
+                )
+                return None
+            first_line = (
+                stdout_bytes.decode("utf-8", errors="replace").splitlines() or [""]
+            )[0].strip()
+            if not first_line:
+                return None
+            remote_sha = first_line.split(maxsplit=1)[0].strip()
+            return remote_sha or None
+        except Exception:
+            logger.debug(
+                "Failed to resolve remote branch SHA for run %s (branch=%s)",
+                run_id,
+                branch_name,
+                exc_info=True,
+            )
+            return None
 
     async def _resolve_workspace_ref_sha(
         self,

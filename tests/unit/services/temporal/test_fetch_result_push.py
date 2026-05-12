@@ -569,6 +569,69 @@ class TestPushWorkspaceBranch:
             ]
 
     @pytest.mark.asyncio
+    async def test_push_uses_ls_remote_when_tracking_ref_is_missing(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        recorded_calls: list[tuple[object, ...]] = []
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            recorded_calls.append(args)
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse --abbrev-ref HEAD
+                proc.communicate = AsyncMock(return_value=(b"feature/no-tracking\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # missing local tracking ref
+                proc.communicate = AsyncMock(
+                    return_value=(b"", b"fatal: Needed a single revision")
+                )
+                proc.returncode = 128
+            elif call_count == 5:  # remote branch exists
+                proc.communicate = AsyncMock(
+                    return_value=(
+                        b"remote-branch-sha\trefs/heads/feature/no-tracking\n",
+                        b"",
+                    )
+                )
+                proc.returncode = 0
+            elif call_count == 6:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 7:  # final HEAD
+                proc.communicate = AsyncMock(return_value=(b"local-head-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 8:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
+                proc.returncode = 0
+            else:
+                raise AssertionError(f"Unexpected subprocess call #{call_count}: {args!r}")
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "pushed"
+        assert result["push_branch"] == "feature/no-tracking"
+        assert any(
+            list(call[-3:]) == ["ls-remote", "origin", "refs/heads/feature/no-tracking"]
+            for call in recorded_calls
+        )
+        assert any(
+            "--force-with-lease=refs/heads/feature/no-tracking:remote-branch-sha"
+            in call
+            for call in recorded_calls
+            if "push" in call
+        )
+
+    @pytest.mark.asyncio
     async def test_push_failure(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)

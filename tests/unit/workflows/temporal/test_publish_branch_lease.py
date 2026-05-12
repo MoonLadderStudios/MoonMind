@@ -23,6 +23,18 @@ def test_build_git_push_with_lease_args_pins_recorded_remote_sha() -> None:
     ]
 
 
+def test_build_git_push_with_lease_args_uses_empty_expect_for_new_branch() -> None:
+    args = build_git_push_with_lease_args(branch="feature/new")
+
+    assert args == [
+        "push",
+        "-u",
+        "--force-with-lease=refs/heads/feature/new:",
+        "origin",
+        "feature/new",
+    ]
+
+
 def test_classify_git_push_failure_returns_retryable_lease_conflict() -> None:
     result = classify_git_push_failure(
         stderr="! [rejected] feature -> feature (stale info)",
