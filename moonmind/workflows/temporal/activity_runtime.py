@@ -6750,7 +6750,7 @@ class TemporalAgentRuntimeActivities:
                             "fetch",
                             "origin",
                             (
-                                f"refs/heads/{current_branch}:"
+                                f"+refs/heads/{current_branch}:"
                                 f"{remote_tracking_ref}"
                             ),
                         ),

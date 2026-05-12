@@ -737,6 +737,14 @@ class TestPushWorkspaceBranch:
             for call in push_calls
         )
         assert any(
+            list(call[-3:]) == [
+                "fetch",
+                "origin",
+                "+refs/heads/feature/retry-push:refs/remotes/origin/feature/retry-push",
+            ]
+            for call in recorded_calls
+        )
+        assert any(
             list(call[-2:]) == ["rebase", "refs/remotes/origin/feature/retry-push"]
             for call in recorded_calls
         )
