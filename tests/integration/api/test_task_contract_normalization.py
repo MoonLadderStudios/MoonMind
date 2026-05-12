@@ -123,6 +123,22 @@ def test_sc006_target_branch_rejected_as_active_authored_input() -> None:
     assert "targetBranch" not in result["task"]["git"]
 
 
+def test_mm641_task_git_branch_remains_the_active_authored_branch() -> None:
+    result = build_canonical_task_view(
+        job_type="task",
+        payload=_task_payload(
+            {
+                "git": {"branch": "feature/mm-641-create-page"},
+                "publish": {"mode": "branch"},
+            }
+        ),
+    )
+
+    assert result["task"]["git"]["branch"] == "feature/mm-641-create-page"
+    assert result["task"]["publish"]["mode"] == "branch"
+    assert "targetBranch" not in result["task"]["git"]
+
+
 def test_mm569_unresolved_preset_submission_rejected_with_field_path() -> None:
     with pytest.raises(TaskContractError) as excinfo:
         build_canonical_task_view(job_type="task", payload=task_payload(preset_step()))
