@@ -118,6 +118,7 @@ from moonmind.workflows.tasks.task_contract import (
     TaskInputAttachmentRef,
     TaskProposalPolicy,
     TaskSkillSelectors,
+    build_authoritative_task_input_snapshot,
     is_self_managed_publish_skill,
     resolve_publish_mode_for_skill,
 )
@@ -4273,17 +4274,35 @@ def _task_input_snapshot_descriptor_from_record(
         )
         if str(ref or "").strip()
     ]
+    parameters = getattr(record, "parameters", None)
+    task = parameters.get("task") if isinstance(parameters, Mapping) else None
+    task_payload = task if isinstance(task, Mapping) else {}
+    attachment_aware = bool(
+        task_payload.get("inputAttachments") or task_payload.get("attachmentRefs")
+    )
+    if not attachment_aware:
+        for step in task_payload.get("steps") or []:
+            if isinstance(step, Mapping) and (
+                step.get("inputAttachments") or step.get("attachmentRefs")
+            ):
+                attachment_aware = True
+                break
+    disabled_reasons = {
+        "draft": "original_task_input_snapshot_missing",
+    }
+    if attachment_aware:
+        disabled_reasons["attachments"] = "original_task_input_snapshot_missing"
     return TaskInputSnapshotDescriptorModel(
         available=False,
         artifactRef=None,
         snapshotVersion=None,
         sourceKind="unknown",
         reconstructionMode=(
-            "degraded_read_only" if fallback_refs else "unavailable"
+            "degraded_read_only"
+            if fallback_refs or attachment_aware
+            else "unavailable"
         ),
-        disabledReasons={
-            "draft": "original_task_input_snapshot_missing",
-        },
+        disabledReasons=disabled_reasons,
         fallbackEvidenceRefs=fallback_refs,
     )
 
@@ -4302,6 +4321,14 @@ def _build_original_task_input_snapshot_payload(
         "targetRuntime": payload.get("targetRuntime"),
         "requiredCapabilities": list(payload.get("requiredCapabilities") or []),
         "task": dict(task_payload),
+        "authoredTaskInput": build_authoritative_task_input_snapshot(
+            task_payload=task_payload,
+            repository=payload.get("repository"),
+            target_runtime=payload.get("targetRuntime"),
+            required_capabilities=payload.get("requiredCapabilities"),
+            dependency_declarations=payload.get("dependencies"),
+            attachment_refs=attachment_refs,
+        ),
     }
     return {
         "snapshotVersion": _TASK_INPUT_SNAPSHOT_VERSION,

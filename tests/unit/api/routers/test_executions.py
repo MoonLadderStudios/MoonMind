@@ -19,8 +19,10 @@ from temporalio.service import RPCError, RPCStatusCode
 from api_service.api.routers.executions import (
     _get_service,
     _artifact_id_from_ref,
+    _build_original_task_input_snapshot_payload,
     _merge_task_preserving_artifact_instructions,
     _resume_not_available_reason,
+    _task_input_snapshot_descriptor_from_record,
     get_temporal_client,
     _serialize_execution,
     router,
@@ -77,6 +79,86 @@ def _completed_attachment_artifact(
         size_bytes=size_bytes,
         created_by_principal=created_by_principal,
     )
+
+def _mm639_authored_task_payload() -> dict[str, Any]:
+    return {
+        "title": "MM-639 durable snapshot",
+        "instructions": "Preserve the original authored task input for MM-639.",
+        "inputAttachments": [
+            {
+                "artifactId": "art-objective",
+                "filename": "objective.png",
+                "contentType": "image/png",
+                "sizeBytes": 123,
+            }
+        ],
+        "runtime": {
+            "mode": "codex_cli",
+            "model": "gpt-5.4",
+            "effort": "medium",
+            "profileId": "profile-codex",
+        },
+        "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
+        "git": {
+            "repository": "MoonLadderStudios/MoonMind",
+            "branch": "feature/mm-639",
+        },
+        "dependencies": ["MM-638"],
+        "appliedStepTemplates": [
+            {
+                "slug": "jira-orchestrate",
+                "version": "1.0.0",
+                "inputs": {"issueKey": "MM-639"},
+                "stepIds": ["step-1", "step-2"],
+                "composition": {
+                    "slug": "jira-orchestrate",
+                    "includes": [
+                        {"slug": "jira-fetch", "version": "1.0.0"},
+                    ],
+                },
+            }
+        ],
+        "authoredPresets": [
+            {
+                "presetSlug": "jira-orchestrate",
+                "presetVersion": "1.0.0",
+                "inputBindings": {"issueKey": "MM-639"},
+            }
+        ],
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Fetch issue",
+                "instructions": "Fetch Jira issue MM-639.",
+                "dependsOn": [],
+                "templateStepId": "tpl:jira-orchestrate:fetch",
+                "presetProvenance": {
+                    "presetSlug": "jira-orchestrate",
+                    "presetVersion": "1.0.0",
+                },
+            },
+            {
+                "id": "step-2",
+                "title": "Implement",
+                "instructions": "Implement MM-639.",
+                "dependsOn": ["step-1"],
+                "inputAttachments": [
+                    {
+                        "artifactId": "art-step",
+                        "filename": "step.png",
+                        "contentType": "image/png",
+                        "sizeBytes": 456,
+                    }
+                ],
+                "presetProvenance": {
+                    "presetSlug": "jira-orchestrate",
+                    "presetVersion": "1.0.0",
+                    "sourceStepId": "tpl:jira-orchestrate:implement",
+                },
+                "detachedFromPreset": True,
+            },
+        ],
+    }
 
 class _QueryHandle:
     def __init__(
@@ -6159,6 +6241,142 @@ def test_task_input_snapshot_merge_preserves_step_deletions() -> None:
     assert merged["steps"] == [
         {"id": "step-1", "title": "First edited", "instructions": "Original first"}
     ]
+
+
+def test_original_task_input_snapshot_payload_preserves_mm639_authored_fields() -> None:
+    task_payload = _mm639_authored_task_payload()
+
+    payload = _build_original_task_input_snapshot_payload(
+        source_kind="create",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex_cli",
+            "requiredCapabilities": ["git", "jira"],
+        },
+        task_payload=task_payload,
+        attachment_refs=[
+            {
+                "artifactId": "art-objective",
+                "targetKind": "objective",
+            },
+            {
+                "artifactId": "art-step",
+                "targetKind": "step",
+                "stepId": "step-2",
+                "stepOrdinal": 1,
+            },
+        ],
+    )
+
+    authored = payload["draft"]["authoredTaskInput"]
+    assert authored["traceability"]["jiraIssueKey"] == "MM-639"
+    assert authored["objective"]["instructions"] == (
+        "Preserve the original authored task input for MM-639."
+    )
+    assert authored["objective"]["inputAttachments"][0]["artifactId"] == (
+        "art-objective"
+    )
+    assert authored["runtime"] == task_payload["runtime"]
+    assert authored["publish"] == task_payload["publish"]
+    assert authored["repository"] == "MoonLadderStudios/MoonMind"
+    assert authored["branch"] == "feature/mm-639"
+    assert authored["dependencyDeclarations"] == ["MM-638"]
+    assert authored["presetApplicationMetadata"] == task_payload[
+        "appliedStepTemplates"
+    ]
+    assert authored["pinnedPresetBindings"] == task_payload["authoredPresets"]
+    assert authored["includeTreeSummary"] == [
+        {
+            "presetSlug": "jira-orchestrate",
+            "presetVersion": "1.0.0",
+            "includedSlug": "jira-fetch",
+            "includedVersion": "1.0.0",
+        }
+    ]
+    assert authored["finalSubmittedOrder"] == [
+        {"stepId": "step-1", "ordinal": 0},
+        {"stepId": "step-2", "ordinal": 1},
+    ]
+    assert authored["perStepProvenance"][1] == {
+        "stepId": "step-2",
+        "ordinal": 1,
+        "presetProvenance": task_payload["steps"][1]["presetProvenance"],
+    }
+    assert authored["detachmentState"] == [
+        {"stepId": "step-2", "ordinal": 1, "detached": True}
+    ]
+    assert authored["steps"][1]["inputAttachments"][0]["artifactId"] == "art-step"
+    assert payload["attachmentRefs"][1]["stepId"] == "step-2"
+
+
+def test_missing_attachment_aware_snapshot_descriptor_is_degraded_explicitly() -> None:
+    record = _build_execution_record(
+        has_task_input_snapshot=False,
+    )
+    record.parameters = {
+        "task": {
+            "instructions": "Attachment-aware task without a snapshot.",
+            "inputAttachments": [
+                {
+                    "artifactId": "art-objective",
+                    "filename": "objective.png",
+                    "contentType": "image/png",
+                }
+            ],
+        }
+    }
+
+    descriptor = _task_input_snapshot_descriptor_from_record(record)
+
+    assert descriptor.available is False
+    assert descriptor.reconstruction_mode == "degraded_read_only"
+    assert descriptor.disabled_reasons["draft"] == (
+        "original_task_input_snapshot_missing"
+    )
+    assert descriptor.disabled_reasons["attachments"] == (
+        "original_task_input_snapshot_missing"
+    )
+
+
+def test_missing_legacy_attachment_ref_snapshot_descriptor_is_degraded() -> None:
+    record = _build_execution_record(
+        has_task_input_snapshot=False,
+    )
+    record.parameters = {
+        "task": {
+            "instructions": "Legacy attachment-aware task without a snapshot.",
+            "attachmentRefs": [
+                {
+                    "artifactRef": "artifact://input/objective-image",
+                    "filename": "objective.png",
+                    "contentType": "image/png",
+                }
+            ],
+            "steps": [
+                {
+                    "id": "inspect",
+                    "attachmentRefs": [
+                        {
+                            "artifactRef": "artifact://input/step-image",
+                            "filename": "step.png",
+                            "contentType": "image/png",
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+
+    descriptor = _task_input_snapshot_descriptor_from_record(record)
+
+    assert descriptor.available is False
+    assert descriptor.reconstruction_mode == "degraded_read_only"
+    assert descriptor.disabled_reasons["draft"] == (
+        "original_task_input_snapshot_missing"
+    )
+    assert descriptor.disabled_reasons["attachments"] == (
+        "original_task_input_snapshot_missing"
+    )
 
 
 def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:

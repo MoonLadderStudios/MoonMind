@@ -1417,11 +1417,42 @@ async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
         "task": {
             "title": "Run Jira Orchestrate for MM-501",
             "instructions": "Run Jira Orchestrate for MM-501.",
+            "runtime": {"mode": "codex_cli", "model": "gpt-5.4"},
+            "publish": {"mode": "pr"},
+            "git": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "branch": "feature/mm-501",
+            },
+            "dependencies": ["MM-500"],
+            "appliedStepTemplates": [
+                {
+                    "slug": "jira-orchestrate",
+                    "version": "1.0.0",
+                    "stepIds": ["step-1"],
+                    "composition": {
+                        "slug": "jira-orchestrate",
+                        "includes": [
+                            {"slug": "jira-fetch", "version": "1.0.0"}
+                        ],
+                    },
+                },
+            ],
+            "authoredPresets": [
+                {
+                    "presetSlug": "jira-orchestrate",
+                    "presetVersion": "1.0.0",
+                    "inputBindings": {"issueKey": "MM-501"},
+                }
+            ],
             "steps": [
                 {
                     "id": "step-1",
                     "title": "First step",
                     "instructions": "Do the first step.",
+                    "presetProvenance": {
+                        "presetSlug": "jira-orchestrate",
+                        "presetVersion": "1.0.0",
+                    },
                 }
             ],
         },
@@ -1546,6 +1577,32 @@ async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
         snapshot_payload["draft"]["task"]["title"]
         == "Run Jira Orchestrate for MM-501"
     )
+    authored = snapshot_payload["draft"]["authoredTaskInput"]
+    assert authored["runtime"] == {"mode": "codex_cli", "model": "gpt-5.4"}
+    assert authored["publish"] == {"mode": "pr"}
+    assert authored["repository"] == "MoonLadderStudios/MoonMind"
+    assert authored["branch"] == "feature/mm-501"
+    assert authored["dependencyDeclarations"] == ["MM-500"]
+    assert authored["finalSubmittedOrder"] == [{"stepId": "step-1", "ordinal": 0}]
+    assert authored["pinnedPresetBindings"][0]["presetSlug"] == "jira-orchestrate"
+    assert authored["includeTreeSummary"] == [
+        {
+            "presetSlug": "jira-orchestrate",
+            "presetVersion": "1.0.0",
+            "includedSlug": "jira-fetch",
+            "includedVersion": "1.0.0",
+        }
+    ]
+    assert authored["perStepProvenance"] == [
+        {
+            "stepId": "step-1",
+            "ordinal": 0,
+            "presetProvenance": {
+                "presetSlug": "jira-orchestrate",
+                "presetVersion": "1.0.0",
+            },
+        }
+    ]
 
 
 def test_runtime_planner_uses_branch_handoff_for_jira_output_when_task_publish_none():

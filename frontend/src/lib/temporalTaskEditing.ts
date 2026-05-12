@@ -614,9 +614,16 @@ function assertSnapshotAttachmentBindings(
   artifactTask: Record<string, unknown>,
   artifactTaskSteps: TemporalSubmissionDraft['steps'],
 ): void {
-  const compactRefs = Array.isArray(artifactParams.attachmentRefs)
-    ? artifactParams.attachmentRefs.map((entry) => objectValue(entry))
-    : [];
+  const snapshotDraft = objectValue(artifactParams.draft);
+  const authoredTaskInput = objectValue(snapshotDraft.authoredTaskInput);
+  const compactRefSources = [
+    artifactParams.attachmentRefs,
+    snapshotDraft.attachmentRefs,
+    authoredTaskInput.attachmentRefs,
+  ];
+  const compactRefs = compactRefSources.flatMap((source) =>
+    Array.isArray(source) ? source.map((entry) => objectValue(entry)) : [],
+  );
   if (compactRefs.length === 0) {
     return;
   }

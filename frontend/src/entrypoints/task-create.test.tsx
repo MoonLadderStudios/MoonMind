@@ -2852,6 +2852,72 @@ describe.skip("Task Create Entrypoint", () => {
     ]);
   });
 
+  it("validates compact attachment refs stored inside the authoritative draft", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:draft-attachment-refs",
+        workflowType: "MoonMind.Run",
+        taskInputSnapshot: {
+          available: true,
+          artifactRef: "art-snapshot",
+          snapshotVersion: 1,
+          sourceKind: "create",
+          reconstructionMode: "authoritative",
+          disabledReasons: {},
+          fallbackEvidenceRefs: [],
+        },
+        inputParameters: {
+          task: {},
+        },
+      },
+      {
+        snapshotVersion: 1,
+        source: { kind: "create" },
+        draft: {
+          taskShape: "multi_step",
+          task: {
+            instructions: "Preserve authoritative draft attachment refs.",
+            steps: [
+              {
+                id: "step-bound",
+                title: "Bound step",
+                instructions: "Use the step attachment.",
+                inputAttachments: [
+                  {
+                    artifactId: "art-step",
+                    filename: "step.webp",
+                    contentType: "image/webp",
+                    sizeBytes: 4567,
+                  },
+                ],
+              },
+            ],
+          },
+          attachmentRefs: [
+            {
+              artifactId: "art-step",
+              filename: "step.webp",
+              contentType: "image/webp",
+              sizeBytes: 4567,
+              targetKind: "step",
+              stepId: "step-bound",
+              stepOrdinal: 0,
+            },
+          ],
+        },
+      },
+    );
+
+    expect(draft.steps[0]?.inputAttachments).toEqual([
+      {
+        artifactId: "art-step",
+        filename: "step.webp",
+        contentType: "image/webp",
+        sizeBytes: 4567,
+      },
+    ]);
+  });
+
   it("fails reconstruction when compact attachment refs cannot be bound from the task snapshot", () => {
     expect(() =>
       buildTemporalSubmissionDraftFromExecution(
