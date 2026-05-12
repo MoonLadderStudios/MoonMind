@@ -85,7 +85,6 @@ from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
 from moonmind.workflows.temporal.activity_catalog import (
-    ARTIFACTS_TASK_QUEUE,
     INTEGRATIONS_TASK_QUEUE,
     WORKFLOW_TASK_QUEUE,
     TemporalActivityRoute,
@@ -203,6 +202,7 @@ DEPENDENCY_WAIT_THROUGH_RERUN_PATCH = "dependency-wait-through-rerun-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
 NATIVE_PR_BRANCH_DEFAULTS_PATCH = "native-pr-branch-defaults-v1"
 NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
+NATIVE_PR_LEASE_CONFLICT_GATE_PATCH = "native-pr-lease-conflict-gate-v1"
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
@@ -3675,6 +3675,8 @@ class MoonMindRunWorkflow:
         status = self._coerce_text(push_status)
         if status in {"failed", "skipped"}:
             return True
+        if status == "lease_conflict":
+            return workflow.patched(NATIVE_PR_LEASE_CONFLICT_GATE_PATCH)
         if status == "protected_branch":
             return workflow.patched(NATIVE_PR_PUSH_STATUS_GATE_PATCH)
         return False
@@ -3741,6 +3743,28 @@ class MoonMindRunWorkflow:
             push_error = self._coerce_text(outputs.get("push_error"), max_chars=200)
             self._publish_status = "failed"
             self._publish_reason = push_error or "publish skipped"
+            return
+
+        if push_status == "lease_conflict":
+            if not workflow.patched(NATIVE_PR_LEASE_CONFLICT_GATE_PATCH):
+                return
+            push_error = self._coerce_text(outputs.get("push_error"), max_chars=200)
+            push_branch = self._coerce_text(outputs.get("push_branch"), max_chars=120)
+            self._publish_status = "failed"
+            if push_branch and push_error:
+                self._publish_reason = (
+                    f"publish failed: remote branch '{push_branch}' changed "
+                    f"before publish completed: {push_error}"
+                )
+            elif push_branch:
+                self._publish_reason = (
+                    f"publish failed: remote branch '{push_branch}' changed "
+                    "before publish completed"
+                )
+            else:
+                self._publish_reason = (
+                    "publish failed: remote branch changed before publish completed"
+                )
             return
 
         if push_status == "protected_branch":

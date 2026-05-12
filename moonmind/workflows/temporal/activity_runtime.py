@@ -118,6 +118,7 @@ from moonmind.schemas.managed_session_models import (
 )
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.plan_validation import validate_plan_payload
+
 from moonmind.workflows.skills.skill_dispatcher import execute_skill_activity
 from moonmind.workflows.skills.skill_plan_contracts import (
     ActivityExecutionContext,
@@ -6629,6 +6630,72 @@ class TemporalAgentRuntimeActivities:
                     env=command_env,
                 )
 
+            async def _finalize_push_success(
+                *,
+                extra: Mapping[str, Any] | None = None,
+                precomputed_commit_count: int | None = commit_count,
+            ) -> dict[str, Any]:
+                head_sha = await self._resolve_workspace_head_sha(
+                    workspace=workspace,
+                    run_id=run_id,
+                    env=command_env,
+                )
+
+                final_commit_count = precomputed_commit_count
+                # Verify the branch actually has commits over the publish base.
+                # git push succeeds as a no-op when the branch is already
+                # up-to-date, which would cause repo.create_pr to fail
+                # with HTTP 422 ("No commits between main and <branch>").
+                if final_commit_count is None:
+                    final_commit_count = await self._count_branch_commits_ahead(
+                        workspace=workspace,
+                        base_ref=base_ref,
+                        branch=current_branch,
+                        run_id=run_id,
+                        env=command_env,
+                    )
+
+                if final_commit_count == 0:
+                    logger.warning(
+                        "Post-agent git push completed for run %s but branch "
+                        "'%s' has no commits over %s",
+                        run_id,
+                        current_branch,
+                        base_ref,
+                    )
+                    result: dict[str, Any] = {
+                        "push_status": "no_commits",
+                        "push_branch": current_branch,
+                        "push_base_branch": base_branch_name,
+                        "push_base_ref": base_ref,
+                        "push_commit_count": 0,
+                    }
+                    if head_sha:
+                        result["push_head_sha"] = head_sha
+                    if extra:
+                        result.update(extra)
+                    return result
+
+                logger.info(
+                    "Post-agent git push completed for run %s (branch=%s)",
+                    run_id,
+                    current_branch,
+                )
+                result = {
+                    "push_status": "pushed",
+                    "push_branch": current_branch,
+                    "push_base_branch": base_branch_name,
+                    "push_base_ref": base_ref,
+                }
+                result.update(commit_info)
+                if extra:
+                    result.update(extra)
+                if head_sha:
+                    result["push_head_sha"] = head_sha
+                if final_commit_count >= 0:
+                    result["push_commit_count"] = final_commit_count
+                return result
+
             remote_sha: str | None = None
             remote_sha_proc = await asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
@@ -6693,6 +6760,7 @@ class TemporalAgentRuntimeActivities:
                     base_branch=base_branch_name,
                 )
                 if classified.get("push_status") == "lease_conflict":
+                    retry_metadata: dict[str, Any] = {"push_retry_count": 1}
                     fetch_proc = await asyncio.create_subprocess_exec(
                         *self._workspace_git_command(
                             workspace, "fetch", "origin", current_branch,
@@ -6712,6 +6780,7 @@ class TemporalAgentRuntimeActivities:
                     classified["fetch_status"] = (
                         "fetched" if fetch_proc.returncode == 0 else "failed"
                     )
+                    retry_metadata["fetch_status"] = classified["fetch_status"]
                     if fetch_proc.returncode != 0:
                         classified["fetch_error"] = (
                             fetch_stderr.decode(
@@ -6721,63 +6790,122 @@ class TemporalAgentRuntimeActivities:
                                 "utf-8", errors="replace"
                             ).strip()
                         )
+                    else:
+                        remote_tracking_ref = f"refs/remotes/origin/{current_branch}"
+                        local_head_after_fetch = await self._resolve_workspace_head_sha(
+                            workspace=workspace,
+                            run_id=run_id,
+                            env=command_env,
+                        )
+                        remote_sha_after_fetch = await self._resolve_workspace_ref_sha(
+                            workspace=workspace,
+                            ref=remote_tracking_ref,
+                            run_id=run_id,
+                            env=command_env,
+                        )
+                        if (
+                            local_head_after_fetch
+                            and remote_sha_after_fetch
+                            and local_head_after_fetch == remote_sha_after_fetch
+                        ):
+                            retry_metadata["rebase_status"] = "not_needed"
+                            return await _finalize_push_success(
+                                extra=retry_metadata,
+                                precomputed_commit_count=None,
+                            )
+
+                        rebase_proc = await asyncio.create_subprocess_exec(
+                            *self._workspace_git_command(
+                                workspace, "rebase", remote_tracking_ref,
+                            ),
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            env=command_env,
+                        )
+                        try:
+                            rebase_stdout, rebase_stderr = await asyncio.wait_for(
+                                rebase_proc.communicate(), timeout=120,
+                            )
+                        except asyncio.TimeoutError:
+                            rebase_proc.kill()
+                            await rebase_proc.wait()
+                            raise
+                        if rebase_proc.returncode != 0:
+                            rebase_detail = (
+                                rebase_stderr.decode(
+                                    "utf-8", errors="replace"
+                                ).strip()
+                                or rebase_stdout.decode(
+                                    "utf-8", errors="replace"
+                                ).strip()
+                                or "(no stderr)"
+                            )
+                            classified["rebase_status"] = "failed"
+                            classified["retryable"] = False
+                            classified["push_error"] = (
+                                f"{classified['push_error']}; automatic rebase "
+                                f"onto {remote_tracking_ref} failed: {rebase_detail}"
+                            )
+                            abort_proc = await asyncio.create_subprocess_exec(
+                                *self._workspace_git_command(
+                                    workspace, "rebase", "--abort",
+                                ),
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.PIPE,
+                                env=command_env,
+                            )
+                            try:
+                                await asyncio.wait_for(
+                                    abort_proc.communicate(), timeout=30,
+                                )
+                            except asyncio.TimeoutError:
+                                abort_proc.kill()
+                                await abort_proc.wait()
+                            return classified
+
+                        retry_metadata["rebase_status"] = "rebased"
+                        retry_remote_sha = remote_sha_after_fetch
+                        retry_push_proc = await asyncio.create_subprocess_exec(
+                            *self._workspace_git_command(
+                                workspace,
+                                *build_git_push_with_lease_args(
+                                    branch=current_branch,
+                                    recorded_remote_sha=retry_remote_sha,
+                                ),
+                            ),
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            env=command_env,
+                        )
+                        try:
+                            _, retry_push_stderr = await asyncio.wait_for(
+                                retry_push_proc.communicate(), timeout=120,
+                            )
+                        except asyncio.TimeoutError:
+                            retry_push_proc.kill()
+                            await retry_push_proc.wait()
+                            raise
+                        if retry_push_proc.returncode == 0:
+                            return await _finalize_push_success(
+                                extra=retry_metadata,
+                                precomputed_commit_count=None,
+                            )
+                        retry_error_detail = (
+                            retry_push_stderr.decode(
+                                "utf-8", errors="replace"
+                            ).strip()
+                            or "(no stderr)"
+                        )
+                        retry_classified = classify_git_push_failure(
+                            stderr=retry_error_detail,
+                            branch=current_branch,
+                            base_branch=base_branch_name,
+                        )
+                        retry_classified.update(retry_metadata)
+                        return retry_classified
                 return classified
 
-            head_sha = await self._resolve_workspace_head_sha(
-                workspace=workspace,
-                run_id=run_id,
-                env=command_env,
-            )
-
-            # Verify the branch actually has commits over the publish base.
-            # git push succeeds as a no-op when the branch is already
-            # up-to-date, which would cause repo.create_pr to fail
-            # with HTTP 422 ("No commits between main and <branch>").
-            if commit_count is None:
-                commit_count = await self._count_branch_commits_ahead(
-                    workspace=workspace,
-                    base_ref=base_ref,
-                    branch=current_branch,
-                    run_id=run_id,
-                    env=command_env,
-                )
-
-            if commit_count == 0:
-                logger.warning(
-                    "Post-agent git push completed for run %s but branch "
-                    "'%s' has no commits over %s",
-                    run_id,
-                    current_branch,
-                    base_ref,
-                )
-                result = {
-                    "push_status": "no_commits",
-                    "push_branch": current_branch,
-                    "push_base_branch": base_branch_name,
-                    "push_base_ref": base_ref,
-                    "push_commit_count": 0,
-                }
-                if head_sha:
-                    result["push_head_sha"] = head_sha
-                return result
-
-            logger.info(
-                "Post-agent git push completed for run %s (branch=%s)",
-                run_id,
-                current_branch,
-            )
-            result: dict[str, Any] = {
-                "push_status": "pushed",
-                "push_branch": current_branch,
-                "push_base_branch": base_branch_name,
-                "push_base_ref": base_ref,
-            }
-            result.update(commit_info)
-            if head_sha:
-                result["push_head_sha"] = head_sha
-            if commit_count >= 0:
-                result["push_commit_count"] = commit_count
-            return result
+            return await _finalize_push_success()
         except Exception as exc:
             logger.warning(
                 "Post-agent git push failed for run %s",
@@ -6788,6 +6916,41 @@ class TemporalAgentRuntimeActivities:
                 "push_status": "failed",
                 "push_error": str(exc),
             }
+
+    async def _resolve_workspace_ref_sha(
+        self,
+        *,
+        workspace: str,
+        ref: str,
+        run_id: str,
+        env: Mapping[str, str],
+    ) -> str | None:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *self._workspace_git_command(workspace, "rev-parse", "--verify", ref),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                stdout_bytes, _ = await asyncio.wait_for(
+                    proc.communicate(), timeout=10,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return None
+            if proc.returncode != 0:
+                return None
+            return stdout_bytes.decode("utf-8", errors="replace").strip() or None
+        except Exception:
+            logger.debug(
+                "Failed to resolve workspace ref sha for run %s (ref=%s)",
+                run_id,
+                ref,
+                exc_info=True,
+            )
+            return None
 
     async def _resolve_workspace_head_sha(
         self,
