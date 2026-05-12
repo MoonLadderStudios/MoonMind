@@ -12777,7 +12777,7 @@ describe("Task Create MM-641 authoring validation", () => {
     fetchSpy.mockRestore();
   });
 
-  it("renders repository branch and publish mode as Steps card authoring controls", async () => {
+  it("renders repository branch and publish mode in the Submit floating bar", async () => {
     renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
 
     const stepsSection = await waitFor(() => {
@@ -12794,27 +12794,37 @@ describe("Task Create MM-641 authoring validation", () => {
     const repoInput = await screen.findByLabelText("GitHub Repo");
     const branchInput = screen.getByLabelText("Branch");
     const publishModeSelect = screen.getByLabelText("Publish Mode");
+    const floatingBar = createButton.closest(".queue-floating-bar");
+    const floatingBarRow = createButton.closest(".queue-floating-bar-row");
 
-    expect(repoInput.closest('[data-canonical-create-section="Steps"]')).toBe(
-      stepsSection,
+    expect(floatingBar).not.toBeNull();
+    expect(floatingBarRow).not.toBeNull();
+    expect(repoInput.closest(".queue-floating-bar")).toBe(floatingBar);
+    expect(branchInput.closest(".queue-floating-bar")).toBe(floatingBar);
+    expect(publishModeSelect.closest(".queue-floating-bar")).toBe(floatingBar);
+    expect(repoInput.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
+    expect(branchInput.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
+    expect(publishModeSelect.closest(".queue-floating-bar-row")).toBe(
+      floatingBarRow,
     );
-    expect(branchInput.closest('[data-canonical-create-section="Steps"]')).toBe(
-      stepsSection,
+    expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBe(
+      submitSection,
     );
-    expect(
-      publishModeSelect.closest('[data-canonical-create-section="Steps"]'),
-    ).toBe(stepsSection);
-    expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBeNull();
-    expect(branchInput.closest('[data-canonical-create-section="Submit"]')).toBeNull();
+    expect(branchInput.closest('[data-canonical-create-section="Submit"]')).toBe(
+      submitSection,
+    );
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Submit"]'),
+    ).toBe(submitSection);
+    expect(repoInput.closest('[data-canonical-create-section="Steps"]')).toBeNull();
+    expect(branchInput.closest('[data-canonical-create-section="Steps"]')).toBeNull();
+    expect(
+      publishModeSelect.closest('[data-canonical-create-section="Steps"]'),
     ).toBeNull();
-    expect(repoInput.closest(".queue-floating-bar")).toBeNull();
-    expect(branchInput.closest(".queue-floating-bar")).toBeNull();
-    expect(publishModeSelect.closest(".queue-floating-bar")).toBeNull();
     expect(createButton.closest('[data-canonical-create-section="Submit"]')).toBe(
       submitSection,
     );
+    expect(stepsSection).not.toBeNull();
   });
 
   it("blocks invalid MM-641 authoring drafts before creating executions", async () => {
