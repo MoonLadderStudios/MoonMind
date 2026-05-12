@@ -180,6 +180,9 @@ class SettingsValidationError(ValueError):
     def to_settings_error(self) -> "SettingsError":
         issue = self.first_issue
         details = issue.model_dump(mode="json")
+        details.pop("key", None)
+        details.pop("scope", None)
+        details.pop("message", None)
         if len(self.issues) > 1:
             details["issues"] = [
                 item.model_dump(mode="json") for item in self.issues
@@ -1789,12 +1792,6 @@ class SettingsCatalogService:
                 )
             )
             return diagnostics
-        if (
-            override_present
-            and entry.key != "workflow.default_provider_profile_ref"
-            and (entry.value_type != "secret_ref" or value is None)
-        ):
-            return diagnostics
         diagnostics.extend(self._diagnostics(entry, value))
         validation_issues = self._validation_issues_for_value(
             entry,
@@ -3109,21 +3106,29 @@ class SettingsCatalogService:
                         details={"maximum": policy.max_canary_percent},
                     )
                 )
-        token_ref = changes.get("integrations.github.token_ref")
-        if isinstance(token_ref, str) and "://" in token_ref:
-            scheme = token_ref.split("://", 1)[0]
-            if scheme not in policy.allowed_secret_ref_backends:
-                issues.append(
-                    self._validation_issue(
-                        self._entries_by_key["integrations.github.token_ref"],
-                        scope,
-                        code="secret_ref_backend_policy_denied",
-                        message="integrations.github.token_ref uses a SecretRef backend denied by workspace policy.",
-                        boundary=boundary,
-                        rule="allowed_secret_ref_backends",
-                        details={"ref_scheme": scheme},
-                    )
+        for key, value in changes.items():
+            entry = self._entries_by_key.get(key)
+            if (
+                entry is None
+                or entry.value_type != "secret_ref"
+                or not isinstance(value, str)
+                or "://" not in value
+            ):
+                continue
+            scheme = value.split("://", 1)[0]
+            if scheme in policy.allowed_secret_ref_backends:
+                continue
+            issues.append(
+                self._validation_issue(
+                    entry,
+                    scope,
+                    code="secret_ref_backend_policy_denied",
+                    message=f"{key} uses a SecretRef backend denied by workspace policy.",
+                    boundary=boundary,
+                    rule="allowed_secret_ref_backends",
+                    details={"ref_scheme": scheme},
                 )
+            )
         provider_profile = changes.get("workflow.default_provider_profile_ref")
         if (
             isinstance(provider_profile, str)

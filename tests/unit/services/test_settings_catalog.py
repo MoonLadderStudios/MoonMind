@@ -21,6 +21,7 @@ from api_service.services.settings_catalog import (
     SettingDependency,
     SettingMigrationRule,
     SettingConstraints,
+    SettingValidationIssue,
     SettingsCatalogBuilder,
     SettingsCatalogService,
     SettingsValidationError,
@@ -385,6 +386,12 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
                 "workflow.default_publish_mode",
                 "publication_mode_policy_denied",
             ),
+            (
+                {"workflow.operation_mode": "maintenance"},
+                {"workflow.operation_mode": 1},
+                "workflow.operation_mode",
+                "maintenance_mode_conflict",
+            ),
         ]
         for changes, versions, key, code in invalid_cases:
             with pytest.raises(SettingsValidationError) as exc:
@@ -427,6 +434,112 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
         )
         assert unchanged.value == "none"
         assert canary.value != 25
+
+
+@pytest.mark.asyncio
+async def test_mm656_secret_ref_backend_policy_applies_to_all_secret_ref_settings(
+    settings_session_maker,
+):
+    extra_secret_ref = SettingRegistryEntry(
+        key="integrations.secondary_token_ref",
+        title="Secondary Token Reference",
+        category="Integrations",
+        section="user-workspace",
+        value_type="secret_ref",
+        ui="secret_ref_picker",
+        scopes=("workspace",),
+        default_value=None,
+        order=999,
+    )
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            registry=(*_REGISTRY, extra_secret_ref),
+            session=settings_session,
+            workspace_policy=SettingsWorkspacePolicy(
+                allowed_secret_ref_backends=("db",),
+            ),
+        )
+
+        with pytest.raises(SettingsValidationError) as exc:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"integrations.secondary_token_ref": "env://TOKEN"},
+                expected_versions={"integrations.secondary_token_ref": 1},
+            )
+
+    _assert_validation_issue(
+        exc,
+        key="integrations.secondary_token_ref",
+        code="secret_ref_backend_policy_denied",
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm656_persisted_overrides_surface_policy_diagnostics_after_policy_change(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        enabled_service = SettingsCatalogService(env={}, session=settings_session)
+        await enabled_service.apply_overrides(
+            scope="workspace",
+            changes={
+                "workflow.default_publish_mode": "branch",
+                "skills.canary_percent": 50,
+            },
+            expected_versions={
+                "workflow.default_publish_mode": 1,
+                "skills.canary_percent": 1,
+            },
+        )
+
+        restricted_service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            workspace_policy=SettingsWorkspacePolicy(
+                skills_canary_enabled=False,
+                allowed_publication_modes=("none",),
+            ),
+        )
+        publish_mode = await restricted_service.effective_value_async(
+            "workflow.default_publish_mode", scope="workspace"
+        )
+        canary = await restricted_service.effective_value_async(
+            "skills.canary_percent", scope="workspace"
+        )
+
+    assert [diagnostic.code for diagnostic in publish_mode.diagnostics] == [
+        "publication_mode_policy_denied"
+    ]
+    assert [diagnostic.code for diagnostic in canary.diagnostics] == [
+        "feature_disabled_canary_percent"
+    ]
+
+
+def test_mm656_settings_error_details_omit_top_level_fields():
+    issue = SettingValidationIssue(
+        key="workflow.default_publish_mode",
+        scope="workspace",
+        code="publication_mode_policy_denied",
+        message="workflow.default_publish_mode is not allowed by workspace policy.",
+        boundary="write_request",
+        rule="allowed_publication_modes",
+        blocks=["persistence"],
+        details={"allowed": ["none"]},
+    )
+
+    error = SettingsValidationError([issue]).to_settings_error()
+
+    assert error.key == "workflow.default_publish_mode"
+    assert error.scope == "workspace"
+    assert error.message == (
+        "workflow.default_publish_mode is not allowed by workspace policy."
+    )
+    assert "key" not in error.details
+    assert "scope" not in error.details
+    assert "message" not in error.details
+    assert error.details["code"] == "publication_mode_policy_denied"
+    assert error.details["details"] == {"allowed": ["none"]}
 
 
 def test_mm656_boundary_validation_helpers_return_structured_issues():
