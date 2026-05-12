@@ -44,7 +44,7 @@ MM-644 requires Edit task on a failed execution to open edit-for-rerun mode from
 | DESIGN-REQ-005 | implemented_unverified | Fresh rerun source immutability exists for exact rerun | Add edited retry-specific immutability verification | integration |
 | DESIGN-REQ-006 | implemented_unverified | Full rerun sanitization removes Resume progress metadata | Add edited retry no-progress import tests | unit + integration |
 
-Status summary: 9 partial, 21 implemented_unverified, 0 missing, 0 implemented_verified.
+Status summary: 10 partial, 20 implemented_unverified, 0 missing, 0 implemented_verified.
 
 ## Technical Context
 

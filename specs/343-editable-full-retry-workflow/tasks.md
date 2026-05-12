@@ -7,7 +7,7 @@
 
 **Organization**: Tasks cover exactly one independently testable story: Editable Full Retry From Snapshot.
 
-**Source Traceability**: Preserves MM-644 and maps FR-001 through FR-012, acceptance scenarios 1-7, SC-001 through SC-005, and DESIGN-REQ-001 through DESIGN-REQ-006.
+**Source Traceability**: Preserves MM-644 and maps FR-001 through FR-012, acceptance scenarios 1-7, SC-001 through SC-005, DESIGN-REQ-001 through DESIGN-REQ-006, and original source coverage ID DESIGN-REQ-016.
 
 **Test Commands**:
 
@@ -26,7 +26,7 @@
 
 **Purpose**: Confirm the current feature artifacts and existing test surfaces before authoring tests.
 
-- [ ] T001 Confirm `specs/343-editable-full-retry-workflow/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/editable-full-retry.md`, and `quickstart.md` are present and preserve MM-644 traceability.
+- [ ] T001 Confirm `specs/343-editable-full-retry-workflow/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/editable-full-retry.md`, and `quickstart.md` are present and preserve MM-644 traceability plus original source coverage ID DESIGN-REQ-016.
 - [ ] T002 Confirm existing focused test targets in `frontend/src/entrypoints/task-create.test.tsx`, `frontend/src/entrypoints/task-detail.test.tsx`, `tests/unit/api/routers/test_executions.py`, `tests/unit/workflows/tasks/test_task_contract.py`, and `tests/integration/temporal/` match the paths in `specs/343-editable-full-retry-workflow/quickstart.md`.
 
 ---
@@ -101,7 +101,7 @@
 - [ ] T028 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx` and verify UI coverage for FR-001 through FR-004, FR-010, FR-011, SCN-001, SCN-002, and SCN-007 passes.
 - [ ] T029 Run `./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/tasks/test_task_contract.py` and verify API/contract coverage for FR-001, FR-009, FR-010, FR-011, SC-003, and SC-004 passes.
 - [ ] T030 Run `./tools/test_integration.sh` and verify integration coverage for FR-005 through FR-009, SCN-003 through SCN-006, SC-002, SC-003, and DESIGN-REQ-003 through DESIGN-REQ-006 passes.
-- [ ] T031 Confirm `specs/343-editable-full-retry-workflow/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/editable-full-retry.md`, `quickstart.md`, and `tasks.md` preserve MM-644 and the original Jira preset brief for FR-012 and SC-005.
+- [ ] T031 Confirm `specs/343-editable-full-retry-workflow/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/editable-full-retry.md`, `quickstart.md`, and `tasks.md` preserve MM-644, original source coverage ID DESIGN-REQ-016, and the original Jira preset brief for FR-012 and SC-005.
 
 **Checkpoint**: The single story is fully covered by unit and integration tests and can be validated independently.
 
@@ -176,5 +176,5 @@ Task: "Add Create page edit-for-rerun tests in frontend/src/entrypoints/task-cre
 
 - This task list covers one story only: Editable Full Retry From Snapshot.
 - Do not create `plan.md`, additional specs, implementation docs, PRs, Jira transitions, or downstream verification artifacts except where T035-T036 explicitly call for final validation after implementation.
-- Preserve MM-644 in implementation notes, test names or comments where useful, verification output, commit text, and pull request metadata.
+- Preserve MM-644 and original source coverage ID DESIGN-REQ-016 in implementation notes, test names or comments where useful, verification output, commit text, and pull request metadata.
 - Keep exact rerun and failed-step Resume behavior out of scope except where tests ensure edited full retry stays distinct and does not import Resume progress.
