@@ -290,6 +290,11 @@ def _remap_host_compose_path(
     return local_dir / compose_file.name
 
 
+def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
+    text = payload.decode("utf-8", errors="replace")
+    return text[-max_chars:]
+
+
 @dataclass(frozen=True, slots=True)
 class HostDockerComposeRunner:
     """Docker Compose runner for a trusted deployment-control worker.

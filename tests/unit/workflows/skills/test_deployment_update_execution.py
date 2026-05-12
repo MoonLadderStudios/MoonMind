@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Mapping
 
@@ -818,3 +819,47 @@ def test_compose_base_command_accepts_windows_host_paths(tmp_path):
     command = runner._compose_base_command()
     assert command[5] == "C:\\Users\\dev\\MoonMind"
     assert command[-1] == str(compose)
+
+
+@pytest.mark.asyncio
+async def test_host_compose_runner_returns_bounded_command_output_tails(
+    tmp_path, monkeypatch
+):
+    compose = tmp_path / "docker-compose.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"0123456789abcdefTAIL", b"compose stderr tail"
+
+    async def fake_create_subprocess_exec(
+        *args: str,
+        cwd: str,
+        env: Mapping[str, str],
+        stdout: Any,
+        stderr: Any,
+    ):
+        captured["args"] = args
+        captured["cwd"] = cwd
+        captured["env"] = env
+        captured["stdout"] = stdout
+        captured["stderr"] = stderr
+        return FakeProcess()
+
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_exec", fake_create_subprocess_exec
+    )
+    runner = HostDockerComposeRunner(project_dir=str(tmp_path))
+
+    result = await runner._run_compose_command(
+        ("docker", "compose", "ps"), max_output_chars=8
+    )
+
+    assert result["exitCode"] == 0
+    assert result["stdout"] == "cdefTAIL"
+    assert result["stderr"] == "err tail"
+    assert result["command"][-1] == "ps"
+    assert captured["cwd"] == str(tmp_path)
