@@ -1887,7 +1887,7 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
                 version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
-                    "jira_project_key": "TOOL",
+                    "jira_project_key": "MM",
                     "jira_issue_type": "Story",
                 },
                 context={},
@@ -1897,14 +1897,14 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert expanded["steps"][0]["skill"]["id"] == "moonspec-breakdown"
             assert "docs/Designs/RuntimeTypes.md" in expanded["steps"][0]["instructions"]
             assert expanded["steps"][1]["skill"]["id"] == "story.create_jira_issues"
-            assert "Jira Story issue in project TOOL" in expanded["steps"][1]["instructions"]
+            assert "Jira Story issue in project MM" in expanded["steps"][1]["instructions"]
             assert "linear_blocker_chain" in expanded["steps"][1]["instructions"]
             assert "ordered blocker chain" in expanded["steps"][1]["instructions"]
             assert "Source Document path" in expanded["steps"][1]["instructions"]
             assert expanded["steps"][1]["storyOutput"] == {
                 "mode": "jira",
                 "jira": {
-                    "projectKey": "TOOL",
+                    "projectKey": "MM",
                     "issueTypeName": "Story",
                     "boardId": "",
                     "dependencyMode": "linear_blocker_chain",
@@ -2005,7 +2005,7 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 for item in template["inputs"]
                 if item["name"] == "jira_project_key"
             )
-            assert project_input["default"] is None
+            assert project_input["default"] == "MM"
 
             expanded = await service.expand_template(
                 slug="jira-breakdown-orchestrate",
@@ -2147,7 +2147,7 @@ async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
                 {"mode": "claude_code"}
             )
 
-async def test_jira_breakdown_requires_project_when_multiple_allowed_without_repo_policy(
+async def test_jira_breakdown_uses_seeded_default_when_multiple_allowed_without_repo_policy(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -2178,21 +2178,22 @@ async def test_jira_breakdown_requires_project_when_multiple_allowed_without_rep
                 for item in template["inputs"]
                 if item["name"] == "jira_project_key"
             )
-            assert project_input["default"] is None
+            assert project_input["default"] == "MM"
 
-            with pytest.raises(TaskTemplateValidationError):
-                await service.expand_template(
-                    slug="jira-breakdown",
-                    scope="global",
-                    scope_ref=None,
-                    version="1.0.0",
-                    inputs={
-                        "feature_request": "docs/Designs/RuntimeTypes.md",
-                        "jira_issue_type": "Story",
-                        "jira_dependency_mode": "none",
-                    },
-                    context={},
-                )
+            expanded = await service.expand_template(
+                slug="jira-breakdown",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": "docs/Designs/RuntimeTypes.md",
+                    "jira_issue_type": "Story",
+                    "jira_dependency_mode": "none",
+                },
+                context={},
+            )
+
+            assert expanded["steps"][1]["storyOutput"]["jira"]["projectKey"] == "MM"
 
 async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
     seed_dir = (
