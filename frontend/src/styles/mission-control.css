@@ -3571,10 +3571,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   display: grid;
   width: 100%;
   justify-self: stretch;
-  grid-template-columns: auto;
+  grid-template-columns:
+    minmax(12rem, 1.65fr)
+    minmax(10rem, 1.45fr)
+    minmax(8rem, 1fr)
+    auto;
   gap: 0.5rem;
   align-items: center;
-  justify-content: end;
+  justify-content: stretch;
 }
 
 .queue-floating-bar-status {
@@ -3762,7 +3766,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 
   .queue-floating-bar-row {
+    grid-template-columns:
+      minmax(0, 1fr)
+      minmax(9.5rem, 0.8fr)
+      auto;
     justify-content: stretch;
+  }
+
+  .queue-floating-bar-row .queue-inline-selector--repo {
+    grid-column: 1 / -1;
   }
 
   .queue-floating-bar-row .queue-submit-primary {
