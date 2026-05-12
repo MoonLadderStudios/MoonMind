@@ -1387,17 +1387,21 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
             )
 
     task = expanded_parameters["task"]
-    assert expanded_parameters["stepCount"] == 13
-    assert len(task["steps"]) == 13
+    assert expanded_parameters["stepCount"] == 15
+    assert len(task["steps"]) == 15
     assert task["steps"][0]["title"] == "Move Jira issue to In Progress"
     assert task["steps"][0]["skill"]["id"] == "jira-issue-updater"
     assert "MM-501" in task["steps"][0]["instructions"]
     assert task["steps"][7]["skill"]["id"] == "moonspec-tasks"
     assert task["steps"][9]["skill"]["id"] == "moonspec-implement"
-    assert task["steps"][11]["title"] == "Create pull request"
-    assert task["steps"][12]["title"] == "Move Jira issue to Code Review"
+    assert task["steps"][11]["title"] == "Remediate verification gaps"
+    assert task["steps"][11]["skill"]["id"] == "moonspec-implement"
+    assert task["steps"][12]["title"] == "Verify remediation"
+    assert task["steps"][12]["skill"]["id"] == "moonspec-verify"
+    assert task["steps"][13]["title"] == "Create pull request"
+    assert task["steps"][14]["title"] == "Move Jira issue to Code Review"
     assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
-    assert len(task["appliedStepTemplates"][0]["stepIds"]) == 13
+    assert len(task["appliedStepTemplates"][0]["stepIds"]) == 15
     assert task["authoredPresets"][0]["presetSlug"] == "jira-orchestrate"
     assert task["authoredPresets"][0]["presetVersion"] == "1.0.0"
     assert "authoredPresets" not in task["appliedStepTemplates"][0]
