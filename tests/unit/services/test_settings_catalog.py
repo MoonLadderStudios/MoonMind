@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -55,7 +57,7 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
     assert default_runtime.category == "Workflow"
     assert default_runtime.scopes == ["workspace"]
     assert default_runtime.constraints is None
-    assert default_runtime.source == "config_or_default"
+    assert default_runtime.source == "config_file"
     assert default_runtime.apply_mode == "next_task"
     assert default_runtime.activation_state == "active"
     assert default_runtime.active is True
@@ -351,7 +353,7 @@ async def _workspace_override_persists_and_reports_version(settings_session):
     inherited = await service.effective_value_async(
         "workflow.default_publish_mode", scope="workspace"
     )
-    assert inherited.source == "config_or_default"
+    assert inherited.source == "config_file"
     assert inherited.value_version == 1
 
     response = await service.apply_overrides(
@@ -432,7 +434,7 @@ async def test_rename_migration_preserves_old_workspace_override(settings_sessio
         )
 
     assert effective.value == "preserved-runtime"
-    assert effective.source == "migrated_workspace_override"
+    assert effective.source == "workspace_override"
     assert effective.value_version == 3
     assert [diagnostic.code for diagnostic in effective.diagnostics] == [
         "setting_renamed_override"
@@ -706,9 +708,9 @@ async def test_schema_version_mismatch_requires_explicit_type_migration(
         )
 
     assert effective.value is None
-    assert effective.source == "type_migration_required"
+    assert effective.source == "workspace_override"
     assert effective.value_version == 4
-    assert effective.diagnostics[0].code == "setting_type_migration_required"
+    assert effective.diagnostics[0].code == "post_migration_invalid"
     assert effective.diagnostics[0].details == {
         "key": "test.threshold",
         "state": "type_changed",
@@ -780,6 +782,35 @@ async def test_provider_profile_reference_reports_missing_and_disabled_diagnosti
         disabled_value = disabled.values["workflow.default_provider_profile_ref"]
         assert disabled_value.diagnostics[0].code == "provider_profile_disabled"
         assert disabled_value.diagnostics[0].details["launch_blocker"] is True
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_override_preserves_resettable_source(
+    settings_session_maker,
+) -> None:
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+
+        response = await service.apply_overrides(
+            scope="workspace",
+            changes={"workflow.default_provider_profile_ref": "missing-profile"},
+            expected_versions={"workflow.default_provider_profile_ref": 1},
+        )
+        effective = response.values["workflow.default_provider_profile_ref"]
+        descriptor = next(
+            item
+            for item in (
+                await service.catalog_async(section="user-workspace", scope="workspace")
+            ).categories["Workflow"]
+            if item.key == "workflow.default_provider_profile_ref"
+        )
+
+    assert effective.value == "missing-profile"
+    assert effective.source == "workspace_override"
+    assert effective.diagnostics[0].code == "provider_profile_not_found"
+    assert descriptor.effective_value == "missing-profile"
+    assert descriptor.source == "workspace_override"
+    assert descriptor.diagnostics[0].code == "provider_profile_not_found"
 
 
 @pytest.mark.asyncio
@@ -922,7 +953,7 @@ async def _user_override_wins_and_null_override_is_intentional(settings_session)
     )
     assert intentional_null.value is None
     assert intentional_null.source == "user_override"
-    assert intentional_null.diagnostics == []
+    assert intentional_null.diagnostics[0].code == "intentional_null_override"
 
 
 @pytest.mark.asyncio
@@ -1135,11 +1166,11 @@ async def test_reset_edge_cases_preserve_sparse_scope_boundaries(
                 "workflow.default_publish_mode", scope="user"
             )
 
-    assert workspace_reset.source in {"config_or_default", "environment", "default"}
+    assert workspace_reset.source in {"config_file", "environment", "default"}
     assert user_after_workspace_reset.value == "env://USER_TOKEN"
     assert user_after_workspace_reset.source == "user_override"
-    assert user_reset.source in {"config_or_default", "environment", "default"}
-    assert absent_reset.source in {"config_or_default", "environment", "default"}
+    assert user_reset.source in {"config_file", "environment", "default"}
+    assert absent_reset.source in {"config_file", "environment", "default"}
 
 
 @pytest.mark.asyncio
@@ -1210,7 +1241,7 @@ async def _reset_deletes_only_override_and_preserves_secret_and_audit(settings_s
         "workflow.default_publish_mode", scope="workspace", reason="inherit again"
     )
 
-    assert reset.source == "config_or_default"
+    assert reset.source == "config_file"
     assert reset.value != "branch"
     secret_count = len((await settings_session.execute(select(ManagedSecret))).scalars().all())
     audit_count = await service.audit_event_count()
@@ -1498,7 +1529,7 @@ async def test_settings_diagnostics_include_source_restart_and_recent_change(
         diagnostics = await service.diagnostics(scope="workspace")
 
     github = diagnostics.values["integrations.github.token_ref"]
-    assert github.source == "workspace_override"
+    assert github.source == "secret_ref"
     assert github.recent_change is not None
     assert github.recent_change.reason == "wire github token"
     assert github.apply_mode == "next_launch"
@@ -1561,6 +1592,257 @@ def test_invalid_secret_ref_diagnostic_does_not_fallback_to_sensitive_source(mon
 
     assert effective.diagnostics[0].code == "unresolved_secret_ref"
     assert "ghp_should_not_be_used" not in effective.model_dump_json()
+
+
+# ---------------------------------------------------------------------------
+# MM-655: effective value resolver source, lock, metadata, diagnostics
+# ---------------------------------------------------------------------------
+
+
+def test_mm655_effective_value_metadata_and_canonical_source_vocabulary():
+    configured_entry = SettingRegistryEntry(
+        key="test.configured",
+        title="Configured",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        default_value="built-in",
+        settings_path=("settings", "configured"),
+        apply_mode="worker_reload",
+        requires_reload=True,
+        applies_to=("worker", "task_creation"),
+        order=1,
+    )
+    default_entry = SettingRegistryEntry(
+        key="test.default_only",
+        title="Default Only",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        default_value="catalog-default",
+        order=2,
+    )
+    service = SettingsCatalogService(
+        env={},
+        settings=SimpleNamespace(settings=SimpleNamespace(configured="from-config")),
+        registry=(configured_entry, default_entry),
+    )
+
+    configured = service.effective_value("test.configured", scope="workspace")
+    default_only = service.effective_value("test.default_only", scope="workspace")
+
+    assert configured.value == "from-config"
+    assert configured.source == "config_file"
+    assert configured.default_value == "built-in"
+    assert configured.inheritance_state == "inherited"
+    assert configured.requires_reload is True
+    assert configured.applies_to == ["worker", "task_creation"]
+    assert default_only.value == "catalog-default"
+    assert default_only.source == "default"
+    assert default_only.default_value == "catalog-default"
+    assert default_only.inheritance_state == "inherited"
+
+
+@pytest.mark.asyncio
+async def test_mm655_operator_lock_wins_and_sets_read_only_reason(settings_session_maker):
+    locked_entry = SettingRegistryEntry(
+        key="test.locked",
+        title="Locked",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        default_value="built-in",
+        operator_locked_value="operator-value",
+        operator_lock_reason="Controlled by operator policy.",
+        order=1,
+    )
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            registry=(locked_entry,),
+            session=settings_session,
+        )
+        settings_session.add(
+            SettingsOverride(
+                scope="workspace",
+                key="test.locked",
+                value_json="workspace-value",
+            )
+        )
+        await settings_session.commit()
+
+        effective = await service.effective_value_async(
+            "test.locked",
+            scope="workspace",
+        )
+        descriptor = (
+            await service.catalog_async(section="user-workspace", scope="workspace")
+        ).categories["Test"][0]
+
+    assert effective.value == "operator-value"
+    assert effective.source == "operator_lock"
+    assert effective.inheritance_state == "locked"
+    assert effective.read_only is True
+    assert effective.read_only_reason == "Controlled by operator policy."
+    assert descriptor.effective_value == "operator-value"
+    assert descriptor.source == "operator_lock"
+    assert descriptor.read_only is True
+    assert descriptor.read_only_reason == "Controlled by operator policy."
+
+
+@pytest.mark.asyncio
+async def test_mm655_distinct_resolution_diagnostics(settings_session_maker):
+    no_default = SettingRegistryEntry(
+        key="test.no_default",
+        title="No Default",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        order=1,
+    )
+    inherited_null = SettingRegistryEntry(
+        key="test.inherited_null",
+        title="Inherited Null",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        default_value=None,
+        settings_path=("missing", "path"),
+        order=2,
+    )
+    intentional_null = SettingRegistryEntry(
+        key="test.intentional_null",
+        title="Intentional Null",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        default_value="default",
+        order=3,
+    )
+    policy_blocked = SettingRegistryEntry(
+        key="test.policy_blocked",
+        title="Policy Blocked",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        default_value="blocked",
+        policy_blocked_reason="Workspace policy blocks this value.",
+        order=4,
+    )
+    migrated = SettingRegistryEntry(
+        key="test.migrated",
+        title="Migrated",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        default_value="default",
+        order=5,
+    )
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsOverride(
+                scope="workspace",
+                key="test.migrated",
+                value_json={"old": "shape"},
+                schema_version=1,
+            )
+        )
+        await settings_session.commit()
+        service = SettingsCatalogService(
+            env={},
+            registry=(
+                no_default,
+                inherited_null,
+                intentional_null,
+                policy_blocked,
+                migrated,
+            ),
+            migration_rules=(
+                SettingMigrationRule(
+                    old_key="test.migrated",
+                    state="type_changed",
+                    message="Stored value is invalid after migration.",
+                    expected_schema_version=2,
+                ),
+            ),
+            session=settings_session,
+        )
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"test.intentional_null": None},
+            expected_versions={"test.intentional_null": 1},
+        )
+
+        values = {
+            key: await service.effective_value_async(key, scope="workspace")
+            for key in (
+                "test.no_default",
+                "test.inherited_null",
+                "test.intentional_null",
+                "test.policy_blocked",
+                "test.migrated",
+            )
+        }
+
+    assert values["test.no_default"].diagnostics[0].code == "no_default"
+    assert values["test.inherited_null"].diagnostics[0].code == "inherited_null"
+    assert (
+        values["test.intentional_null"].diagnostics[0].code
+        == "intentional_null_override"
+    )
+    assert values["test.policy_blocked"].diagnostics[0].code == "policy_blocked"
+    assert values["test.migrated"].diagnostics[0].code == "post_migration_invalid"
+
+
+@pytest.mark.asyncio
+async def test_mm655_reference_sources_remain_secret_safe(settings_session_maker):
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            ManagedSecret(
+                slug="active-token",
+                ciphertext="active-secret-plaintext",
+                status=SecretStatus.ACTIVE,
+                details={},
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(env={}, session=settings_session)
+        secret_ref = await service.apply_overrides(
+            scope="workspace",
+            changes={"integrations.github.token_ref": "db://active-token"},
+            expected_versions={"integrations.github.token_ref": 1},
+        )
+        provider_ref = await service.apply_overrides(
+            scope="workspace",
+            changes={"workflow.default_provider_profile_ref": "missing-profile"},
+            expected_versions={"workflow.default_provider_profile_ref": 1},
+        )
+
+    github = secret_ref.values["integrations.github.token_ref"]
+    provider = provider_ref.values["workflow.default_provider_profile_ref"]
+    assert github.source == "secret_ref"
+    assert github.diagnostics == []
+    assert "active-secret-plaintext" not in github.model_dump_json()
+    assert provider.source == "workspace_override"
+    assert provider.diagnostics[0].code == "provider_profile_not_found"
+    assert "secret_refs" not in provider.model_dump_json()
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ from api_service.db.models import Base, ManagedSecret, SecretStatus, SettingsOve
 from api_service.main import app
 from api_service.services.settings_catalog import (
     SettingMigrationRule,
+    SettingRegistryEntry,
     SettingsCatalogService,
 )
 
@@ -91,7 +92,7 @@ async def test_settings_catalog_endpoint_returns_grouped_descriptors():
     )
     assert descriptor["type"] == "enum"
     assert descriptor["ui"] == "select"
-    assert descriptor["source"] in {"config_or_default", "environment"}
+    assert descriptor["source"] in {"config_file", "environment"}
     assert descriptor["apply_mode"] == "next_task"
     assert descriptor["activation_state"] == "active"
     assert descriptor["active"] is True
@@ -254,7 +255,7 @@ async def test_effective_setting_endpoint_resolves_renamed_override(
     assert response.status_code == 200
     body = response.json()
     assert body["value"] == "branch"
-    assert body["source"] == "migrated_workspace_override"
+    assert body["source"] == "workspace_override"
     assert body["value_version"] == 5
     assert body["diagnostics"][0]["code"] == "setting_renamed_override"
 
@@ -473,7 +474,7 @@ async def test_delete_reset_preserves_secret_and_audit(settings_api_db):
         )
 
     assert response.status_code == 200
-    assert response.json()["source"] in {"config_or_default", "environment", "default"}
+    assert response.json()["source"] in {"config_file", "environment", "default"}
     async with settings_api_db() as session:
         secrets = (await session.execute(select(ManagedSecret))).scalars().all()
         assert len(secrets) == 1
@@ -575,7 +576,7 @@ async def test_oversized_override_payload_rejected_and_effective_value_unchanged
     assert rejected.json()["error"] == "invalid_setting_value"
     assert "x" * 64 not in rejected.text
     assert effective.status_code == 200
-    assert effective.json()["source"] in {"config_or_default", "environment", "default"}
+    assert effective.json()["source"] in {"config_file", "environment", "default"}
 
 
 @pytest.mark.asyncio
@@ -853,7 +854,7 @@ async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output
 
     assert response.status_code == 200
     value = response.json()["values"]["integrations.github.token_ref"]
-    assert value["source"] == "workspace_override"
+    assert value["source"] == "secret_ref"
     assert value["recent_change"]["reason"] == "select managed secret"
     assert value["apply_mode"] == "next_launch"
     assert value["activation_state"] == "active"
@@ -887,7 +888,7 @@ async def test_settings_diagnostics_endpoint_falls_back_without_db(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["values"]["workflow.default_publish_mode"]["source"] in {
-        "config_or_default",
+        "config_file",
         "environment",
     }
 
@@ -986,3 +987,126 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_mm655_effective_setting_endpoint_exposes_complete_contract(monkeypatch):
+    configured_entry = SettingRegistryEntry(
+        key="test.configured",
+        title="Configured",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        default_value="built-in",
+        settings_path=("settings", "configured"),
+        apply_mode="worker_reload",
+        requires_reload=True,
+        applies_to=("worker", "task_creation"),
+        order=1,
+    )
+
+    def _factory(*args, **kwargs):
+        kwargs["registry"] = (configured_entry,)
+        kwargs["settings"] = SimpleNamespace(
+            settings=SimpleNamespace(configured="from-config")
+        )
+        kwargs["env"] = {}
+        return SettingsCatalogService(*args, **kwargs)
+
+    monkeypatch.setattr(settings_router, "SettingsCatalogService", _factory)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/v1/settings/effective/test.configured",
+            params={"scope": "workspace"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "config_file"
+    assert body["default_value"] == "built-in"
+    assert body["inheritance_state"] == "inherited"
+    assert body["read_only"] is False
+    assert body["read_only_reason"] is None
+    assert body["requires_reload"] is True
+    assert body["applies_to"] == ["worker", "task_creation"]
+
+
+@pytest.mark.asyncio
+async def test_mm655_operator_lock_endpoint_returns_read_only_reason(monkeypatch):
+    locked_entry = SettingRegistryEntry(
+        key="test.locked",
+        title="Locked",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        default_value="built-in",
+        operator_locked_value="operator-value",
+        operator_lock_reason="Controlled by operator policy.",
+        order=1,
+    )
+
+    def _factory(*args, **kwargs):
+        kwargs["registry"] = (locked_entry,)
+        kwargs["env"] = {}
+        return SettingsCatalogService(*args, **kwargs)
+
+    monkeypatch.setattr(settings_router, "SettingsCatalogService", _factory)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/v1/settings/effective/test.locked",
+            params={"scope": "workspace"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["value"] == "operator-value"
+    assert body["source"] == "operator_lock"
+    assert body["inheritance_state"] == "locked"
+    assert body["read_only"] is True
+    assert body["read_only_reason"] == "Controlled by operator policy."
+
+
+@pytest.mark.asyncio
+async def test_mm655_diagnostics_endpoint_reports_distinct_states(monkeypatch):
+    policy_entry = SettingRegistryEntry(
+        key="test.policy_blocked",
+        title="Policy Blocked",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        default_value="blocked",
+        policy_blocked_reason="Workspace policy blocks this value.",
+        order=1,
+    )
+
+    def _factory(*args, **kwargs):
+        kwargs["registry"] = (policy_entry,)
+        kwargs["env"] = {}
+        return SettingsCatalogService(*args, **kwargs)
+
+    monkeypatch.setattr(settings_router, "SettingsCatalogService", _factory)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/v1/settings/diagnostics",
+            params={"scope": "workspace", "key": "test.policy_blocked"},
+        )
+
+    assert response.status_code == 200
+    value = response.json()["values"]["test.policy_blocked"]
+    assert value["diagnostics"][0]["code"] == "policy_blocked"
+    assert value["source"] == "default"
