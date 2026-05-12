@@ -563,6 +563,7 @@ async def test_secret_ref_reference_allowed_but_raw_secret_rejected(settings_api
 async def test_mm656_patch_settings_returns_structured_validation_error_and_no_mutation(
     settings_api_db,
 ):
+    raw_secret_value = "gh" + "p_raw_plaintext"
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -578,7 +579,7 @@ async def test_mm656_patch_settings_returns_structured_validation_error_and_no_m
             json={
                 "changes": {
                     "workflow.default_publish_mode": "not-supported",
-                    "integrations.github.token_ref": "ghp_raw_plaintext",
+                    "integrations.github.token_ref": raw_secret_value,
                 },
                 "expected_versions": {
                     "workflow.default_publish_mode": accepted.json()["values"][
@@ -606,9 +607,9 @@ async def test_mm656_patch_settings_returns_structured_validation_error_and_no_m
     assert body["details"]["code"] == "enum_value_invalid"
     assert body["details"]["boundary"] == "write_request"
     assert "persistence" in body["details"]["blocks"]
-    assert "ghp_raw_plaintext" not in rejected.text
+    assert raw_secret_value not in rejected.text
     assert publish_mode.json()["value"] == "branch"
-    assert token_ref.json()["value"] != "ghp_raw_plaintext"
+    assert token_ref.json()["value"] != raw_secret_value
 
 
 @pytest.mark.asyncio

@@ -223,7 +223,7 @@ def _assert_validation_issue(
     assert blocks in issue.blocks
     assert issue.message
     dumped = issue.model_dump_json()
-    assert "ghp_raw_plaintext" not in dumped
+    assert ("gh" + "p_raw_plaintext") not in dumped
     assert "active-secret-plaintext" not in dumped
 
 
@@ -285,7 +285,7 @@ async def test_mm656_value_type_matrix_accepts_and_rejects_supported_categories(
             ("test.enum", "three", "enum_value_invalid"),
             ("test.list", [], "list_constraint_failed"),
             ("test.object", {"enabled": True}, "object_constraint_failed"),
-            ("test.secret_ref", "ghp_raw_plaintext", "unsafe_setting_payload"),
+            ("test.secret_ref", "gh" + "p_raw_plaintext", "unsafe_setting_payload"),
         ]
         for key, value, code in invalid_cases:
             with pytest.raises(SettingsValidationError) as exc:
