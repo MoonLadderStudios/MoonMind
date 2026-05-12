@@ -270,6 +270,130 @@ def test_task_steps_validate_without_resolving_source_provenance(
     else:
         assert dumped["source"] == source
 
+
+def test_task_steps_preserve_detached_template_source_provenance() -> None:
+    spec = TaskExecutionSpec.model_validate(
+        {
+            "instructions": "Run detached preset step.",
+            "steps": [
+                {
+                    "id": "detached-step",
+                    "type": "skill",
+                    "instructions": "Run the edited preset step.",
+                    "skill": {"id": "auto"},
+                    "source": {
+                        "kind": "detached",
+                        "presetSlug": "quality-flow",
+                        "presetVersion": "1.0.0",
+                        "includePath": ["root-flow@1.0.0", "quality-flow@1.0.0"],
+                        "originalStepId": "lint-target",
+                    },
+                }
+            ],
+        }
+    )
+
+    dumped = spec.model_dump(by_alias=True, exclude_none=True)["steps"][0]
+    assert dumped["source"] == {
+        "kind": "detached",
+        "presetSlug": "quality-flow",
+        "presetVersion": "1.0.0",
+        "includePath": ["root-flow@1.0.0", "quality-flow@1.0.0"],
+        "originalStepId": "lint-target",
+    }
+
+
+def test_canonical_task_payload_preserves_recursive_preset_source_original_step_id() -> None:
+    payload = CanonicalTaskPayload.model_validate(
+        {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "Run compiled preset.",
+                "authoredPresets": [
+                    {
+                        "presetSlug": "parent-flow",
+                        "presetVersion": "1.0.0",
+                        "scope": "global",
+                        "includePath": ["parent-flow@1.0.0"],
+                    },
+                    {
+                        "presetSlug": "child-checks",
+                        "presetVersion": "1.0.0",
+                        "alias": "quality",
+                        "scope": "global",
+                        "includePath": [
+                            "parent-flow@1.0.0",
+                            "quality:child-checks@1.0.0",
+                        ],
+                        "inputMapping": {"target": "preset composition"},
+                    },
+                ],
+                "steps": [
+                    {
+                        "id": "tpl:parent-flow:1.0.0:01:abcdef12",
+                        "type": "skill",
+                        "instructions": "Lint target.",
+                        "skill": {"id": "auto"},
+                        "source": {
+                            "kind": "preset-derived",
+                            "presetSlug": "child-checks",
+                            "presetVersion": "1.0.0",
+                            "includePath": [
+                                "parent-flow@1.0.0",
+                                "quality:child-checks@1.0.0",
+                            ],
+                            "originalStepId": "lint-target",
+                        },
+                    }
+                ],
+            },
+        }
+    )
+
+    task = payload.model_dump(by_alias=True, exclude_none=True)["task"]
+    assert task["steps"][0]["source"]["originalStepId"] == "lint-target"
+    assert task["authoredPresets"][1]["inputMapping"] == {
+        "target": "preset composition"
+    }
+
+
+def test_canonical_task_payload_preserves_detached_template_source_provenance() -> None:
+    payload = CanonicalTaskPayload.model_validate(
+        {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "Run edited preset step.",
+                "steps": [
+                    {
+                        "id": "edited-lint-step",
+                        "type": "skill",
+                        "instructions": "Edited lint instructions.",
+                        "skill": {"id": "auto"},
+                        "source": {
+                            "kind": "detached",
+                            "presetSlug": "quality-flow",
+                            "presetVersion": "1.0.0",
+                            "includePath": [
+                                "root-flow@1.0.0",
+                                "quality-flow@1.0.0",
+                            ],
+                            "originalStepId": "lint-target",
+                        },
+                    }
+                ],
+            },
+        }
+    )
+
+    task = payload.model_dump(by_alias=True, exclude_none=True)["task"]
+    assert task["steps"][0]["source"] == {
+        "kind": "detached",
+        "presetSlug": "quality-flow",
+        "presetVersion": "1.0.0",
+        "includePath": ["root-flow@1.0.0", "quality-flow@1.0.0"],
+        "originalStepId": "lint-target",
+    }
+
 def test_task_authored_presets_accept_recursive_bindings() -> None:
     payload = CanonicalTaskPayload.model_validate(
         {

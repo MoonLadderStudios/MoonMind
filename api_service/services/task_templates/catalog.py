@@ -95,6 +95,7 @@ _STEP_RESERVED_KEYS = frozenset(
         "scope",
         "inputMapping",
         "input_mapping",
+        "originalStepId",
         "instructions",
         "tool",
         "skill",
@@ -321,6 +322,35 @@ def _step_validation_error(
             }
         ],
     )
+
+
+def _include_tree_error(
+    *,
+    message: str,
+    code: str,
+    include_path: list[str],
+    recoverable: bool = True,
+) -> TaskTemplateValidationError:
+    return TaskTemplateValidationError(
+        message,
+        errors=[
+            {
+                "path": "preset.includeTree",
+                "message": message,
+                "code": code,
+                "includePath": list(include_path),
+                "recoverable": recoverable,
+            }
+        ],
+    )
+
+
+def _source_original_step_id(rendered: Mapping[str, Any]) -> str | None:
+    explicit = str(rendered.get("originalStepId") or "").strip()
+    if explicit:
+        return explicit
+    step_id = str(rendered.get("id") or "").strip()
+    return step_id or None
 
 
 def _has_substantive_tool_metadata(value: Any) -> bool:
@@ -1440,6 +1470,9 @@ class TaskTemplateCatalogService:
             step_id = str(raw_step.get("id") or "").strip()
             if step_id:
                 step_payload["id"] = step_id
+            original_step_id = str(raw_step.get("originalStepId") or "").strip()
+            if original_step_id:
+                step_payload["originalStepId"] = original_step_id
             title = str(raw_step.get("title") or "").strip()
             if title:
                 step_payload["title"] = title
@@ -1577,15 +1610,25 @@ class TaskTemplateCatalogService:
                     ),
                 ]
                 if scope is TaskTemplateScopeType.GLOBAL and include_scope is TaskTemplateScopeType.PERSONAL:
-                    raise TaskTemplateValidationError(
+                    message = (
                         "Global presets cannot include personal presets at "
                         f"{_format_include_path(include_path)}."
                     )
+                    raise _include_tree_error(
+                        message=message,
+                        code="preset_include_scope_violation",
+                        include_path=include_path,
+                    )
                 target_key = (include_scope.value, include_slug, include_version)
                 if target_key in visited:
-                    raise TaskTemplateValidationError(
+                    message = (
                         "Preset include cycle detected at "
                         f"{_format_include_path(include_path)}."
+                    )
+                    raise _include_tree_error(
+                        message=message,
+                        code="preset_include_cycle",
+                        include_path=include_path,
                     )
                 try:
                     child_template = await self._get_template_for_scope(
@@ -1593,24 +1636,51 @@ class TaskTemplateCatalogService:
                         scope=include_scope,
                         scope_ref=include_scope_ref,
                     )
+                except TaskTemplateError as exc:
+                    message = (
+                        f"Preset include target unavailable at "
+                        f"{_format_include_path(include_path)}: {exc}"
+                    )
+                    raise _include_tree_error(
+                        message=message,
+                        code="preset_include_missing",
+                        include_path=include_path,
+                    ) from exc
+                try:
                     child_version = self._select_template_version(
                         child_template, include_version
                     )
-                except TaskTemplateError as exc:
-                    raise TaskTemplateValidationError(
-                        f"Preset include target unavailable at "
-                        f"{_format_include_path(include_path)}: {exc}"
+                except TaskTemplateNotFoundError as exc:
+                    message = (
+                        f"Preset include version mismatch at "
+                        f"{_format_include_path(include_path)}: requested version "
+                        f"{include_version!r} is not available."
+                    )
+                    raise _include_tree_error(
+                        message=message,
+                        code="preset_include_version_mismatch",
+                        include_path=include_path,
                     ) from exc
                 if child_version.release_status is TaskTemplateReleaseStatus.INACTIVE:
-                    raise TaskTemplateValidationError(
+                    message = (
                         f"Preset include target is inactive at "
                         f"{_format_include_path(include_path)}."
                     )
+                    raise _include_tree_error(
+                        message=message,
+                        code="preset_include_inactive",
+                        include_path=include_path,
+                    )
                 input_mapping = rendered.get("inputMapping") or {}
                 if not isinstance(input_mapping, dict):
-                    raise TaskTemplateValidationError(
+                    message = (
                         f"Preset include inputMapping must be an object at "
                         f"{_format_include_path(include_path)}."
+                    )
+                    raise _include_tree_error(
+                        message=message,
+                        code="preset_include_input_mapping_invalid",
+                        include_path=include_path,
                     )
                 try:
                     child_schema = _effective_inputs_schema(
@@ -1634,9 +1704,14 @@ class TaskTemplateCatalogService:
                         resolved=child_inputs,
                     )
                 except TaskTemplateValidationError as exc:
-                    raise TaskTemplateValidationError(
+                    message = (
                         f"Preset include input mapping is incompatible at "
                         f"{_format_include_path(include_path)}: {exc}"
+                    )
+                    raise _include_tree_error(
+                        message=message,
+                        code="preset_include_input_mapping_invalid",
+                        include_path=include_path,
                     ) from exc
                 child_variables = {
                     **variables,
@@ -1689,9 +1764,14 @@ class TaskTemplateCatalogService:
             step_type = _normalize_step_type(rendered, index=source_index)
             next_index = len(resolved_steps) + 1
             if enforce_limit and next_index > root_max_step_count:
-                raise TaskTemplateValidationError(
+                message = (
                     f"Template expansion exceeded max_step_count={root_max_step_count} "
                     f"at {_format_include_path(path)}."
+                )
+                raise _include_tree_error(
+                    message=message,
+                    code="preset_include_limit_exceeded",
+                    include_path=path,
                 )
             step_payload: dict[str, Any] = {
                 "id": _build_step_id(
@@ -1719,6 +1799,12 @@ class TaskTemplateCatalogService:
                     "includePath": list(path),
                 },
             }
+            original_step_id = _source_original_step_id(rendered)
+            if original_step_id:
+                step_payload["presetProvenance"]["source"][
+                    "originalStepId"
+                ] = original_step_id
+                step_payload["source"]["originalStepId"] = original_step_id
             if alias:
                 step_payload["presetProvenance"]["alias"] = alias
             title = str(rendered.get("title") or "").strip()

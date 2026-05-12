@@ -3125,6 +3125,7 @@ def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
                                 "presetSlug": "root-preset",
                                 "presetVersion": "1.0.0",
                                 "includePath": ["root-preset@1.0.0"],
+                                "originalStepId": "prepare-task",
                             },
                         },
                         {
@@ -3139,6 +3140,7 @@ def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
                                     "root-preset@1.0.0",
                                     "checks:child-preset@1.0.0",
                                 ],
+                                "originalStepId": "run-checks",
                             },
                         },
                     ],
@@ -3150,10 +3152,12 @@ def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
     assert response.status_code == 201
     task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
     assert task["steps"][0]["source"]["presetSlug"] == "root-preset"
+    assert task["steps"][0]["source"]["originalStepId"] == "prepare-task"
     assert task["steps"][1]["source"]["includePath"] == [
         "root-preset@1.0.0",
         "checks:child-preset@1.0.0",
     ]
+    assert task["steps"][1]["source"]["originalStepId"] == "run-checks"
     assert [preset["presetSlug"] for preset in task["authoredPresets"]] == [
         "root-preset",
         "child-preset",
@@ -3166,6 +3170,125 @@ def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
     )
     assert task["runtime"] == {"mode": "codex_cli"}
     assert task["publish"] == {"mode": "pr"}
+
+
+def test_create_task_shaped_execution_preserves_manual_and_preset_step_order(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Run mixed task.",
+                    "authoredPresets": [
+                        {
+                            "presetSlug": "parent-flow",
+                            "presetVersion": "1.0.0",
+                            "includePath": ["parent-flow@1.0.0"],
+                        }
+                    ],
+                    "steps": [
+                        {
+                            "id": "manual-before",
+                            "type": "skill",
+                            "instructions": "Manual before.",
+                            "skill": {"id": "auto"},
+                        },
+                        {
+                            "id": "tpl:parent-flow:1.0.0:01:abcdef12",
+                            "type": "skill",
+                            "instructions": "Preset one.",
+                            "skill": {"id": "auto"},
+                            "source": {
+                                "kind": "preset-derived",
+                                "presetSlug": "parent-flow",
+                                "presetVersion": "1.0.0",
+                                "includePath": ["parent-flow@1.0.0"],
+                                "originalStepId": "preset-derived-1",
+                            },
+                        },
+                        {
+                            "id": "tpl:parent-flow:1.0.0:02:abcdef12",
+                            "type": "skill",
+                            "instructions": "Preset two.",
+                            "skill": {"id": "auto"},
+                            "source": {
+                                "kind": "preset-derived",
+                                "presetSlug": "parent-flow",
+                                "presetVersion": "1.0.0",
+                                "includePath": ["parent-flow@1.0.0"],
+                                "originalStepId": "preset-derived-2",
+                            },
+                        },
+                        {
+                            "id": "manual-after",
+                            "type": "skill",
+                            "instructions": "Manual after.",
+                            "skill": {"id": "auto"},
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    assert [step["id"] for step in task["steps"]] == [
+        "manual-before",
+        "tpl:parent-flow:1.0.0:01:abcdef12",
+        "tpl:parent-flow:1.0.0:02:abcdef12",
+        "manual-after",
+    ]
+    assert task["steps"][0].get("source") in (None, {"kind": "manual"})
+    assert task["steps"][3].get("source") in (None, {"kind": "manual"})
+    assert task["steps"][1]["source"]["originalStepId"] == "preset-derived-1"
+    assert task["steps"][2]["source"]["originalStepId"] == "preset-derived-2"
+
+
+def test_create_task_shaped_execution_preserves_detached_edited_step_source(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    detached_source = {
+        "kind": "detached",
+        "presetSlug": "quality-flow",
+        "presetVersion": "1.0.0",
+        "includePath": ["root-flow@1.0.0", "quality-flow@1.0.0"],
+        "originalStepId": "lint-target",
+    }
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Run edited preset step.",
+                    "steps": [
+                        {
+                            "id": "edited-lint-step",
+                            "type": "skill",
+                            "instructions": "Edited lint instructions.",
+                            "skill": {"id": "auto"},
+                            "source": detached_source,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    task = service.create_execution.await_args.kwargs["initial_parameters"]["task"]
+    assert task["steps"][0]["instructions"] == "Edited lint instructions."
+    assert task["steps"][0]["source"] == detached_source
 
 def test_create_task_shaped_execution_does_not_fabricate_manual_preset_metadata(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],

@@ -211,6 +211,7 @@ def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
                                         "parent-flow@1.0.0",
                                         "quality:child-checks@1.0.0",
                                     ],
+                                    "originalStepId": "lint-target",
                                 },
                             }
                         ],
@@ -238,6 +239,8 @@ def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
         "parent-flow@1.0.0",
         "quality:child-checks@1.0.0",
     ]
+    assert task["steps"][0]["source"]["originalStepId"] == "lint-target"
+    assert all(step.get("kind") != "include" for step in task["steps"])
     assert all(step.get("type") != "preset" for step in task["steps"])
 
 

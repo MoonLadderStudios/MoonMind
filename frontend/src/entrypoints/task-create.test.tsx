@@ -13966,6 +13966,27 @@ describe("Task Create MM-578 Preset expansion", () => {
       target: { value: "Edited generated MM-578 step." },
     });
     expect(screen.getByDisplayValue("Edited generated MM-578 step.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const submittedStep = latestCreateTaskSteps()[0];
+    if (!submittedStep) {
+      throw new Error("Expected submitted first step");
+    }
+    expect(submittedStep.instructions).toBe("Edited generated MM-578 step.");
+    expect(submittedStep.source).toMatchObject({
+      kind: "detached",
+      presetId: "mm-578-preset",
+      presetVersion: "1.0.0",
+      includePath: ["root", "fetch"],
+      originalStepId: "fetch-jira-issue",
+    });
   });
 
   it("submits applied preset-generated Tool and Skill steps with executable binding and provenance", async () => {
