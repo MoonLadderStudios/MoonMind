@@ -211,14 +211,22 @@ class EffectiveSettingValue(BaseModel):
     key: str
     scope: SettingScope
     value: Any = None
+    default_value: Any = None
     source: str
     source_explanation: str
+    inheritance_state: str = "inherited"
     apply_mode: SettingApplyMode
     activation_state: SettingActivationState
     active: bool
     pending_value: Any = None
     affected_process_or_worker: str | None = None
     completion_guidance: str | None = None
+    read_only: bool = False
+    read_only_reason: str | None = None
+    requires_reload: bool = False
+    requires_worker_restart: bool = False
+    requires_process_restart: bool = False
+    applies_to: list[str] = Field(default_factory=list)
     value_version: int = 1
     diagnostics: list[SettingDiagnostic] = Field(default_factory=list)
 
@@ -268,8 +276,11 @@ class SettingsRecentChange(BaseModel):
 class SettingsDiagnosticRead(BaseModel):
     key: str
     scope: SettingScope
+    value: Any = None
+    default_value: Any = None
     source: str
     source_explanation: str
+    inheritance_state: str = "inherited"
     apply_mode: SettingApplyMode
     activation_state: SettingActivationState
     active: bool
@@ -282,6 +293,7 @@ class SettingsDiagnosticRead(BaseModel):
     requires_worker_restart: bool = False
     requires_process_restart: bool = False
     applies_to: list[str] = Field(default_factory=list)
+    value_version: int = 1
     diagnostics: list[SettingDiagnostic] = Field(default_factory=list)
     recent_change: SettingsRecentChange | None = None
 
@@ -341,6 +353,9 @@ class SettingRegistryEntry:
     secret_role: str | None = None
     read_only: bool = False
     read_only_reason: str | None = None
+    operator_locked_value: Any = None
+    operator_lock_reason: str | None = None
+    policy_blocked_reason: str | None = None
     apply_mode: SettingApplyMode = "immediate"
     requires_reload: bool = False
     requires_worker_restart: bool = False
@@ -656,7 +671,11 @@ class SettingsCatalogService:
         self._env = env if env is not None else os.environ
         self._migration_rules = migration_rules
         ledger = _CATALOG_KEY_LEDGER if registry is _REGISTRY else None
-        self._settings_registry = SettingsRegistry(registry, migration_rules, stable_key_ledger=ledger)
+        self._settings_registry = SettingsRegistry(
+            registry,
+            migration_rules,
+            stable_key_ledger=ledger,
+        )
         self._catalog_builder = SettingsCatalogBuilder(self._settings_registry)
         self._registry = self._settings_registry.entries
         self._entries_by_key = self._settings_registry.entries_by_key
@@ -763,15 +782,15 @@ class SettingsCatalogService:
         if scope not in entry.scopes:
             raise ValueError(scope)
         value, source = self._resolve_value(entry)
+        diagnostics = self._diagnostics_for_override(entry, value, False)
         activation = self._activation_metadata(entry, value)
         return EffectiveSettingValue(
             key=entry.key,
             scope=scope,
             value=value,
-            source=source,
-            source_explanation=self._source_explanation(entry, source),
+            **self._effective_metadata(entry, value, source, False, diagnostics),
             **activation,
-            diagnostics=self._diagnostics(entry, value),
+            diagnostics=diagnostics,
         )
 
     def ensure_write_allowed(self, key: str, *, scope: SettingScope) -> None:
@@ -787,8 +806,8 @@ class SettingsCatalogService:
             raise KeyError(key)
         if scope not in entry.scopes:
             raise ValueError(scope)
-        if entry.read_only:
-            raise PermissionError(entry.read_only_reason or "Setting is read-only.")
+        if self._read_only(entry):
+            raise PermissionError(self._read_only_reason(entry) or "Setting is read-only.")
 
     def _descriptor(
         self,
@@ -807,6 +826,14 @@ class SettingsCatalogService:
             value, source = self._resolve_value(entry)
             version = 1
             override_present = False
+        diagnostics = self._diagnostics_for_override(entry, value, override_present)
+        metadata = self._effective_metadata(
+            entry,
+            value,
+            source,
+            override_present,
+            diagnostics,
+        )
         return SettingDescriptor(
             key=entry.key,
             title=entry.title,
@@ -819,8 +846,8 @@ class SettingsCatalogService:
             default_value=entry.default_value,
             effective_value=value,
             override_value=None,
-            source=source,
-            source_explanation=self._source_explanation(entry, source),
+            source=metadata["source"],
+            source_explanation=metadata["source_explanation"],
             **self._activation_metadata(entry, value),
             options=[
                 SettingOption(value=value, label=label)
@@ -830,8 +857,8 @@ class SettingsCatalogService:
             constraints=entry.constraints,
             sensitive=entry.sensitive,
             secret_role=entry.secret_role,
-            read_only=entry.read_only,
-            read_only_reason=entry.read_only_reason,
+            read_only=metadata["read_only"],
+            read_only_reason=metadata["read_only_reason"],
             requires_reload=entry.requires_reload,
             requires_worker_restart=entry.requires_worker_restart,
             requires_process_restart=entry.requires_process_restart,
@@ -840,7 +867,7 @@ class SettingsCatalogService:
             order=entry.order,
             audit=entry.audit,
             value_version=version,
-            diagnostics=self._diagnostics_for_override(entry, value, override_present),
+            diagnostics=diagnostics,
         )
 
     async def effective_value_async(
@@ -863,15 +890,15 @@ class SettingsCatalogService:
         await self._prime_managed_secret_statuses([value])
         if entry.key == "workflow.default_provider_profile_ref":
             await self._prime_provider_profile_statuses([value])
+        diagnostics = self._diagnostics_for_override(entry, value, override_present)
         return EffectiveSettingValue(
             key=entry.key,
             scope=scope,
             value=value,
-            source=source,
-            source_explanation=self._source_explanation(entry, source),
+            **self._effective_metadata(entry, value, source, override_present, diagnostics),
             **self._activation_metadata(entry, value),
             value_version=version,
-            diagnostics=self._diagnostics_for_override(entry, value, override_present),
+            diagnostics=diagnostics,
         )
 
     async def effective_values_async(
@@ -903,19 +930,18 @@ class SettingsCatalogService:
             for entry, data in resolved.values()
             if entry.key == "workflow.default_provider_profile_ref"
         )
-        values = {
-            key: EffectiveSettingValue(
+        values = {}
+        for key, (entry, data) in resolved.items():
+            diagnostics = self._diagnostics_for_override(entry, data[0], data[3])
+            values[key] = EffectiveSettingValue(
                 key=entry.key,
                 scope=scope,
                 value=data[0],
-                source=data[1],
-                source_explanation=self._source_explanation(entry, data[1]),
+                **self._effective_metadata(entry, data[0], data[1], data[3], diagnostics),
                 **self._activation_metadata(entry, data[0]),
                 value_version=data[2],
-                diagnostics=self._diagnostics_for_override(entry, data[0], data[3]),
+                diagnostics=diagnostics,
             )
-            for key, (entry, data) in resolved.items()
-        }
         return EffectiveSettingsResponse(scope=scope, values=values)
 
     async def apply_overrides(
@@ -952,8 +978,10 @@ class SettingsCatalogService:
                 raise KeyError(key)
             if scope not in entry.scopes:
                 raise ValueError("invalid_scope")
-            if entry.read_only:
-                raise PermissionError(entry.read_only_reason or "Setting is read-only.")
+            if self._read_only(entry):
+                raise PermissionError(
+                    self._read_only_reason(entry) or "Setting is read-only."
+                )
             self._validate_override_value(entry, value)
             row = current_rows.get((scope, key))
             current_version = row.value_version if row is not None else 1
@@ -1016,25 +1044,23 @@ class SettingsCatalogService:
             for key, data in resolved.items()
             if entries[key].key == "workflow.default_provider_profile_ref"
         )
-        values = {
-            key: EffectiveSettingValue(
-                key=entries[key].key,
+        values = {}
+        for key, data in resolved.items():
+            entry = entries[key]
+            diagnostics = self._diagnostics_for_override(entry, data[0], data[3])
+            values[key] = EffectiveSettingValue(
+                key=entry.key,
                 scope=scope,
                 value=data[0],
-                source=data[1],
-                source_explanation=self._source_explanation(entries[key], data[1]),
+                **self._effective_metadata(entry, data[0], data[1], data[3], diagnostics),
                 **self._activation_metadata(
-                    entries[key],
+                    entry,
                     data[0],
                     pending_activation=True,
                 ),
                 value_version=data[2],
-                diagnostics=self._diagnostics_for_override(
-                    entries[key], data[0], data[3]
-                ),
+                diagnostics=diagnostics,
             )
-            for key, data in resolved.items()
-        }
         return EffectiveSettingsResponse(scope=scope, values=values)
 
     async def reset_override(
@@ -1149,11 +1175,12 @@ class SettingsCatalogService:
         values = {}
         for entry, data in resolved.values():
             diagnostics = list(self._diagnostics_for_override(entry, data[0], data[3]))
-            if entry.read_only:
+            metadata = self._effective_metadata(entry, data[0], data[1], data[3], diagnostics)
+            if metadata["read_only"]:
                 diagnostics.append(
                     SettingDiagnostic(
                         code="read_only_setting",
-                        message=entry.read_only_reason or f"{entry.key} is read-only.",
+                        message=metadata["read_only_reason"] or f"{entry.key} is read-only.",
                         severity="warning",
                     )
                 )
@@ -1176,15 +1203,19 @@ class SettingsCatalogService:
             values[entry.key] = SettingsDiagnosticRead(
                 key=entry.key,
                 scope=scope,
-                source=data[1],
-                source_explanation=self._source_explanation(entry, data[1]),
+                value=None if entry.audit.redact else data[0],
+                default_value=entry.default_value,
+                source=metadata["source"],
+                source_explanation=metadata["source_explanation"],
+                inheritance_state=metadata["inheritance_state"],
                 **self._activation_metadata(entry, data[0]),
-                read_only=entry.read_only,
-                read_only_reason=entry.read_only_reason,
+                read_only=metadata["read_only"],
+                read_only_reason=metadata["read_only_reason"],
                 requires_reload=entry.requires_reload,
                 requires_worker_restart=entry.requires_worker_restart,
                 requires_process_restart=entry.requires_process_restart,
                 applies_to=list(entry.applies_to),
+                value_version=data[2],
                 diagnostics=diagnostics,
                 recent_change=recent_changes.get(entry.key),
             )
@@ -1277,7 +1308,90 @@ class SettingsCatalogService:
             "completion_guidance": guidance_by_mode[entry.apply_mode],
         }
 
+    def _is_operator_locked(self, entry: SettingRegistryEntry) -> bool:
+        return entry.operator_lock_reason is not None
+
+    def _read_only(self, entry: SettingRegistryEntry) -> bool:
+        return entry.read_only or self._is_operator_locked(entry)
+
+    def _read_only_reason(self, entry: SettingRegistryEntry) -> str | None:
+        if self._is_operator_locked(entry):
+            return entry.operator_lock_reason
+        return entry.read_only_reason
+
+    def _canonical_source(
+        self,
+        entry: SettingRegistryEntry,
+        source: str,
+        value: Any,
+    ) -> str:
+        if entry.value_type == "secret_ref" and isinstance(value, str):
+            if value.startswith("db://"):
+                return "secret_ref"
+        if (
+            entry.key == "workflow.default_provider_profile_ref"
+            and isinstance(value, str)
+            and value.strip()
+        ):
+            return "provider_profile"
+        return source
+
+    def _inheritance_state(
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+        source: str,
+        override_present: bool,
+        diagnostics: list[SettingDiagnostic],
+    ) -> str:
+        diagnostic_codes = {diagnostic.code for diagnostic in diagnostics}
+        if source == "operator_lock":
+            return "locked"
+        if "policy_blocked" in diagnostic_codes:
+            return "blocked"
+        if "post_migration_invalid" in diagnostic_codes:
+            return "invalid"
+        if "no_default" in diagnostic_codes:
+            return "missing"
+        if "intentional_null_override" in diagnostic_codes:
+            return "intentionally_null"
+        if override_present:
+            return "overridden"
+        if value is None:
+            return "inherited_null"
+        return "inherited"
+
+    def _effective_metadata(
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+        source: str,
+        override_present: bool,
+        diagnostics: list[SettingDiagnostic],
+    ) -> dict[str, Any]:
+        canonical_source = self._canonical_source(entry, source, value)
+        return {
+            "default_value": entry.default_value,
+            "source": canonical_source,
+            "source_explanation": self._source_explanation(entry, canonical_source),
+            "inheritance_state": self._inheritance_state(
+                entry,
+                value,
+                canonical_source,
+                override_present,
+                diagnostics,
+            ),
+            "read_only": self._read_only(entry),
+            "read_only_reason": self._read_only_reason(entry),
+            "requires_reload": entry.requires_reload,
+            "requires_worker_restart": entry.requires_worker_restart,
+            "requires_process_restart": entry.requires_process_restart,
+            "applies_to": list(entry.applies_to),
+        }
+
     def _resolve_value(self, entry: SettingRegistryEntry) -> tuple[Any, str]:
+        if self._is_operator_locked(entry):
+            return entry.operator_locked_value, "operator_lock"
         for alias in entry.env_aliases:
             if alias in self._env:
                 return self._parse_env_value(entry, self._env[alias]), "environment"
@@ -1286,9 +1400,11 @@ class SettingsCatalogService:
             try:
                 for part in entry.settings_path:
                     current = getattr(current, part)
-                return current, "config_or_default"
+                return current, "config_file"
             except AttributeError:
                 return None, "missing"
+        if entry.default_value is None and not entry.env_aliases:
+            return None, "no_default"
         return entry.default_value, "default"
 
     async def _resolve_value_async(
@@ -1343,15 +1459,15 @@ class SettingsCatalogService:
             scope=scope,
             overrides=overrides,
         )
+        diagnostics = self._diagnostics_for_override(entry, value, override_present)
         return EffectiveSettingValue(
             key=entry.key,
             scope=scope,
             value=value,
-            source=source,
-            source_explanation=self._source_explanation(entry, source),
+            **self._effective_metadata(entry, value, source, override_present, diagnostics),
             **self._activation_metadata(entry, value),
             value_version=version,
-            diagnostics=self._diagnostics_for_override(entry, value, override_present),
+            diagnostics=diagnostics,
         )
 
     def _diagnostics_for_override(
@@ -1363,13 +1479,32 @@ class SettingsCatalogService:
         migration_diagnostic = self._migration_diagnostics_by_key.get(entry.key)
         if migration_diagnostic is not None:
             return [migration_diagnostic]
+        diagnostics: list[SettingDiagnostic] = []
+        if entry.policy_blocked_reason is not None:
+            diagnostics.append(
+                SettingDiagnostic(
+                    code="policy_blocked",
+                    message=entry.policy_blocked_reason,
+                    severity="error",
+                )
+            )
+        if override_present and value is None:
+            diagnostics.append(
+                SettingDiagnostic(
+                    code="intentional_null_override",
+                    message=f"{entry.key} is intentionally cleared by override.",
+                    severity="info",
+                )
+            )
+            return diagnostics
         if (
             override_present
             and entry.key != "workflow.default_provider_profile_ref"
             and (entry.value_type != "secret_ref" or value is None)
         ):
-            return []
-        return self._diagnostics(entry, value)
+            return diagnostics
+        diagnostics.extend(self._diagnostics(entry, value))
+        return diagnostics
 
     async def _deprecated_override_diagnostics(
         self,
@@ -1479,6 +1614,8 @@ class SettingsCatalogService:
         overrides: dict[tuple[SettingScope, str], SettingsOverride],
     ) -> tuple[Any, str, int, bool]:
         self._migration_diagnostics_by_key.pop(entry.key, None)
+        if self._is_operator_locked(entry):
+            return entry.operator_locked_value, "operator_lock", 1, False
         if scope == "user":
             user_override = overrides.get(("user", entry.key))
             if user_override is not None:
@@ -1487,7 +1624,7 @@ class SettingsCatalogService:
                     self._migration_diagnostics_by_key[entry.key] = type_migration
                     return (
                         None,
-                        "type_migration_required",
+                        "user_override",
                         user_override.value_version,
                         True,
                     )
@@ -1506,7 +1643,7 @@ class SettingsCatalogService:
                     self._migration_diagnostics_by_key[entry.key] = type_migration
                     return (
                         None,
-                        "type_migration_required",
+                        "workspace_override",
                         workspace_override.value_version,
                         True,
                     )
@@ -1526,7 +1663,7 @@ class SettingsCatalogService:
                     self._migration_diagnostics_by_key[entry.key] = type_migration
                     return (
                         None,
-                        "type_migration_required",
+                        "workspace_override",
                         workspace_override.value_version,
                         True,
                     )
@@ -1539,11 +1676,7 @@ class SettingsCatalogService:
         migrated = self._resolve_migrated_override(entry, scope=scope, overrides=overrides)
         if migrated is not None:
             row_scope, row, rule = migrated
-            source = (
-                "migrated_user_override"
-                if row_scope == "user"
-                else "migrated_workspace_override"
-            )
+            source = "user_override" if row_scope == "user" else "workspace_override"
             self._migration_diagnostics_by_key[entry.key] = SettingDiagnostic(
                 code="setting_renamed_override",
                 message=rule.message,
@@ -1567,7 +1700,7 @@ class SettingsCatalogService:
         if rule is None or row.schema_version == rule.expected_schema_version:
             return None
         return SettingDiagnostic(
-            code="setting_type_migration_required",
+            code="post_migration_invalid",
             message=rule.message,
             severity="error",
             details={
@@ -1703,26 +1836,26 @@ class SettingsCatalogService:
         if source == "environment":
             aliases = ", ".join(entry.env_aliases)
             return f"Resolved from deployment environment using one of: {aliases}."
-        if source == "config_or_default":
-            return (
-                "Resolved from application settings after config and default loading."
-            )
+        if source == "config_file":
+            return "Resolved from application settings configuration."
         if source == "default":
             return "Resolved from the catalog default value."
         if source == "missing":
+            return "No configured value or catalog default could be resolved."
+        if source == "no_default":
             return "No configured value or catalog default could be resolved."
         if source == "workspace_override":
             return "Resolved from a workspace override."
         if source == "user_override":
             return "Resolved from a user override."
-        if source == "migrated_workspace_override":
-            return "Resolved from a workspace override migrated from a renamed setting."
-        if source == "migrated_user_override":
-            return "Resolved from a user override migrated from a renamed setting."
+        if source == "operator_lock":
+            return entry.operator_lock_reason or "Resolved from an operator lock."
+        if source == "secret_ref":
+            return "Resolved as a managed SecretRef reference."
+        if source == "provider_profile":
+            return "Resolved as a provider profile reference."
         if source == "deprecated_override":
             return "Resolved from a deprecated setting override."
-        if source == "type_migration_required":
-            return "Stored override requires an explicit type migration."
         return f"Resolved from {source}."
 
     def _validate_override_value(self, entry: SettingRegistryEntry, value: Any) -> None:
@@ -1842,6 +1975,19 @@ class SettingsCatalogService:
     ) -> list[SettingDiagnostic]:
         diagnostics: list[SettingDiagnostic] = []
         if value is None:
+            if (
+                entry.default_value is None
+                and entry.settings_path is None
+                and not entry.env_aliases
+            ):
+                diagnostics.append(
+                    SettingDiagnostic(
+                        code="no_default",
+                        message=f"{entry.key} has no configured value and no catalog default.",
+                        severity="warning",
+                    )
+                )
+                return diagnostics
             diagnostics.append(
                 SettingDiagnostic(
                     code="inherited_null",

@@ -88,7 +88,7 @@ async def test_settings_override_contract_round_trips_and_resets(
         )
 
     assert inherited.status_code == 200
-    assert inherited.json()["source"] in {"config_or_default", "environment", "default"}
+    assert inherited.json()["source"] in {"config_file", "environment", "default"}
     assert workspace.status_code == 200
     assert workspace.json()["values"]["integrations.github.token_ref"]["source"] == (
         "workspace_override"
@@ -101,10 +101,10 @@ async def test_settings_override_contract_round_trips_and_resets(
     assert user_after_workspace_reset.json()["value"] == "env://USER_TOKEN"
     assert user_after_workspace_reset.json()["source"] == "user_override"
     assert user_reset.status_code == 200
-    assert user_reset.json()["source"] in {"config_or_default", "environment", "default"}
+    assert user_reset.json()["source"] in {"config_file", "environment", "default"}
     assert absent_reset.status_code == 200
     assert absent_reset.json()["source"] in {
-        "config_or_default",
+        "config_file",
         "environment",
         "default",
     }
