@@ -97,7 +97,7 @@ specs/340-effective-value-resolver/
 ├── quickstart.md
 ├── contracts/
 │   └── settings-effective-values-api.md
-└── tasks.md              # created later by /speckit.tasks
+└── tasks.md
 ```
 
 ### Source Code (repository root)
