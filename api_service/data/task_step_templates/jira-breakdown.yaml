@@ -22,7 +22,7 @@ inputs:
     label: Jira Project Key
     type: text
     required: true
-    default: TOOL
+    default: MM
   - name: jira_issue_type
     label: Jira Issue Type
     type: text
