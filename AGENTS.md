@@ -264,6 +264,8 @@ Key diagnostics:
 - N/A — this is a one-shot tool-driven workflow. The only persisted artifact is the run's structured outcome report (artifact-backed run output); no new persistent tables. (334-transition-mm667-in-pr)
 - Python 3.12; TypeScript/React for Mission Control edit/rerun UI + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, existing Temporal artifact service/helpers (339-authoritative-task-snapshot-durability)
 - Existing Temporal execution records, canonical execution memo/search/projection records, Temporal artifact metadata/content store; no new persistent database tables planned (339-authoritative-task-snapshot-durability)
+- Python 3.12 + FastAPI, Pydantic v2, SQLAlchemy async ORM, Alembic, pytest, httpx ASGI test transport (339-sparse-settings-overrides)
+- Existing SQLAlchemy/Alembic database tables `settings_overrides` and `settings_audit_events`; no new persistent table expected (339-sparse-settings-overrides)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

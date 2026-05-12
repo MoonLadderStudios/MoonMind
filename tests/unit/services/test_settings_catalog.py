@@ -1004,6 +1004,145 @@ async def _unsafe_values_rejected_but_secret_refs_are_allowed(settings_session):
 
 
 @pytest.mark.asyncio
+async def test_oversized_override_value_rejected_before_persistence(
+    settings_session_maker,
+):
+    entry_type = SettingsCatalogService(env={})._registry[0].__class__
+    registry = (
+        entry_type(
+            key="test.large_payload",
+            title="Large Payload",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="default",
+            order=1,
+            apply_mode="immediate",
+        ),
+    )
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            registry=registry,
+            session=settings_session,
+        )
+
+        with pytest.raises(ValueError, match="invalid_setting_value"):
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"test.large_payload": "x" * 20000},
+                expected_versions={"test.large_payload": 1},
+            )
+
+        rows = (await settings_session.execute(select(SettingsOverride))).scalars().all()
+        effective = await service.effective_value_async(
+            "test.large_payload", scope="workspace"
+        )
+
+    assert rows == []
+    assert effective.value == "default"
+    assert effective.source == "default"
+
+
+@pytest.mark.asyncio
+async def test_unsafe_payload_classes_rejected_before_persistence(
+    settings_session_maker,
+):
+    entry_type = SettingsCatalogService(env={})._registry[0].__class__
+    registry = (
+        entry_type(
+            key="test.payload_guard",
+            title="Payload Guard",
+            category="Test",
+            section="user-workspace",
+            value_type="string",
+            ui="text",
+            scopes=("workspace",),
+            default_value="safe",
+            order=1,
+            apply_mode="immediate",
+        ),
+    )
+    unsafe_values = [
+        "oauth_session_blob={...}",
+        "decrypted_credential_file=/tmp/credential.json",
+        "generated_config password=plaintext",
+        "large_artifact:" + ("x" * 20000),
+        "workflow_payload={\"steps\": []}",
+        "operational command_history: rm -rf /",
+    ]
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            registry=registry,
+            session=settings_session,
+        )
+
+        for unsafe_value in unsafe_values:
+            with pytest.raises(ValueError, match="invalid_setting_value"):
+                await service.apply_overrides(
+                    scope="workspace",
+                    changes={"test.payload_guard": unsafe_value},
+                    expected_versions={"test.payload_guard": 1},
+                )
+
+        rows = (await settings_session.execute(select(SettingsOverride))).scalars().all()
+        effective = await service.effective_value_async(
+            "test.payload_guard", scope="workspace"
+        )
+
+    assert rows == []
+    assert effective.value == "safe"
+    assert effective.source == "default"
+
+
+@pytest.mark.asyncio
+async def test_reset_edge_cases_preserve_sparse_scope_boundaries(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"integrations.github.token_ref": "env://WORKSPACE_TOKEN"},
+            expected_versions={"integrations.github.token_ref": 1},
+        )
+        await service.apply_overrides(
+            scope="user",
+            changes={"integrations.github.token_ref": "env://USER_TOKEN"},
+            expected_versions={"integrations.github.token_ref": 1},
+        )
+
+        workspace_reset = await service.reset_override(
+            "integrations.github.token_ref", scope="workspace"
+        )
+        user_after_workspace_reset = await service.effective_value_async(
+            "integrations.github.token_ref", scope="user"
+        )
+        user_reset = await service.reset_override(
+            "integrations.github.token_ref", scope="user"
+        )
+        absent_reset = await service.reset_override(
+            "integrations.github.token_ref", scope="user"
+        )
+
+        with pytest.raises(KeyError):
+            await service.reset_override("settings.unknown_key", scope="workspace")
+        with pytest.raises(ValueError, match="invalid_scope"):
+            await service.reset_override(
+                "workflow.default_publish_mode", scope="user"
+            )
+
+    assert workspace_reset.source in {"config_or_default", "environment", "default"}
+    assert user_after_workspace_reset.value == "env://USER_TOKEN"
+    assert user_after_workspace_reset.source == "user_override"
+    assert user_reset.source in {"config_or_default", "environment", "default"}
+    assert absent_reset.source in {"config_or_default", "environment", "default"}
+
+
+@pytest.mark.asyncio
 async def test_pending_activation_redacts_sensitive_non_reference_values(
     settings_session_maker,
 ):

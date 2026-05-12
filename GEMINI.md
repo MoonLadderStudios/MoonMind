@@ -239,6 +239,8 @@ Key diagnostics:
 - Existing task-template catalog tables and execution payload/artifact records only; no new persistent storage planned. (331-model-step-type-payloads)
 - Python 3.12 (existing MoonMind runtime); adds `moonmind/workflows/temporal/transition_mm667.py` for the one-shot MM-667 orchestration. + Existing trusted Jira tool registry (`moonmind/mcp/jira_tool_registry.py`), `JiraToolService` (`moonmind/integrations/jira/tool.py`), `redact_sensitive_text` / `SecretRedactor` redaction helpers. (334-transition-mm667-in-pr)
 - N/A — this is a one-shot tool-driven workflow. The only persisted artifact is the run's structured outcome report (artifact-backed run output); no new persistent tables. (334-transition-mm667-in-pr)
+- Python 3.12 + FastAPI, Pydantic v2, SQLAlchemy async ORM, Alembic, pytest, httpx ASGI test transport (339-sparse-settings-overrides)
+- Existing SQLAlchemy/Alembic database tables `settings_overrides` and `settings_audit_events`; no new persistent table expected (339-sparse-settings-overrides)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

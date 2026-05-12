@@ -465,7 +465,97 @@ def test_list_executions_temporal_query_includes_canonical_state_filters() -> No
     query = temporal_client.count_workflows.await_args.kwargs["query"]
     assert 'WorkflowType="MoonMind.Run"' in query
     assert 'mm_entry="run"' in query
-    assert '(mm_state="completed" OR mm_state="failed")' in query
+    # ``completed`` and ``failed`` are terminal states; the executions list
+    # filter resolves them to the Temporal ``ExecutionStatus`` so closed
+    # workflows whose ``mm_state`` search attribute was never updated still
+    # match the user's selection.
+    assert 'ExecutionStatus="Completed"' in query
+    assert 'ExecutionStatus="Failed"' in query
+    assert 'ExecutionStatus="Terminated"' in query
+    assert 'ExecutionStatus="TimedOut"' in query
+    assert 'mm_state="completed"' not in query
+    assert 'mm_state="failed"' not in query
+
+
+def test_list_executions_temporal_query_anchors_non_terminal_state_to_running_status() -> None:
+    """Selecting ``AWAITING TASK`` must not match closed workflows whose
+    ``mm_state`` search attribute was left at ``waiting_on_dependencies``
+    when they were canceled or failed.
+    """
+
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "scope": "tasks",
+                "stateIn": "waiting_on_dependencies",
+            },
+        )
+
+    assert response.status_code == 200
+    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    assert 'mm_state="waiting_on_dependencies"' in query
+    assert 'ExecutionStatus="Running"' in query
+    assert 'ExecutionStatus="Failed"' not in query
+    assert 'ExecutionStatus="Canceled"' not in query
+
+
+def test_list_executions_temporal_query_mixes_terminal_and_non_terminal_state_filters() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "scope": "tasks",
+                "stateIn": "waiting_on_dependencies,canceled",
+            },
+        )
+
+    assert response.status_code == 200
+    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    assert 'mm_state="waiting_on_dependencies"' in query
+    assert 'ExecutionStatus="Running"' in query
+    assert 'ExecutionStatus="Canceled"' in query
+
 
 def test_list_executions_temporal_query_supports_repeated_canonical_filters() -> None:
     app = FastAPI()
@@ -539,7 +629,8 @@ def test_list_executions_temporal_query_ignores_empty_canonical_state_for_legacy
 
     assert response.status_code == 200
     query = temporal_client.count_workflows.await_args.kwargs["query"]
-    assert 'mm_state="completed"' in query
+    assert 'ExecutionStatus="Completed"' in query
+    assert 'mm_state="completed"' not in query
 
 def test_list_executions_temporal_query_rejects_contradictory_canonical_filters() -> None:
     app = FastAPI()
@@ -649,7 +740,10 @@ def test_list_executions_temporal_query_prefers_canonical_filters_over_legacy_ex
 
     assert response.status_code == 200
     query = temporal_client.count_workflows.await_args.kwargs["query"]
-    assert 'mm_state="completed"' in query
+    assert (
+        '(ExecutionStatus="Completed")' in query
+        or 'ExecutionStatus="Completed"' in query
+    )
     assert 'mm_state="executing"' not in query
     assert 'mm_repo="owner/repo"' in query
     assert 'mm_repo="legacy/repo"' not in query
