@@ -6244,6 +6244,47 @@ def test_missing_attachment_aware_snapshot_descriptor_is_degraded_explicitly() -
     )
 
 
+def test_missing_legacy_attachment_ref_snapshot_descriptor_is_degraded() -> None:
+    record = _build_execution_record(
+        has_task_input_snapshot=False,
+    )
+    record.parameters = {
+        "task": {
+            "instructions": "Legacy attachment-aware task without a snapshot.",
+            "attachmentRefs": [
+                {
+                    "artifactRef": "artifact://input/objective-image",
+                    "filename": "objective.png",
+                    "contentType": "image/png",
+                }
+            ],
+            "steps": [
+                {
+                    "id": "inspect",
+                    "attachmentRefs": [
+                        {
+                            "artifactRef": "artifact://input/step-image",
+                            "filename": "step.png",
+                            "contentType": "image/png",
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+
+    descriptor = _task_input_snapshot_descriptor_from_record(record)
+
+    assert descriptor.available is False
+    assert descriptor.reconstruction_mode == "degraded_read_only"
+    assert descriptor.disabled_reasons["draft"] == (
+        "original_task_input_snapshot_missing"
+    )
+    assert descriptor.disabled_reasons["attachments"] == (
+        "original_task_input_snapshot_missing"
+    )
+
+
 def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
     metrics = Mock()
     for test_client, service in _client_with_service():

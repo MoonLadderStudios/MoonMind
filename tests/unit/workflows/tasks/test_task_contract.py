@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from moonmind.workflows.tasks.task_contract import (
     build_canonical_task_view,
+    build_authoritative_task_input_snapshot,
     build_effective_task_skill_selectors,
     CanonicalTaskPayload,
     ResumeFromFailedStepRef,
@@ -48,6 +49,46 @@ def test_task_skills_accepts_valid_properties() -> None:
     assert spec.skills.include[1].version is None
     assert spec.skills.exclude == ["legacy"]
     assert spec.skills.materialization_mode == "hybrid"
+
+
+def test_authoritative_snapshot_preserves_explicit_empty_dependencies() -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": "Run MM-639 without dependencies.",
+            "dependencies": [],
+            "steps": [
+                {
+                    "id": "step-1",
+                    "instructions": "Use the explicit empty dependency list.",
+                    "dependsOn": [],
+                }
+            ],
+        },
+        dependency_declarations=["MM-638"],
+    )
+
+    assert snapshot["dependencyDeclarations"] == []
+    assert snapshot["steps"][0]["dependencies"] == []
+
+
+def test_authoritative_snapshot_detects_jira_key_without_serializing_metadata() -> None:
+    class Unserializable:
+        pass
+
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": "Implement MM-639.",
+            "metadata": {"opaque": Unserializable()},
+            "steps": [
+                {
+                    "id": "step-1",
+                    "instructions": "Preserve authored fields.",
+                }
+            ],
+        }
+    )
+
+    assert snapshot["traceability"]["jiraIssueKey"] == "MM-639"
 
 def test_task_skills_rejects_invalid_values() -> None:
     """T001: Assert structure validation handles edge cases for skills."""

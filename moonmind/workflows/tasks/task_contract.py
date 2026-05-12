@@ -2047,13 +2047,49 @@ def _task_steps(task_payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _safe_mapping(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _safe_list(value: object) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _first_present_snapshot_list(
+    source: Mapping[str, Any],
+    *keys: str,
+    fallback: object = None,
+) -> list[Any]:
+    for key in keys:
+        if key in source:
+            return _snapshot_list(source.get(key))
+    return _snapshot_list(fallback)
+
+
 def _detect_jira_issue_key(task_payload: Mapping[str, Any]) -> str | None:
-    try:
-        serialized = json.dumps(_snapshot_safe(task_payload), sort_keys=True)
-    except TypeError:
-        serialized = str(task_payload)
-    match = re.search(r"\b[A-Z][A-Z0-9]+-\d+\b", serialized)
-    return match.group(0) if match else None
+    pattern = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
+    stack: list[object] = [
+        task_payload.get("title"),
+        task_payload.get("instructions"),
+        task_payload.get("description"),
+        task_payload.get("objective"),
+        task_payload.get("steps"),
+    ]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            match = pattern.search(value)
+            if match:
+                return match.group(0)
+            continue
+        if isinstance(value, Mapping):
+            stack.extend(value.values())
+            continue
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            stack.extend(value)
+    return None
 
 
 def _step_identifier(step: Mapping[str, Any], ordinal: int) -> str:
@@ -2068,7 +2104,7 @@ def _include_tree_summary(
     task_payload: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     summary: list[dict[str, Any]] = []
-    for template in _snapshot_list(task_payload.get("appliedStepTemplates")):
+    for template in _safe_list(task_payload.get("appliedStepTemplates")):
         if not isinstance(template, Mapping):
             continue
         parent_slug = _clean_optional_str(
@@ -2080,8 +2116,8 @@ def _include_tree_summary(
         composition = template.get("composition")
         candidates: list[Any] = []
         if isinstance(composition, Mapping):
-            candidates.extend(_snapshot_list(composition.get("includes")))
-        candidates.extend(_snapshot_list(template.get("includes")))
+            candidates.extend(_safe_list(composition.get("includes")))
+        candidates.extend(_safe_list(template.get("includes")))
         for include in candidates:
             if not isinstance(include, Mapping):
                 continue
@@ -2112,8 +2148,10 @@ def build_authoritative_task_input_snapshot(
     """Build explicit authored fields for durable task input reconstruction."""
 
     task = _snapshot_mapping(task_payload)
-    git = _snapshot_mapping(task.get("git"))
-    steps = _task_steps(task)
+    git = _safe_mapping(task.get("git"))
+    steps = [
+        step for step in _safe_list(task.get("steps")) if isinstance(step, Mapping)
+    ]
     repository_value = (
         _clean_optional_str(git.get("repository"))
         or _clean_optional_str(repository)
@@ -2137,13 +2175,15 @@ def build_authoritative_task_input_snapshot(
                 "id": step_id,
                 "title": _clean_optional_str(step.get("title")),
                 "instructions": _clean_optional_str(step.get("instructions")) or "",
-                "inputAttachments": _snapshot_list(step.get("inputAttachments")),
-                "dependencies": _snapshot_list(
-                    step.get("dependsOn") or step.get("dependencies")
+                "inputAttachments": _safe_list(step.get("inputAttachments")),
+                "dependencies": _first_present_snapshot_list(
+                    step,
+                    "dependsOn",
+                    "dependencies",
                 ),
                 "templateStepId": _clean_optional_str(step.get("templateStepId")),
                 "stepType": _clean_optional_str(step.get("type")),
-                "presetProvenance": _snapshot_mapping(step.get("presetProvenance")),
+                "presetProvenance": _safe_mapping(step.get("presetProvenance")),
             }
         )
         if isinstance(step.get("presetProvenance"), Mapping):
@@ -2151,9 +2191,7 @@ def build_authoritative_task_input_snapshot(
                 {
                     "stepId": step_id,
                     "ordinal": ordinal,
-                    "presetProvenance": _snapshot_mapping(
-                        step.get("presetProvenance")
-                    ),
+                    "presetProvenance": _safe_mapping(step.get("presetProvenance")),
                 }
             )
         detached = bool(
@@ -2172,29 +2210,28 @@ def build_authoritative_task_input_snapshot(
         },
         "objective": {
             "instructions": _clean_optional_str(task.get("instructions")) or "",
-            "inputAttachments": _snapshot_list(task.get("inputAttachments")),
+            "inputAttachments": _safe_list(task.get("inputAttachments")),
         },
         "steps": authored_steps,
-        "runtime": _snapshot_mapping(task.get("runtime"))
+        "runtime": _safe_mapping(task.get("runtime"))
         or (
             {"mode": _clean_optional_str(target_runtime)}
             if _clean_optional_str(target_runtime)
             else {}
         ),
-        "publish": _snapshot_mapping(task.get("publish")),
+        "publish": _safe_mapping(task.get("publish")),
         "repository": repository_value,
         "branch": branch_value,
         "singleAuthoredBranch": branch_value,
         "requiredCapabilities": _snapshot_list(required_capabilities),
-        "dependencyDeclarations": _snapshot_list(
-            task.get("dependencies")
-            or task.get("dependsOn")
-            or dependency_declarations
+        "dependencyDeclarations": _first_present_snapshot_list(
+            task,
+            "dependencies",
+            "dependsOn",
+            fallback=dependency_declarations,
         ),
-        "presetApplicationMetadata": _snapshot_list(
-            task.get("appliedStepTemplates")
-        ),
-        "pinnedPresetBindings": _snapshot_list(task.get("authoredPresets")),
+        "presetApplicationMetadata": _safe_list(task.get("appliedStepTemplates")),
+        "pinnedPresetBindings": _safe_list(task.get("authoredPresets")),
         "includeTreeSummary": _include_tree_summary(task),
         "perStepProvenance": provenance,
         "detachmentState": detachment,

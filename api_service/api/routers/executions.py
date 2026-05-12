@@ -4171,10 +4171,14 @@ def _task_input_snapshot_descriptor_from_record(
     parameters = getattr(record, "parameters", None)
     task = parameters.get("task") if isinstance(parameters, Mapping) else None
     task_payload = task if isinstance(task, Mapping) else {}
-    attachment_aware = bool(task_payload.get("inputAttachments"))
+    attachment_aware = bool(
+        task_payload.get("inputAttachments") or task_payload.get("attachmentRefs")
+    )
     if not attachment_aware:
         for step in task_payload.get("steps") or []:
-            if isinstance(step, Mapping) and step.get("inputAttachments"):
+            if isinstance(step, Mapping) and (
+                step.get("inputAttachments") or step.get("attachmentRefs")
+            ):
                 attachment_aware = True
                 break
     disabled_reasons = {
