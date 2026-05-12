@@ -12665,7 +12665,7 @@ describe("Task Create MM-641 authoring validation", () => {
     vi.mocked(navigateTo).mockReset();
     fetchSpy = vi
       .spyOn(window, "fetch")
-      .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      .mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
         const url = String(input);
         if (url.startsWith("/api/tasks/skills")) {
           return Promise.resolve({
