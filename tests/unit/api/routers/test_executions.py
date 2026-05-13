@@ -7272,6 +7272,52 @@ def test_describe_execution_surfaces_failed_step_execution_resume_phase(
     assert recovery["failedResumePhase"] == "failed_step_execution"
 
 
+def test_describe_execution_prefers_diagnostics_failed_phase_over_disabled_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.parameters = {
+        "task": {"instructions": "Resume failed while executing step."},
+        "targetDiagnostics": {
+            "recovery": {
+                "resumed": True,
+                "sourceWorkflowId": "mm:source",
+                "sourceRunId": "run-source",
+                "failedResumePhase": "failed_step_execution",
+            }
+        },
+    }
+    record.memo = {
+        **record.memo,
+        "resume_failed_step_id": "inspect",
+        "resume_completed_step_refs": ["artifact://completed/prepare"],
+        "resume_workspace_checkpoint_ref": "artifact://workspace/checkpoint",
+        "resume_plan_digest": "sha256:plan",
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "temporal_task_editing_enabled", True
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resume"]["disabledReason"] == "resume_checkpoint_missing"
+    assert (
+        body["targetDiagnostics"]["recovery"]["failedResumePhase"]
+        == "failed_step_execution"
+    )
+
+
 def test_describe_execution_omits_recovery_for_routine_resume_action_gating(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

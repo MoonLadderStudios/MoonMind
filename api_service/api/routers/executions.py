@@ -2683,11 +2683,12 @@ def _build_target_diagnostics(
     source_run_id = _mapping_str_value(
         resume_source, "sourceRunId", "source_run_id"
     ) or _mapping_str_value(diagnostics_recovery, "sourceRunId", "source_run_id")
-    failed_resume_phase = _failed_resume_phase(
+    failed_resume_phase = _normalize_failed_resume_phase(
+        _mapping_str_value(
+            diagnostics_recovery, "failedResumePhase", "failed_resume_phase"
+        )
+    ) or _failed_resume_phase(
         resume_summary.disabled_reason if resume_summary else None
-    ) or _normalize_failed_resume_phase(
-        diagnostics_recovery.get("failedResumePhase")
-        or diagnostics_recovery.get("failed_resume_phase")
     )
     checkpoint_ref = (
         resume_summary.checkpoint_ref if resume_summary else None
