@@ -3,7 +3,7 @@
 **Input**: Design documents from `/work/agent_jobs/mm:65075e25-154f-4b9d-ada1-8cf187f002c9/repo/specs/350-operator-observability-diagnostics/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/execution-target-diagnostics-contract.md, quickstart.md
 
-**Tests**: Unit tests and integration tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement production changes only where verification exposes a gap.
+**Tests**: Unit tests and integration tests are REQUIRED. Write tests first; confirm red-first failures for partial behavior and record verification-first pass/fail outcomes for implemented_unverified behavior before applying production changes.
 
 **Organization**: One story only: Operator Observability Diagnostics.
 
@@ -68,23 +68,23 @@
 ### Unit Tests (write first)
 
 - [ ] T008 [P] Add failing backend unit test for empty objective/step target distinction in tests/unit/api/routers/test_executions.py covering FR-002, SC-001, DESIGN-REQ-030, and edge cases for targets without attachments
-- [ ] T009 [P] Add failing backend unit test for generated context refs in tests/unit/api/routers/test_executions.py covering FR-004, FR-010, SC-003, and DESIGN-REQ-030
-- [ ] T010 [P] Add failing backend unit test for objective-vs-step compatibility non-drift with alias-shaped attachment input in tests/unit/api/routers/test_executions.py covering FR-011, FR-012, DESIGN-REQ-012, and acceptance scenario 7
+- [ ] T009 [P] Add verification-first backend unit test for generated context refs in tests/unit/api/routers/test_executions.py covering FR-004, FR-010, SC-003, and DESIGN-REQ-030
+- [ ] T010 [P] Add verification-first backend unit test for objective-vs-step compatibility non-drift with alias-shaped attachment input in tests/unit/api/routers/test_executions.py covering FR-011, FR-012, DESIGN-REQ-012, and acceptance scenario 7
 - [ ] T011 [P] Add failing backend unit test for failed Resume phase `failed_step_execution` in tests/unit/api/routers/test_executions.py covering FR-013, SC-005, DESIGN-REQ-031, and acceptance scenario 6
 - [ ] T012 [P] Add failing frontend unit test for empty target and generated context evidence rendering in frontend/src/entrypoints/task-detail.test.tsx covering FR-002, FR-004, FR-010, SC-003, and acceptance scenarios 2-4
 - [ ] T013 [P] Add failing frontend unit test for failed Resume phase display and preserved-step provenance in frontend/src/entrypoints/task-detail.test.tsx covering FR-008, FR-009, FR-013, SC-004, SC-005, and acceptance scenarios 5-6
 
 ### Integration Tests (write first)
 
-- [ ] T014 [P] Add failing integration schema-boundary test for alias-shaped objective and step target payloads in tests/integration/schemas/test_execution_target_diagnostics_boundary.py covering FR-011, FR-012, DESIGN-REQ-012, and acceptance scenario 7
+- [ ] T014 [P] Add verification-first integration schema-boundary test for alias-shaped objective and step target payloads in tests/integration/schemas/test_execution_target_diagnostics_boundary.py covering FR-011, FR-012, DESIGN-REQ-012, and acceptance scenario 7
 - [ ] T015 [P] Add failing integration schema-boundary test for `failed_step_execution` recovery phase and preserved-step provenance in tests/integration/schemas/test_execution_target_diagnostics_boundary.py covering FR-008, FR-009, FR-013, SC-004, SC-005, and DESIGN-REQ-031
-- [ ] T016 [P] Add failing integration schema-boundary test for generated context refs and bounded attachment failure phases in tests/integration/schemas/test_execution_target_diagnostics_boundary.py covering FR-003, FR-004, FR-005, FR-006, SC-002, SC-003, and DESIGN-REQ-030
+- [ ] T016 [P] Add verification-first integration schema-boundary test for generated context refs and bounded attachment failure phases in tests/integration/schemas/test_execution_target_diagnostics_boundary.py covering FR-003, FR-004, FR-005, FR-006, SC-002, SC-003, and DESIGN-REQ-030
 
 ### Red-First Confirmation
 
-- [ ] T017 Run `pytest tests/unit/api/routers/test_executions.py -q --tb=short` for tests/unit/api/routers/test_executions.py and confirm T008-T011 fail for the expected missing or partial behavior before production changes
+- [ ] T017 Run `pytest tests/unit/api/routers/test_executions.py -q --tb=short` for tests/unit/api/routers/test_executions.py and confirm T008 and T011 fail for expected partial behavior while T009-T010 either pass as verification or fail before conditional fallback implementation
 - [ ] T018 Run `npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx` for frontend/src/entrypoints/task-detail.test.tsx and confirm T012-T013 fail for the expected missing or partial behavior before production changes
-- [ ] T019 Run `pytest tests/integration/schemas/test_execution_target_diagnostics_boundary.py -q --tb=short` for tests/integration/schemas/test_execution_target_diagnostics_boundary.py and confirm T014-T016 fail for the expected missing or partial behavior before production changes
+- [ ] T019 Run `pytest tests/integration/schemas/test_execution_target_diagnostics_boundary.py -q --tb=short` for tests/integration/schemas/test_execution_target_diagnostics_boundary.py and confirm T015 fails for expected partial behavior while T014 and T016 either pass as verification or fail before conditional fallback implementation
 
 ### Conditional Fallback Implementation
 
@@ -132,7 +132,7 @@
 ### Within The Story
 
 - T008-T016 must be written before T017-T019.
-- T017-T019 red-first confirmation must complete before T020-T026 production changes.
+- T017-T019 red-first and verification-first confirmation must complete before T020-T026 production changes.
 - T020-T026 are conditional fallback tasks; skip any task whose verification tests already pass without production changes.
 - T027-T030 validate the story after conditional implementation.
 - T033-T036 run only after focused story validation passes.
@@ -159,7 +159,7 @@ Task: "T014 Add integration alias contract test in tests/integration/schemas/tes
 
 1. Complete setup and foundational inspection tasks.
 2. Add backend, frontend, and integration tests for partial and implemented_unverified rows.
-3. Run focused tests and confirm red-first failures for missing behavior.
+3. Run focused tests and confirm red-first failures for partial behavior while recording verification-first pass/fail outcomes.
 4. Apply conditional fallback implementation only where verification fails.
 5. Re-run focused backend, frontend, and integration tests until the one story passes.
 6. Run full required unit and hermetic integration suites.
@@ -175,7 +175,7 @@ Task: "T014 Add integration alias contract test in tests/integration/schemas/tes
 
 - This task list covers exactly one story.
 - Unit and integration tests are mandatory and appear before production implementation tasks.
-- Red-first confirmation tasks T017-T019 appear before conditional production changes.
+- Red-first and verification-first confirmation tasks T017-T019 appear before conditional production changes.
 - Final `/moonspec-verify` work is T036.
 - Do not create new persistent storage for this story.
 - Preserve `MM-651` and the original Jira preset brief in downstream verification evidence, commit text, and pull request metadata.
