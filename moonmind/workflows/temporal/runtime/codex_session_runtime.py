@@ -40,6 +40,7 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.codex_session_timeouts import (
     DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
+from moonmind.workflows.provider_failures import classify_provider_failure
 
 _STATE_FILENAME = ".moonmind-codex-session-state.json"
 _READY_LOOP_SECONDS = 3600.0
@@ -52,7 +53,22 @@ _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
 _ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
 _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS = 5.0
 _LOG_RECOVERY_MAX_ROWS = 200
+_LOG_RECOVERY_PROVIDER_MAX_ROWS = 1000
 _LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS = 1.0
+_LOG_RECOVERY_PROVIDER_MARKERS: tuple[str, ...] = (
+    "429",
+    "rate limit",
+    "too many requests",
+    "usage limit",
+    "usage_limit_reached",
+    "hit your limit",
+    "send a request to your admin",
+    "high demand",
+    "overloaded",
+    "temporarily unavailable",
+    "service unavailable",
+    "gateway timeout",
+)
 
 @dataclass(frozen=True)
 class _RolloutTurnScan:
@@ -1128,7 +1144,55 @@ class CodexManagedSessionRuntime:
         recovered = "".join(characters).strip()
         return recovered or None
 
-    def _extract_turn_error_from_logs(self, vendor_turn_id: str) -> str | None:
+    @classmethod
+    def _extract_log_error_text(cls, text: str) -> str | None:
+        marker = "Turn error:"
+        marker_index = text.find(marker)
+        if marker_index >= 0:
+            recovered = text[marker_index + len(marker) :].strip()
+            if recovered:
+                return recovered
+        recovered = cls._extract_quoted_log_field(text, "error.message")
+        if recovered:
+            return recovered
+        received_marker = "Received message "
+        received_index = text.find(received_marker)
+        if received_index >= 0:
+            raw_json = text[received_index + len(received_marker) :].strip()
+            try:
+                payload = json.loads(raw_json)
+            except json.JSONDecodeError:
+                payload = None
+            if isinstance(payload, Mapping):
+                error_payload = payload.get("error")
+                recovered = cls._error_text_from_value(error_payload)
+                if recovered:
+                    status_code = payload.get("status_code")
+                    status_suffix = (
+                        f" (status {status_code})" if status_code is not None else ""
+                    )
+                    return recovered + status_suffix
+        return None
+
+    @staticmethod
+    def _sqlite_timestamp_cutoff(turn_started_at: float | None) -> int | None:
+        if turn_started_at is None:
+            return None
+        try:
+            return max(
+                0,
+                int(float(turn_started_at) - _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS),
+            )
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def _extract_turn_error_from_logs(
+        self,
+        vendor_turn_id: str,
+        *,
+        turn_started_at: float | None = None,
+    ) -> str | None:
+        timestamp_cutoff = self._sqlite_timestamp_cutoff(turn_started_at)
         for log_path in sorted(
             self._codex_home_path.glob("logs_*.sqlite"),
             key=self._log_shard_sort_key,
@@ -1164,18 +1228,40 @@ class CodexManagedSessionRuntime:
                         ),
                         (f"%{vendor_turn_id}%", _LOG_RECOVERY_MAX_ROWS),
                     ).fetchall()
+                    provider_rows: list[tuple[Any, ...]] = []
+                    if timestamp_cutoff is not None and "ts" in available_columns:
+                        quoted_ts_column = self._quoted_sqlite_identifier("ts")
+                        marker_clauses = " OR ".join(
+                            f"{quoted_text_column} LIKE ?"
+                            for _marker in _LOG_RECOVERY_PROVIDER_MARKERS
+                        )
+                        provider_rows = connection.execute(
+                            (
+                                f"SELECT {quoted_text_column} FROM \"logs\" "
+                                f"WHERE {quoted_ts_column} >= ? "
+                                f"AND ({marker_clauses}) "
+                                f"ORDER BY \"id\" DESC LIMIT ?"
+                            ),
+                            (
+                                timestamp_cutoff,
+                                *(
+                                    f"%{marker}%"
+                                    for marker in _LOG_RECOVERY_PROVIDER_MARKERS
+                                ),
+                                _LOG_RECOVERY_PROVIDER_MAX_ROWS,
+                            ),
+                        ).fetchall()
             except (ValueError, sqlite3.Error):
                 continue
             for (raw_text,) in rows:
                 text = str(raw_text or "").strip()
-                marker = "Turn error:"
-                marker_index = text.find(marker)
-                if marker_index >= 0:
-                    recovered = text[marker_index + len(marker) :].strip()
-                    if recovered:
-                        return recovered
-                recovered = self._extract_quoted_log_field(text, "error.message")
+                recovered = self._extract_log_error_text(text)
                 if recovered:
+                    return recovered
+            for (raw_text,) in provider_rows:
+                text = str(raw_text or "").strip()
+                recovered = self._extract_log_error_text(text)
+                if recovered and classify_provider_failure(recovered) is not None:
                     return recovered
         return None
 
@@ -1259,7 +1345,10 @@ class CodexManagedSessionRuntime:
         if scan.saw_task_complete:
             if scan.assistant_text:
                 return _TurnTerminalOutcome(status="completed")
-            recovered_error = self._extract_turn_error_from_logs(vendor_turn_id)
+            recovered_error = self._extract_turn_error_from_logs(
+                vendor_turn_id,
+                turn_started_at=turn_started_at,
+            )
             if recovered_error:
                 return _TurnTerminalOutcome(
                     status="failed",
@@ -1307,7 +1396,10 @@ class CodexManagedSessionRuntime:
                 failure_class="permanent",
             )
         if rollout_scan.saw_task_complete:
-            recovered_error = self._extract_turn_error_from_logs(vendor_turn_id)
+            recovered_error = self._extract_turn_error_from_logs(
+                vendor_turn_id,
+                turn_started_at=state.last_control_at,
+            )
             if recovered_error:
                 return _TurnTerminalOutcome(
                     status="failed",
