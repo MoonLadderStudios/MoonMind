@@ -45,10 +45,10 @@ Use this Jira preset brief as the canonical MoonSpec orchestration input. Preser
 
 **Acceptance Scenarios**:
 
-1. **Given** task intent with image artifact references for a text-first runtime, **When** the runtime input is prepared, **Then** the runtime receives generated image context through the canonical input attachment contract.
-2. **Given** the same task intent with image artifact references for a multimodal runtime, **When** the runtime input is prepared, **Then** the runtime may receive raw image references through the adapter without changing the control-plane task contract.
-3. **Given** a runtime adapter handles image inputs, **When** it maps task attachments into runtime input, **Then** it cannot introduce target kinds or targeting rules that were not expressible in the originating task contract.
-4. **Given** runtime selection changes between text-first and multimodal adapters, **When** the task is prepared for execution, **Then** the canonical task contract remains unchanged and adapter-specific representation is confined to the runtime boundary.
+1. **SCN-001 - Text-first image context**: **Given** task intent with image artifact references for a text-first runtime, **When** the runtime input is prepared, **Then** the runtime receives generated image context through the canonical input attachment contract.
+2. **SCN-002 - Multimodal raw refs**: **Given** the same task intent with image artifact references for a multimodal runtime, **When** the runtime input is prepared, **Then** the runtime may receive raw image references through the adapter without changing the control-plane task contract.
+3. **SCN-003 - Adapter target guardrail**: **Given** a runtime adapter handles image inputs, **When** it maps task attachments into runtime input, **Then** it cannot introduce target kinds or targeting rules that were not expressible in the originating task contract.
+4. **SCN-004 - Runtime selection stability**: **Given** runtime selection changes between text-first and multimodal adapters, **When** the task is prepared for execution, **Then** the canonical task contract remains unchanged and adapter-specific representation is confined to the runtime boundary.
 
 ### Edge Cases
 

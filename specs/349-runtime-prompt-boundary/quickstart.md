@@ -9,7 +9,7 @@ Validate MM-650 against `specs/349-runtime-prompt-boundary/spec.md`, preserving 
 Run focused unit tests first while developing:
 
 ```bash
-./tools/test_unit.sh tests/unit/workflows/tasks/test_prepared_context.py tests/unit/agents/codex_worker/test_worker.py tests/unit/workflows/adapters/test_target_aware_prepared_context.py
+./tools/test_unit.sh tests/unit/workflows/tasks/test_prepared_context.py tests/unit/workflows/adapters/test_target_aware_prepared_context.py tests/unit/workflows/adapters/test_base_external_agent_adapter.py tests/unit/workflows/adapters/test_openclaw_agent_adapter.py tests/unit/agents/codex_worker/test_worker.py
 ```
 
 Add or update unit tests to cover:
