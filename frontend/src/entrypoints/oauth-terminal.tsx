@@ -620,7 +620,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
         </div>
       </section>
       {session ? (
-        <section className="oauth-terminal-session-panel" aria-label="OAuth session actions">
+        <section className="oauth-terminal-session-panel" aria-label="OAuth session status and actions">
           <div className="oauth-terminal-session-actions">
             {TERMINAL_FINALIZE_STATUSES.includes(session.status) ? (
               <button
