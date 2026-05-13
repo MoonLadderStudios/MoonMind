@@ -507,7 +507,8 @@ class HostDockerComposeRunner:
         command: Sequence[str],
         *,
         requested_image: str | None = None,
-        max_output_chars: int | None = 512,
+        max_stdout_chars: int | None = 512,
+        max_stderr_chars: int | None = 512,
     ) -> Mapping[str, Any]:
         resolved = self._compose_command(command)
         env = os.environ.copy()
@@ -542,14 +543,15 @@ class HostDockerComposeRunner:
         return {
             "command": resolved,
             "exitCode": process.returncode,
-            "stdout": _tail_text(stdout, max_chars=max_output_chars),
-            "stderr": _tail_text(stderr, max_chars=max_output_chars),
+            "stdout": _tail_text(stdout, max_chars=max_stdout_chars),
+            "stderr": _tail_text(stderr, max_chars=max_stderr_chars),
         }
 
     async def _run_compose_json(self, args: Sequence[str]) -> list[Mapping[str, Any]]:
         result = await self._run_compose_command(
             ("docker", "compose", *args),
-            max_output_chars=None,
+            max_stdout_chars=None,
+            max_stderr_chars=2000,
         )
         _ensure_command_succeeded("config", result)
         stdout = str(result.get("stdout") or "")

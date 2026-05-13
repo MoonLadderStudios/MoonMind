@@ -863,7 +863,9 @@ async def test_host_compose_runner_returns_bounded_command_output_tails(
     runner = HostDockerComposeRunner(project_dir=str(tmp_path))
 
     result = await runner._run_compose_command(
-        ("docker", "compose", "ps"), max_output_chars=8
+        ("docker", "compose", "ps"),
+        max_stdout_chars=8,
+        max_stderr_chars=8,
     )
 
     assert result["exitCode"] == 0
@@ -969,3 +971,42 @@ async def test_host_compose_runner_invalid_json_stdout_is_tool_failure(
     assert failure.message == "Deployment compose command returned invalid JSON."
     assert failure.details["failureClass"] == "compose_config_validation_failure"
     assert failure.details["stderr"]
+
+
+@pytest.mark.asyncio
+async def test_run_compose_json_failure_bounds_stderr_in_tool_failure(
+    tmp_path, monkeypatch
+):
+    compose = tmp_path / "docker-compose.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    huge_stderr = ("compose diagnostic line\n" * 5000).encode("utf-8")
+
+    class FakeProcess:
+        returncode = 1
+
+        async def communicate(self):
+            return b"", huge_stderr
+
+    async def fake_create_subprocess_exec(
+        *args: str,
+        cwd: str,
+        env: Mapping[str, str],
+        stdout: Any,
+        stderr: Any,
+    ):
+        return FakeProcess()
+
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_exec", fake_create_subprocess_exec
+    )
+    runner = HostDockerComposeRunner(project_dir=str(tmp_path))
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await runner._run_compose_json(("ps", "--format", "json"))
+
+    failure = exc_info.value
+    assert failure.error_code == "DEPLOYMENT_COMMAND_FAILED"
+    assert failure.details["failureClass"] == "compose_config_validation_failure"
+    embedded_result = failure.details["result"]
+    assert len(embedded_result["stderr"]) <= 2000
+    assert len(embedded_result["stderr"]) < len(huge_stderr)
