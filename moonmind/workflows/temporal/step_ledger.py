@@ -45,6 +45,40 @@ def _has_semantic_output_ref(row: Mapping[str, Any]) -> bool:
     return False
 
 
+def preserved_outputs_for_dependencies(
+    rows: list[dict[str, Any]],
+    logical_step_id: str,
+) -> dict[str, dict[str, str]]:
+    """Return semantic output refs from preserved direct dependencies."""
+
+    row_by_id = {
+        str(row.get("logicalStepId") or "").strip(): row
+        for row in rows
+        if str(row.get("logicalStepId") or "").strip()
+    }
+    target_row = row_by_id.get(logical_step_id)
+    if target_row is None:
+        raise KeyError(f"Unknown logical step id: {logical_step_id}")
+
+    outputs: dict[str, dict[str, str]] = {}
+    for dependency_id in target_row.get("dependsOn") or []:
+        dep_id = str(dependency_id or "").strip()
+        dependency_row = row_by_id.get(dep_id)
+        if dependency_row is None or "preservedFrom" not in dependency_row:
+            continue
+        artifacts = dependency_row.get("artifacts")
+        if not isinstance(artifacts, Mapping):
+            continue
+        semantic_refs: dict[str, str] = {}
+        for key in ("outputSummary", "outputPrimary"):
+            value = artifacts.get(key)
+            if isinstance(value, str) and value.strip():
+                semantic_refs[key] = value.strip()
+        if semantic_refs:
+            outputs[dep_id] = semantic_refs
+    return outputs
+
+
 def _resume_preservation(
     *,
     eligible: bool,
