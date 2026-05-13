@@ -2524,7 +2524,12 @@ class TemporalExecutionService:
         if parameters_patch:
             params = dict(record.parameters or {})
             params.update(parameters_patch)
-            record.parameters = self._full_rerun_parameters(params)
+            record.parameters = self._full_rerun_parameters(
+                params,
+                recovery_provenance=self._full_retry_recovery_from_patch(
+                    parameters_patch
+                ),
+            )
         else:
             record.parameters = self._full_rerun_parameters(record.parameters)
         self._continue_as_new(
@@ -2551,7 +2556,10 @@ class TemporalExecutionService:
         params = dict(record.parameters or {})
         if parameters_patch:
             params.update(parameters_patch)
-        params = self._full_rerun_parameters(params)
+        params = self._full_rerun_parameters(
+            params,
+            recovery_provenance=self._full_retry_recovery_from_patch(parameters_patch),
+        )
 
         rerun_source = {
             "workflowId": record.workflow_id,
@@ -2619,6 +2627,8 @@ class TemporalExecutionService:
     def _full_rerun_parameters(
         cls,
         parameters: Mapping[str, Any] | None,
+        *,
+        recovery_provenance: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         params = cls._strip_resume_reference_parameters(parameters)
         for key in TASK_RUN_ID_PARAM_KEYS:
@@ -2629,7 +2639,33 @@ class TemporalExecutionService:
             if not params["task"]:
                 params.pop("task", None)
         params.pop("dependsOn", None)
+        if recovery_provenance:
+            task_params = dict(params.get("task") or {})
+            task_params["recovery"] = dict(recovery_provenance)
+            params["task"] = task_params
         return params
+
+    @staticmethod
+    def _full_retry_recovery_from_patch(
+        parameters_patch: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        task_patch = (
+            parameters_patch.get("task")
+            if isinstance(parameters_patch, Mapping)
+            else None
+        )
+        if not isinstance(task_patch, Mapping):
+            return None
+        recovery = task_patch.get("recovery")
+        if not isinstance(recovery, Mapping):
+            return None
+        if recovery.get("kind") not in {"exact_full_rerun", "edited_full_retry"}:
+            return None
+        source_workflow_id = str(recovery.get("sourceWorkflowId") or "").strip()
+        source_run_id = str(recovery.get("sourceRunId") or "").strip()
+        if not source_workflow_id or not source_run_id:
+            return None
+        return dict(recovery)
 
     async def create_failed_step_resume_execution(
         self,

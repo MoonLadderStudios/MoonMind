@@ -4256,7 +4256,18 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
   const canShowEditTask = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
   const canFailedStepResume = Boolean(actions?.canResumeFromFailedStep);
-  const hasTaskEditingActions = taskEditingOn && Boolean(canShowEditTask || actions?.canRerun || canFailedStepResume);
+  const editTaskUnavailableReason =
+    actions?.disabledReasons?.canEditForRerun ||
+    actions?.disabledReasons?.canUpdateInputs ||
+    null;
+  const rerunUnavailableReason = actions?.disabledReasons?.canRerun || null;
+  const hasTaskEditingActions = taskEditingOn && Boolean(
+    canShowEditTask ||
+      actions?.canRerun ||
+      canFailedStepResume ||
+      editTaskUnavailableReason ||
+      rerunUnavailableReason,
+  );
   const hasTaskActions = Boolean(actions?.canSetTitle || hasTaskEditingActions || canCreateRemediation);
   const taskInstructions = execution?.taskInstructions?.trim() || '';
   const hasTaskInstructions = taskInstructions.length > 0;
@@ -4827,6 +4838,16 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                   </button>
                 ) : null}
               </div>
+              {editTaskUnavailableReason ? (
+                <p className="small">
+                  Edit task unavailable: {formatStatusLabel(editTaskUnavailableReason)}
+                </p>
+              ) : null}
+              {rerunUnavailableReason ? (
+                <p className="small">
+                  Rerun unavailable: {formatStatusLabel(rerunUnavailableReason)}
+                </p>
+              ) : null}
               {actions.disabledReasons?.canResumeFromFailedStep ? (
                 <p className="small">
                   Failed-step Resume unavailable: {formatStatusLabel(actions.disabledReasons.canResumeFromFailedStep)}

@@ -7507,6 +7507,68 @@ def test_temporal_task_editing_actions_require_original_snapshot(
     )
 
 
+def test_mm644_failed_task_edit_for_rerun_requires_authoritative_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    eligible = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+
+    eligible_body = _serialize_execution(eligible).model_dump(by_alias=True)
+
+    assert eligible_body["taskInputSnapshot"]["available"] is True
+    assert eligible_body["taskInputSnapshot"]["artifactRef"] == "art_snapshot_1"
+    assert eligible_body["taskInputSnapshot"]["reconstructionMode"] == "authoritative"
+    assert eligible_body["actions"]["canEditForRerun"] is True
+
+    missing_snapshot = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED,
+        has_task_input_snapshot=False,
+    )
+    missing_body = _serialize_execution(missing_snapshot).model_dump(by_alias=True)
+
+    assert missing_body["taskInputSnapshot"]["available"] is False
+    assert missing_body["actions"]["canEditForRerun"] is False
+    assert (
+        missing_body["actions"]["disabledReasons"]["canEditForRerun"]
+        == "original_task_input_snapshot_missing"
+    )
+
+
+def test_mm644_rerun_snapshot_payload_records_source_lineage() -> None:
+    payload = _build_original_task_input_snapshot_payload(
+        source_kind="rerun",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {
+                "instructions": "MM-644 edited retry instructions.",
+                "recovery": {
+                    "kind": "edited_full_retry",
+                    "sourceWorkflowId": "mm:failed-source",
+                    "sourceRunId": "run-source",
+                },
+            },
+        },
+        task_payload={
+            "instructions": "MM-644 edited retry instructions.",
+            "recovery": {
+                "kind": "edited_full_retry",
+                "sourceWorkflowId": "mm:failed-source",
+                "sourceRunId": "run-source",
+            },
+        },
+        source_workflow_id="mm:failed-source",
+        source_run_id="run-source",
+    )
+
+    assert payload["source"] == {
+        "kind": "rerun",
+        "sourceWorkflowId": "mm:failed-source",
+        "sourceRunId": "run-source",
+    }
+    assert payload["draft"]["task"]["recovery"]["kind"] == "edited_full_retry"
+
+
 def test_terminal_task_editing_actions_reject_parameter_fallback_without_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
