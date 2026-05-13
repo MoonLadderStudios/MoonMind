@@ -61,21 +61,21 @@
 
 ### Unit Tests (write first)
 
-- [ ] T006 [P] Add failing unit tests for `MoonMind.Run` resume-source validation before step execution in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-001, FR-002, FR-003, FR-012, SCN-001, SCN-007, SC-001, SC-006, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, and DESIGN-REQ-006.
-- [ ] T007 [P] Add failing unit tests for workspace restoration requirement before failed-step execution in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-006, SCN-002, SC-002, DESIGN-REQ-001, and DESIGN-REQ-002.
-- [ ] T008 [P] Add failing unit tests for preserved output injection into failed and downstream step input contracts in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-008, SCN-004, SC-004, DESIGN-REQ-001, and DESIGN-REQ-002.
-- [ ] T009 [P] Add failing unit tests for fresh resumed-run ledger rows, artifacts, and checkpoints on retried and later steps in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-011, SCN-006, SC-005, DESIGN-REQ-002, and DESIGN-REQ-003.
+- [ ] T006 Add failing unit tests for `MoonMind.Run` resume-source validation before step execution in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-001, FR-002, FR-003, FR-012, SCN-001, SCN-007, SC-001, SC-006, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, and DESIGN-REQ-006.
+- [ ] T007 Add failing unit tests for workspace restoration requirement before failed-step execution in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-006, SCN-002, SC-002, DESIGN-REQ-001, and DESIGN-REQ-002.
+- [ ] T008 Add failing unit tests for preserved output injection into failed and downstream step input contracts in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-008, SCN-004, SC-004, DESIGN-REQ-001, and DESIGN-REQ-002.
+- [ ] T009 Add failing unit tests for fresh resumed-run ledger rows, artifacts, and checkpoints on retried and later steps in `tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-011, SCN-006, SC-005, DESIGN-REQ-002, and DESIGN-REQ-003.
 - [ ] T010 [P] Add verification unit tests preserving edited-input rejection and source ID pinning in `tests/unit/api/routers/test_executions.py` covering FR-013, FR-014, SCN-008, SC-007, SC-008, DESIGN-REQ-004, and DESIGN-REQ-006.
 - [ ] T011 Run `./tools/test_unit.sh tests/unit/workflows/temporal/workflows/test_run_resume_from_failed_step.py tests/unit/workflows/temporal/test_temporal_service.py tests/unit/api/routers/test_executions.py` and confirm T006-T009 fail for missing/partial MM-647 execution semantics while T010 preserves existing verified behavior.
 
 ### Integration Tests (write first)
 
-- [ ] T012 [P] Add failing integration test for valid Resume initialization validating source workflow ID, source run ID, snapshot, failed step, and plan identity before execution in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-001, FR-002, FR-003, SCN-001, SC-001, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-004, and DESIGN-REQ-006.
-- [ ] T013 [P] Add failing integration test proving workspace or branch checkpoint restoration happens before the failed step starts in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-006, SCN-002, SC-002, DESIGN-REQ-001, and DESIGN-REQ-002.
-- [ ] T014 [P] Add failing integration test proving preserved prior steps are not re-executed and retain `preservedFrom` provenance in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-004, FR-005, FR-007, SCN-003, SC-003, DESIGN-REQ-001, DESIGN-REQ-003, and DESIGN-REQ-005.
-- [ ] T015 [P] Add failing integration test proving preserved outputs are available to the retried failed step and downstream steps with continuous-run semantics in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-008, SCN-004, SC-004, DESIGN-REQ-001, and DESIGN-REQ-002.
-- [ ] T016 [P] Add failing integration test proving the failed step is the first newly executed step and downstream steps continue after success in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-009, FR-010, SCN-005, SC-005, DESIGN-REQ-001, and DESIGN-REQ-002.
-- [ ] T017 [P] Add failing integration test proving invalid restoration fails explicitly before failed-step execution and never falls back to full rerun in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-012, SCN-007, SC-006, DESIGN-REQ-001, DESIGN-REQ-002, and DESIGN-REQ-003.
+- [ ] T012 Add failing integration test for valid Resume initialization validating source workflow ID, source run ID, snapshot, failed step, and plan identity before execution in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-001, FR-002, FR-003, SCN-001, SC-001, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-004, and DESIGN-REQ-006.
+- [ ] T013 Add failing integration test proving workspace or branch checkpoint restoration happens before the failed step starts in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-006, SCN-002, SC-002, DESIGN-REQ-001, and DESIGN-REQ-002.
+- [ ] T014 Add failing integration test proving preserved prior steps are not re-executed and retain `preservedFrom` provenance in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-004, FR-005, FR-007, SCN-003, SC-003, DESIGN-REQ-001, DESIGN-REQ-003, and DESIGN-REQ-005.
+- [ ] T015 Add failing integration test proving preserved outputs are available to the retried failed step and downstream steps with continuous-run semantics in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-008, SCN-004, SC-004, DESIGN-REQ-001, and DESIGN-REQ-002.
+- [ ] T016 Add failing integration test proving the failed step is the first newly executed step and downstream steps continue after success in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-009, FR-010, SCN-005, SC-005, DESIGN-REQ-001, and DESIGN-REQ-002.
+- [ ] T017 Add failing integration test proving invalid restoration fails explicitly before failed-step execution and never falls back to full rerun in `tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py` covering FR-012, SCN-007, SC-006, DESIGN-REQ-001, DESIGN-REQ-002, and DESIGN-REQ-003.
 - [ ] T018 Add or extend integration verification for accepted Resume refs and route/service invalid checkpoint behavior in `tests/integration/temporal/test_backend_resume_eligibility.py` covering FR-001, FR-002, FR-012, FR-013, SCN-001, SCN-007, SCN-008, SC-001, SC-006, and SC-007.
 - [ ] T019 Run `./tools/test_unit.sh tests/integration/workflows/temporal/workflows/test_run_resume_from_failed_step.py tests/integration/temporal/test_backend_resume_eligibility.py` and confirm T012-T018 fail for the intended missing/partial MM-647 behavior or pass only for already verified rows.
 
@@ -136,8 +136,8 @@
 ### Parallel Opportunities
 
 - T004 and T005 can run in parallel with T003 after T001-T002.
-- T006-T010 can be authored in parallel if workers coordinate changes to shared files.
-- T012-T018 can be authored in parallel because they target separate scenarios.
+- T010 can be authored in parallel with the T006-T009 unit-test sequence because it touches a different file.
+- T018 can be authored in parallel with the T012-T017 integration-test sequence because it touches a different file.
 - T033 and T034 can run in parallel after story validation.
 
 ## Parallel Example
