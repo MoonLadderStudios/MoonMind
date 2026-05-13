@@ -272,6 +272,8 @@ Key diagnostics:
 - Existing `settings_overrides`, `settings_audit_events`, `managed_secrets`, and `managed_agent_provider_profiles`; no new persistent table planned (341-server-side-validation)
 - Python 3.12; TypeScript/React for Mission Control UI behavior + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Zod, Vitest, pytest (343-editable-full-retry-workflow)
 - Existing Temporal execution records, memo/search attributes, Temporal artifact metadata/content store, authoritative task input snapshot artifacts; no new persistent database table planned (343-editable-full-retry-workflow)
+- Python 3.12 + Temporal Python SDK, Pydantic v2, FastAPI execution service models, existing Temporal artifact service/helpers (345-step-ledger-checkpoint-durability)
+- Existing Temporal workflow state/history, Temporal artifact metadata/content store, execution source records; no new persistent database table planned (345-step-ledger-checkpoint-durability)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
