@@ -7527,7 +7527,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             "Cannot request edited retry because the source execution identity is missing.",
           );
         }
-        const editedTaskPayload = {
+        const editedTaskPayload: Record<string, unknown> = {
           ...recordValue(artifactPayload.task ?? taskPayload),
           recovery: {
             kind: "edited_full_retry",
