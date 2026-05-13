@@ -305,13 +305,21 @@ def run_orchestration(
             return result, EXIT_CODE_ATTEMPTS_EXHAUSTED
 
         if retry_action == "finalize_only_retry":
-            if reason == "merge_not_ready" and grace_remaining > 0:
+            normalized_reason = normalize_text(reason)
+            if normalized_reason == "merge_not_ready" and grace_remaining > 0:
                 grace_remaining -= 1
+            effective_base_sleep_seconds = (
+                max(base_sleep_seconds, 60)
+                if normalized_reason == "ci_running"
+                else base_sleep_seconds
+            )
             sleep_seconds = compute_backoff_seconds(
                 finalize_only_retry_index,
-                base_sleep_seconds=base_sleep_seconds,
+                base_sleep_seconds=effective_base_sleep_seconds,
                 max_sleep_seconds=max_sleep_seconds,
             )
+            if normalized_reason == "ci_running":
+                sleep_seconds = max(sleep_seconds, 60)
             finalize_only_retry_index += 1
             history.append(
                 {
@@ -441,7 +449,7 @@ def main() -> None:
     parser.add_argument(
         "--finalize-max-retries",
         type=int,
-        default=6,
+        default=60,
         help="Number of finalize retries after the initial attempt.",
     )
     parser.add_argument(
@@ -459,7 +467,7 @@ def main() -> None:
     parser.add_argument(
         "--max-elapsed-seconds",
         type=int,
-        default=1800,
+        default=7200,
         help="Hard wall-clock cap for orchestration execution.",
     )
     parser.add_argument(

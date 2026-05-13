@@ -18,10 +18,12 @@ The task is not complete until the target PR is merged or is proven already merg
 - inputs.branch (optional)
 - inputs.mergeMethod (merge|squash|rebase)
 - inputs.maxIterations (default 3, full remediation cap per cycle)
-- inputs.finalizeMaxRetries (default 6)
+- inputs.finalizeMaxRetries (default 60)
 - inputs.finalizeBackoffSeconds (default 30)
 - inputs.finalizeMaxSleepSeconds (default 120)
-- inputs.finalizeMaxElapsedSeconds (default 1800)
+- inputs.finalizeMaxElapsedSeconds (default 7200)
+- `ci_running` finalize waits use at least 60 seconds before the next check,
+  even when `finalizeBackoffSeconds` is lower.
 
 ## Primary Command (mandatory first action)
 Run the orchestration entrypoint before making manual changes. **You MUST provide the `--pr` argument** (using either the PR number or the branch name) to ensure the script targets the correct PR, even if you are on a different branch or detached HEAD:
@@ -89,6 +91,10 @@ Repeat this state machine until a terminal success or manual blocker:
   - `comments_unavailable`
   - `ci_signal_degraded`
   - `merge_not_ready` (limited grace retries)
+- `ci_running` should be allowed to consume the long finalize elapsed budget so
+  queued or running checks can reach a terminal state; if they then become
+  `ci_failures`, continue into `run_fix_ci_skill` instead of stopping early.
+- `ci_running` should not poll faster than once per minute.
 - If retries transition from transient CI states into actionable `ci_failures`, continue into `run_fix_ci_skill` instead of stopping at manual review.
 - If `merge_not_ready` resolves into an actionable blocker such as `merge_conflicts`, continue into the matching remediation skill instead of stopping at manual review.
 - Non-retryable stop reasons:
