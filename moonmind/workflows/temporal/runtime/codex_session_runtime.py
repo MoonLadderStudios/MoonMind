@@ -40,7 +40,10 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.codex_session_timeouts import (
     DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
-from moonmind.workflows.provider_failures import classify_provider_failure
+from moonmind.workflows.provider_failures import (
+    classify_provider_failure,
+    provider_failure_search_markers,
+)
 
 _STATE_FILENAME = ".moonmind-codex-session-state.json"
 _READY_LOOP_SECONDS = 3600.0
@@ -53,22 +56,9 @@ _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
 _ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
 _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS = 5.0
 _LOG_RECOVERY_MAX_ROWS = 200
-_LOG_RECOVERY_PROVIDER_MAX_ROWS = 1000
+_LOG_RECOVERY_PROVIDER_MAX_ROWS = 200
 _LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS = 1.0
-_LOG_RECOVERY_PROVIDER_MARKERS: tuple[str, ...] = (
-    "429",
-    "rate limit",
-    "too many requests",
-    "usage limit",
-    "usage_limit_reached",
-    "hit your limit",
-    "send a request to your admin",
-    "high demand",
-    "overloaded",
-    "temporarily unavailable",
-    "service unavailable",
-    "gateway timeout",
-)
+_LOG_RECOVERY_PROVIDER_MARKERS: tuple[str, ...] = provider_failure_search_markers()
 
 @dataclass(frozen=True)
 class _RolloutTurnScan:
@@ -1175,14 +1165,11 @@ class CodexManagedSessionRuntime:
         return None
 
     @staticmethod
-    def _sqlite_timestamp_cutoff(turn_started_at: float | None) -> int | None:
+    def _sqlite_provider_timestamp_cutoff(turn_started_at: float | None) -> int | None:
         if turn_started_at is None:
             return None
         try:
-            return max(
-                0,
-                int(float(turn_started_at) - _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS),
-            )
+            return max(0, int(float(turn_started_at)))
         except (TypeError, ValueError, OverflowError):
             return None
 
@@ -1192,7 +1179,10 @@ class CodexManagedSessionRuntime:
         *,
         turn_started_at: float | None = None,
     ) -> str | None:
-        timestamp_cutoff = self._sqlite_timestamp_cutoff(turn_started_at)
+        provider_timestamp_cutoff = self._sqlite_provider_timestamp_cutoff(
+            turn_started_at
+        )
+        provider_rows_remaining = _LOG_RECOVERY_PROVIDER_MAX_ROWS
         for log_path in sorted(
             self._codex_home_path.glob("logs_*.sqlite"),
             key=self._log_shard_sort_key,
@@ -1229,7 +1219,11 @@ class CodexManagedSessionRuntime:
                         (f"%{vendor_turn_id}%", _LOG_RECOVERY_MAX_ROWS),
                     ).fetchall()
                     provider_rows: list[tuple[Any, ...]] = []
-                    if timestamp_cutoff is not None and "ts" in available_columns:
+                    if (
+                        provider_timestamp_cutoff is not None
+                        and provider_rows_remaining > 0
+                        and "ts" in available_columns
+                    ):
                         quoted_ts_column = self._quoted_sqlite_identifier("ts")
                         marker_clauses = " OR ".join(
                             f"{quoted_text_column} LIKE ?"
@@ -1243,14 +1237,15 @@ class CodexManagedSessionRuntime:
                                 f"ORDER BY \"id\" DESC LIMIT ?"
                             ),
                             (
-                                timestamp_cutoff,
+                                provider_timestamp_cutoff,
                                 *(
                                     f"%{marker}%"
                                     for marker in _LOG_RECOVERY_PROVIDER_MARKERS
                                 ),
-                                _LOG_RECOVERY_PROVIDER_MAX_ROWS,
+                                provider_rows_remaining,
                             ),
                         ).fetchall()
+                        provider_rows_remaining -= len(provider_rows)
             except (ValueError, sqlite3.Error):
                 continue
             for (raw_text,) in rows:
@@ -1263,6 +1258,8 @@ class CodexManagedSessionRuntime:
                 recovered = self._extract_log_error_text(text)
                 if recovered and classify_provider_failure(recovered) is not None:
                     return recovered
+            if provider_rows_remaining <= 0:
+                break
         return None
 
     def _reset_skill_outcome(self) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from moonmind.workflows.provider_failures import (
     classify_provider_failure,
     provider_error_requires_cooldown,
+    provider_failure_search_markers,
 )
 
 def test_classifies_high_demand_as_provider_capacity() -> None:
@@ -37,6 +38,28 @@ def test_classifies_codex_usage_limit_as_429() -> None:
     assert result.failure_class == "integration_error"
     assert result.provider_error_code == "429"
     assert result.retry_recommendation == "retry_after_cooldown"
+
+def test_classifies_codex_structured_usage_limit_as_429() -> None:
+    result = classify_provider_failure("provider error type=usage_limit_reached")
+
+    assert result is not None
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "429"
+    assert result.retry_recommendation == "retry_after_cooldown"
+
+def test_provider_failure_search_markers_cover_classification_markers() -> None:
+    markers = provider_failure_search_markers()
+
+    for expected in (
+        "rate-limit",
+        "http 503",
+        "status 503",
+        "temporary errors",
+        "try again later",
+        "usage_limit_reached",
+        "http 401",
+    ):
+        assert expected in markers
 
 def test_classifies_claude_code_short_limit_as_429() -> None:
     """Claude Code's shorter wording omits 'usage' — markers must still match."""
