@@ -152,8 +152,11 @@ def build_prepared_input_manifest(
         )
 
     for index, step in enumerate(_step_sequence(task_payload.get("steps")), start=1):
+        step_attachments = _attachment_sequence(step.get("inputAttachments"))
+        if not step_attachments:
+            continue
         step_ref = _step_ref(step, index)
-        for attachment in _attachment_sequence(step.get("inputAttachments")):
+        for attachment in step_attachments:
             entries.append(
                 _entry_from_attachment(
                     attachment,
@@ -259,13 +262,12 @@ def _entry_from_attachment(
         ) from exc
     safe_artifact_id = _safe_segment(artifact_id)
     raw_input_ref = _artifact_ref(artifact_id)
+    filename = _optional_text(attachment.get("filename") or attachment.get("name"))
     if target_kind == "objective":
         derived_context_ref = f"prepared-context://objective/{safe_artifact_id}"
         workspace_path = _workspace_path(
             artifact_id=artifact_id,
-            filename=_optional_text(
-                attachment.get("filename") or attachment.get("name")
-            ),
+            filename=filename,
             target_kind=target_kind,
         )
     else:
@@ -275,15 +277,13 @@ def _entry_from_attachment(
         )
         workspace_path = _workspace_path(
             artifact_id=artifact_id,
-            filename=_optional_text(
-                attachment.get("filename") or attachment.get("name")
-            ),
+            filename=filename,
             target_kind=target_kind,
             step_ref=step_ref,
         )
     return PreparedInputEntry(
         artifactId=artifact_id,
-        filename=_optional_text(attachment.get("filename") or attachment.get("name")),
+        filename=filename,
         contentType=_optional_text(
             attachment.get("contentType") or attachment.get("mimeType")
         ),

@@ -98,6 +98,26 @@ def test_prepared_manifest_rejects_step_attachment_without_stable_step_ref() -> 
         )
 
 
+def test_prepared_manifest_allows_anonymous_steps_without_attachments() -> None:
+    manifest = build_prepared_input_manifest(
+        {
+            "inputAttachments": [{"artifactId": "objective-artifact"}],
+            "steps": [
+                {"instructions": "No attachments on this anonymous step"},
+                {
+                    "id": "attached-step",
+                    "inputAttachments": [{"artifactId": "step-artifact"}],
+                },
+            ],
+        }
+    )
+
+    assert [(entry.artifact_id, entry.step_ref) for entry in manifest.entries] == [
+        ("objective-artifact", None),
+        ("step-artifact", "attached-step"),
+    ]
+
+
 def test_prepared_manifest_bindings_survive_reorder_and_text_edits() -> None:
     original = {
         "steps": [
