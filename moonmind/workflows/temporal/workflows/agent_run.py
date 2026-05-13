@@ -530,6 +530,32 @@ class MoonMindAgentRun:
         if task_run_id:
             metadata.setdefault("taskRunId", task_run_id)
 
+        request_metadata = (
+            request.parameters.get("metadata")
+            if isinstance(request.parameters, Mapping)
+            else None
+        )
+        request_moonmind = (
+            request_metadata.get("moonmind")
+            if isinstance(request_metadata, Mapping)
+            and isinstance(request_metadata.get("moonmind"), Mapping)
+            else None
+        )
+        parent_prepared_context = (
+            request_moonmind.get("preparedContext")
+            if isinstance(request_moonmind, Mapping)
+            and isinstance(request_moonmind.get("preparedContext"), Mapping)
+            else None
+        )
+        if parent_prepared_context is not None:
+            moonmind_payload = (
+                metadata.get("moonmind")
+                if isinstance(metadata.get("moonmind"), dict)
+                else {}
+            )
+            moonmind_payload["preparedContext"] = dict(parent_prepared_context)
+            metadata["moonmind"] = moonmind_payload
+
         step_ledger_context = _request_step_ledger_context(request)
         report_output_context = (
             request.parameters.get("reportOutput")

@@ -2,6 +2,7 @@
 
 **Created**: 2026-05-13
 **Feature**: `specs/348-target-aware-step-scope`
+**Source**: MM-649 canonical Jira preset brief
 
 ## Findings
 

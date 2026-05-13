@@ -7,7 +7,7 @@
 
 ## Summary
 
-MM-649 requires step execution and delegated MoonMind.AgentRun child workflows to consume objective context plus only the current step's prepared context. Current repo evidence shows compact prepared-context models, target filtering, parent workflow request assembly, and unit/integration coverage already exist for the main runtime boundary. Planned work is primarily verification-first: strengthen child-workflow authority/diagnostic evidence where current tests are thinner, then patch the parent request metadata or child diagnostic handling only if those verification tests expose a gap.
+MM-649 requires step execution and delegated MoonMind.AgentRun child workflows to consume objective context plus only the current step's prepared context. The canonical Jira preset brief is preserved for final traceability. Current repo evidence shows compact prepared-context models, target filtering, parent workflow request assembly, and unit/integration coverage already exist for the main runtime boundary. Planned work is primarily verification-first: strengthen child-workflow authority/diagnostic evidence where current tests are thinner, then patch the parent request metadata or child diagnostic handling only if those verification tests expose a gap.
 
 ## Requirement Status
 

@@ -83,6 +83,24 @@ def test_child_agent_run_request_receives_only_represented_step_context() -> Non
     assert "collect-notes" not in str(request.model_dump(by_alias=True))
 
 
+def test_parent_request_metadata_is_target_binding_authority() -> None:
+    request = _build_request_for_step("collect-evidence")
+
+    moonmind_metadata = request.parameters["metadata"]["moonmind"]
+    prepared_context = moonmind_metadata["preparedContext"]
+
+    assert prepared_context["logicalStepId"] == "collect-evidence"
+    assert prepared_context["manifestRef"].startswith("prepared-context-manifest://")
+    assert prepared_context["objectiveContextRefs"] == [
+        "prepared-context://objective/objective-image"
+    ]
+    assert prepared_context["stepContextRefs"] == [
+        "prepared-context://steps/collect-evidence/collect-notes"
+    ]
+    assert "report-notes" not in str(moonmind_metadata)
+    assert "preparedContext" not in request.workspace_spec
+
+
 def test_managed_codex_request_keeps_prepared_context_out_of_input_refs() -> None:
     wf = MoonMindRunWorkflow()
     with patch(
