@@ -58,11 +58,11 @@ Test implications: Unit tests directly cover the normalization/contract risk.
 
 ## FR-007 and SC-003 Explicit Preparation Failure
 
-Decision: implemented_verified.
-Evidence: Worker tests cover failed artifact download diagnostics and stable-ref validation; focused integration validates target-aware workflow dispatch boundaries.
-Rationale: Preparation must stop before downstream execution sees incomplete target state.
-Alternatives considered: Allowing partial manifests was rejected because downstream steps could mistake partial preparation for complete state.
-Test implications: Unit tests cover deterministic failure paths; integration runner should be rerun in Docker-enabled CI.
+Decision: FR-007 is implemented_verified; SC-003 is implemented_unverified pending integration-level failure coverage.
+Evidence: Worker tests cover failed artifact download diagnostics and stable-ref validation. Repository search found unit coverage for target-specific preparation failure, but no integration test that proves preparation failure surfaces target-specific diagnostics.
+Rationale: Preparation must stop before downstream execution sees incomplete target state, and SC-003 specifically requires integration evidence.
+Alternatives considered: Treating unit worker failure coverage as sufficient for SC-003 was rejected because the success criterion explicitly names integration coverage.
+Test implications: Add or run integration verification for target-specific preparation failure first; repair the preparation boundary only if that integration evidence exposes a real behavior gap.
 
 ## FR-010 and SC-005 Traceability
 

@@ -3,7 +3,7 @@
 **Feature**: Prepare-Time Target-Aware Attachment Materialization  
 **Spec**: `/work/agent_jobs/mm:582f6f4c-2a08-4fdd-9e41-0b3b02e8f097/repo/specs/347-prepare-target-aware-attachments/spec.md`  
 **Original Request Source**: `spec.md` `Input` preserving `MM-648` Jira preset brief  
-**Verdict**: FULLY_IMPLEMENTED  
+**Verdict**: ADDITIONAL_WORK_NEEDED
 **Confidence**: MEDIUM
 
 ## Test Results
@@ -25,7 +25,7 @@
 | FR-004 | `PreparedInputEntry.workspacePath/status`; worker manifest `status` | VERIFIED | Entries identify artifact, target, path, and status. |
 | FR-005 | Existing vision/target-aware workflow tests and focused integration | VERIFIED | Per-target context delivery remains covered. |
 | FR-006 | Stable `stepRef` tests for reorder/text edits | VERIFIED | Bindings are keyed by stable step identity, not list position. |
-| FR-007 | Worker download failure tests and stable-ref validation | VERIFIED | Invalid prep fails explicitly before materialization completes. |
+| FR-007 | Worker download failure tests and stable-ref validation | VERIFIED | Unit evidence verifies explicit failure behavior. |
 | FR-008 | Unit tests assert no data URLs/base64 in prepared metadata | VERIFIED | Only refs and bounded metadata cross boundaries. |
 | FR-009 | `prepared_context.py` and `worker.py` reject step attachments without `id`, `stepRef`, or `ref` | VERIFIED | Removes index fallback retargeting risk. |
 | FR-010 | `spec.md`, `plan.md`, `tasks.md`, this report | VERIFIED | `MM-648` preserved throughout artifacts. |
@@ -35,9 +35,9 @@
 | Source Requirement | Status | Evidence |
 |--------------------|--------|----------|
 | DESIGN-REQ-002 | VERIFIED | No binary payloads; artifact refs, workspace paths, and context refs only. |
-| DESIGN-REQ-020 | VERIFIED | Preparation manifest, materialized paths, status metadata, explicit failures. |
+| DESIGN-REQ-020 | PARTIAL | Preparation manifest, materialized paths, status metadata, and unit failure behavior are covered; SC-003 still needs integration-level failure evidence. |
 | DESIGN-REQ-029 | VERIFIED | Stable step-ref enforcement and reorder/text-edit tests prevent silent retargeting. |
 
 ## Remaining Risks
 
-- The full compose-backed integration suite could not run in this managed environment because Docker access was denied by administrative policy. Focused local integration coverage passed for the target-aware workflow boundary.
+- The full compose-backed integration suite could not run in this managed environment because Docker access was denied by administrative policy. Focused local integration coverage passed for the target-aware workflow boundary. Alignment found SC-003 still needs integration-level evidence for target-specific preparation failure before the story should be closed as fully implemented.
