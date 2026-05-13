@@ -190,6 +190,33 @@ def test_parent_owned_checkpoint_evidence_survives_child_runtime_projection() ->
         "message": "Step has recoverable output refs and state checkpoint evidence.",
     }
 
+def test_empty_resume_source_is_treated_as_absent() -> None:
+    now = datetime.now(UTC)
+    workflow = MoonMindRunWorkflow()
+    workflow._resume_source = {}
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+
+    assert workflow._resume_failed_step_id is None
+    assert workflow._resume_workspace == {}
+    assert workflow._step_ledger_rows[0]["status"] == "ready"
+
+
+def test_step_ledger_row_lookup_uses_initialized_index() -> None:
+    workflow = _workflow_with_resume()
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=datetime.now(UTC),
+    )
+
+    assert workflow._step_ledger_row_for("prepare") is workflow._step_ledger_rows[0]
+    assert workflow._step_ledger_row_for("missing") is None
+
 
 @pytest.mark.parametrize(
     ("field", "message"),
@@ -266,16 +293,53 @@ def test_resume_source_restores_workspace_before_failed_step_execution() -> None
     assert workflow._restore_resume_workspace_for_failed_step("verify") is None
 
 
-def test_resume_source_rejects_missing_workspace_checkpoint() -> None:
+def test_resume_source_rejects_missing_workspace_evidence() -> None:
     source = _resume_source(resumeWorkspace={})
     workflow = _workflow_with_resume(source)
 
-    with pytest.raises(ValueError, match="workspace checkpoint"):
+    with pytest.raises(ValueError, match="workspace evidence"):
         workflow._initialize_step_ledger(
             ordered_nodes=_ordered_nodes(),
             dependency_map=_dependency_map(),
             updated_at=datetime.now(UTC),
         )
+
+
+def test_resume_source_accepts_branch_commit_workspace_evidence() -> None:
+    now = datetime.now(UTC)
+    source = _resume_source(resumeWorkspace={"branch": "feature", "commit": "abc123"})
+    workflow = _workflow_with_resume(source)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+
+    assert workflow._resume_workspace == {"branch": "feature", "commit": "abc123"}
+    assert workflow._restore_resume_workspace_for_failed_step("implement") is None
+
+
+def test_resume_source_accepts_checkpoint_payload_ref_workspace_evidence() -> None:
+    now = datetime.now(UTC)
+    source = _resume_source(
+        resumeWorkspace={
+            "checkpoint_payload_ref": "artifact://checkpoint/payload",
+            "inline_checkpoint_metadata": "artifact://checkpoint/metadata",
+        }
+    )
+    workflow = _workflow_with_resume(source)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+
+    restored_ref = workflow._restore_resume_workspace_for_failed_step("implement")
+
+    assert restored_ref == "artifact://checkpoint/payload"
+    assert workflow._resume_workspace_restored_ref == restored_ref
 
 
 def test_preserved_outputs_are_available_to_failed_step_dependencies() -> None:

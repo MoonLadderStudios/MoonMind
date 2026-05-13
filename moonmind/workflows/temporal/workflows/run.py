@@ -381,6 +381,7 @@ class MoonMindRunWorkflow:
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
+        self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
         self._progress_snapshot: dict[str, Any] = {
             "total": 0,
             "pending": 0,
@@ -678,7 +679,25 @@ class MoonMindRunWorkflow:
             "workspace_checkpoint_ref",
             "branchCheckpointRef",
             "branch_checkpoint_ref",
+            "checkpointPayloadRef",
+            "checkpoint_payload_ref",
         )
+
+    def _resume_workspace_has_evidence(
+        self,
+        workspace: Mapping[str, Any],
+    ) -> bool:
+        return any(
+            isinstance(value, str) and value.strip()
+            for value in workspace.values()
+        )
+
+    def _rebuild_step_ledger_index(self) -> None:
+        self._step_ledger_by_id = {
+            row["logicalStepId"]: row
+            for row in self._step_ledger_rows
+            if isinstance(row.get("logicalStepId"), str) and row["logicalStepId"]
+        }
 
     def _validate_resume_source_for_execution(self) -> dict[str, Any] | None:
         resume_source = self._resume_source
@@ -689,6 +708,8 @@ class MoonMindRunWorkflow:
             return None
         if not isinstance(resume_source, Mapping):
             raise ValueError("Resume source must be a compact mapping.")
+        if not resume_source:
+            return None
 
         source_workflow_id = self._resume_source_text(
             resume_source,
@@ -740,14 +761,15 @@ class MoonMindRunWorkflow:
         if not plan_identity:
             raise ValueError("Resume source requires source plan identity.")
 
-        workspace = resume_source.get("resumeWorkspace") or resume_source.get(
-            "resume_workspace"
+        workspace = (
+            resume_source.get("resumeWorkspace")
+            if "resumeWorkspace" in resume_source
+            else resume_source.get("resume_workspace")
         )
         if not isinstance(workspace, Mapping):
             raise ValueError("Resume source requires resume workspace checkpoint.")
-        workspace_checkpoint_ref = self._resume_workspace_checkpoint_ref(workspace)
-        if not workspace_checkpoint_ref:
-            raise ValueError("Resume source requires workspace checkpoint ref.")
+        if not self._resume_workspace_has_evidence(workspace):
+            raise ValueError("Resume source requires workspace evidence.")
 
         preserved_steps = resume_source.get("preservedSteps") or resume_source.get(
             "preserved_steps"
@@ -811,7 +833,7 @@ class MoonMindRunWorkflow:
             return self._resume_workspace_restored_ref
         checkpoint_ref = self._resume_workspace_checkpoint_ref(self._resume_workspace)
         if not checkpoint_ref:
-            raise ValueError("Resume source requires workspace checkpoint ref.")
+            return None
         self._resume_workspace_restored_ref = checkpoint_ref
         return checkpoint_ref
 
@@ -825,10 +847,7 @@ class MoonMindRunWorkflow:
         )
 
     def _step_ledger_row_for(self, logical_step_id: str) -> dict[str, Any] | None:
-        for row in self._step_ledger_rows:
-            if row.get("logicalStepId") == logical_step_id:
-                return row
-        return None
+        return self._step_ledger_by_id.get(logical_step_id)
 
     def _is_preserved_step(self, logical_step_id: str) -> bool:
         row = self._step_ledger_row_for(logical_step_id)
@@ -880,9 +899,10 @@ class MoonMindRunWorkflow:
             dependency_map=dependency_map,
             updated_at=updated_at,
         )
-        preserved_steps = resume_source.get("preservedSteps")
-        if not isinstance(preserved_steps, list):
-            preserved_steps = resume_source.get("preserved_steps")
+        self._rebuild_step_ledger_index()
+        preserved_steps = resume_source.get("preservedSteps") or resume_source.get(
+            "preserved_steps"
+        )
         if isinstance(preserved_steps, list):
             source_workflow_id = self._resume_source_text(
                 resume_source,

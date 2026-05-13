@@ -305,7 +305,7 @@ def test_invalid_resume_restoration_fails_without_full_rerun() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._resume_source = _resume_source(resumeWorkspace={})
 
-    with pytest.raises(ValueError, match="workspace checkpoint"):
+    with pytest.raises(ValueError, match="workspace evidence"):
         workflow._initialize_step_ledger(
             ordered_nodes=_ordered_nodes(),
             dependency_map=_dependency_map(),
@@ -313,3 +313,21 @@ def test_invalid_resume_restoration_fails_without_full_rerun() -> None:
         )
 
     assert workflow._step_ledger_rows == []
+
+
+@pytest.mark.integration
+@pytest.mark.integration_ci
+def test_resume_initialization_accepts_existing_workspace_evidence_formats() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._resume_source = _resume_source(
+        resumeWorkspace={"branch": "feature", "commit": "abc123"}
+    )
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=datetime.now(UTC),
+    )
+
+    assert workflow._resume_workspace == {"branch": "feature", "commit": "abc123"}
+    assert workflow._restore_resume_workspace_for_failed_step("implement") is None
