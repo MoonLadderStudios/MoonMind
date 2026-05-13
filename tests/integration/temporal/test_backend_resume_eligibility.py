@@ -166,6 +166,8 @@ async def test_generic_rerun_does_not_carry_resume_reference_fields(
             created.state = MoonMindWorkflowState.FAILED
             created.close_status = TemporalExecutionCloseStatus.FAILED
             await session.commit()
+            source_workflow_id = created.workflow_id
+            source_run_id = created.run_id
 
             result = await service.update_execution(
                 workflow_id=created.workflow_id,
@@ -190,6 +192,11 @@ async def test_generic_rerun_does_not_carry_resume_reference_fields(
     assert rerun.parameters["task"] == {
         "title": "Resume source",
         "instructions": "Original",
+        "recovery": {
+            "kind": "exact_full_rerun",
+            "sourceWorkflowId": source_workflow_id,
+            "sourceRunId": source_run_id,
+        },
     }
 
 

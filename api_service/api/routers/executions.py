@@ -4761,6 +4761,80 @@ async def _persist_original_task_input_snapshot_from_parameters(
         source_run_id=source_run_id,
     )
 
+async def _reuse_original_task_input_snapshot_from_source(
+    *,
+    session: AsyncSession,
+    source_record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+    target_record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+) -> str:
+    source_memo = dict(getattr(source_record, "memo", None) or {})
+    snapshot_ref = _task_input_snapshot_ref_from_memo(source_memo)
+    if not snapshot_ref:
+        return ""
+    raw_version = source_memo.get("task_input_snapshot_version")
+    if raw_version is None:
+        raw_version = source_memo.get("taskInputSnapshotVersion")
+    try:
+        snapshot_version = (
+            int(raw_version)
+            if raw_version is not None
+            else _TASK_INPUT_SNAPSHOT_VERSION
+        )
+    except (TypeError, ValueError):
+        snapshot_version = _TASK_INPUT_SNAPSHOT_VERSION
+    records_to_update: list[
+        TemporalExecutionRecord | TemporalExecutionCanonicalRecord
+    ] = []
+    if isinstance(
+        target_record,
+        (TemporalExecutionRecord, TemporalExecutionCanonicalRecord),
+    ):
+        records_to_update.append(target_record)
+        if not isinstance(target_record, TemporalExecutionCanonicalRecord):
+            canonical_record = await session.get(
+                TemporalExecutionCanonicalRecord,
+                target_record.workflow_id,
+            )
+            if canonical_record is not None:
+                records_to_update.append(canonical_record)
+    linked_execution_keys: set[tuple[str, str, str]] = set()
+    for target in records_to_update:
+        memo = dict(target.memo or {})
+        memo["task_input_snapshot_ref"] = snapshot_ref
+        memo["task_input_snapshot_version"] = snapshot_version
+        memo["task_input_snapshot_source_kind"] = "rerun"
+        target.memo = memo
+        refs = list(target.artifact_refs or [])
+        if snapshot_ref not in refs:
+            refs.append(snapshot_ref)
+            target.artifact_refs = refs
+        execution_key = (target.namespace, target.workflow_id, target.run_id)
+        if execution_key in linked_execution_keys:
+            continue
+        linked_execution_keys.add(execution_key)
+        exists = await session.execute(
+            select(TemporalArtifactLink.id).where(
+                TemporalArtifactLink.artifact_id == snapshot_ref,
+                TemporalArtifactLink.namespace == target.namespace,
+                TemporalArtifactLink.workflow_id == target.workflow_id,
+                TemporalArtifactLink.run_id == target.run_id,
+                TemporalArtifactLink.link_type == _TASK_INPUT_SNAPSHOT_LINK_TYPE,
+            ).limit(1)
+        )
+        if exists.scalar_one_or_none() is None:
+            session.add(
+                TemporalArtifactLink(
+                    id=uuid4(),
+                    artifact_id=snapshot_ref,
+                    namespace=target.namespace,
+                    workflow_id=target.workflow_id,
+                    run_id=target.run_id,
+                    link_type=_TASK_INPUT_SNAPSHOT_LINK_TYPE,
+                    label="Original task input snapshot",
+                )
+            )
+    return snapshot_ref
+
 async def _attach_input_attachment_artifacts_to_execution(
     *,
     session: AsyncSession | None,
@@ -6573,18 +6647,31 @@ async def update_execution(
     refreshed_record = await service.describe_execution(response_workflow_id)
     snapshot_ref = ""
     if is_task_editing_update:
-        snapshot_ref = await _persist_original_task_input_snapshot_from_parameters(
-            session=session,
-            record=refreshed_record,
-            user=user,
-            parameters=dict(getattr(refreshed_record, "parameters", None) or {}),
-            source_kind=(
-                "rerun" if payload.update_name == "RequestRerun" else "edit"
-            ),
-            source_workflow_id=record.workflow_id,
-            source_run_id=getattr(record, "run_id", None),
-            input_artifact_ref=payload.input_artifact_ref,
+        exact_rerun = (
+            payload.update_name == "RequestRerun"
+            and payload.input_artifact_ref is None
+            and payload.plan_artifact_ref is None
+            and payload.parameters_patch is None
         )
+        if exact_rerun:
+            snapshot_ref = await _reuse_original_task_input_snapshot_from_source(
+                session=session,
+                source_record=record,
+                target_record=refreshed_record,
+            )
+        else:
+            snapshot_ref = await _persist_original_task_input_snapshot_from_parameters(
+                session=session,
+                record=refreshed_record,
+                user=user,
+                parameters=dict(getattr(refreshed_record, "parameters", None) or {}),
+                source_kind=(
+                    "rerun" if payload.update_name == "RequestRerun" else "edit"
+                ),
+                source_workflow_id=record.workflow_id,
+                source_run_id=getattr(record, "run_id", None),
+                input_artifact_ref=payload.input_artifact_ref,
+            )
     if is_task_editing_update:
         accepted = bool(update_result.get("accepted", True))
         applied = str(update_result.get("applied") or "").strip() or None

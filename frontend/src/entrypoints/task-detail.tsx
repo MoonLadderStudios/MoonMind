@@ -12,8 +12,8 @@ import {
   recordTemporalTaskEditingClientEvent,
   taskEditForRerunHref,
   taskEditHref,
-  taskRerunHref,
 } from '../lib/temporalTaskEditing';
+import { navigateTo } from '../lib/navigation';
 
 type DashboardConfig = {
   pollIntervalsMs?: { list?: number; detail?: number; events?: number };
@@ -4237,10 +4237,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       ? taskEditForRerunHref(workflowId)
       : taskEditHref(workflowId)
     : '';
-  const rerunHref = workflowId ? taskRerunHref(workflowId) : '';
   const onTaskEditingNavigation = (
     event: MouseEvent<HTMLAnchorElement>,
-    telemetryEvent: 'detail_edit_click' | 'detail_rerun_click',
+    telemetryEvent: 'detail_edit_click',
   ) => {
     if (busy) {
       event.preventDefault();
@@ -4251,6 +4250,39 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       mode: 'detail',
       workflowId,
     });
+  };
+  const onRerun = () => {
+    setActionError(null);
+    if (busy || !workflowId) return;
+    recordTemporalTaskEditingClientEvent({
+      event: 'detail_rerun_click',
+      mode: 'detail',
+      workflowId,
+    });
+    updateMutation.mutate(
+      { updateName: 'RequestRerun' },
+      {
+        onSuccess: (result: unknown) => {
+          const payloadResult = result as {
+            execution?: { workflowId?: string | null };
+            workflow_id?: string | null;
+          };
+          const redirectWorkflowId =
+            String(payloadResult.execution?.workflowId || '').trim() ||
+            String(payloadResult.workflow_id || '').trim() ||
+            workflowId;
+          try {
+            window.sessionStorage.setItem(
+              'moonmind.temporalTaskEditing.notice',
+              'Rerun was requested and the latest execution view is ready.',
+            );
+          } catch {
+            // Navigation should not depend on session storage availability.
+          }
+          navigateTo(`/tasks/${encodeURIComponent(redirectWorkflowId)}?source=temporal`);
+        },
+      },
+    );
   };
   const isTerminalExecution = TERMINAL_STATES.has(execution?.rawState || execution?.state || '');
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
@@ -4818,15 +4850,15 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     Edit task
                   </a>
                 ) : null}
-                {taskEditingOn && actions.canRerun && rerunHref ? (
-                  <a
-                    className="button secondary"
-                    href={rerunHref}
-                    aria-disabled={busy}
-                    onClick={(event) => onTaskEditingNavigation(event, 'detail_rerun_click')}
+                {taskEditingOn && actions.canRerun ? (
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={onRerun}
                   >
                     Rerun
-                  </a>
+                  </button>
                 ) : null}
                 {taskEditingOn && actions.canResumeFromFailedStep ? (
                   <button

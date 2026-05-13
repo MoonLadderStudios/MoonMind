@@ -12,8 +12,8 @@ import {
 import {
   taskEditForRerunHref,
   taskEditHref,
-  taskRerunHref,
 } from '../lib/temporalTaskEditing';
+import { navigateTo } from '../lib/navigation';
 import { BootPayload } from '../boot/parseBootPayload';
 import { MockInstance } from 'vitest';
 
@@ -41,6 +41,10 @@ vi.mock('react-virtuoso', () => ({
       </div>
     );
   },
+}));
+
+vi.mock('../lib/navigation', () => ({
+  navigateTo: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -311,6 +315,7 @@ describe('Task Detail Entrypoint', () => {
     window.sessionStorage.clear();
     fetchSpy = vi.spyOn(window, 'fetch');
     fetchSpy.mockClear();
+    vi.mocked(navigateTo).mockReset();
   });
 
   it('returns null for route templates with missing parameters', () => {
@@ -1164,7 +1169,6 @@ describe('Task Detail Entrypoint', () => {
     expect(taskEditForRerunHref('mm:wf 1')).toBe(
       '/tasks/new?rerunExecutionId=mm%3Awf%201&mode=edit',
     );
-    expect(taskRerunHref('mm:wf 1')).toBe('/tasks/new?rerunExecutionId=mm%3Awf%201');
   });
 
   it('shows Edit and Rerun entry points only when Temporal task editing is flagged on and capabilities allow them', async () => {
@@ -1225,15 +1229,20 @@ describe('Task Detail Entrypoint', () => {
     expect(screen.getByRole('link', { name: 'Edit task' }).getAttribute('href')).toBe(
       '/tasks/new?editExecutionId=test-123',
     );
-    expect(screen.getByRole('link', { name: 'Rerun' }).getAttribute('href')).toBe(
-      '/tasks/new?rerunExecutionId=test-123',
-    );
     const editLink = screen.getByRole('link', { name: 'Edit task' });
-    const rerunLink = screen.getByRole('link', { name: 'Rerun' });
+    const rerunButton = screen.getByRole('button', { name: 'Rerun' });
     editLink.addEventListener('click', (event) => event.preventDefault());
-    rerunLink.addEventListener('click', (event) => event.preventDefault());
     fireEvent.click(editLink);
-    fireEvent.click(rerunLink);
+    fireEvent.click(rerunButton);
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/update',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ updateName: 'RequestRerun' }),
+        }),
+      );
+    });
     expect(telemetryEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1347,19 +1356,19 @@ describe('Task Detail Entrypoint', () => {
     renderWithClient(<TaskDetailPage payload={actionPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'Rerun' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Rerun' })).toBeTruthy();
     });
     fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'Rerun' }).getAttribute('aria-disabled')).toBe('true');
+      expect((screen.getByRole('button', { name: 'Rerun' }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
     });
 
-    const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true });
-    const allowed = screen.getByRole('link', { name: 'Rerun' }).dispatchEvent(clickEvent);
-
-    expect(allowed).toBe(false);
-    expect(clickEvent.defaultPrevented).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Rerun' }));
+    const updateCalls = fetchSpy.mock.calls.filter(([input]) => String(input).includes('/update'));
+    expect(updateCalls).toHaveLength(1);
     promptSpy.mockRestore();
   });
 
@@ -1412,9 +1421,8 @@ describe('Task Detail Entrypoint', () => {
     expect(screen.getByRole('link', { name: 'Edit task' }).getAttribute('href')).toBe(
       '/tasks/new?rerunExecutionId=test-123&mode=edit',
     );
-    expect(screen.getByRole('link', { name: 'Rerun' }).getAttribute('href')).toBe(
-      '/tasks/new?rerunExecutionId=test-123',
-    );
+    expect(screen.getByRole('button', { name: 'Rerun' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Rerun' })).toBeNull();
   });
 
   it('does not show edit unavailable text while another edit path is enabled', async () => {
