@@ -60,6 +60,96 @@ def test_run_boundary_prepares_objective_and_current_step_context_only() -> None
     ] == {"objective": 1, "step": 1}
 
 
+def test_agent_run_child_input_scope_is_parent_selected() -> None:
+    wf = MoonMindRunWorkflow()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=SimpleNamespace(
+            workflow_id="run-target-aware-child",
+            run_id="run-id-1",
+            namespace="default",
+        ),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "jules"}},
+            node_id="second-step",
+            tool_name="jules",
+            workflow_parameters={
+                "task": {
+                    "inputAttachments": [{"artifactId": "objective-artifact"}],
+                    "steps": [
+                        {
+                            "id": "first-step",
+                            "inputAttachments": [{"artifactId": "first-step-artifact"}],
+                        },
+                        {
+                            "id": "second-step",
+                            "inputAttachments": [
+                                {"artifactId": "second-step-artifact"}
+                            ],
+                        },
+                    ],
+                }
+            },
+        )
+
+    dumped = request.model_dump(by_alias=True)
+    prepared_context = dumped["parameters"]["metadata"]["moonmind"]["preparedContext"]
+
+    assert dumped["agentKind"] == "external"
+    assert prepared_context["logicalStepId"] == "second-step"
+    assert "objective-artifact" in str(dumped)
+    assert "second-step-artifact" in str(dumped)
+    assert "first-step-artifact" not in str(dumped)
+
+
+def test_same_workspace_materialization_excludes_sibling_step_refs() -> None:
+    wf = MoonMindRunWorkflow()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=SimpleNamespace(
+            workflow_id="run-target-aware-shared-workspace",
+            run_id="run-id-1",
+            namespace="default",
+        ),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="first-step",
+            tool_name="codex_cli",
+            workflow_parameters={
+                "task": {
+                    "steps": [
+                        {
+                            "id": "first-step",
+                            "inputAttachments": [
+                                {"artifactId": "shared-image", "filename": "image.png"}
+                            ],
+                        },
+                        {
+                            "id": "second-step",
+                            "inputAttachments": [
+                                {
+                                    "artifactId": "shared-image-copy",
+                                    "filename": "image.png",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            },
+        )
+
+    dumped = request.model_dump(by_alias=True)
+    prepared_context = dumped["parameters"]["metadata"]["moonmind"]["preparedContext"]
+
+    assert request.input_refs == []
+    assert prepared_context["logicalStepId"] == "first-step"
+    assert "prepared-context://steps/first-step/shared-image" in str(prepared_context)
+    assert "shared-image-copy" not in str(prepared_context)
+    assert "second-step" not in str(prepared_context)
+
+
 def test_prepare_boundary_reports_target_for_invalid_step_attachment() -> None:
     payload = build_target_aware_prepared_context_payload(
         {

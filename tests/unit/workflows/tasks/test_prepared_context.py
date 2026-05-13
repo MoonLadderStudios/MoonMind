@@ -255,6 +255,58 @@ def test_select_step_context_includes_objective_and_current_step_only() -> None:
     assert "artifact-step-2" not in str(context.model_dump(by_alias=True))
 
 
+def test_select_step_context_excludes_sibling_refs_from_shared_workspace() -> None:
+    manifest = PreparedInputManifest.model_validate(
+        {
+            "manifestRef": "prepared-context-manifest://task-inputs",
+            "entries": [
+                {
+                    "artifactId": "objective-image",
+                    "targetKind": "objective",
+                    "rawInputRef": "artifact://objective-image",
+                    "derivedContextRef": "prepared-context://objective/objective-image",
+                    "workspacePath": ".moonmind/inputs/shared/objective-image.png",
+                },
+                {
+                    "artifactId": "collect-image",
+                    "targetKind": "step",
+                    "stepRef": "collect-evidence",
+                    "rawInputRef": "artifact://collect-image",
+                    "derivedContextRef": (
+                        "prepared-context://steps/collect-evidence/collect-image"
+                    ),
+                    "workspacePath": ".moonmind/inputs/shared/image.png",
+                },
+                {
+                    "artifactId": "report-image",
+                    "targetKind": "step",
+                    "stepRef": "write-report",
+                    "rawInputRef": "artifact://report-image",
+                    "derivedContextRef": (
+                        "prepared-context://steps/write-report/report-image"
+                    ),
+                    "workspacePath": ".moonmind/inputs/shared/image.png",
+                },
+            ],
+        }
+    )
+
+    context = select_step_prepared_context(
+        manifest,
+        logical_step_id="collect-evidence",
+    )
+    dumped = context.model_dump(by_alias=True)
+
+    assert context.objective_context_refs == [
+        "prepared-context://objective/objective-image"
+    ]
+    assert context.step_context_refs == [
+        "prepared-context://steps/collect-evidence/collect-image"
+    ]
+    assert "report-image" not in str(dumped)
+    assert "write-report" not in str(dumped)
+
+
 def test_step_context_metadata_is_bounded_and_target_aware() -> None:
     manifest = build_prepared_input_manifest(_task_payload())
     context = select_step_prepared_context(manifest, logical_step_id="collect-evidence")
