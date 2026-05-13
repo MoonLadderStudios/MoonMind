@@ -11,6 +11,10 @@ export function formatTaskSkills(
 const STATUS_DISPLAY_NAMES: Record<string, string> = {
   awaiting_slot: 'AWAITING SLOT',
   waiting_on_dependencies: 'AWAITING TASK',
+  checkpoint_validation: 'Checkpoint validation',
+  failed_step_execution: 'Failed step execution',
+  preserved_output_injection: 'Preserved output injection',
+  workspace_restoration: 'Workspace restoration',
 };
 
 export function formatStatusLabel(status: string | null | undefined, fallback = '—'): string {

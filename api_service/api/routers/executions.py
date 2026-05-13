@@ -2575,6 +2575,32 @@ def _failed_resume_phase(disabled_reason: str | None) -> str | None:
         return "checkpoint_validation"
     return None
 
+def _normalize_failed_resume_phase(value: Any) -> str | None:
+    phase = str(value or "").strip().lower().replace("-", "_")
+    if phase in {
+        "workspace_restoration",
+        "checkpoint_validation",
+        "preserved_output_injection",
+        "failed_step_execution",
+    }:
+        return phase
+    return None
+
+def _target_diagnostics_recovery_block(
+    diagnostics_block: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    recovery = diagnostics_block.get("recovery")
+    if isinstance(recovery, Mapping):
+        return recovery
+    return {}
+
+def _mapping_str_value(value: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        candidate = str(value.get(key) or "").strip()
+        if candidate:
+            return candidate
+    return None
+
 def _build_target_diagnostics(
     record,
     *,
@@ -2592,7 +2618,28 @@ def _build_target_diagnostics(
 
     targets: list[dict[str, Any]] = []
     objective_attachments = _target_attachment_payloads(task_payload)
-    if objective_attachments or diagnostics_block:
+    raw_steps = task_payload.get("steps") if isinstance(task_payload, Mapping) else None
+    step_targets: list[dict[str, Any]] = []
+    if isinstance(raw_steps, list):
+        for index, raw_step in enumerate(raw_steps, start=1):
+            if not isinstance(raw_step, Mapping):
+                continue
+            step_id = _target_step_id(raw_step, f"step-{index}")
+            step_targets.append(
+                {
+                    "targetKind": "step",
+                    "stepId": step_id,
+                    "label": _target_step_label(raw_step, step_id, index),
+                    "attachments": _target_attachment_payloads(raw_step),
+                    "refs": [],
+                    "failures": [],
+                }
+            )
+
+    has_any_target_attachments = bool(objective_attachments) or any(
+        step_target["attachments"] for step_target in step_targets
+    )
+    if objective_attachments or diagnostics_block or has_any_target_attachments:
         targets.append(
             {
                 "targetKind": "objective",
@@ -2603,22 +2650,9 @@ def _build_target_diagnostics(
             }
         )
 
-    raw_steps = task_payload.get("steps") if isinstance(task_payload, Mapping) else None
-    if isinstance(raw_steps, list):
-        for index, raw_step in enumerate(raw_steps, start=1):
-            if not isinstance(raw_step, Mapping):
-                continue
-            step_id = _target_step_id(raw_step, f"step-{index}")
-            step_target = {
-                "targetKind": "step",
-                "stepId": step_id,
-                "label": _target_step_label(raw_step, step_id, index),
-                "attachments": _target_attachment_payloads(raw_step),
-                "refs": [],
-                "failures": [],
-            }
-            if step_target["attachments"] or diagnostics_block:
-                targets.append(step_target)
+    for step_target in step_targets:
+        if step_target["attachments"] or diagnostics_block or has_any_target_attachments:
+            targets.append(step_target)
 
     raw_overlay_targets = diagnostics_block.get("targets")
     if isinstance(raw_overlay_targets, list):
@@ -2640,24 +2674,36 @@ def _build_target_diagnostics(
             )
 
     resume_source = _resume_source_block_from_record(record)
-    source_workflow_id = str(
-        resume_source.get("sourceWorkflowId")
-        or resume_source.get("source_workflow_id")
-        or ""
-    ).strip() or None
-    source_run_id = str(
-        resume_source.get("sourceRunId") or resume_source.get("source_run_id") or ""
-    ).strip() or None
-    failed_resume_phase = _failed_resume_phase(
+    diagnostics_recovery = _target_diagnostics_recovery_block(diagnostics_block)
+    source_workflow_id = _mapping_str_value(
+        resume_source, "sourceWorkflowId", "source_workflow_id"
+    ) or _mapping_str_value(
+        diagnostics_recovery, "sourceWorkflowId", "source_workflow_id"
+    )
+    source_run_id = _mapping_str_value(
+        resume_source, "sourceRunId", "source_run_id"
+    ) or _mapping_str_value(diagnostics_recovery, "sourceRunId", "source_run_id")
+    failed_resume_phase = _normalize_failed_resume_phase(
+        _mapping_str_value(
+            diagnostics_recovery, "failedResumePhase", "failed_resume_phase"
+        )
+    ) or _failed_resume_phase(
         resume_summary.disabled_reason if resume_summary else None
     )
+    checkpoint_ref = (
+        resume_summary.checkpoint_ref if resume_summary else None
+    ) or _mapping_str_value(diagnostics_recovery, "checkpointRef", "checkpoint_ref")
+    preserved_steps = _preserved_steps_from_resume_source(
+        resume_source
+    ) or _preserved_steps_from_resume_source(diagnostics_recovery)
     recovery = None
     has_resume_evidence = bool(
         resume_source
+        or diagnostics_recovery
         or (
             resume_summary
             and (
-                resume_summary.checkpoint_ref
+                checkpoint_ref
                 or resume_summary.failed_step_id
                 or failed_resume_phase
             )
@@ -2665,11 +2711,16 @@ def _build_target_diagnostics(
     )
     if has_resume_evidence:
         recovery = {
-            "resumed": bool(source_workflow_id or source_run_id or resume_source),
+            "resumed": bool(
+                source_workflow_id
+                or source_run_id
+                or resume_source
+                or diagnostics_recovery.get("resumed")
+            ),
             "sourceWorkflowId": source_workflow_id,
             "sourceRunId": source_run_id,
-            "checkpointRef": resume_summary.checkpoint_ref if resume_summary else None,
-            "preservedSteps": _preserved_steps_from_resume_source(resume_source),
+            "checkpointRef": checkpoint_ref,
+            "preservedSteps": preserved_steps,
             "failedResumePhase": failed_resume_phase,
         }
 

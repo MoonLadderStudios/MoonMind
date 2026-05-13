@@ -2017,6 +2017,139 @@ describe('Task Detail Entrypoint', () => {
     });
   });
 
+  it('renders empty target and generated context diagnostics', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      taskRunId: '123e4567-e89b-12d3-a456-426614174000',
+      title: 'Generated context diagnostic task',
+      summary: 'Context preparation completed.',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      targetDiagnostics: {
+        targets: [
+          {
+            targetKind: 'objective',
+            label: 'Task objective',
+            attachments: [
+              {
+                artifactRef: 'artifact://input/objective',
+                filename: 'objective.png',
+                contentType: 'image/png',
+                previewAvailable: true,
+              },
+            ],
+            refs: [{ refKind: 'generated_context', artifactRef: 'artifact://context/objective' }],
+            failures: [],
+          },
+          {
+            targetKind: 'step',
+            stepId: 'inspect',
+            label: 'Inspect screenshot',
+            attachments: [],
+            refs: [{ refKind: 'generated_context', artifactRef: 'artifact://context/inspect' }],
+            failures: [],
+          },
+        ],
+        recovery: null,
+        degradedReason: null,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/logs/') || url.includes('/observability') || url.includes('/diagnostics')) {
+        return Promise.resolve({ ok: true, text: async () => '' } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Generated context diagnostic task')).toBeTruthy();
+    });
+    expect(screen.getByText('artifact://context/objective')).toBeTruthy();
+    expect(screen.getByText('artifact://context/inspect')).toBeTruthy();
+    expect(screen.getByText('No attachments recorded for this target.')).toBeTruthy();
+  });
+
+  it('renders failed-step execution Resume phase with preserved provenance', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      taskRunId: '123e4567-e89b-12d3-a456-426614174000',
+      title: 'Failed Resume diagnostic task',
+      summary: 'Resume failed during step execution.',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      targetDiagnostics: {
+        targets: [],
+        recovery: {
+          resumed: true,
+          sourceWorkflowId: 'mm:source',
+          sourceRunId: 'run-source',
+          checkpointRef: 'artifact://resume/checkpoint',
+          preservedSteps: [
+            {
+              logicalStepId: 'prepare',
+              title: 'Prepare context',
+              sourceAttempt: 1,
+              sourceWorkflowId: 'mm:source',
+              sourceRunId: 'run-source',
+            },
+          ],
+          failedResumePhase: 'failed_step_execution',
+        },
+        degradedReason: null,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/logs/') || url.includes('/observability') || url.includes('/diagnostics')) {
+        return Promise.resolve({ ok: true, text: async () => '' } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed Resume diagnostic task')).toBeTruthy();
+    });
+    expect(screen.getByText('Resumed from mm:source')).toBeTruthy();
+    expect(screen.getByText('Prepare context')).toBeTruthy();
+    expect(screen.getByText('Failed phase:')).toBeTruthy();
+    expect(screen.getByText('Failed step execution')).toBeTruthy();
+  });
+
   it('renders remediation create action, relationships, evidence, and degraded states', async () => {
     const mockExecution = {
       taskId: 'test-123',
