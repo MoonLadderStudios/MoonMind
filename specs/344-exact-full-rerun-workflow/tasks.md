@@ -7,7 +7,7 @@
 
 **Organization**: Tasks cover exactly one story: exact full rerun from a failed execution using the original task input snapshot unchanged.
 
-**Source Traceability**: Preserves Jira issue `MM-645` and the original Jira preset brief from `spec.md`. Requirement status from `plan.md`: 5 partial, 4 missing, 9 implemented_unverified, 1 implemented_verified across FR/SCN/SC/DESIGN rows.
+**Source Traceability**: Preserves Jira issue `MM-645` and the original Jira preset brief from `spec.md`. Requirement status from `plan.md`: 10 partial, 5 missing, 8 implemented_unverified, 1 implemented_verified across FR/SCN/SC/DESIGN rows.
 
 **Test Commands**:
 
