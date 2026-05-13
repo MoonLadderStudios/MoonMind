@@ -2527,7 +2527,9 @@ class TemporalExecutionService:
             record.parameters = self._full_rerun_parameters(
                 params,
                 recovery_provenance=self._full_retry_recovery_from_patch(
-                    parameters_patch
+                    parameters_patch,
+                    source_workflow_id=record.workflow_id,
+                    source_run_id=record.run_id,
                 ),
             )
         else:
@@ -2558,7 +2560,11 @@ class TemporalExecutionService:
             params.update(parameters_patch)
         params = self._full_rerun_parameters(
             params,
-            recovery_provenance=self._full_retry_recovery_from_patch(parameters_patch),
+            recovery_provenance=self._full_retry_recovery_from_patch(
+                parameters_patch,
+                source_workflow_id=record.workflow_id,
+                source_run_id=record.run_id,
+            ),
         )
 
         rerun_source = {
@@ -2648,6 +2654,9 @@ class TemporalExecutionService:
     @staticmethod
     def _full_retry_recovery_from_patch(
         parameters_patch: Mapping[str, Any] | None,
+        *,
+        source_workflow_id: str,
+        source_run_id: str,
     ) -> dict[str, Any] | None:
         task_patch = (
             parameters_patch.get("task")
@@ -2661,11 +2670,33 @@ class TemporalExecutionService:
             return None
         if recovery.get("kind") not in {"exact_full_rerun", "edited_full_retry"}:
             return None
-        source_workflow_id = str(recovery.get("sourceWorkflowId") or "").strip()
-        source_run_id = str(recovery.get("sourceRunId") or "").strip()
-        if not source_workflow_id or not source_run_id:
-            return None
-        return dict(recovery)
+        canonical_workflow_id = source_workflow_id.strip()
+        canonical_run_id = source_run_id.strip()
+        if not canonical_workflow_id or not canonical_run_id:
+            raise TemporalExecutionValidationError(
+                "Rerun source workflowId and runId are required."
+            )
+
+        for field, canonical_value in (
+            ("sourceWorkflowId", canonical_workflow_id),
+            ("sourceRunId", canonical_run_id),
+        ):
+            value = recovery.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise TemporalExecutionValidationError(
+                    f"task.recovery.{field} must be a string."
+                )
+            if value.strip() != canonical_value:
+                raise TemporalExecutionValidationError(
+                    "task.recovery source identifiers must match the source execution."
+                )
+
+        recovery_provenance = dict(recovery)
+        recovery_provenance["sourceWorkflowId"] = canonical_workflow_id
+        recovery_provenance["sourceRunId"] = canonical_run_id
+        return recovery_provenance
 
     async def create_failed_step_resume_execution(
         self,

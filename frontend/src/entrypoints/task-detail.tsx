@@ -4256,10 +4256,11 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
   const canShowEditTask = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
   const canFailedStepResume = Boolean(actions?.canResumeFromFailedStep);
-  const editTaskUnavailableReason =
-    actions?.disabledReasons?.canEditForRerun ||
-    actions?.disabledReasons?.canUpdateInputs ||
-    null;
+  const editTaskUnavailableReason = canShowEditTask
+    ? null
+    : actions?.disabledReasons?.canEditForRerun ||
+      actions?.disabledReasons?.canUpdateInputs ||
+      null;
   const rerunUnavailableReason = actions?.disabledReasons?.canRerun || null;
   const hasTaskEditingActions = taskEditingOn && Boolean(
     canShowEditTask ||

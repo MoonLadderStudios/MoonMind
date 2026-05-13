@@ -2052,6 +2052,102 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         assert rerun.parameters["task"] == {"instructions": "Original task"}
         assert service._client_adapter.update_workflow.await_count == 0
 
+
+@pytest.mark.asyncio
+async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"task": {"instructions": "Original task"}},
+            idempotency_key=None,
+        )
+        await service.cancel_execution(
+            workflow_id=created.workflow_id,
+            reason="done",
+            graceful=True,
+        )
+
+        source_workflow_id = created.workflow_id
+        source_run_id = created.run_id
+
+        response = await service.update_execution(
+            workflow_id=source_workflow_id,
+            update_name="RequestRerun",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch={
+                "task": {
+                    "instructions": "Edited task",
+                    "recovery": {"kind": "edited_full_retry"},
+                }
+            },
+            title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
+            idempotency_key="rerun-edited",
+        )
+        rerun = await service.describe_execution(response["workflow_id"])
+
+        assert rerun.parameters["task"]["recovery"] == {
+            "kind": "edited_full_retry",
+            "sourceWorkflowId": source_workflow_id,
+            "sourceRunId": source_run_id,
+        }
+
+
+def test_full_retry_recovery_from_patch_rejects_non_string_source_ids():
+    with pytest.raises(
+        TemporalExecutionValidationError,
+        match="task.recovery.sourceWorkflowId must be a string",
+    ):
+        TemporalExecutionService._full_retry_recovery_from_patch(
+            {
+                "task": {
+                    "recovery": {
+                        "kind": "edited_full_retry",
+                        "sourceWorkflowId": 123,
+                        "sourceRunId": "run-source",
+                    }
+                }
+            },
+            source_workflow_id="mm:source",
+            source_run_id="run-source",
+        )
+
+
+def test_full_retry_recovery_from_patch_rejects_forged_source_ids():
+    with pytest.raises(
+        TemporalExecutionValidationError,
+        match="source identifiers must match",
+    ):
+        TemporalExecutionService._full_retry_recovery_from_patch(
+            {
+                "task": {
+                    "recovery": {
+                        "kind": "edited_full_retry",
+                        "sourceWorkflowId": "mm:other",
+                        "sourceRunId": "run-source",
+                    }
+                }
+            },
+            source_workflow_id="mm:source",
+            source_run_id="run-source",
+        )
+
+
 def _valid_resume_checkpoint_payload(
     *,
     workflow_id: str,
