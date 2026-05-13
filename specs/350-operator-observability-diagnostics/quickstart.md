@@ -26,6 +26,12 @@ Target new or strengthened cases:
 npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx
 ```
 
+If npm script PATH resolution is unavailable in a managed worker after `npm ci`, run the same focused Vitest target through the local binary:
+
+```bash
+./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx
+```
+
 Target UI cases:
 - target cards render objective and step metadata separately
 - targets without attachments show an explicit empty state
