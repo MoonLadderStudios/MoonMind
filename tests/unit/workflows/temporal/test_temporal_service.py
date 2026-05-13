@@ -1961,7 +1961,14 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
         assert "resumeCheckpointRef" not in refreshed.parameters
         assert "preservedSteps" not in refreshed.parameters
         assert "completedSteps" not in refreshed.parameters
-        assert refreshed.parameters["task"] == {"instructions": "Original task"}
+        assert refreshed.parameters["task"] == {
+            "instructions": "Original task",
+            "recovery": {
+                "kind": "exact_full_rerun",
+                "sourceWorkflowId": workflow_id,
+                "sourceRunId": original_run_id,
+            },
+        }
         assert refreshed.search_attributes["mm_continue_as_new_cause"] == "manual_rerun"
 
 @pytest.mark.asyncio
@@ -2049,7 +2056,14 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         assert "resumeCheckpointRef" not in rerun.parameters
         assert "preservedSteps" not in rerun.parameters
         assert "completedSteps" not in rerun.parameters
-        assert rerun.parameters["task"] == {"instructions": "Original task"}
+        assert rerun.parameters["task"] == {
+            "instructions": "Original task",
+            "recovery": {
+                "kind": "exact_full_rerun",
+                "sourceWorkflowId": source_workflow_id,
+                "sourceRunId": source_run_id,
+            },
+        }
         assert service._client_adapter.update_workflow.await_count == 0
 
 
@@ -2145,6 +2159,24 @@ def test_full_retry_recovery_from_patch_rejects_forged_source_ids():
             },
             source_workflow_id="mm:source",
             source_run_id="run-source",
+        )
+
+
+@pytest.mark.parametrize(
+    ("source_workflow_id", "source_run_id"),
+    [("", "run-source"), ("mm:source", " ")],
+)
+def test_exact_full_rerun_recovery_rejects_missing_source_identity(
+    source_workflow_id: str,
+    source_run_id: str,
+) -> None:
+    with pytest.raises(
+        TemporalExecutionValidationError,
+        match="Rerun source workflowId and runId are required",
+    ):
+        TemporalExecutionService._exact_full_rerun_recovery(
+            source_workflow_id=source_workflow_id,
+            source_run_id=source_run_id,
         )
 
 

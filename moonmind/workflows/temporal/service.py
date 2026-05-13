@@ -2533,7 +2533,16 @@ class TemporalExecutionService:
                 ),
             )
         else:
-            record.parameters = self._full_rerun_parameters(record.parameters)
+            recovery_provenance = None
+            if not input_artifact_ref and not plan_artifact_ref:
+                recovery_provenance = self._exact_full_rerun_recovery(
+                    source_workflow_id=record.workflow_id,
+                    source_run_id=record.run_id,
+                )
+            record.parameters = self._full_rerun_parameters(
+                record.parameters,
+                recovery_provenance=recovery_provenance,
+            )
         self._continue_as_new(
             record,
             summary="Rerun requested via Continue-As-New.",
@@ -2558,13 +2567,21 @@ class TemporalExecutionService:
         params = dict(record.parameters or {})
         if parameters_patch:
             params.update(parameters_patch)
-        params = self._full_rerun_parameters(
-            params,
-            recovery_provenance=self._full_retry_recovery_from_patch(
+            recovery_provenance = self._full_retry_recovery_from_patch(
                 parameters_patch,
                 source_workflow_id=record.workflow_id,
                 source_run_id=record.run_id,
-            ),
+            )
+        elif not input_artifact_ref and not plan_artifact_ref:
+            recovery_provenance = self._exact_full_rerun_recovery(
+                source_workflow_id=record.workflow_id,
+                source_run_id=record.run_id,
+            )
+        else:
+            recovery_provenance = None
+        params = self._full_rerun_parameters(
+            params,
+            recovery_provenance=recovery_provenance,
         )
 
         rerun_source = {
@@ -2650,6 +2667,24 @@ class TemporalExecutionService:
             task_params["recovery"] = dict(recovery_provenance)
             params["task"] = task_params
         return params
+
+    @staticmethod
+    def _exact_full_rerun_recovery(
+        *,
+        source_workflow_id: str,
+        source_run_id: str,
+    ) -> dict[str, Any]:
+        canonical_workflow_id = source_workflow_id.strip()
+        canonical_run_id = source_run_id.strip()
+        if not canonical_workflow_id or not canonical_run_id:
+            raise TemporalExecutionValidationError(
+                "Rerun source workflowId and runId are required."
+            )
+        return {
+            "kind": "exact_full_rerun",
+            "sourceWorkflowId": canonical_workflow_id,
+            "sourceRunId": canonical_run_id,
+        }
 
     @staticmethod
     def _full_retry_recovery_from_patch(

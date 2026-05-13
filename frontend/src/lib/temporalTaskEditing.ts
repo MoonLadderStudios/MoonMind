@@ -229,10 +229,6 @@ export function taskEditForRerunHref(workflowId: string): string {
   return `${taskCreateHref()}?rerunExecutionId=${encodeURIComponent(workflowId)}&mode=edit`;
 }
 
-export function taskRerunHref(workflowId: string): string {
-  return `${taskCreateHref()}?rerunExecutionId=${encodeURIComponent(workflowId)}`;
-}
-
 export function resolveTaskSubmitPageMode(
   search: string | URLSearchParams,
 ): TaskSubmitPageModeResolution {

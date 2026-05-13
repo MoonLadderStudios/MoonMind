@@ -22,6 +22,7 @@ from api_service.api.routers.executions import (
     _build_original_task_input_snapshot_payload,
     _merge_task_preserving_artifact_instructions,
     _resume_not_available_reason,
+    _reuse_original_task_input_snapshot_from_source,
     _task_input_snapshot_descriptor_from_record,
     get_temporal_client,
     _serialize_execution,
@@ -33,6 +34,8 @@ from api_service.db.models import (
     MoonMindWorkflowState,
     TemporalArtifactEncryption,
     TemporalArtifactStatus,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionRecord,
     TemporalWorkflowType,
 )
 from moonmind.config.settings import settings
@@ -7567,6 +7570,52 @@ def test_mm644_rerun_snapshot_payload_records_source_lineage() -> None:
         "sourceRunId": "run-source",
     }
     assert payload["draft"]["task"]["recovery"]["kind"] == "edited_full_retry"
+
+
+@pytest.mark.asyncio
+async def test_exact_rerun_reuses_source_task_input_snapshot_lineage() -> None:
+    source = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    source.memo = {
+        **source.memo,
+        "task_input_snapshot_ref": "artifact://snapshot/source",
+        "task_input_snapshot_version": 1,
+        "task_input_snapshot_source_kind": "create",
+    }
+    target = TemporalExecutionRecord(
+        workflow_id="mm:rerun",
+        run_id="run-rerun",
+        namespace="moonmind",
+        workflow_type=TemporalWorkflowType.RUN,
+        memo={},
+        artifact_refs=[],
+    )
+    canonical = TemporalExecutionCanonicalRecord(
+        workflow_id="mm:rerun",
+        run_id="run-rerun",
+        namespace="moonmind",
+        workflow_type=TemporalWorkflowType.RUN,
+        memo={},
+        artifact_refs=[],
+    )
+    session = AsyncMock()
+    session.get.return_value = canonical
+
+    snapshot_ref = await _reuse_original_task_input_snapshot_from_source(
+        session=session,
+        source_record=source,
+        target_record=target,
+    )
+
+    assert snapshot_ref == "artifact://snapshot/source"
+    for record in (target, canonical):
+        assert record.memo["task_input_snapshot_ref"] == "artifact://snapshot/source"
+        assert record.memo["task_input_snapshot_version"] == 1
+        assert record.memo["task_input_snapshot_source_kind"] == "rerun"
+        assert record.artifact_refs == ["artifact://snapshot/source"]
+    session.get.assert_awaited_once_with(
+        TemporalExecutionCanonicalRecord,
+        "mm:rerun",
+    )
 
 
 def test_terminal_task_editing_actions_reject_parameter_fallback_without_snapshot(
