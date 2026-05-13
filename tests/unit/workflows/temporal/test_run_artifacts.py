@@ -2271,6 +2271,128 @@ async def test_run_execution_stage_skips_native_pr_after_push_failure(
     assert wf._publish_reason == "publish failed: working branch 'main' is protected"
 
 @pytest.mark.asyncio
+async def test_run_execution_stage_stops_after_publish_lease_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wf = MoonMindRunWorkflow()
+    wf._owner_id = "owner-1"
+    wf._repo = "MoonLadderStudios/MoonMind"
+    child_workflow_ids: list[str] = []
+    create_pr_called = False
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        nonlocal create_pr_called
+        if activity_type == "repo.create_pr":
+            create_pr_called = True
+            return {"url": "https://github.com/MoonLadderStudios/MoonMind/pull/999"}
+
+        if activity_type == "artifact.read":
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Two Step Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "node-1",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "auto",
+                                "version": "1.0",
+                            },
+                            "inputs": {
+                                "runtime": {"mode": "claude"},
+                                "instructions": "Create spec artifacts",
+                            },
+                            "options": {},
+                        },
+                        {
+                            "id": "node-2",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "auto",
+                                "version": "1.0",
+                            },
+                            "inputs": {
+                                "runtime": {"mode": "claude"},
+                                "instructions": "Implement the spec",
+                            },
+                            "options": {},
+                        },
+                    ],
+                    "edges": [{"from": "node-1", "to": "node-2"}],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        args: object,
+        **kwargs: object,
+    ) -> object:
+        child_workflow_ids.append(str(kwargs.get("id") or ""))
+        return {
+            "summary": "Completed with status completed",
+            "metadata": {
+                "push_status": "lease_conflict",
+                "push_branch": "feature/stale",
+                "push_error": "! [rejected] feature/stale (stale info)",
+                "diagnostic_kind": "publish_lease_conflict",
+                "retryable": True,
+            },
+            "output_refs": [],
+        }
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+
+    await wf._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
+        plan_ref="art_plan_1",
+    )
+
+    assert len(child_workflow_ids) == 1
+    assert child_workflow_ids[0].endswith(":agent:node-1")
+    assert not create_pr_called
+    assert wf._publish_status == "failed"
+    assert "remote branch 'feature/stale' changed" in (wf._publish_reason or "")
+
+@pytest.mark.asyncio
 async def test_run_proposals_stage_global_disable_halts_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

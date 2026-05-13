@@ -203,6 +203,9 @@ NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
 NATIVE_PR_BRANCH_DEFAULTS_PATCH = "native-pr-branch-defaults-v1"
 NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
 NATIVE_PR_LEASE_CONFLICT_GATE_PATCH = "native-pr-lease-conflict-gate-v1"
+RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH = (
+    "run-stop-on-publish-handoff-failure-v1"
+)
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
@@ -2817,10 +2820,33 @@ class MoonMindRunWorkflow:
                 self._refresh_step_readiness(updated_at=workflow.now())
                 self._update_memo()
                 break
+            publish_status_before = self._publish_status
             self._record_publish_result(
                 parameters=parameters,
                 execution_result=execution_result,
             )
+            if (
+                self._publish_status == "failed"
+                and publish_status_before != "failed"
+                and workflow.patched(RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH)
+            ):
+                publish_failure_summary = self._publish_reason or "Publish failed"
+                self._summary = publish_failure_summary
+                self._mark_step_terminal(
+                    node_id,
+                    status="failed",
+                    updated_at=workflow.now(),
+                    summary=publish_failure_summary,
+                    last_error="publish_failed",
+                )
+                self._mark_remaining_plan_steps_skipped(
+                    ordered_nodes=ordered_nodes,
+                    completed_index=index - 1,
+                    summary=publish_failure_summary,
+                )
+                self._refresh_step_readiness(updated_at=workflow.now())
+                self._update_memo()
+                break
             if (
                 pr_publish_optional
                 and publish_mode == "pr"
@@ -3714,6 +3740,9 @@ class MoonMindRunWorkflow:
         parameters: Mapping[str, Any],
         execution_result: Any,
     ) -> None:
+        if self._publish_status == "failed":
+            return
+
         publish_mode = self._publish_mode(parameters)
         if publish_mode not in {"pr", "branch"}:
             return
