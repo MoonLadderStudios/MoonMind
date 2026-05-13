@@ -24,8 +24,8 @@
 
 **Purpose**: Confirm the existing feature artifacts and test surfaces are ready for TDD work.
 
-- [ ] T001 Confirm the active feature artifacts exist and preserve `MM-650` and `DESIGN-REQ-026` in specs/349-runtime-prompt-boundary/spec.md, specs/349-runtime-prompt-boundary/plan.md, specs/349-runtime-prompt-boundary/research.md, specs/349-runtime-prompt-boundary/data-model.md, specs/349-runtime-prompt-boundary/contracts/runtime-prompt-boundary.md, and specs/349-runtime-prompt-boundary/quickstart.md (FR-008, SC-005)
-- [ ] T002 Confirm the focused unit and integration commands from specs/349-runtime-prompt-boundary/quickstart.md are still valid for the current repository layout (FR-001 through FR-008, DESIGN-REQ-026)
+- [X] T001 Confirm the active feature artifacts exist and preserve `MM-650` and `DESIGN-REQ-026` in specs/349-runtime-prompt-boundary/spec.md, specs/349-runtime-prompt-boundary/plan.md, specs/349-runtime-prompt-boundary/research.md, specs/349-runtime-prompt-boundary/data-model.md, specs/349-runtime-prompt-boundary/contracts/runtime-prompt-boundary.md, and specs/349-runtime-prompt-boundary/quickstart.md (FR-008, SC-005)
+- [X] T002 Confirm the focused unit and integration commands from specs/349-runtime-prompt-boundary/quickstart.md are still valid for the current repository layout (FR-001 through FR-008, DESIGN-REQ-026)
 
 ---
 
@@ -35,9 +35,9 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete.
 
-- [ ] T003 [P] Extend or confirm reusable canonical task payload fixtures with objective and step-scoped image attachments in tests/unit/workflows/tasks/test_prepared_context.py (FR-001, FR-006, SC-004, DESIGN-REQ-026)
-- [ ] T004 [P] Extend or confirm runtime adapter request fixtures carrying prepared `input_refs` and `metadata.moonmind.preparedContext` in tests/unit/workflows/adapters/test_target_aware_prepared_context.py (FR-003, FR-005, SCN-002, SCN-003)
-- [ ] T005 [P] Extend or confirm Temporal workflow boundary fixtures for paired `codex_cli` and multimodal/external runtime requests in tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py (FR-001, FR-003, FR-006, SCN-004)
+- [X] T003 [P] Extend or confirm reusable canonical task payload fixtures with objective and step-scoped image attachments in tests/unit/workflows/tasks/test_prepared_context.py (FR-001, FR-006, SC-004, DESIGN-REQ-026)
+- [X] T004 [P] Extend or confirm runtime adapter request fixtures carrying prepared `input_refs` and `metadata.moonmind.preparedContext` in tests/unit/workflows/adapters/test_target_aware_prepared_context.py (FR-003, FR-005, SCN-002, SCN-003)
+- [X] T005 [P] Extend or confirm Temporal workflow boundary fixtures for paired `codex_cli` and multimodal/external runtime requests in tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py (FR-001, FR-003, FR-006, SCN-004)
 
 **Checkpoint**: Foundation ready; story test authoring and red-first confirmation can begin.
 
@@ -60,44 +60,44 @@
 
 > Write these tests first. Partial rows should fail for the intended missing behavior before implementation. Implemented-unverified rows may pass; if they pass, skip their conditional fallback implementation tasks and preserve the evidence.
 
-- [ ] T006 [P] Add or update unit tests proving selected prepared context exposes raw artifact refs without broadening objective/current-step target binding in tests/unit/workflows/tasks/test_prepared_context.py (FR-001, FR-003, FR-006, SC-002, SC-004, DESIGN-REQ-026)
-- [ ] T007 [P] Add a failing unit guardrail test proving adapter-facing prepared context excludes sibling step refs and cannot add non-canonical target rules in tests/unit/workflows/adapters/test_target_aware_prepared_context.py (FR-005, SCN-003, SC-003, DESIGN-REQ-026)
-- [ ] T008 [P] Add or update external adapter unit tests proving raw image artifact refs are passed as `input_refs` without mutating canonical task metadata in tests/unit/workflows/adapters/test_base_external_agent_adapter.py (FR-003, SCN-002, SC-002)
-- [ ] T009 [P] Add or update OpenClaw adapter translation tests proving raw input refs are included only as adapter-boundary refs and not as control-plane target semantics in tests/unit/workflows/adapters/test_openclaw_agent_adapter.py (FR-003, FR-005, SCN-002, SCN-003)
-- [ ] T010 [P] Add or update text-first prompt regression tests preserving existing `INPUT ATTACHMENTS` ordering, generated vision context paths, and unsafe metadata filtering in tests/unit/agents/codex_worker/test_worker.py (FR-002, SCN-001, SC-001)
-- [ ] T011 [P] Add or update unit tests for missing prepared context/raw refs diagnostics in tests/unit/workflows/tasks/test_prepared_context.py (FR-007, DESIGN-REQ-026)
+- [X] T006 [P] Add or update unit tests proving selected prepared context exposes raw artifact refs without broadening objective/current-step target binding in tests/unit/workflows/tasks/test_prepared_context.py (FR-001, FR-003, FR-006, SC-002, SC-004, DESIGN-REQ-026)
+- [X] T007 [P] Add a failing unit guardrail test proving adapter-facing prepared context excludes sibling step refs and cannot add non-canonical target rules in tests/unit/workflows/adapters/test_target_aware_prepared_context.py (FR-005, SCN-003, SC-003, DESIGN-REQ-026)
+- [X] T008 [P] Add or update external adapter unit tests proving raw image artifact refs are passed as `input_refs` without mutating canonical task metadata in tests/unit/workflows/adapters/test_base_external_agent_adapter.py (FR-003, SCN-002, SC-002)
+- [X] T009 [P] Add or update OpenClaw adapter translation tests proving raw input refs are included only as adapter-boundary refs and not as control-plane target semantics in tests/unit/workflows/adapters/test_openclaw_agent_adapter.py (FR-003, FR-005, SCN-002, SCN-003)
+- [X] T010 [P] Add or update text-first prompt regression tests preserving existing `INPUT ATTACHMENTS` ordering, generated vision context paths, and unsafe metadata filtering in tests/unit/agents/codex_worker/test_worker.py (FR-002, SCN-001, SC-001)
+- [X] T011 [P] Add or update unit tests for missing prepared context/raw refs diagnostics in tests/unit/workflows/tasks/test_prepared_context.py (FR-007, DESIGN-REQ-026)
 
 ### Integration Tests (write first) ⚠️
 
-- [ ] T012 Add a failing paired runtime workflow-boundary test using the same canonical task payload for `codex_cli` and multimodal/external runtime modes in tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py (FR-001, FR-003, FR-006, SCN-002, SCN-004, SC-002, SC-004, DESIGN-REQ-026)
-- [ ] T013 Add a failing integration guardrail test proving adapter/runtime preparation rejects or excludes non-canonical target broadening with explicit diagnostics in tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py (FR-005, FR-007, SCN-003, SC-003, DESIGN-REQ-026)
-- [ ] T014 Add or update integration coverage preserving already-verified text-first `INPUT ATTACHMENTS` behavior through the workflow boundary in tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py (FR-002, SCN-001, SC-001)
+- [X] T012 Add a failing paired runtime workflow-boundary test using the same canonical task payload for `codex_cli` and multimodal/external runtime modes in tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py (FR-001, FR-003, FR-006, SCN-002, SCN-004, SC-002, SC-004, DESIGN-REQ-026)
+- [X] T013 Add a failing integration guardrail test proving adapter/runtime preparation rejects or excludes non-canonical target broadening with explicit diagnostics in tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py (FR-005, FR-007, SCN-003, SC-003, DESIGN-REQ-026)
+- [X] T014 Add or update integration coverage preserving already-verified text-first `INPUT ATTACHMENTS` behavior through the workflow boundary in tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py (FR-002, SCN-001, SC-001)
 
 ### Red-First Confirmation ⚠️
 
-- [ ] T015 Run `./tools/test_unit.sh tests/unit/workflows/tasks/test_prepared_context.py tests/unit/workflows/adapters/test_target_aware_prepared_context.py tests/unit/workflows/adapters/test_base_external_agent_adapter.py tests/unit/workflows/adapters/test_openclaw_agent_adapter.py tests/unit/agents/codex_worker/test_worker.py` and record that new partial-row tests fail for the expected MM-650 boundary gaps in specs/349-runtime-prompt-boundary/implementation-notes.md (FR-003, FR-005, FR-006, SCN-002, SCN-003, SC-002, SC-003, SC-004, DESIGN-REQ-026)
-- [ ] T016 Run `pytest tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py -q` and record that new partial-row integration tests fail for the expected MM-650 boundary gaps in specs/349-runtime-prompt-boundary/implementation-notes.md (FR-003, FR-005, FR-006, FR-007, SCN-002, SCN-003, SCN-004, DESIGN-REQ-026)
-- [ ] T017 Record any implemented_unverified tests that already pass and identify which conditional fallback tasks can be skipped in specs/349-runtime-prompt-boundary/implementation-notes.md (FR-001, FR-007, SCN-004)
+- [X] T015 Run `./tools/test_unit.sh tests/unit/workflows/tasks/test_prepared_context.py tests/unit/workflows/adapters/test_target_aware_prepared_context.py tests/unit/workflows/adapters/test_base_external_agent_adapter.py tests/unit/workflows/adapters/test_openclaw_agent_adapter.py tests/unit/agents/codex_worker/test_worker.py` and record that new partial-row tests fail for the expected MM-650 boundary gaps in specs/349-runtime-prompt-boundary/implementation-notes.md (FR-003, FR-005, FR-006, SCN-002, SCN-003, SC-002, SC-003, SC-004, DESIGN-REQ-026)
+- [X] T016 Run `pytest tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py -q` and record that new partial-row integration tests fail for the expected MM-650 boundary gaps in specs/349-runtime-prompt-boundary/implementation-notes.md (FR-003, FR-005, FR-006, FR-007, SCN-002, SCN-003, SCN-004, DESIGN-REQ-026)
+- [X] T017 Record any implemented_unverified tests that already pass and identify which conditional fallback tasks can be skipped in specs/349-runtime-prompt-boundary/implementation-notes.md (FR-001, FR-007, SCN-004)
 
 ### Conditional Fallback Implementation for Implemented-Unverified Rows
 
-- [ ] T018 If T006 or T012 exposes missing normalized task intent plus artifact refs across runtime modes, update moonmind/workflows/temporal/workflows/run.py and moonmind/workflows/tasks/prepared_context.py to preserve selected prepared refs consistently (FR-001, SCN-004)
-- [ ] T019 If T011 or T013 exposes silent missing-preparation behavior, update moonmind/workflows/tasks/prepared_context.py and moonmind/workflows/temporal/activity_runtime.py to return bounded diagnostics for selected-runtime missing context or raw refs (FR-007, DESIGN-REQ-026)
+- [X] T018 If T006 or T012 exposes missing normalized task intent plus artifact refs across runtime modes, update moonmind/workflows/temporal/workflows/run.py and moonmind/workflows/tasks/prepared_context.py to preserve selected prepared refs consistently (FR-001, SCN-004)
+- [X] T019 If T011 or T013 exposes silent missing-preparation behavior, update moonmind/workflows/tasks/prepared_context.py and moonmind/workflows/temporal/activity_runtime.py to return bounded diagnostics for selected-runtime missing context or raw refs (FR-007, DESIGN-REQ-026)
 
 ### Implementation
 
-- [ ] T020 Complete multimodal/external raw artifact ref support or hardening in moonmind/workflows/tasks/prepared_context.py so selected `rawInputRefs` remain available without changing the canonical task contract (FR-003, SCN-002, SC-002, DESIGN-REQ-026)
-- [ ] T021 Complete adapter-boundary guardrails in moonmind/workflows/adapters/base_external_agent_adapter.py so adapters consume selected refs without adding target kinds or target rules (FR-005, SCN-003, SC-003)
-- [ ] T022 Complete provider translation guardrails in moonmind/workflows/adapters/openclaw_agent_adapter.py so raw refs are adapter-boundary inputs only and never redefine attachment target semantics (FR-003, FR-005, SCN-002, SCN-003)
-- [ ] T023 Complete workflow-boundary wiring in moonmind/workflows/temporal/workflows/run.py so text-first managed runtime and multimodal/external runtime requests are derived from the same canonical task payload while preserving objective/current-step target binding (FR-001, FR-003, FR-006, SCN-004, SC-004, DESIGN-REQ-026)
-- [ ] T024 Preserve or adjust text-first prompt rendering in moonmind/agents/codex_worker/worker.py only if T010 or T014 exposes a regression in `INPUT ATTACHMENTS` ordering, generated context paths, sibling exclusion, or unsafe metadata filtering (FR-002, SCN-001, SC-001)
-- [ ] T025 Ensure target-aware vision context remains restricted to canonical `objective` and `step` target kinds in moonmind/vision/service.py if T013 exposes a target-kind validation gap (FR-004, FR-005, DESIGN-REQ-026)
+- [X] T020 Complete multimodal/external raw artifact ref support or hardening in moonmind/workflows/tasks/prepared_context.py so selected `rawInputRefs` remain available without changing the canonical task contract (FR-003, SCN-002, SC-002, DESIGN-REQ-026)
+- [X] T021 Complete adapter-boundary guardrails in moonmind/workflows/adapters/base_external_agent_adapter.py so adapters consume selected refs without adding target kinds or target rules (FR-005, SCN-003, SC-003)
+- [X] T022 Complete provider translation guardrails in moonmind/workflows/adapters/openclaw_agent_adapter.py so raw refs are adapter-boundary inputs only and never redefine attachment target semantics (FR-003, FR-005, SCN-002, SCN-003)
+- [X] T023 Complete workflow-boundary wiring in moonmind/workflows/temporal/workflows/run.py so text-first managed runtime and multimodal/external runtime requests are derived from the same canonical task payload while preserving objective/current-step target binding (FR-001, FR-003, FR-006, SCN-004, SC-004, DESIGN-REQ-026)
+- [X] T024 Preserve or adjust text-first prompt rendering in moonmind/agents/codex_worker/worker.py only if T010 or T014 exposes a regression in `INPUT ATTACHMENTS` ordering, generated context paths, sibling exclusion, or unsafe metadata filtering (FR-002, SCN-001, SC-001)
+- [X] T025 Ensure target-aware vision context remains restricted to canonical `objective` and `step` target kinds in moonmind/vision/service.py if T013 exposes a target-kind validation gap (FR-004, FR-005, DESIGN-REQ-026)
 
 ### Story Validation
 
-- [ ] T026 Run the focused unit command from this tasks.md and verify all MM-650 unit tests pass after implementation in tests/unit/workflows/tasks/test_prepared_context.py, tests/unit/workflows/adapters/test_target_aware_prepared_context.py, tests/unit/workflows/adapters/test_base_external_agent_adapter.py, tests/unit/workflows/adapters/test_openclaw_agent_adapter.py, and tests/unit/agents/codex_worker/test_worker.py (FR-001 through FR-008, SC-001 through SC-005, DESIGN-REQ-026)
-- [ ] T027 Run `pytest tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py -q` and verify the single story passes through text-first and multimodal/external workflow-boundary paths (SCN-001 through SCN-004, DESIGN-REQ-026)
-- [ ] T028 Update specs/349-runtime-prompt-boundary/implementation-notes.md with passing focused test evidence, skipped conditional fallback tasks, and any implementation files changed for MM-650 (FR-008, SC-005)
+- [X] T026 Run the focused unit command from this tasks.md and verify all MM-650 unit tests pass after implementation in tests/unit/workflows/tasks/test_prepared_context.py, tests/unit/workflows/adapters/test_target_aware_prepared_context.py, tests/unit/workflows/adapters/test_base_external_agent_adapter.py, tests/unit/workflows/adapters/test_openclaw_agent_adapter.py, and tests/unit/agents/codex_worker/test_worker.py (FR-001 through FR-008, SC-001 through SC-005, DESIGN-REQ-026)
+- [X] T027 Run `pytest tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py -q` and verify the single story passes through text-first and multimodal/external workflow-boundary paths (SCN-001 through SCN-004, DESIGN-REQ-026)
+- [X] T028 Update specs/349-runtime-prompt-boundary/implementation-notes.md with passing focused test evidence, skipped conditional fallback tasks, and any implementation files changed for MM-650 (FR-008, SC-005)
 
 **Checkpoint**: The Runtime Attachment Boundary story is fully covered by unit and integration tests and remains independently testable.
 
@@ -107,10 +107,10 @@
 
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
-- [ ] T029 [P] Run `rg -n "MM-650|DESIGN-REQ-026|original Jira preset brief" specs/349-runtime-prompt-boundary` and preserve traceability evidence in specs/349-runtime-prompt-boundary/implementation-notes.md (FR-008, SC-005)
-- [ ] T030 [P] Review specs/349-runtime-prompt-boundary/contracts/runtime-prompt-boundary.md against final code behavior and update only if implementation evidence changes the boundary wording (FR-001 through FR-007, DESIGN-REQ-026)
-- [ ] T031 Run `./tools/test_unit.sh` for the full required unit suite and record the result in specs/349-runtime-prompt-boundary/implementation-notes.md (FR-001 through FR-008)
-- [ ] T032 Run `./tools/test_integration.sh` for required hermetic integration coverage when Docker is available, or record the managed-runtime blocker and focused integration evidence in specs/349-runtime-prompt-boundary/implementation-notes.md (SCN-001 through SCN-004, DESIGN-REQ-026)
+- [X] T029 [P] Run `rg -n "MM-650|DESIGN-REQ-026|original Jira preset brief" specs/349-runtime-prompt-boundary` and preserve traceability evidence in specs/349-runtime-prompt-boundary/implementation-notes.md (FR-008, SC-005)
+- [X] T030 [P] Review specs/349-runtime-prompt-boundary/contracts/runtime-prompt-boundary.md against final code behavior and update only if implementation evidence changes the boundary wording (FR-001 through FR-007, DESIGN-REQ-026)
+- [X] T031 Run `./tools/test_unit.sh` for the full required unit suite and record the result in specs/349-runtime-prompt-boundary/implementation-notes.md (FR-001 through FR-008)
+- [X] T032 Run `./tools/test_integration.sh` for required hermetic integration coverage when Docker is available, or record the managed-runtime blocker and focused integration evidence in specs/349-runtime-prompt-boundary/implementation-notes.md (SCN-001 through SCN-004, DESIGN-REQ-026)
 - [ ] T033 Run `/moonspec-verify` against specs/349-runtime-prompt-boundary/spec.md after implementation and tests pass, preserving `MM-650`, the original Jira preset brief, and `DESIGN-REQ-026` in final verification evidence (FR-008, SC-005)
 
 ---

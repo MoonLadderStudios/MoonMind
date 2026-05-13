@@ -68,12 +68,29 @@ def test_run_request_filters_prepared_context_to_current_step() -> None:
 
     assert request.input_refs == [
         "artifact://explicit-node-input",
+        "artifact://objective-image",
+        "artifact://collect-notes",
+    ]
+    assert "report-notes" not in str(request.model_dump(by_alias=True))
+
+
+def test_external_request_keeps_generated_context_out_of_adapter_input_refs() -> None:
+    request = _build_request_for_step("collect-evidence", runtime_mode="jules")
+
+    prepared_context = request.parameters["metadata"]["moonmind"]["preparedContext"]
+
+    assert request.agent_kind == "external"
+    assert request.input_refs == [
+        "artifact://explicit-node-input",
+        "artifact://objective-image",
+        "artifact://collect-notes",
+    ]
+    assert prepared_context["inputRefs"] == [
         "prepared-context://objective/objective-image",
         "prepared-context://steps/collect-evidence/collect-notes",
         "artifact://objective-image",
         "artifact://collect-notes",
     ]
-    assert "report-notes" not in str(request.model_dump(by_alias=True))
 
 
 def test_child_agent_run_request_receives_only_represented_step_context() -> None:

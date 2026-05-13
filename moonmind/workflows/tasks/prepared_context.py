@@ -203,6 +203,23 @@ def merge_prepared_input_refs(
 ) -> list[str]:
     """Merge node input refs with selected prepared context refs."""
 
+    refs = _clean_existing_refs(existing_refs)
+    refs.extend(prepared_context.input_refs)
+    return _dedupe_refs(refs)
+
+
+def merge_prepared_raw_input_refs(
+    existing_refs: Sequence[Any] | None,
+    prepared_context: StepPreparedContext,
+) -> list[str]:
+    """Merge node input refs with raw artifact refs selected for adapters."""
+
+    refs = _clean_existing_refs(existing_refs)
+    refs.extend(prepared_context.raw_input_refs)
+    return _dedupe_refs(refs)
+
+
+def _clean_existing_refs(existing_refs: Sequence[Any] | None) -> list[str]:
     refs: list[str] = []
     if isinstance(existing_refs, str):
         existing_values: Sequence[Any] = [existing_refs]
@@ -213,8 +230,7 @@ def merge_prepared_input_refs(
     for ref in existing_values:
         if isinstance(ref, str) and ref.strip():
             refs.append(ref.strip())
-    refs.extend(prepared_context.input_refs)
-    return _dedupe_refs(refs)
+    return refs
 
 
 def build_resume_prepared_artifact_refs(
