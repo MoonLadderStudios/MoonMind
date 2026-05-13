@@ -591,9 +591,16 @@ class ResumeCheckpointModel(BaseModel):
     @field_validator("resume_workspace", mode="before")
     @classmethod
     def _validate_compact_resume_workspace(cls, value: Any) -> dict[str, Any]:
-        return validate_compact_temporal_mapping(
+        compact = validate_compact_temporal_mapping(
             value, field_name="resumeWorkspace"
         )
+        for raw_key in compact:
+            key = str(raw_key).strip()
+            if key.lower() == "inlinecheckpointpayload":
+                raise ValueError(
+                    "resumeWorkspace must not contain inline checkpoint payload"
+                )
+        return compact
 
     @field_validator("prepared_artifact_refs")
     @classmethod
@@ -1106,6 +1113,18 @@ class StepLedgerArtifactsModel(BaseModel):
     runtime_diagnostics: str | None = Field(None, alias="runtimeDiagnostics")
     provider_snapshot: str | None = Field(None, alias="providerSnapshot")
 
+class StepLedgerResumePreservationModel(BaseModel):
+    """Bounded failed-step Resume preservation eligibility for one source step."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    eligible: bool = Field(..., alias="eligible")
+    reason: Literal[
+        "complete", "not_completed", "missing_output_refs", "missing_state_checkpoint"
+    ] = Field(..., alias="reason")
+    message: str | None = Field(None, alias="message")
+
+
 class StepLedgerWorkloadModel(BaseModel):
     """Bounded Docker-backed workload metadata linked to a producing step."""
 
@@ -1173,6 +1192,10 @@ class StepLedgerRowModel(BaseModel):
     preserved_from: PreservedStepProvenanceModel | None = Field(
         None, alias="preservedFrom"
     )
+    state_checkpoint_ref: str | None = Field(None, alias="stateCheckpointRef")
+    resume_preservation: StepLedgerResumePreservationModel | None = Field(
+        None, alias="resumePreservation"
+    )
     workload: StepLedgerWorkloadModel | None = Field(None, alias="workload")
     last_error: str | None = Field(None, alias="lastError")
 
@@ -1184,7 +1207,11 @@ class StepLedgerSnapshotModel(BaseModel):
     workflow_id: str = Field(..., alias="workflowId", min_length=1)
     run_id: str = Field(..., alias="runId", min_length=1)
     run_scope: Literal["latest"] = Field("latest", alias="runScope")
+    prepared_artifact_refs: list[str] = Field(
+        default_factory=list, alias="preparedArtifactRefs"
+    )
     steps: list[StepLedgerRowModel] = Field(default_factory=list, alias="steps")
+
 
 class ExecutionReportProjectionModel(BaseModel):
     """Bounded report summary surfaced on execution detail responses."""

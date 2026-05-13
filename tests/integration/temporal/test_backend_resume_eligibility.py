@@ -61,6 +61,16 @@ def _checkpoint_payload(*, workflow_id: str, run_id: str) -> dict[str, object]:
     }
 
 
+async def test_checkpoint_payload_stays_ref_only_and_contains_prepared_refs() -> None:
+    payload = _checkpoint_payload(workflow_id="wf-source", run_id="run-source")
+
+    assert payload["preparedArtifactRefs"] == ["artifact://prepared"]
+    assert payload["preservedSteps"][0]["stateCheckpointRef"] == (
+        "artifact://workspace/before-plan"
+    )
+    assert "inlineCheckpointPayload" not in str(payload)
+
+
 async def test_accepted_resume_carries_canonical_recovery_and_resume_refs(
     tmp_path: Path,
 ) -> None:

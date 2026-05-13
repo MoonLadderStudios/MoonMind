@@ -211,6 +211,23 @@ def merge_prepared_input_refs(
     return _dedupe_refs(refs)
 
 
+def build_resume_prepared_artifact_refs(
+    manifest: PreparedInputManifest | Mapping[str, Any] | None,
+) -> list[str]:
+    """Return compact prepared refs suitable for Resume checkpoint evidence."""
+
+    if manifest is None:
+        return []
+    if not isinstance(manifest, PreparedInputManifest):
+        manifest = PreparedInputManifest.model_validate(manifest)
+    refs: list[str] = []
+    for entry in manifest.entries:
+        if entry.derived_context_ref:
+            refs.append(entry.derived_context_ref)
+        refs.append(entry.raw_input_ref)
+    return _dedupe_refs(refs)
+
+
 def task_payload_has_input_attachments(payload: Mapping[str, Any] | None) -> bool:
     if not isinstance(payload, Mapping):
         return False

@@ -13,6 +13,7 @@ from moonmind.schemas.temporal_models import (
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     build_progress_summary,
+    mark_step_checkpoint_evidence,
     upsert_step_check,
     update_step_row,
 )
@@ -327,6 +328,62 @@ def test_row_defaults_remain_bounded_and_structured() -> None:
         "runtimeDiagnostics": None,
         "providerSnapshot": None,
     }
+
+
+def test_mark_step_checkpoint_evidence_marks_completed_step_eligible() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 15, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "implement", "inputs": {"title": "Implement"}},
+        ],
+        dependency_map={"implement": []},
+        updated_at=updated_at,
+    )
+    update_step_row(
+        rows,
+        "implement",
+        updated_at=updated_at,
+        status="succeeded",
+        artifacts={"outputPrimary": "artifact://output"},
+    )
+
+    mark_step_checkpoint_evidence(
+        rows,
+        "implement",
+        updated_at=updated_at,
+        state_checkpoint_ref="artifact://checkpoint/implement/1",
+    )
+
+    row = StepLedgerRowModel.model_validate(rows[0])
+    assert row.state_checkpoint_ref == "artifact://checkpoint/implement/1"
+    assert row.resume_preservation is not None
+    assert row.resume_preservation.eligible is True
+    assert row.resume_preservation.reason == "complete"
+
+
+def test_mark_step_checkpoint_evidence_records_bounded_ineligible_reason() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 16, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "plan", "inputs": {"title": "Plan"}},
+        ],
+        dependency_map={"plan": []},
+        updated_at=updated_at,
+    )
+    update_step_row(
+        rows,
+        "plan",
+        updated_at=updated_at,
+        status="succeeded",
+    )
+
+    mark_step_checkpoint_evidence(rows, "plan", updated_at=updated_at)
+
+    row = StepLedgerRowModel.model_validate(rows[0])
+    assert row.resume_preservation is not None
+    assert row.resume_preservation.eligible is False
+    assert row.resume_preservation.reason == "missing_output_refs"
+    assert "output ref" in (row.resume_preservation.message or "")
 
 def test_update_step_row_allows_explicit_last_error_clear() -> None:
     updated_at = datetime(2026, 4, 7, 12, 12, tzinfo=UTC)
