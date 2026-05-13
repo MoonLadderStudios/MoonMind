@@ -21,7 +21,10 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
 )
 from api_service.main import app
-from api_service.services.provider_profile_service import _manager_profile_payload
+from api_service.services.provider_profile_service import (
+    _manager_profile_payload,
+    normalize_runtime_default_profile,
+)
 
 @pytest.fixture(scope="module")
 def _module_db(tmp_path_factory):
@@ -73,6 +76,111 @@ def _override_current_user(*, user_id=None, is_superuser: bool = False):
     for dependency in dependencies:
         app.dependency_overrides[dependency] = lambda user=user: user
     return user
+
+
+class _TrackedProfile:
+    def __init__(
+        self,
+        *,
+        profile_id: str,
+        runtime_id: str,
+        enabled: bool,
+        priority: int,
+        is_default: bool,
+        events: list[tuple[object, ...]],
+    ) -> None:
+        self.profile_id = profile_id
+        self.runtime_id = runtime_id
+        self.enabled = enabled
+        self.priority = priority
+        self._is_default = is_default
+        self._events = events
+
+    @property
+    def is_default(self) -> bool:
+        return self._is_default
+
+    @is_default.setter
+    def is_default(self, value: bool) -> None:
+        self._is_default = value
+        self._events.append(("set", self.profile_id, value))
+
+
+class _TrackedExecuteResult:
+    def __init__(self, rows: list[_TrackedProfile]) -> None:
+        self._rows = rows
+
+    def scalars(self) -> "_TrackedExecuteResult":
+        return self
+
+    def all(self) -> list[_TrackedProfile]:
+        return self._rows
+
+
+class _TrackedDefaultSession:
+    def __init__(
+        self,
+        rows: list[_TrackedProfile],
+        events: list[tuple[object, ...]],
+    ) -> None:
+        self._rows = rows
+        self._events = events
+
+    async def execute(self, _statement):
+        return _TrackedExecuteResult(self._rows)
+
+    async def flush(self) -> None:
+        self._events.append(
+            (
+                "flush",
+                {
+                    row.profile_id: row.is_default
+                    for row in self._rows
+                },
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_runtime_default_switch_flushes_old_default_first():
+    events: list[tuple[object, ...]] = []
+    minimax = _TrackedProfile(
+        profile_id="claude_minimax",
+        runtime_id="claude_code",
+        enabled=True,
+        priority=200,
+        is_default=True,
+        events=events,
+    )
+    anthropic = _TrackedProfile(
+        profile_id="claude_anthropic",
+        runtime_id="claude_code",
+        enabled=True,
+        priority=100,
+        is_default=False,
+        events=events,
+    )
+    session = _TrackedDefaultSession([minimax, anthropic], events)
+
+    selected = await normalize_runtime_default_profile(
+        session=session,
+        runtime_id="claude_code",
+        preferred_profile_id="claude_anthropic",
+    )
+
+    assert selected == "claude_anthropic"
+    assert events == [
+        ("set", "claude_minimax", False),
+        (
+            "flush",
+            {"claude_minimax": False, "claude_anthropic": False},
+        ),
+        ("set", "claude_anthropic", True),
+        (
+            "flush",
+            {"claude_minimax": False, "claude_anthropic": True},
+        ),
+    ]
 
 async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
     """Helper to create a baseline profile in the test DB."""
@@ -410,6 +518,79 @@ async def test_update_profile_can_become_runtime_default(
     profiles = {profile["profile_id"]: profile for profile in listed.json()}
     assert profiles["patch_runtime_default_first"]["is_default"] is False
     assert profiles["patch_runtime_default_second"]["is_default"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_claude_anthropic_can_replace_minimax_runtime_default(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch,
+) -> None:
+    """Regression for switching the Claude Code runtime default on PostgreSQL."""
+
+    async def _fake_sync_provider_profile_manager(
+        *,
+        session,
+        runtime_id: str,
+    ) -> None:
+        assert runtime_id == "claude_code"
+
+    monkeypatch.setattr(
+        provider_profiles_router,
+        "sync_provider_profile_manager",
+        _fake_sync_provider_profile_manager,
+    )
+
+    async with db_base.async_session_maker() as session:
+        session.add_all(
+            [
+                ManagedAgentProviderProfile(
+                    profile_id="claude_minimax",
+                    runtime_id="claude_code",
+                    provider_id="minimax",
+                    provider_label="MiniMax",
+                    credential_source=ProviderCredentialSource.SECRET_REF,
+                    runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                    secret_refs={"ANTHROPIC_AUTH_TOKEN": "env://MINIMAX_API_KEY"},
+                    enabled=True,
+                    is_default=True,
+                    priority=200,
+                ),
+                ManagedAgentProviderProfile(
+                    profile_id="claude_anthropic",
+                    runtime_id="claude_code",
+                    provider_id="anthropic",
+                    provider_label="Anthropic",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    volume_ref="claude_auth_volume",
+                    volume_mount_path="/home/app/.claude",
+                    enabled=True,
+                    is_default=False,
+                    priority=100,
+                ),
+            ]
+        )
+        await session.commit()
+
+    async with client_app as client:
+        update_response = await client.patch(
+            "/api/v1/provider-profiles/claude_anthropic",
+            json={"is_default": True},
+        )
+        listed = await client.get(
+            "/api/v1/provider-profiles",
+            params={"runtime_id": "claude_code"},
+        )
+
+    assert update_response.status_code == 200
+    assert update_response.json()["is_default"] is True
+    assert listed.status_code == 200
+    profiles = {profile["profile_id"]: profile for profile in listed.json()}
+    assert profiles["claude_anthropic"]["is_default"] is True
+    assert profiles["claude_minimax"]["is_default"] is False
+    assert sum(1 for profile in listed.json() if profile["is_default"]) == 1
+
 
 @pytest.mark.asyncio
 async def test_create_provider_profile_invalid_secret_refs(client_app: AsyncClient, _module_db):

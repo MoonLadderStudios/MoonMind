@@ -52,14 +52,17 @@ async def normalize_runtime_default_profile(
         selected = candidates[0]
 
     selected_id = selected.profile_id
-    changed = False
-    for row in rows:
-        should_be_default = row.profile_id == selected_id
-        if row.is_default != should_be_default:
-            row.is_default = should_be_default
-            changed = True
 
-    if changed:
+    rows_to_clear = [
+        row for row in rows if row.profile_id != selected_id and row.is_default
+    ]
+    for row in rows_to_clear:
+        row.is_default = False
+    if rows_to_clear:
+        await session.flush()
+
+    if not selected.is_default:
+        selected.is_default = True
         await session.flush()
 
     return selected_id
