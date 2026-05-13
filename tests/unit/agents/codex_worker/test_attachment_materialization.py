@@ -98,7 +98,8 @@ def _canonical_payload() -> dict[str, object]:
                     ],
                 },
                 {
-                    "instructions": "No id",
+                    "id": "summarize-step",
+                    "instructions": "Stable id",
                     "inputAttachments": [
                         {
                             "artifactId": "art_no_id",
@@ -124,7 +125,7 @@ def test_collect_attachment_targets_preserves_canonical_target_fields(
     assert targets[0].step_ref is None
     assert targets[1].step_ref == "review-step"
     assert targets[1].step_ordinal == 0
-    assert targets[2].step_ref == "step-2"
+    assert targets[2].step_ref == "summarize-step"
     assert targets[2].step_ordinal == 1
 
 def test_attachment_workspace_paths_are_target_aware_and_sanitized(
@@ -141,7 +142,7 @@ def test_attachment_workspace_paths_are_target_aware_and_sanitized(
     assert paths == [
         ".moonmind/inputs/objective/art_objective-Objective_Diagram.png",
         ".moonmind/inputs/steps/review-step/art_step-shot.png",
-        ".moonmind/inputs/steps/step-2/art_no_id-same.png",
+        ".moonmind/inputs/steps/summarize-step/art_no_id-same.png",
     ]
 
 def test_attachment_workspace_paths_do_not_depend_on_unrelated_target_order(
@@ -187,6 +188,22 @@ def test_collect_attachment_targets_rejects_malformed_refs(tmp_path: Path) -> No
     task["inputAttachments"] = [{"artifactId": "art_missing_filename"}]
 
     with pytest.raises(ValueError, match="filename is required"):
+        worker._collect_input_attachment_targets(payload)
+
+
+def test_collect_attachment_targets_rejects_step_attachments_without_stable_ref(
+    tmp_path: Path,
+) -> None:
+    worker = _worker(tmp_path)
+    payload = _canonical_payload()
+    task = payload["task"]
+    assert isinstance(task, dict)
+    steps = task["steps"]
+    assert isinstance(steps, list)
+    assert isinstance(steps[1], dict)
+    steps[1].pop("id")
+
+    with pytest.raises(ValueError, match="stable stepRef"):
         worker._collect_input_attachment_targets(payload)
 
 @pytest.mark.asyncio
@@ -330,7 +347,7 @@ async def test_materialize_input_attachments_writes_files_and_manifest(
         repo_dir / ".moonmind/inputs/steps/review-step/art_step-shot.png"
     ).read_bytes() == b"step"
     assert (
-        repo_dir / ".moonmind/inputs/steps/step-2/art_no_id-same.png"
+        repo_dir / ".moonmind/inputs/steps/summarize-step/art_no_id-same.png"
     ).read_bytes() == b"no-id"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["version"] == 1
@@ -341,6 +358,7 @@ async def test_materialize_input_attachments_writes_files_and_manifest(
             "contentType": "image/png",
             "sizeBytes": 3,
             "targetKind": "objective",
+            "status": "prepared",
             "workspacePath": (
                 ".moonmind/inputs/objective/"
                 "art_objective-Objective_Diagram.png"
@@ -354,6 +372,7 @@ async def test_materialize_input_attachments_writes_files_and_manifest(
             "targetKind": "step",
             "stepRef": "review-step",
             "stepOrdinal": 0,
+            "status": "prepared",
             "workspacePath": ".moonmind/inputs/steps/review-step/art_step-shot.png",
         },
         {
@@ -362,9 +381,12 @@ async def test_materialize_input_attachments_writes_files_and_manifest(
             "contentType": "image/png",
             "sizeBytes": 5,
             "targetKind": "step",
-            "stepRef": "step-2",
+            "stepRef": "summarize-step",
             "stepOrdinal": 1,
-            "workspacePath": ".moonmind/inputs/steps/step-2/art_no_id-same.png",
+            "status": "prepared",
+            "workspacePath": (
+                ".moonmind/inputs/steps/summarize-step/art_no_id-same.png"
+            ),
         },
     ]
 
@@ -451,7 +473,7 @@ async def test_prepare_stage_materializes_attachments_before_return(
             "contentType": "image/png",
             "sizeBytes": 5,
             "targetKind": "step",
-            "stepRef": "step-2",
+            "stepRef": "summarize-step",
             "stepOrdinal": 1,
         },
     ]

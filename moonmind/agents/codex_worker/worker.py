@@ -4557,12 +4557,17 @@ class CodexWorker:
 
     @classmethod
     def _attachment_step_ref(cls, step: Mapping[str, Any], index: int) -> str:
-        explicit = str(step.get("id") or "").strip()
+        explicit = str(
+            step.get("id") or step.get("stepRef") or step.get("ref") or ""
+        ).strip()
         if explicit:
             return cls._sanitize_attachment_workspace_segment(
                 explicit, fallback=f"step-{index + 1}"
             )
-        return f"step-{index + 1}"
+        raise ValueError(
+            "stable stepRef is required for step inputAttachments; "
+            f"task.steps[{index}] must include id, stepRef, or ref"
+        )
 
     @staticmethod
     def _require_attachment_ref_field(
@@ -4694,6 +4699,7 @@ class CodexWorker:
             "contentType": target.content_type,
             "sizeBytes": target.size_bytes,
             "targetKind": target.target_kind,
+            "status": "prepared",
             "workspacePath": workspace_path.as_posix(),
         }
         if target.step_ref is not None:
