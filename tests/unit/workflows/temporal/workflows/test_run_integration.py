@@ -1164,6 +1164,38 @@ def test_native_pr_push_status_gate_blocks_unrecovered_lease_conflict(
         mock_run_workflow._publish_reason or ""
     )
 
+def test_publish_failure_preservation_is_patch_gated(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._publish_status = "failed"
+    mock_run_workflow._publish_reason = "first publish failure"
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={"outputs": {"push_status": "no_commits"}},
+    )
+
+    assert mock_run_workflow._publish_status == "skipped"
+
+    mock_run_workflow._publish_status = "failed"
+    mock_run_workflow._publish_reason = "first publish failure"
+
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == run_workflow_module.RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={"outputs": {"push_status": "no_commits"}},
+    )
+
+    assert mock_run_workflow._publish_status == "failed"
+    assert mock_run_workflow._publish_reason == "first publish failure"
+
 def test_record_execution_context_resets_last_step_fields_when_current_node_has_no_summary(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
