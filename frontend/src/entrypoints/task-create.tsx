@@ -7511,6 +7511,33 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const artifactPayload = editParametersPatch ?? submittedPayload;
       const isExactRerunRequest =
         pageMode.mode === "rerun" && pageMode.intent === "rerun";
+      if (
+        pageMode.intent === "edit-for-rerun" &&
+        pageMode.executionId &&
+        temporalDraftData?.execution
+      ) {
+        const sourceWorkflowId = String(pageMode.executionId).trim();
+        const sourceRunId = String(
+          temporalDraftData.execution.runId ||
+            temporalDraftData.execution.temporalRunId ||
+            "",
+        ).trim();
+        if (!sourceWorkflowId || !sourceRunId) {
+          throw new Error(
+            "Cannot request edited retry because the source execution identity is missing.",
+          );
+        }
+        const editedTaskPayload: Record<string, unknown> = {
+          ...recordValue(artifactPayload.task ?? taskPayload),
+          recovery: {
+            kind: "edited_full_retry",
+            sourceWorkflowId,
+            sourceRunId,
+          },
+        };
+        delete editedTaskPayload.resume;
+        artifactPayload.task = editedTaskPayload;
+      }
       const rerunDraft = temporalDraftData?.draft;
       const rerunFormChanged = isExactRerunRequest
         ? !rerunDraft ||

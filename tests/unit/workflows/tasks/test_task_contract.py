@@ -1118,6 +1118,43 @@ def test_fr008_edited_full_retry_with_resume_is_rejected() -> None:
         )
 
 
+def test_mm644_edited_full_retry_requires_pinned_source_run_ids() -> None:
+    """MM-644 FR-010: edited full retry provenance pins the source workflow and run."""
+    result = build_canonical_task_view(
+        job_type="task",
+        payload=_canonical_task_payload({
+            "instructions": "MM-644 edited retry instructions.",
+            "recovery": {
+                "kind": "edited_full_retry",
+                "sourceWorkflowId": "mm:failed-source",
+                "sourceRunId": "run-source",
+            },
+        }),
+    )
+
+    recovery = result["task"]["recovery"]
+    assert recovery["kind"] == "edited_full_retry"
+    assert recovery["sourceWorkflowId"] == "mm:failed-source"
+    assert recovery["sourceRunId"] == "run-source"
+
+
+def test_mm644_edited_full_retry_rejects_resume_pairing() -> None:
+    """MM-644 FR-009: edited full retry must not carry failed-step Resume refs."""
+    with pytest.raises(TaskContractError, match="resume_from_failed_step"):
+        build_canonical_task_view(
+            job_type="task",
+            payload=_canonical_task_payload({
+                "instructions": "MM-644 edited retry instructions.",
+                "recovery": {
+                    "kind": "edited_full_retry",
+                    "sourceWorkflowId": "mm:failed-source",
+                    "sourceRunId": "run-source",
+                },
+                "resume": _VALID_RESUME_BLOCK,
+            }),
+        )
+
+
 # FR-009: dependsOn list preserved verbatim; empty list normalized to None
 
 def test_fr009_depends_on_preserved_verbatim() -> None:

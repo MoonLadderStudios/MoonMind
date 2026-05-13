@@ -1124,6 +1124,7 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               workflowId: "mm:complex-rerun",
+              runId: "run-complex-source",
               workflowType: "MoonMind.Run",
               state: "completed",
               targetRuntime: "codex_cli",
@@ -1211,6 +1212,7 @@ describe.skip("Task Create Entrypoint", () => {
               },
               actions: {
                 canUpdateInputs: false,
+                canEditForRerun: true,
                 canRerun: true,
               },
             }),
@@ -3748,6 +3750,53 @@ describe.skip("Task Create Entrypoint", () => {
     const request = JSON.parse(String(updateCall?.[1]?.body));
     expect(request).toEqual({
       updateName: "RequestRerun",
+    });
+  });
+
+  it("submits edit-for-rerun with edited_full_retry provenance pinned to the source run", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit For Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Acomplex-rerun&mode=edit",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    const instructions = screen.getAllByLabelText(
+      "Instructions",
+    )[0] as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Break down the Grid UI overlay plan.");
+    });
+    fireEvent.change(instructions, {
+      target: { value: "MM-644 edited retry instructions." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run edited task" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Acomplex-rerun/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions/mm%3Acomplex-rerun/update")
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+
+    expect(request).toMatchObject({
+      updateName: "RequestRerun",
+      parametersPatch: {
+        task: {
+          instructions: "MM-644 edited retry instructions.",
+          recovery: {
+            kind: "edited_full_retry",
+            sourceWorkflowId: "mm:complex-rerun",
+            sourceRunId: "run-complex-source",
+          },
+        },
+      },
     });
   });
 

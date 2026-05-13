@@ -243,6 +243,8 @@ Key diagnostics:
 - Existing SQLAlchemy/Alembic database tables `settings_overrides` and `settings_audit_events`; no new persistent table expected (339-sparse-settings-overrides)
 - Python 3.12; TypeScript/React for Mission Control Create page + React, TanStack Query, existing Mission Control stylesheet, FastAPI/Pydantic v2/SQLAlchemy/Temporal boundaries for submission normalization (340-create-page-authoring-validation)
 - Existing execution records and artifact metadata/content stores only; no new persistent storage (340-create-page-authoring-validation)
+- Python 3.12; TypeScript/React for Mission Control UI behavior + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Zod, Vitest, pytest (343-editable-full-retry-workflow)
+- Existing Temporal execution records, memo/search attributes, Temporal artifact metadata/content store, authoritative task input snapshot artifacts; no new persistent database table planned (343-editable-full-retry-workflow)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

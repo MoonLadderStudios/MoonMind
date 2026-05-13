@@ -1417,6 +1417,121 @@ describe('Task Detail Entrypoint', () => {
     );
   });
 
+  it('does not show edit unavailable text while another edit path is enabled', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Running task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canUpdateInputs: true,
+        canEditForRerun: false,
+        disabledReasons: {
+          canEditForRerun: 'state_not_eligible',
+        },
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Task Actions' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Edit task' }).getAttribute('href')).toBe(
+      '/tasks/new?editExecutionId=test-123',
+    );
+    expect(screen.queryByText(/Edit task unavailable:/)).toBeNull();
+  });
+
+  it('shows failed task edit-for-rerun disabled reasons without inferring from status', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Failed task without snapshot',
+      summary: 'Execution summary',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canEditForRerun: false,
+        canRerun: false,
+        disabledReasons: {
+          canEditForRerun: 'original_task_input_snapshot_missing',
+          canRerun: 'original_task_input_snapshot_missing',
+        },
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Task Actions' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Edit task' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Rerun' })).toBeNull();
+    expect(
+      screen.getByText('Edit task unavailable: original task input snapshot missing'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('Rerun unavailable: original task input snapshot missing'),
+    ).toBeTruthy();
+  });
+
   it('renders failed-step Resume separately from lifecycle Resume and submits the resume command', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const actionPayload: BootPayload = {

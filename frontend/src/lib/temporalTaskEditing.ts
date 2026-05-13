@@ -20,6 +20,8 @@ export type TemporalTaskEditingActions = {
 
 export type TemporalTaskEditingExecutionContract = {
   workflowId: string;
+  runId?: string | null;
+  temporalRunId?: string | null;
   workflowType?: string | null;
   state?: string | null;
   rawState?: string | null;
