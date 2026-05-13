@@ -530,15 +530,13 @@ class MoonMindAgentRun:
         if task_run_id:
             metadata.setdefault("taskRunId", task_run_id)
 
-        request_metadata = (
-            request.parameters.get("metadata")
-            if isinstance(request.parameters, Mapping)
-            else None
+        request_params = (
+            request.parameters if isinstance(request.parameters, Mapping) else {}
         )
+        request_metadata = request_params.get("metadata")
         request_moonmind = (
             request_metadata.get("moonmind")
             if isinstance(request_metadata, Mapping)
-            and isinstance(request_metadata.get("moonmind"), Mapping)
             else None
         )
         parent_prepared_context = (
