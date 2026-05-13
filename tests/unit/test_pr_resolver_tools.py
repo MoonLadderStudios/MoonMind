@@ -651,6 +651,43 @@ def test_orchestrate_ci_running_uses_finalize_only_retry_path(
     assert full_invocations == 0
     assert sleeps == [60]
 
+
+def test_orchestrate_ci_running_sleep_floor_overrides_low_max_sleep(
+    pr_resolve_orchestrate_module: dict[str, Any],
+) -> None:
+    run_orchestration = pr_resolve_orchestrate_module["run_orchestration"]
+
+    finalize_results = iter(
+        [
+            {"status": "blocked", "merge_outcome": "blocked", "reason": "ci_running"},
+            {"status": "merged", "merge_outcome": "merged", "reason": "ci_complete"},
+        ]
+    )
+    sleeps: list[int] = []
+
+    result, exit_code = run_orchestration(
+        finalize_runner=lambda _attempt: next(finalize_results),
+        full_runner=lambda _attempt, _escalation, _reason: {
+            "status": "failed",
+            "merge_outcome": "failed",
+            "reason": "unexpected",
+        },
+        sleep_fn=lambda seconds: sleeps.append(seconds),
+        monotonic_fn=lambda: 0.0,
+        finalize_max_retries=2,
+        fix_max_iterations=3,
+        base_sleep_seconds=15,
+        max_sleep_seconds=30,
+        max_elapsed_seconds=900,
+        merge_not_ready_grace_retries=1,
+    )
+
+    assert exit_code == 0
+    assert result["status"] == "merged"
+    assert result["mergeAutomationDisposition"] == "merged"
+    assert sleeps == [60]
+
+
 def test_orchestrate_ci_failures_after_transient_ci_states_escalates_fix_ci(
     pr_resolve_orchestrate_module: dict[str, Any],
 ) -> None:

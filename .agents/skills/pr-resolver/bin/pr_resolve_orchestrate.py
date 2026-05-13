@@ -305,11 +305,12 @@ def run_orchestration(
             return result, EXIT_CODE_ATTEMPTS_EXHAUSTED
 
         if retry_action == "finalize_only_retry":
-            if reason == "merge_not_ready" and grace_remaining > 0:
+            normalized_reason = normalize_text(reason)
+            if normalized_reason == "merge_not_ready" and grace_remaining > 0:
                 grace_remaining -= 1
             effective_base_sleep_seconds = (
                 max(base_sleep_seconds, 60)
-                if reason == "ci_running"
+                if normalized_reason == "ci_running"
                 else base_sleep_seconds
             )
             sleep_seconds = compute_backoff_seconds(
@@ -317,6 +318,8 @@ def run_orchestration(
                 base_sleep_seconds=effective_base_sleep_seconds,
                 max_sleep_seconds=max_sleep_seconds,
             )
+            if normalized_reason == "ci_running":
+                sleep_seconds = max(sleep_seconds, 60)
             finalize_only_retry_index += 1
             history.append(
                 {
