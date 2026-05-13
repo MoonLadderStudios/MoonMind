@@ -803,11 +803,22 @@ def test_run_marks_completed_step_without_checkpoint_ineligible(
         updated_at=now,
         summary="Planned",
     )
+    workflow._record_step_result_evidence(
+        "plan",
+        execution_result={
+            "status": "COMPLETED",
+            "outputs": {
+                "outputPrimaryRef": "artifact://plan-output",
+            },
+        },
+        updated_at=now,
+    )
     workflow._record_step_checkpoint_evidence("plan", updated_at=now)
 
     step = workflow.get_step_ledger()["steps"][0]
     assert step["resumePreservation"]["eligible"] is False
-    assert step["resumePreservation"]["reason"] == "missing_output_refs"
+    assert step["resumePreservation"]["reason"] == "missing_state_checkpoint"
+    assert step.get("stateCheckpointRef") is None
 
 def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
     monkeypatch: pytest.MonkeyPatch,

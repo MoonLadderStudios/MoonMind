@@ -977,13 +977,6 @@ class MoonMindRunWorkflow:
                 return
         self._sync_progress_snapshot(updated_at=updated_at)
 
-    def _deterministic_step_checkpoint_ref(self, logical_step_id: str) -> str:
-        attempt = self._step_attempt_for(logical_step_id) or 0
-        workflow_id = re.sub(r"[^A-Za-z0-9_.:-]+", "-", workflow.info().workflow_id)
-        run_id = re.sub(r"[^A-Za-z0-9_.:-]+", "-", workflow.info().run_id)
-        step_id = re.sub(r"[^A-Za-z0-9_.:-]+", "-", logical_step_id)
-        return f"artifact://resume-checkpoints/{workflow_id}/{run_id}/{step_id}/{attempt}"
-
     def _record_step_checkpoint_evidence(
         self,
         logical_step_id: str,
@@ -991,10 +984,8 @@ class MoonMindRunWorkflow:
         updated_at: datetime,
         state_checkpoint_ref: str | None = None,
     ) -> str | None:
-        checkpoint_ref = (
-            state_checkpoint_ref
-            or self._step_checkpoint_refs.get(logical_step_id)
-            or self._deterministic_step_checkpoint_ref(logical_step_id)
+        checkpoint_ref = state_checkpoint_ref or self._step_checkpoint_refs.get(
+            logical_step_id
         )
         try:
             row = mark_step_checkpoint_evidence(
@@ -1005,11 +996,11 @@ class MoonMindRunWorkflow:
             )
         except KeyError:
             return None
-        self._step_checkpoint_refs[logical_step_id] = str(
-            row.get("stateCheckpointRef") or checkpoint_ref
-        )
+        recorded_checkpoint_ref = str(row.get("stateCheckpointRef") or "").strip()
+        if recorded_checkpoint_ref:
+            self._step_checkpoint_refs[logical_step_id] = recorded_checkpoint_ref
         self._sync_progress_snapshot(updated_at=updated_at)
-        return self._step_checkpoint_refs[logical_step_id]
+        return self._step_checkpoint_refs.get(logical_step_id)
 
     def _refresh_step_readiness(self, *, updated_at: datetime) -> None:
         refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)

@@ -145,3 +145,31 @@ def test_source_run_marks_missing_completed_step_evidence_ineligible() -> None:
     assert rows[0]["resumePreservation"]["eligible"] is False
     assert rows[0]["resumePreservation"]["reason"] == "missing_output_refs"
     assert rows[1]["status"] == "ready"
+
+
+@pytest.mark.integration
+@pytest.mark.integration_ci
+def test_source_run_marks_completed_step_without_checkpoint_ineligible() -> None:
+    now = datetime.now(UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "prepare", "title": "Prepare"},
+            {"id": "implement", "title": "Implement"},
+        ],
+        dependency_map={"implement": ["prepare"]},
+        updated_at=now,
+    )
+    update_step_row(
+        rows,
+        "prepare",
+        updated_at=now,
+        status="succeeded",
+        artifacts={"outputPrimary": "artifact://prepare-output"},
+    )
+
+    mark_step_checkpoint_evidence(rows, "prepare", updated_at=now)
+    refresh_ready_steps(rows, updated_at=now)
+
+    assert rows[0]["resumePreservation"]["eligible"] is False
+    assert rows[0]["resumePreservation"]["reason"] == "missing_state_checkpoint"
+    assert rows[1]["status"] == "ready"
