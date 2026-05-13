@@ -73,6 +73,7 @@ from moonmind.workflows.skills.approval_policy import (
 )
 from moonmind.workflows.skills.skill_registry import parse_skill_registry
 from moonmind.workflows.temporal.step_ledger import (
+    TERMINAL_STEP_STATUSES,
     build_initial_step_rows,
     build_progress_summary,
     build_step_ledger_snapshot,
@@ -3268,6 +3269,16 @@ class MoonMindRunWorkflow:
             node_id = str(node.get("id") or "").strip()
             if not node_id:
                 continue
+            current_row = next(
+                (
+                    row
+                    for row in self._step_ledger_rows
+                    if row.get("logicalStepId") == node_id
+                ),
+                None,
+            )
+            if str((current_row or {}).get("status") or "") in TERMINAL_STEP_STATUSES:
+                continue
             try:
                 self._mark_step_terminal(
                     node_id,
@@ -3740,7 +3751,10 @@ class MoonMindRunWorkflow:
         parameters: Mapping[str, Any],
         execution_result: Any,
     ) -> None:
-        if self._publish_status == "failed":
+        if (
+            self._publish_status == "failed"
+            and workflow.patched(RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH)
+        ):
             return
 
         publish_mode = self._publish_mode(parameters)

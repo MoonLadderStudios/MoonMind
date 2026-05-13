@@ -2391,6 +2391,10 @@ async def test_run_execution_stage_stops_after_publish_lease_conflict(
     assert not create_pr_called
     assert wf._publish_status == "failed"
     assert "remote branch 'feature/stale' changed" in (wf._publish_reason or "")
+    steps = wf.get_step_ledger()["steps"]
+    assert steps[0]["status"] == "failed"
+    assert steps[0]["lastError"] == "publish_failed"
+    assert steps[1]["status"] == "skipped"
 
 @pytest.mark.asyncio
 async def test_run_proposals_stage_global_disable_halts_execution(
