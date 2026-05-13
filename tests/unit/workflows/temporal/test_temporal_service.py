@@ -2293,6 +2293,22 @@ def test_resume_checkpoint_model_accepts_complete_evidence() -> None:
     assert checkpoint.resume_workspace == {"branch": "feature", "commit": "abc123"}
 
 
+def test_resume_checkpoint_model_rejects_inline_checkpoint_payload() -> None:
+    payload = _valid_resume_checkpoint_payload(
+        workflow_id="mm:source",
+        run_id="run-source",
+        snapshot_ref="artifact://snapshot",
+    )
+    payload["resumeWorkspace"] = {
+        "branch": "feature",
+        "commit": "abc123",
+        "inlineCheckpointPayload": "x" * 4096,
+    }
+
+    with pytest.raises(ValidationError, match="inline checkpoint payload"):
+        ResumeCheckpointModel.model_validate(payload)
+
+
 @pytest.mark.asyncio
 async def test_failed_step_resume_creates_linked_execution_with_source_identity(
     tmp_path, mock_client_adapter

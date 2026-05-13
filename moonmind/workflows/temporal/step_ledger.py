@@ -33,6 +33,31 @@ def default_step_artifacts() -> dict[str, Any]:
 def default_step_workload() -> dict[str, Any] | None:
     return None
 
+
+def _has_semantic_output_ref(row: Mapping[str, Any]) -> bool:
+    artifacts = row.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        return False
+    for key in ("outputSummary", "outputPrimary"):
+        value = artifacts.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
+def _resume_preservation(
+    *,
+    eligible: bool,
+    reason: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "eligible": eligible,
+        "reason": reason,
+        "message": message,
+    }
+
+
 def build_initial_step_rows(
     *,
     ordered_nodes: list[dict[str, Any]],
@@ -85,13 +110,16 @@ def build_step_ledger_snapshot(
     workflow_id: str,
     run_id: str,
     rows: list[dict[str, Any]],
+    prepared_artifact_refs: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "workflowId": workflow_id,
         "runId": run_id,
         "runScope": "latest",
+        "preparedArtifactRefs": list(prepared_artifact_refs or []),
         "steps": deepcopy(rows),
     }
+
 
 def materialize_preserved_steps(
     rows: list[dict[str, Any]],
@@ -144,6 +172,11 @@ def materialize_preserved_steps(
         row["attentionRequired"] = False
         row["artifacts"] = artifacts
         row["stateCheckpointRef"] = state_checkpoint_ref
+        row["resumePreservation"] = _resume_preservation(
+            eligible=True,
+            reason="complete",
+            message="Step has recoverable output refs and state checkpoint evidence.",
+        )
         row["preservedFrom"] = {
             "workflowId": source_workflow_id,
             "runId": source_run_id,
@@ -151,6 +184,52 @@ def materialize_preserved_steps(
             "attempt": source_attempt,
         }
         row["updatedAt"] = updated_at.isoformat()
+
+
+def mark_step_checkpoint_evidence(
+    rows: list[dict[str, Any]],
+    logical_step_id: str,
+    *,
+    updated_at: datetime,
+    state_checkpoint_ref: str | None = None,
+) -> dict[str, Any]:
+    """Attach checkpoint evidence and preservation eligibility to a step row."""
+
+    for row in rows:
+        if row.get("logicalStepId") != logical_step_id:
+            continue
+        if state_checkpoint_ref is not None:
+            row["stateCheckpointRef"] = state_checkpoint_ref
+        existing_checkpoint = str(row.get("stateCheckpointRef") or "").strip()
+        status = str(row.get("status") or "").strip()
+        if status not in {"succeeded", "skipped"}:
+            preservation = _resume_preservation(
+                eligible=False,
+                reason="not_completed",
+                message="Step is not completed and cannot be preserved for Resume.",
+            )
+        elif not _has_semantic_output_ref(row):
+            preservation = _resume_preservation(
+                eligible=False,
+                reason="missing_output_refs",
+                message="Completed step cannot be preserved because no recoverable output refs were recorded.",
+            )
+        elif not existing_checkpoint:
+            preservation = _resume_preservation(
+                eligible=False,
+                reason="missing_state_checkpoint",
+                message="Completed step cannot be preserved because no state checkpoint ref was recorded.",
+            )
+        else:
+            preservation = _resume_preservation(
+                eligible=True,
+                reason="complete",
+                message="Step has recoverable output refs and state checkpoint evidence.",
+            )
+        row["resumePreservation"] = preservation
+        row["updatedAt"] = updated_at.isoformat()
+        return row
+    raise KeyError(f"Unknown logical step id: {logical_step_id}")
 
 def build_progress_summary(
     rows: list[dict[str, Any]],

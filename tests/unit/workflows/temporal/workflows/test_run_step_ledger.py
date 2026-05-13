@@ -716,6 +716,99 @@ def test_run_accepts_tuple_output_refs_and_ignores_string_values(
     assert step["artifacts"]["outputPrimary"] == "art_primary_1"
     assert step["artifacts"]["runtimeStdout"] == "art_stdout_1"
 
+
+def test_run_records_prepared_refs_and_idempotent_checkpoint_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 30, tzinfo=UTC)
+    task_payload = {
+        "inputAttachments": [{"artifactId": "objective-artifact"}],
+        "steps": [
+            {
+                "id": "implement",
+                "inputAttachments": [{"artifactId": "step-artifact"}],
+            }
+        ],
+    }
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "implement",
+                "tool": {"type": "agent_runtime", "name": "codex"},
+                "inputs": {"title": "Implement"},
+            }
+        ],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._capture_prepared_input_refs({"task": task_payload})
+    workflow._record_step_result_evidence(
+        "implement",
+        execution_result={
+            "status": "COMPLETED",
+            "outputs": {
+                "outputRefs": ["artifact://output"],
+                "latestCheckpointRef": "artifact://runtime/checkpoint",
+            },
+        },
+        updated_at=now,
+    )
+    workflow._mark_step_terminal(
+        "implement",
+        status="succeeded",
+        updated_at=now,
+        summary="Implemented",
+    )
+
+    first_ref = workflow._record_step_checkpoint_evidence(
+        "implement",
+        updated_at=now,
+    )
+    second_ref = workflow._record_step_checkpoint_evidence(
+        "implement",
+        updated_at=now,
+    )
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert workflow.get_step_ledger()["preparedArtifactRefs"] == [
+        "prepared-context://objective/objective-artifact",
+        "artifact://objective-artifact",
+        "prepared-context://steps/implement/step-artifact",
+        "artifact://step-artifact",
+    ]
+    assert first_ref == second_ref == "artifact://runtime/checkpoint"
+    assert step["stateCheckpointRef"] == "artifact://runtime/checkpoint"
+    assert step["resumePreservation"]["eligible"] is True
+    assert step["resumePreservation"]["reason"] == "complete"
+
+
+def test_run_marks_completed_step_without_checkpoint_ineligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 35, tzinfo=UTC)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "plan", "inputs": {"title": "Plan"}}],
+        dependency_map={"plan": []},
+        updated_at=now,
+    )
+    workflow._mark_step_terminal(
+        "plan",
+        status="succeeded",
+        updated_at=now,
+        summary="Planned",
+    )
+    workflow._record_step_checkpoint_evidence("plan", updated_at=now)
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["resumePreservation"]["eligible"] is False
+    assert step["resumePreservation"]["reason"] == "missing_output_refs"
+
 def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

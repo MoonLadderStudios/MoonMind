@@ -4,8 +4,10 @@ from datetime import UTC, datetime
 
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
+    mark_step_checkpoint_evidence,
     materialize_preserved_steps,
     refresh_ready_steps,
+    update_step_row,
 )
 
 
@@ -97,3 +99,41 @@ def test_materialize_preserved_steps_keeps_outputs_for_downstream_steps() -> Non
     assert rows[0]["stateCheckpointRef"] == "artifact://workspace/before-prepare"
     assert rows[1]["status"] == "ready"
     assert rows[2]["status"] == "pending"
+
+
+def test_parent_owned_checkpoint_evidence_survives_child_runtime_projection() -> None:
+    now = datetime.now(UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "delegate-agent", "title": "Delegate agent"},
+        ],
+        dependency_map={"delegate-agent": []},
+        updated_at=now,
+    )
+
+    update_step_row(
+        rows,
+        "delegate-agent",
+        updated_at=now,
+        status="succeeded",
+        refs={"childWorkflowId": "wf-child", "childRunId": "run-child"},
+        artifacts={"outputPrimary": "artifact://child-output"},
+    )
+    mark_step_checkpoint_evidence(
+        rows,
+        "delegate-agent",
+        updated_at=now,
+        state_checkpoint_ref="artifact://child-checkpoint",
+    )
+
+    assert rows[0]["refs"] == {
+        "childWorkflowId": "wf-child",
+        "childRunId": "run-child",
+        "taskRunId": None,
+    }
+    assert rows[0]["stateCheckpointRef"] == "artifact://child-checkpoint"
+    assert rows[0]["resumePreservation"] == {
+        "eligible": True,
+        "reason": "complete",
+        "message": "Step has recoverable output refs and state checkpoint evidence.",
+    }

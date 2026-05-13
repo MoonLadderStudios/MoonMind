@@ -40,6 +40,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.tasks.routing import _coerce_bool
     from moonmind.workflows.tasks.prepared_context import (
         build_prepared_input_manifest,
+        build_resume_prepared_artifact_refs,
         merge_prepared_input_refs,
         select_step_prepared_context,
     )
@@ -77,6 +78,7 @@ from moonmind.workflows.temporal.step_ledger import (
     build_progress_summary,
     build_step_ledger_snapshot,
     materialize_preserved_steps,
+    mark_step_checkpoint_evidence,
     refresh_ready_steps,
     upsert_step_check,
     update_step_row,
@@ -318,6 +320,8 @@ class MoonMindRunWorkflow:
         self._logs_ref: Optional[str] = None
         self._summary_ref: Optional[str] = None
         self._resume_source: dict[str, Any] | None = None
+        self._prepared_artifact_refs: list[str] = []
+        self._step_checkpoint_refs: dict[str, str] = {}
 
         # State tracking
         self._paused: bool = False
@@ -676,6 +680,15 @@ class MoonMindRunWorkflow:
                 refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
         self._sync_progress_snapshot(updated_at=updated_at)
 
+    def _capture_prepared_input_refs(self, parameters: Mapping[str, Any]) -> list[str]:
+        task_payload = parameters.get("task")
+        if not isinstance(task_payload, Mapping):
+            self._prepared_artifact_refs = []
+            return []
+        manifest = build_prepared_input_manifest(task_payload)
+        self._prepared_artifact_refs = build_resume_prepared_artifact_refs(manifest)
+        return list(self._prepared_artifact_refs)
+
     def _mark_step_running(
         self,
         logical_step_id: str,
@@ -919,6 +932,14 @@ class MoonMindRunWorkflow:
                 "provider_snapshot_ref",
             ),
         }
+        checkpoint_ref = _output_ref(
+            "stateCheckpointRef",
+            "state_checkpoint_ref",
+            "latestCheckpointRef",
+            "latest_checkpoint_ref",
+            "checkpointRef",
+            "checkpoint_ref",
+        ) or _artifact_class_ref("session.step_checkpoint", "state.checkpoint")
 
         if artifacts["outputPrimary"] is None:
             reserved_refs = {
@@ -943,7 +964,52 @@ class MoonMindRunWorkflow:
             workload=workload_metadata,
         ):
             return
+        if checkpoint_ref:
+            try:
+                mark_step_checkpoint_evidence(
+                    self._step_ledger_rows,
+                    logical_step_id,
+                    updated_at=updated_at,
+                    state_checkpoint_ref=checkpoint_ref,
+                )
+                self._step_checkpoint_refs[logical_step_id] = checkpoint_ref
+            except KeyError:
+                return
         self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _deterministic_step_checkpoint_ref(self, logical_step_id: str) -> str:
+        attempt = self._step_attempt_for(logical_step_id) or 0
+        workflow_id = re.sub(r"[^A-Za-z0-9_.:-]+", "-", workflow.info().workflow_id)
+        run_id = re.sub(r"[^A-Za-z0-9_.:-]+", "-", workflow.info().run_id)
+        step_id = re.sub(r"[^A-Za-z0-9_.:-]+", "-", logical_step_id)
+        return f"artifact://resume-checkpoints/{workflow_id}/{run_id}/{step_id}/{attempt}"
+
+    def _record_step_checkpoint_evidence(
+        self,
+        logical_step_id: str,
+        *,
+        updated_at: datetime,
+        state_checkpoint_ref: str | None = None,
+    ) -> str | None:
+        checkpoint_ref = (
+            state_checkpoint_ref
+            or self._step_checkpoint_refs.get(logical_step_id)
+            or self._deterministic_step_checkpoint_ref(logical_step_id)
+        )
+        try:
+            row = mark_step_checkpoint_evidence(
+                self._step_ledger_rows,
+                logical_step_id,
+                updated_at=updated_at,
+                state_checkpoint_ref=checkpoint_ref,
+            )
+        except KeyError:
+            return None
+        self._step_checkpoint_refs[logical_step_id] = str(
+            row.get("stateCheckpointRef") or checkpoint_ref
+        )
+        self._sync_progress_snapshot(updated_at=updated_at)
+        return self._step_checkpoint_refs[logical_step_id]
 
     def _refresh_step_readiness(self, *, updated_at: datetime) -> None:
         refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
@@ -2287,6 +2353,7 @@ class MoonMindRunWorkflow:
             dependency_map=dependency_map,
             updated_at=workflow.now(),
         )
+        self._capture_prepared_input_refs(parameters)
 
         registry_snapshot_ref = plan_definition.metadata.registry_snapshot.artifact_ref
         task_payload = parameters.get("task")
@@ -2792,6 +2859,11 @@ class MoonMindRunWorkflow:
                 summary=self._get_from_result(execution_result, "summary")
                 or self._summary,
                 last_error=None,
+            )
+            self._record_step_checkpoint_evidence(
+                node_id,
+                updated_at=workflow.now(),
+                state_checkpoint_ref=self._step_checkpoint_refs.get(node_id),
             )
             self._refresh_step_readiness(updated_at=workflow.now())
             self._record_execution_context(
@@ -6797,6 +6869,7 @@ class MoonMindRunWorkflow:
             workflow_id=workflow.info().workflow_id,
             run_id=workflow.info().run_id,
             rows=self._step_ledger_rows,
+            prepared_artifact_refs=self._prepared_artifact_refs,
         )
         return StepLedgerSnapshotModel.model_validate(snapshot).model_dump(
             by_alias=True,

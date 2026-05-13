@@ -7,6 +7,7 @@ from moonmind.workflows.tasks.prepared_context import (
     PreparedContextFailure,
     PreparedInputEntry,
     PreparedInputManifest,
+    build_resume_prepared_artifact_refs,
     build_prepared_input_manifest,
     select_step_prepared_context,
 )
@@ -176,6 +177,22 @@ def test_step_context_metadata_is_bounded_and_target_aware() -> None:
         "artifact://artifact-step-1",
     ]
     assert "data:image" not in str(metadata)
+
+
+def test_resume_prepared_artifact_refs_are_compact_and_deduped() -> None:
+    manifest = build_prepared_input_manifest(_task_payload())
+
+    refs = build_resume_prepared_artifact_refs(manifest)
+
+    assert refs == [
+        "prepared-context://objective/artifact-objective",
+        "artifact://artifact-objective",
+        "prepared-context://steps/collect-evidence/artifact-step-1",
+        "artifact://artifact-step-1",
+        "prepared-context://steps/write-report/artifact-step-2",
+        "artifact://artifact-step-2",
+    ]
+    assert "data:image" not in str(refs)
 
 
 def test_prepare_failure_payload_is_bounded() -> None:
