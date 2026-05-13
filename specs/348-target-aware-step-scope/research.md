@@ -63,3 +63,11 @@ Evidence: Constitution principle IX requires boundary regression coverage for wo
 Rationale: Prepared-context metadata crosses the parent-child workflow boundary and may be present in in-flight histories.
 Alternatives considered: Hidden fallback translation for alternate target fields. Rejected because fallback transforms could hide target-binding errors.
 Test implications: Add boundary-level regression coverage for request metadata shape and degraded/invalid prepared context inputs.
+
+## Source Coverage ID Preservation
+
+Decision: Preserve both local MoonSpec source IDs and original Jira coverage IDs in downstream evidence.
+Evidence: `spec.md` maps `DESIGN-REQ-001` to original Jira coverage ID `DESIGN-REQ-021` and `DESIGN-REQ-002` to original Jira coverage ID `DESIGN-REQ-022`.
+Rationale: Local IDs keep this one-story spec internally coherent, while original Jira IDs let final verification compare against the canonical preset brief without ambiguity.
+Alternatives considered: Use only local MoonSpec IDs after specification. Rejected because MM-649's preserved Jira brief explicitly includes the original coverage IDs.
+Test implications: Traceability tasks and final `/moonspec-verify` evidence must mention `DESIGN-REQ-021` and `DESIGN-REQ-022` alongside `DESIGN-REQ-001` and `DESIGN-REQ-002`.

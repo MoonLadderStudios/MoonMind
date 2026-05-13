@@ -11,6 +11,8 @@ MM-649 requires step execution and delegated MoonMind.AgentRun child workflows t
 
 ## Requirement Status
 
+Traceability note: `DESIGN-REQ-001` maps the original Jira coverage ID `DESIGN-REQ-021`, and `DESIGN-REQ-002` maps the original Jira coverage ID `DESIGN-REQ-022`.
+
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
 | FR-001 | implemented_verified | `moonmind/workflows/temporal/workflows/run.py` builds prepared context before dispatch; `tests/unit/workflows/temporal/workflows/test_run_target_aware_inputs.py` asserts objective + current step refs | Preserve behavior | unit + integration final verify |

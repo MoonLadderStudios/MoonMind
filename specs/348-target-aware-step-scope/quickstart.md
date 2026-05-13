@@ -72,5 +72,6 @@ Final verification must preserve:
 - Jira issue `MM-649`
 - the canonical Jira preset brief in `spec.md`
 - DESIGN-REQ-001 and DESIGN-REQ-002
+- original Jira coverage IDs DESIGN-REQ-021 and DESIGN-REQ-022
 - FR-001 through FR-009
 - SC-001 through SC-005

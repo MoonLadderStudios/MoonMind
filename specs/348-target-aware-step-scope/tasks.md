@@ -7,7 +7,7 @@
 
 **Organization**: Tasks cover exactly one user story: Step-Scoped Execution Context.
 
-**Source Traceability**: MM-649 and the canonical Jira preset brief are preserved in `spec.md`. This task list covers FR-001 through FR-009, acceptance scenarios 1-5, edge cases, SC-001 through SC-005, DESIGN-REQ-001, and DESIGN-REQ-002.
+**Source Traceability**: MM-649 and the canonical Jira preset brief are preserved in `spec.md`. This task list covers FR-001 through FR-009, acceptance scenarios 1-5, edge cases, SC-001 through SC-005, DESIGN-REQ-001, and DESIGN-REQ-002. Original Jira coverage IDs DESIGN-REQ-021 and DESIGN-REQ-022 are preserved through the DESIGN-REQ-001 and DESIGN-REQ-002 source mappings.
 
 **Test Commands**:
 
@@ -38,7 +38,7 @@
 **CRITICAL**: No story implementation or fallback code changes can begin until this phase is complete.
 
 - [ ] T003 Verify `specs/348-target-aware-step-scope/spec.md` contains exactly one `## User Story -` section and no `[NEEDS CLARIFICATION]` markers for the single-story gate.
-- [ ] T004 Build a requirement coverage checklist from `specs/348-target-aware-step-scope/plan.md` covering all `implemented_verified`, `implemented_unverified`, and `missing` rows for FR-001 through FR-009, SCN-001 through SCN-005, SC-001 through SC-005, DESIGN-REQ-001, and DESIGN-REQ-002.
+- [ ] T004 Build a requirement coverage checklist from `specs/348-target-aware-step-scope/plan.md` covering all `implemented_verified`, `implemented_unverified`, and `missing` rows for FR-001 through FR-009, SCN-001 through SCN-005, SC-001 through SC-005, DESIGN-REQ-001, DESIGN-REQ-002, and original Jira coverage IDs DESIGN-REQ-021 through DESIGN-REQ-022.
 - [ ] T005 Confirm no new persistent storage or new external provider dependency is needed by reviewing `specs/348-target-aware-step-scope/data-model.md` and `specs/348-target-aware-step-scope/contracts/step-context-scope.md` for Constitution principles II, III, IV, IX, and XIII.
 
 **Checkpoint**: Foundation ready - story test and implementation work can now begin.
@@ -104,10 +104,10 @@
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
 - [ ] T023 [P] Update implementation notes or verification notes in `specs/348-target-aware-step-scope/research.md` only if fallback implementation changes alter the plan assumptions for FR-003, FR-006, FR-007, or DESIGN-REQ-002.
-- [ ] T024 [P] Confirm `MM-649`, the canonical Jira preset brief, FR-001 through FR-009, SC-001 through SC-005, DESIGN-REQ-001, and DESIGN-REQ-002 remain present in `specs/348-target-aware-step-scope/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/step-context-scope.md`, `quickstart.md`, and `tasks.md`.
+- [ ] T024 [P] Confirm `MM-649`, the canonical Jira preset brief, FR-001 through FR-009, SC-001 through SC-005, DESIGN-REQ-001, DESIGN-REQ-002, and original Jira coverage IDs DESIGN-REQ-021 through DESIGN-REQ-022 remain present in `specs/348-target-aware-step-scope/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/step-context-scope.md`, `quickstart.md`, and `tasks.md`.
 - [ ] T025 Run `./tools/test_unit.sh` for final unit verification covering FR-001 through FR-009 and DESIGN-REQ-001 through DESIGN-REQ-002.
 - [ ] T026 Run `./tools/test_integration.sh` for final hermetic integration verification covering SCN-001 through SCN-005 and SC-001 through SC-004.
-- [ ] T027 Run `/moonspec-verify` for `specs/348-target-aware-step-scope/spec.md` after implementation and tests pass, preserving MM-649, the canonical Jira preset brief, FR-001 through FR-009, SC-001 through SC-005, DESIGN-REQ-001, and DESIGN-REQ-002 in final verification evidence.
+- [ ] T027 Run `/moonspec-verify` for `specs/348-target-aware-step-scope/spec.md` after implementation and tests pass, preserving MM-649, the canonical Jira preset brief, FR-001 through FR-009, SC-001 through SC-005, DESIGN-REQ-001, DESIGN-REQ-002, and original Jira coverage IDs DESIGN-REQ-021 through DESIGN-REQ-022 in final verification evidence.
 
 ---
 
@@ -167,7 +167,7 @@ Task: "Add MM-649 traceability unit coverage in tests/unit/specs/test_mm649_trac
 
 - Already verified: FR-001, FR-002, FR-004, FR-005, FR-008, SCN-001, SCN-003, SC-001, DESIGN-REQ-001; preserve with final validation only.
 - Verification-only first: FR-003, FR-006, FR-007, SCN-002, SCN-004, SCN-005, SC-002, SC-003, SC-004, DESIGN-REQ-002.
-- Missing traceability/final evidence: FR-009 and SC-005; cover through T009, T024, and T027.
+- Missing traceability/final evidence: FR-009, SC-005, and original Jira coverage IDs DESIGN-REQ-021 through DESIGN-REQ-022; cover through T009, T024, and T027.
 - Conditional fallback code changes: T016-T019 only run if verification tests fail.
 
 ---
