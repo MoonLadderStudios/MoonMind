@@ -80,6 +80,7 @@ from moonmind.workflows.temporal.step_ledger import (
     clear_step_checkpoint_evidence,
     materialize_preserved_steps,
     mark_step_checkpoint_evidence,
+    preserved_outputs_for_dependencies,
     refresh_ready_steps,
     upsert_step_check,
     update_step_row,
@@ -321,6 +322,9 @@ class MoonMindRunWorkflow:
         self._logs_ref: Optional[str] = None
         self._summary_ref: Optional[str] = None
         self._resume_source: dict[str, Any] | None = None
+        self._resume_failed_step_id: str | None = None
+        self._resume_workspace: dict[str, Any] = {}
+        self._resume_workspace_restored_ref: str | None = None
         self._prepared_artifact_refs: list[str] = []
         self._step_checkpoint_refs: dict[str, str] = {}
 
@@ -377,6 +381,7 @@ class MoonMindRunWorkflow:
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
+        self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
         self._progress_snapshot: dict[str, Any] = {
             "total": 0,
             "pending": 0,
@@ -651,6 +656,236 @@ class MoonMindRunWorkflow:
             updated_at=updated_at,
         )
 
+    def _resume_source_text(
+        self,
+        source: Mapping[str, Any],
+        *keys: str,
+    ) -> str:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    def _resume_workspace_checkpoint_ref(
+        self,
+        workspace: Mapping[str, Any],
+    ) -> str:
+        return self._resume_source_text(
+            workspace,
+            "checkpointRef",
+            "checkpoint_ref",
+            "workspaceCheckpointRef",
+            "workspace_checkpoint_ref",
+            "branchCheckpointRef",
+            "branch_checkpoint_ref",
+            "checkpointPayloadRef",
+            "checkpoint_payload_ref",
+        )
+
+    def _resume_workspace_has_evidence(
+        self,
+        workspace: Mapping[str, Any],
+    ) -> bool:
+        return any(
+            isinstance(value, str) and value.strip()
+            for value in workspace.values()
+        )
+
+    def _rebuild_step_ledger_index(self) -> None:
+        self._step_ledger_by_id = {
+            row["logicalStepId"]: row
+            for row in self._step_ledger_rows
+            if isinstance(row.get("logicalStepId"), str) and row["logicalStepId"]
+        }
+
+    def _validate_resume_source_for_execution(self) -> dict[str, Any] | None:
+        resume_source = self._resume_source
+        self._resume_failed_step_id = None
+        self._resume_workspace = {}
+        self._resume_workspace_restored_ref = None
+        if resume_source is None:
+            return None
+        if not isinstance(resume_source, Mapping):
+            raise ValueError("Resume source must be a compact mapping.")
+        if not resume_source:
+            return None
+
+        source_workflow_id = self._resume_source_text(
+            resume_source,
+            "sourceWorkflowId",
+            "source_workflow_id",
+        )
+        if not source_workflow_id:
+            raise ValueError("Resume source requires source workflow ID.")
+
+        source_run_id = self._resume_source_text(
+            resume_source,
+            "sourceRunId",
+            "source_run_id",
+        )
+        if not source_run_id:
+            raise ValueError("Resume source requires source run ID.")
+
+        snapshot_ref = self._resume_source_text(
+            resume_source,
+            "sourceTaskInputSnapshotRef",
+            "source_task_input_snapshot_ref",
+        )
+        if not snapshot_ref:
+            raise ValueError("Resume source requires task input snapshot ref.")
+
+        failed_step_id = self._resume_source_text(
+            resume_source,
+            "failedStepId",
+            "failed_step_id",
+        )
+        if not failed_step_id:
+            raise ValueError("Resume source requires failed step ID.")
+
+        checkpoint_ref = self._resume_source_text(
+            resume_source,
+            "resumeCheckpointRef",
+            "resume_checkpoint_ref",
+        )
+        if not checkpoint_ref:
+            raise ValueError("Resume source requires resume checkpoint ref.")
+
+        plan_identity = self._resume_source_text(
+            resume_source,
+            "sourcePlanRef",
+            "source_plan_ref",
+            "sourcePlanDigest",
+            "source_plan_digest",
+        )
+        if not plan_identity:
+            raise ValueError("Resume source requires source plan identity.")
+
+        workspace = (
+            resume_source.get("resumeWorkspace")
+            if "resumeWorkspace" in resume_source
+            else resume_source.get("resume_workspace")
+        )
+        if not isinstance(workspace, Mapping):
+            raise ValueError("Resume source requires resume workspace checkpoint.")
+        if not self._resume_workspace_has_evidence(workspace):
+            raise ValueError("Resume source requires workspace evidence.")
+
+        preserved_steps = resume_source.get("preservedSteps") or resume_source.get(
+            "preserved_steps"
+        )
+        if preserved_steps is not None and not isinstance(preserved_steps, list):
+            raise ValueError("Resume source preserved steps must be a list.")
+        for preserved in preserved_steps or []:
+            if not isinstance(preserved, Mapping):
+                continue
+            logical_step_id = self._resume_source_text(
+                preserved,
+                "logicalStepId",
+                "logical_step_id",
+            )
+            if not logical_step_id:
+                raise ValueError(
+                    "Resume source preserved step requires logical step ID."
+                )
+            status = self._resume_source_text(preserved, "status").lower()
+            if status and status not in {"succeeded", "skipped"}:
+                raise ValueError(
+                    f"preserved step {logical_step_id} must be completed before Resume"
+                )
+            artifacts = preserved.get("artifacts")
+            if not isinstance(artifacts, Mapping):
+                raise ValueError(
+                    f"preserved step {logical_step_id} requires recoverable output refs"
+                )
+            has_output_ref = any(
+                isinstance(artifacts.get(key), str) and artifacts.get(key).strip()
+                for key in ("outputSummary", "outputPrimary")
+            )
+            if not has_output_ref:
+                raise ValueError(
+                    f"preserved step {logical_step_id} requires recoverable output refs"
+                )
+            state_checkpoint_ref = self._resume_source_text(
+                preserved,
+                "stateCheckpointRef",
+                "state_checkpoint_ref",
+            )
+            if not state_checkpoint_ref:
+                raise ValueError(
+                    f"preserved step {logical_step_id} requires a state checkpoint ref"
+                )
+
+        self._resume_failed_step_id = failed_step_id
+        self._resume_workspace = dict(workspace)
+        return dict(resume_source)
+
+    def _restore_resume_workspace_for_failed_step(
+        self,
+        logical_step_id: str,
+    ) -> str | None:
+        if (
+            not self._resume_failed_step_id
+            or logical_step_id != self._resume_failed_step_id
+        ):
+            return None
+        if self._resume_workspace_restored_ref:
+            return self._resume_workspace_restored_ref
+        checkpoint_ref = self._resume_workspace_checkpoint_ref(self._resume_workspace)
+        if not checkpoint_ref:
+            return None
+        self._resume_workspace_restored_ref = checkpoint_ref
+        return checkpoint_ref
+
+    def _preserved_outputs_for_step(
+        self,
+        logical_step_id: str,
+    ) -> dict[str, dict[str, str]]:
+        return preserved_outputs_for_dependencies(
+            self._step_ledger_rows,
+            logical_step_id,
+        )
+
+    def _step_ledger_row_for(self, logical_step_id: str) -> dict[str, Any] | None:
+        return self._step_ledger_by_id.get(logical_step_id)
+
+    def _is_preserved_step(self, logical_step_id: str) -> bool:
+        row = self._step_ledger_row_for(logical_step_id)
+        return isinstance(row, Mapping) and isinstance(
+            row.get("preservedFrom"),
+            Mapping,
+        )
+
+    def _preserved_step_outputs(self, logical_step_id: str) -> dict[str, Any]:
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, Mapping):
+            return {}
+        artifacts = row.get("artifacts")
+        if not isinstance(artifacts, Mapping):
+            return {}
+        outputs: dict[str, Any] = {}
+        output_summary = artifacts.get("outputSummary")
+        if isinstance(output_summary, str) and output_summary.strip():
+            outputs["outputSummaryRef"] = output_summary.strip()
+        output_primary = artifacts.get("outputPrimary")
+        if isinstance(output_primary, str) and output_primary.strip():
+            outputs["outputPrimaryRef"] = output_primary.strip()
+        if outputs:
+            outputs["preservedFrom"] = dict(row.get("preservedFrom") or {})
+        return outputs
+
+    def _merge_preserved_dependency_outputs(
+        self,
+        logical_step_id: str,
+        previous_step_outputs: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        preserved_outputs = self._preserved_outputs_for_step(logical_step_id)
+        if not preserved_outputs:
+            return previous_step_outputs
+        merged = dict(previous_step_outputs)
+        merged["preservedOutputs"] = preserved_outputs
+        return merged
+
     def _initialize_step_ledger(
         self,
         *,
@@ -658,16 +893,27 @@ class MoonMindRunWorkflow:
         dependency_map: dict[str, list[str]],
         updated_at: datetime,
     ) -> None:
+        resume_source = self._validate_resume_source_for_execution() or {}
         self._step_ledger_rows = build_initial_step_rows(
             ordered_nodes=ordered_nodes,
             dependency_map=dependency_map,
             updated_at=updated_at,
         )
-        resume_source = self._resume_source or {}
-        preserved_steps = resume_source.get("preservedSteps")
+        self._rebuild_step_ledger_index()
+        preserved_steps = resume_source.get("preservedSteps") or resume_source.get(
+            "preserved_steps"
+        )
         if isinstance(preserved_steps, list):
-            source_workflow_id = str(resume_source.get("sourceWorkflowId") or "").strip()
-            source_run_id = str(resume_source.get("sourceRunId") or "").strip()
+            source_workflow_id = self._resume_source_text(
+                resume_source,
+                "sourceWorkflowId",
+                "source_workflow_id",
+            )
+            source_run_id = self._resume_source_text(
+                resume_source,
+                "sourceRunId",
+                "source_run_id",
+            )
             if source_workflow_id and source_run_id:
                 materialize_preserved_steps(
                     self._step_ledger_rows,
@@ -697,6 +943,7 @@ class MoonMindRunWorkflow:
         updated_at: datetime,
         summary: str | None = None,
     ) -> None:
+        self._restore_resume_workspace_for_failed_step(logical_step_id)
         if not self._try_update_step_row(
             logical_step_id,
             updated_at=updated_at,
@@ -2433,6 +2680,11 @@ class MoonMindRunWorkflow:
             ).strip()
             tool_version = str(selected_node.get("version") or "").strip()
             node_id = str(node.get("id") or "unknown")
+            if self._is_preserved_step(node_id):
+                preserved_outputs = self._preserved_step_outputs(node_id)
+                if preserved_outputs:
+                    previous_step_outputs = preserved_outputs
+                continue
             original_node_inputs = dict(node.get("inputs", {}))
             approval_policy = plan_definition.policy.approval_policy
             review_gate_active = self._review_gate_active(
@@ -2467,6 +2719,12 @@ class MoonMindRunWorkflow:
                         feedback=previous_review_feedback,
                         issues=previous_review_issues,
                     )
+                current_previous_outputs = self._merge_preserved_dependency_outputs(
+                    node_id,
+                    previous_step_outputs,
+                )
+                if current_previous_outputs:
+                    node_inputs["previousOutputs"] = dict(current_previous_outputs)
 
                 self._step_count = index
                 self._summary = (
@@ -2623,7 +2881,7 @@ class MoonMindRunWorkflow:
                                     "node_id": node_id,
                                     "ownerId": self._owner_id,
                                     "ownerType": self._owner_type,
-                                    "previousOutputs": previous_step_outputs,
+                                    "previousOutputs": current_previous_outputs,
                                 },
                             }
                             if workflow.patched("idempotency_key_phase3"):

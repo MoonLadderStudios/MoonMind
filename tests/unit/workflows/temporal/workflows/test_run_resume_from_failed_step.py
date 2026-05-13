@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     mark_step_checkpoint_evidence,
@@ -9,6 +11,56 @@ from moonmind.workflows.temporal.step_ledger import (
     refresh_ready_steps,
     update_step_row,
 )
+from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+
+def _resume_source(**overrides: object) -> dict[str, object]:
+    source: dict[str, object] = {
+        "sourceWorkflowId": "mm:source",
+        "sourceRunId": "run-source",
+        "sourceTaskInputSnapshotRef": "artifact://snapshot/source",
+        "sourcePlanDigest": "sha256:source-plan",
+        "failedStepId": "implement",
+        "failedStepAttempt": 1,
+        "resumeCheckpointRef": "artifact://resume/checkpoint",
+        "resumeWorkspace": {
+            "checkpointRef": "artifact://workspace/before-implement",
+        },
+        "preservedSteps": [
+            {
+                "logicalStepId": "prepare",
+                "status": "succeeded",
+                "sourceAttempt": 1,
+                "artifacts": {
+                    "outputSummary": "artifact://prepare-summary",
+                    "outputPrimary": "artifact://prepare-output",
+                },
+                "stateCheckpointRef": "artifact://workspace/prepare",
+            }
+        ],
+    }
+    source.update(overrides)
+    return source
+
+
+def _workflow_with_resume(
+    source: dict[str, object] | None = None,
+) -> MoonMindRunWorkflow:
+    workflow = MoonMindRunWorkflow()
+    workflow._resume_source = source or _resume_source()
+    return workflow
+
+
+def _ordered_nodes() -> list[dict[str, object]]:
+    return [
+        {"id": "prepare", "title": "Prepare"},
+        {"id": "implement", "title": "Implement"},
+        {"id": "verify", "title": "Verify"},
+    ]
+
+
+def _dependency_map() -> dict[str, list[str]]:
+    return {"prepare": [], "implement": ["prepare"], "verify": ["implement"]}
 
 
 def test_materialize_preserved_steps_marks_source_provenance_without_new_attempt() -> None:
@@ -137,3 +189,217 @@ def test_parent_owned_checkpoint_evidence_survives_child_runtime_projection() ->
         "reason": "complete",
         "message": "Step has recoverable output refs and state checkpoint evidence.",
     }
+
+def test_empty_resume_source_is_treated_as_absent() -> None:
+    now = datetime.now(UTC)
+    workflow = MoonMindRunWorkflow()
+    workflow._resume_source = {}
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+
+    assert workflow._resume_failed_step_id is None
+    assert workflow._resume_workspace == {}
+    assert workflow._step_ledger_rows[0]["status"] == "ready"
+
+
+def test_step_ledger_row_lookup_uses_initialized_index() -> None:
+    workflow = _workflow_with_resume()
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=datetime.now(UTC),
+    )
+
+    assert workflow._step_ledger_row_for("prepare") is workflow._step_ledger_rows[0]
+    assert workflow._step_ledger_row_for("missing") is None
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("sourceWorkflowId", "source workflow"),
+        ("sourceRunId", "source run"),
+        ("sourceTaskInputSnapshotRef", "task input snapshot"),
+        ("failedStepId", "failed step"),
+        ("resumeCheckpointRef", "resume checkpoint"),
+    ],
+)
+def test_resume_source_validation_requires_compact_identity_before_execution(
+    field: str,
+    message: str,
+) -> None:
+    source = _resume_source(**{field: ""})
+    workflow = _workflow_with_resume(source)
+
+    with pytest.raises(ValueError, match=message):
+        workflow._initialize_step_ledger(
+            ordered_nodes=_ordered_nodes(),
+            dependency_map=_dependency_map(),
+            updated_at=datetime.now(UTC),
+        )
+
+
+def test_resume_source_validation_requires_plan_identity_before_execution() -> None:
+    source = _resume_source(sourcePlanDigest="", sourcePlanRef="")
+    workflow = _workflow_with_resume(source)
+
+    with pytest.raises(ValueError, match="plan"):
+        workflow._initialize_step_ledger(
+            ordered_nodes=_ordered_nodes(),
+            dependency_map=_dependency_map(),
+            updated_at=datetime.now(UTC),
+        )
+
+
+def test_resume_source_rejects_preserved_step_without_recoverable_output_ref() -> None:
+    source = _resume_source(
+        preservedSteps=[
+            {
+                "logicalStepId": "prepare",
+                "status": "succeeded",
+                "sourceAttempt": 1,
+                "artifacts": {},
+                "stateCheckpointRef": "artifact://workspace/prepare",
+            }
+        ]
+    )
+    workflow = _workflow_with_resume(source)
+
+    with pytest.raises(ValueError, match="recoverable output"):
+        workflow._initialize_step_ledger(
+            ordered_nodes=_ordered_nodes(),
+            dependency_map=_dependency_map(),
+            updated_at=datetime.now(UTC),
+        )
+
+
+def test_resume_source_restores_workspace_before_failed_step_execution() -> None:
+    now = datetime.now(UTC)
+    workflow = _workflow_with_resume()
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+
+    restored_ref = workflow._restore_resume_workspace_for_failed_step("implement")
+
+    assert restored_ref == "artifact://workspace/before-implement"
+    assert workflow._resume_workspace_restored_ref == restored_ref
+    assert workflow._restore_resume_workspace_for_failed_step("verify") is None
+
+
+def test_resume_source_rejects_missing_workspace_evidence() -> None:
+    source = _resume_source(resumeWorkspace={})
+    workflow = _workflow_with_resume(source)
+
+    with pytest.raises(ValueError, match="workspace evidence"):
+        workflow._initialize_step_ledger(
+            ordered_nodes=_ordered_nodes(),
+            dependency_map=_dependency_map(),
+            updated_at=datetime.now(UTC),
+        )
+
+
+def test_resume_source_accepts_branch_commit_workspace_evidence() -> None:
+    now = datetime.now(UTC)
+    source = _resume_source(resumeWorkspace={"branch": "feature", "commit": "abc123"})
+    workflow = _workflow_with_resume(source)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+
+    assert workflow._resume_workspace == {"branch": "feature", "commit": "abc123"}
+    assert workflow._restore_resume_workspace_for_failed_step("implement") is None
+
+
+def test_resume_source_accepts_checkpoint_payload_ref_workspace_evidence() -> None:
+    now = datetime.now(UTC)
+    source = _resume_source(
+        resumeWorkspace={
+            "checkpoint_payload_ref": "artifact://checkpoint/payload",
+            "inline_checkpoint_metadata": "artifact://checkpoint/metadata",
+        }
+    )
+    workflow = _workflow_with_resume(source)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+
+    restored_ref = workflow._restore_resume_workspace_for_failed_step("implement")
+
+    assert restored_ref == "artifact://checkpoint/payload"
+    assert workflow._resume_workspace_restored_ref == restored_ref
+
+
+def test_preserved_outputs_are_available_to_failed_step_dependencies() -> None:
+    now = datetime.now(UTC)
+    workflow = _workflow_with_resume()
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+
+    outputs = workflow._preserved_outputs_for_step("implement")
+
+    assert outputs == {
+        "prepare": {
+            "outputSummary": "artifact://prepare-summary",
+            "outputPrimary": "artifact://prepare-output",
+        }
+    }
+
+
+def test_retried_failed_step_records_fresh_evidence_without_source_provenance() -> None:
+    now = datetime.now(UTC)
+    workflow = _workflow_with_resume()
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+
+    update_step_row(
+        workflow._step_ledger_rows,
+        "implement",
+        updated_at=now,
+        status="succeeded",
+    )
+    workflow._record_step_result_evidence(
+        "implement",
+        execution_result={
+            "outputs": {
+                "outputSummaryRef": "artifact://implement-summary-new",
+                "outputPrimaryRef": "artifact://implement-output-new",
+                "stateCheckpointRef": "artifact://workspace/implement-new",
+            }
+        },
+        updated_at=now,
+    )
+
+    implement_row = next(
+        row
+        for row in workflow._step_ledger_rows
+        if row["logicalStepId"] == "implement"
+    )
+    assert "preservedFrom" not in implement_row
+    assert (
+        implement_row["artifacts"]["outputSummary"]
+        == "artifact://implement-summary-new"
+    )
+    assert (
+        implement_row["artifacts"]["outputPrimary"]
+        == "artifact://implement-output-new"
+    )
+    assert implement_row["stateCheckpointRef"] == "artifact://workspace/implement-new"
