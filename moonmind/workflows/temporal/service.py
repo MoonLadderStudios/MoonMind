@@ -2534,7 +2534,7 @@ class TemporalExecutionService:
             )
         else:
             recovery_provenance = None
-            if not input_artifact_ref and not plan_artifact_ref:
+            if input_artifact_ref is None and plan_artifact_ref is None:
                 recovery_provenance = self._exact_full_rerun_recovery(
                     source_workflow_id=record.workflow_id,
                     source_run_id=record.run_id,
@@ -2572,7 +2572,7 @@ class TemporalExecutionService:
                 source_workflow_id=record.workflow_id,
                 source_run_id=record.run_id,
             )
-        elif not input_artifact_ref and not plan_artifact_ref:
+        elif input_artifact_ref is None and plan_artifact_ref is None:
             recovery_provenance = self._exact_full_rerun_recovery(
                 source_workflow_id=record.workflow_id,
                 source_run_id=record.run_id,
@@ -2671,11 +2671,11 @@ class TemporalExecutionService:
     @staticmethod
     def _exact_full_rerun_recovery(
         *,
-        source_workflow_id: str,
-        source_run_id: str,
+        source_workflow_id: str | None,
+        source_run_id: str | None,
     ) -> dict[str, Any]:
-        canonical_workflow_id = source_workflow_id.strip()
-        canonical_run_id = source_run_id.strip()
+        canonical_workflow_id = (source_workflow_id or "").strip()
+        canonical_run_id = (source_run_id or "").strip()
         if not canonical_workflow_id or not canonical_run_id:
             raise TemporalExecutionValidationError(
                 "Rerun source workflowId and runId are required."

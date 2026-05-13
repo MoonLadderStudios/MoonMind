@@ -2164,11 +2164,11 @@ def test_full_retry_recovery_from_patch_rejects_forged_source_ids():
 
 @pytest.mark.parametrize(
     ("source_workflow_id", "source_run_id"),
-    [("", "run-source"), ("mm:source", " ")],
+    [("", "run-source"), ("mm:source", " "), (None, "run-source")],
 )
 def test_exact_full_rerun_recovery_rejects_missing_source_identity(
-    source_workflow_id: str,
-    source_run_id: str,
+    source_workflow_id: str | None,
+    source_run_id: str | None,
 ) -> None:
     with pytest.raises(
         TemporalExecutionValidationError,

@@ -4764,20 +4764,31 @@ async def _persist_original_task_input_snapshot_from_parameters(
 async def _reuse_original_task_input_snapshot_from_source(
     *,
     session: AsyncSession,
-    source_record,
-    target_record,
+    source_record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+    target_record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
 ) -> str:
     source_memo = dict(getattr(source_record, "memo", None) or {})
     snapshot_ref = _task_input_snapshot_ref_from_memo(source_memo)
     if not snapshot_ref:
         return ""
-    snapshot_version = int(
-        source_memo.get("task_input_snapshot_version")
-        or source_memo.get("taskInputSnapshotVersion")
-        or _TASK_INPUT_SNAPSHOT_VERSION
-    )
-    records_to_update = []
-    if isinstance(target_record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)):
+    raw_version = source_memo.get("task_input_snapshot_version")
+    if raw_version is None:
+        raw_version = source_memo.get("taskInputSnapshotVersion")
+    try:
+        snapshot_version = (
+            int(raw_version)
+            if raw_version is not None
+            else _TASK_INPUT_SNAPSHOT_VERSION
+        )
+    except (TypeError, ValueError):
+        snapshot_version = _TASK_INPUT_SNAPSHOT_VERSION
+    records_to_update: list[
+        TemporalExecutionRecord | TemporalExecutionCanonicalRecord
+    ] = []
+    if isinstance(
+        target_record,
+        (TemporalExecutionRecord, TemporalExecutionCanonicalRecord),
+    ):
         records_to_update.append(target_record)
         if not isinstance(target_record, TemporalExecutionCanonicalRecord):
             canonical_record = await session.get(
@@ -4786,6 +4797,7 @@ async def _reuse_original_task_input_snapshot_from_source(
             )
             if canonical_record is not None:
                 records_to_update.append(canonical_record)
+    linked_execution_keys: set[tuple[str, str, str]] = set()
     for target in records_to_update:
         memo = dict(target.memo or {})
         memo["task_input_snapshot_ref"] = snapshot_ref
@@ -4796,6 +4808,31 @@ async def _reuse_original_task_input_snapshot_from_source(
         if snapshot_ref not in refs:
             refs.append(snapshot_ref)
             target.artifact_refs = refs
+        execution_key = (target.namespace, target.workflow_id, target.run_id)
+        if execution_key in linked_execution_keys:
+            continue
+        linked_execution_keys.add(execution_key)
+        exists = await session.execute(
+            select(TemporalArtifactLink.id).where(
+                TemporalArtifactLink.artifact_id == snapshot_ref,
+                TemporalArtifactLink.namespace == target.namespace,
+                TemporalArtifactLink.workflow_id == target.workflow_id,
+                TemporalArtifactLink.run_id == target.run_id,
+                TemporalArtifactLink.link_type == _TASK_INPUT_SNAPSHOT_LINK_TYPE,
+            ).limit(1)
+        )
+        if exists.scalar_one_or_none() is None:
+            session.add(
+                TemporalArtifactLink(
+                    id=uuid4(),
+                    artifact_id=snapshot_ref,
+                    namespace=target.namespace,
+                    workflow_id=target.workflow_id,
+                    run_id=target.run_id,
+                    link_type=_TASK_INPUT_SNAPSHOT_LINK_TYPE,
+                    label="Original task input snapshot",
+                )
+            )
     return snapshot_ref
 
 async def _attach_input_attachment_artifacts_to_execution(

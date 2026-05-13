@@ -33,6 +33,7 @@ from api_service.db.base import get_async_session
 from api_service.db.models import (
     MoonMindWorkflowState,
     TemporalArtifactEncryption,
+    TemporalArtifactLink,
     TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionRecord,
@@ -51,22 +52,48 @@ from moonmind.schemas.temporal_models import (
     StepLedgerSnapshotModel,
 )
 
+
 class _ScalarRows:
-    def __init__(self, rows: list[SimpleNamespace]) -> None:
+    def __init__(self, rows: list[object]) -> None:
         self._rows = rows
 
-    def all(self) -> list[SimpleNamespace]:
+    def all(self) -> list[object]:
         return self._rows
 
+
 class _ExecuteResult:
-    def __init__(self, rows: list[SimpleNamespace]) -> None:
+    def __init__(self, rows: list[object]) -> None:
         self._rows = rows
 
     def scalars(self) -> _ScalarRows:
         return _ScalarRows(self._rows)
 
+    def scalar_one_or_none(self) -> object | None:
+        return self._rows[0] if self._rows else None
+
+
 def _artifact_session(rows: list[SimpleNamespace]) -> SimpleNamespace:
     return SimpleNamespace(execute=AsyncMock(return_value=_ExecuteResult(rows)))
+
+
+class _SnapshotReuseSession:
+    def __init__(
+        self,
+        *,
+        canonical: TemporalExecutionCanonicalRecord | None = None,
+        existing_link: object | None = None,
+    ) -> None:
+        self._canonical = canonical
+        self._existing_link = existing_link
+        self.added: list[object] = []
+        self.get = AsyncMock(return_value=canonical)
+
+    async def execute(self, _statement: object) -> _ExecuteResult:
+        rows = [self._existing_link] if self._existing_link is not None else []
+        return _ExecuteResult(rows)
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
 
 def _completed_attachment_artifact(
     artifact_id: str,
@@ -7597,8 +7624,7 @@ async def test_exact_rerun_reuses_source_task_input_snapshot_lineage() -> None:
         memo={},
         artifact_refs=[],
     )
-    session = AsyncMock()
-    session.get.return_value = canonical
+    session = _SnapshotReuseSession(canonical=canonical)
 
     snapshot_ref = await _reuse_original_task_input_snapshot_from_source(
         session=session,
@@ -7616,6 +7642,44 @@ async def test_exact_rerun_reuses_source_task_input_snapshot_lineage() -> None:
         TemporalExecutionCanonicalRecord,
         "mm:rerun",
     )
+    assert len(session.added) == 1
+    link = session.added[0]
+    assert isinstance(link, TemporalArtifactLink)
+    assert link.artifact_id == "artifact://snapshot/source"
+    assert link.namespace == "moonmind"
+    assert link.workflow_id == "mm:rerun"
+    assert link.run_id == "run-rerun"
+    assert link.link_type == "input.original_snapshot"
+
+
+@pytest.mark.asyncio
+async def test_exact_rerun_reuses_snapshot_defaults_invalid_version() -> None:
+    source = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    source.memo = {
+        **source.memo,
+        "task_input_snapshot_ref": "artifact://snapshot/source",
+        "task_input_snapshot_version": "2026-05-13T00:00:00Z",
+        "task_input_snapshot_source_kind": "create",
+    }
+    target = TemporalExecutionCanonicalRecord(
+        workflow_id="mm:rerun",
+        run_id="run-rerun",
+        namespace="moonmind",
+        workflow_type=TemporalWorkflowType.RUN,
+        memo={},
+        artifact_refs=[],
+    )
+    session = _SnapshotReuseSession()
+
+    snapshot_ref = await _reuse_original_task_input_snapshot_from_source(
+        session=session,
+        source_record=source,
+        target_record=target,
+    )
+
+    assert snapshot_ref == "artifact://snapshot/source"
+    assert target.memo["task_input_snapshot_version"] == 1
+    assert len(session.added) == 1
 
 
 def test_terminal_task_editing_actions_reject_parameter_fallback_without_snapshot(
