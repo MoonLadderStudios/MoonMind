@@ -290,8 +290,10 @@ def _remap_host_compose_path(
     return local_dir / compose_file.name
 
 
-def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
+def _tail_text(payload: bytes, *, max_chars: int | None = 512) -> str:
     text = payload.decode("utf-8", errors="replace")
+    if max_chars is None:
+        return text
     if max_chars <= 0:
         return ""
     return text[-max_chars:]
@@ -505,7 +507,7 @@ class HostDockerComposeRunner:
         command: Sequence[str],
         *,
         requested_image: str | None = None,
-        max_output_chars: int = 512,
+        max_output_chars: int | None = 512,
     ) -> Mapping[str, Any]:
         resolved = self._compose_command(command)
         env = os.environ.copy()
@@ -547,15 +549,37 @@ class HostDockerComposeRunner:
     async def _run_compose_json(self, args: Sequence[str]) -> list[Mapping[str, Any]]:
         result = await self._run_compose_command(
             ("docker", "compose", *args),
-            max_output_chars=20000,
+            max_output_chars=None,
         )
         _ensure_command_succeeded("config", result)
-        payload = "\n".join(
-            part
-            for part in (str(result.get("stdout") or ""), str(result.get("stderr") or ""))
-            if part.strip()
+        stdout = str(result.get("stdout") or "")
+        if stdout.strip():
+            try:
+                return _parse_json_records(stdout)
+            except json.JSONDecodeError as exc:
+                raise ToolFailure(
+                    error_code="DEPLOYMENT_COMMAND_FAILED",
+                    message="Deployment compose command returned invalid JSON.",
+                    retryable=False,
+                    details={
+                        "phase": "config",
+                        "command": result.get("command"),
+                        "stdout": _tail_text(stdout.encode("utf-8"), max_chars=2000),
+                        "stderr": result.get("stderr"),
+                        "failureClass": "compose_config_validation_failure",
+                    },
+                ) from exc
+        raise ToolFailure(
+            error_code="DEPLOYMENT_COMMAND_FAILED",
+            message="Deployment compose command returned no JSON output.",
+            retryable=False,
+            details={
+                "phase": "config",
+                "command": result.get("command"),
+                "stderr": result.get("stderr"),
+                "failureClass": "compose_config_validation_failure",
+            },
         )
-        return _parse_json_records(payload)
 
     async def _inspect_image(self, requested_image: str) -> Mapping[str, Any]:
         process = await asyncio.create_subprocess_exec(
