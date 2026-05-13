@@ -245,6 +245,8 @@ Key diagnostics:
 - Existing execution records and artifact metadata/content stores only; no new persistent storage (340-create-page-authoring-validation)
 - Python 3.12; TypeScript/React for Mission Control UI behavior + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, Zod, Vitest, pytest (343-editable-full-retry-workflow)
 - Existing Temporal execution records, memo/search attributes, Temporal artifact metadata/content store, authoritative task input snapshot artifacts; no new persistent database table planned (343-editable-full-retry-workflow)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind workflow/task contract helpers (348-target-aware-step-scope)
+- Existing workflow history and artifact refs only; no new persistent storage planned (348-target-aware-step-scope)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
