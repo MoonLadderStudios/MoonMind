@@ -238,14 +238,8 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     renderPage();
     await waitForSocket();
 
-    expect(await screen.findByText('codex-oauth')).toBeTruthy();
-    expect(screen.getByText('codex cli')).toBeTruthy();
-    expect(screen.getByText('OpenAI')).toBeTruthy();
-    expect(screen.getByText('2026-05-05T22:00:00Z')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'Finalize Provider Profile' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Finalize Provider Profile' }));
-
-    expect(await screen.findByText('Codex Team')).toBeTruthy();
     expect((await screen.findAllByText('Succeeded')).length).toBeGreaterThan(0);
     expect(await screen.findByText('Provider profile registered successfully.')).toBeTruthy();
     expect(storageSetItem).toHaveBeenCalledWith(

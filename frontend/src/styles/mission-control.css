@@ -3832,32 +3832,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .oauth-terminal-session-panel {
-  background: rgb(var(--mm-panel, 255 255 255));
-  border: 1px solid rgb(var(--mm-border, 203 213 225));
-  border-radius: 8px;
   display: grid;
   gap: 12px;
-  padding: 16px;
-}
-
-.oauth-terminal-session-panel dl {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  margin: 0;
-}
-
-.oauth-terminal-session-panel dt {
-  color: rgb(var(--mm-muted, 100 116 139));
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.oauth-terminal-session-panel dd {
-  color: rgb(var(--mm-text, 15 23 42));
-  margin: 2px 0 0;
-  overflow-wrap: anywhere;
 }
 
 .oauth-terminal-session-actions {
@@ -3886,23 +3862,21 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .oauth-terminal-paste-box {
-  background: rgb(var(--mm-panel, 255 255 255));
-  border: 1px solid rgb(var(--mm-border, 203 213 225));
-  border-radius: 12px;
   display: grid;
-  gap: 12px;
-  padding: 16px;
+  gap: 8px;
 }
 
 .oauth-terminal-paste-label {
-  color: rgb(var(--mm-text, 15 23 42));
-  font-size: 0.95rem;
+  color: rgb(var(--mm-muted, 100 116 139));
+  font-size: 0.75rem;
   font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .oauth-terminal-paste-controls {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .oauth-terminal-paste-input {
@@ -3910,6 +3884,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   min-height: 5.5rem;
   resize: vertical;
+}
+
+.oauth-terminal-paste-controls > .primary {
+  justify-self: start;
 }
 
 .oauth-terminal-surface {
