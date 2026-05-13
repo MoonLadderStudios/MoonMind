@@ -84,6 +84,100 @@ def test_prepared_manifest_preserves_zero_byte_size() -> None:
     assert manifest.entries[0].size_bytes == 0
 
 
+def test_prepared_manifest_rejects_step_attachment_without_stable_step_ref() -> None:
+    with pytest.raises(ValueError, match="stable stepRef"):
+        build_prepared_input_manifest(
+            {
+                "steps": [
+                    {
+                        "instructions": "No stable step identity",
+                        "inputAttachments": [{"artifactId": "artifact-step"}],
+                    }
+                ]
+            }
+        )
+
+
+def test_prepared_manifest_allows_anonymous_steps_without_attachments() -> None:
+    manifest = build_prepared_input_manifest(
+        {
+            "inputAttachments": [{"artifactId": "objective-artifact"}],
+            "steps": [
+                {"instructions": "No attachments on this anonymous step"},
+                {
+                    "id": "attached-step",
+                    "inputAttachments": [{"artifactId": "step-artifact"}],
+                },
+            ],
+        }
+    )
+
+    assert [(entry.artifact_id, entry.step_ref) for entry in manifest.entries] == [
+        ("objective-artifact", None),
+        ("step-artifact", "attached-step"),
+    ]
+
+
+def test_prepared_manifest_bindings_survive_reorder_and_text_edits() -> None:
+    original = {
+        "steps": [
+            {
+                "id": "first-step",
+                "instructions": "Original text",
+                "inputAttachments": [{"artifactId": "first-artifact"}],
+            },
+            {
+                "id": "second-step",
+                "instructions": "Original text",
+                "inputAttachments": [{"artifactId": "second-artifact"}],
+            },
+        ]
+    }
+    reordered = {
+        "steps": [
+            {
+                "id": "second-step",
+                "instructions": "Edited text",
+                "inputAttachments": [{"artifactId": "second-artifact"}],
+            },
+            {
+                "id": "first-step",
+                "instructions": "Edited text",
+                "inputAttachments": [{"artifactId": "first-artifact"}],
+            },
+        ]
+    }
+
+    original_manifest = build_prepared_input_manifest(original)
+    reordered_manifest = build_prepared_input_manifest(reordered)
+
+    original_bindings = {
+        entry.artifact_id: entry.step_ref for entry in original_manifest.entries
+    }
+    reordered_bindings = {
+        entry.artifact_id: entry.step_ref for entry in reordered_manifest.entries
+    }
+
+    assert reordered_bindings == original_bindings
+
+
+def test_prepared_manifest_entries_include_stable_workspace_status_metadata() -> None:
+    manifest = build_prepared_input_manifest(_task_payload())
+
+    dumped = manifest.model_dump(by_alias=True)
+
+    assert dumped["entries"][0]["workspacePath"] == (
+        ".moonmind/inputs/objective/artifact-objective-objective.png"
+    )
+    assert dumped["entries"][0]["status"] == "prepared"
+    assert dumped["entries"][1]["workspacePath"] == (
+        ".moonmind/inputs/steps/collect-evidence/artifact-step-1-evidence.txt"
+    )
+    assert dumped["entries"][1]["status"] == "prepared"
+    assert "data:image" not in str(dumped)
+    assert "base64" not in str(dumped)
+
+
 def test_prepared_models_reject_missing_step_binding_and_embedded_content() -> None:
     with pytest.raises(ValidationError, match="stepRef"):
         PreparedInputEntry.model_validate(

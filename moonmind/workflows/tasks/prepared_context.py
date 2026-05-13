@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -40,6 +41,8 @@ class PreparedInputEntry(BaseModel):
     target_kind: TargetKind = Field(alias="targetKind")
     raw_input_ref: str = Field(alias="rawInputRef")
     derived_context_ref: str | None = Field(default=None, alias="derivedContextRef")
+    workspace_path: str | None = Field(default=None, alias="workspacePath")
+    status: str = "prepared"
     step_ref: str | None = Field(default=None, alias="stepRef")
     step_ordinal: int | None = Field(default=None, alias="stepOrdinal")
 
@@ -149,8 +152,11 @@ def build_prepared_input_manifest(
         )
 
     for index, step in enumerate(_step_sequence(task_payload.get("steps")), start=1):
+        step_attachments = _attachment_sequence(step.get("inputAttachments"))
+        if not step_attachments:
+            continue
         step_ref = _step_ref(step, index)
-        for attachment in _attachment_sequence(step.get("inputAttachments")):
+        for attachment in step_attachments:
             entries.append(
                 _entry_from_attachment(
                     attachment,
@@ -247,20 +253,37 @@ def _entry_from_attachment(
     step_ref: str | None = None,
     step_ordinal: int | None = None,
 ) -> PreparedInputEntry:
-    _reject_inline_attachment_content(attachment)
-    artifact_id = _artifact_id(attachment)
+    try:
+        _reject_inline_attachment_content(attachment)
+        artifact_id = _artifact_id(attachment)
+    except ValueError as exc:
+        raise ValueError(
+            f"{_attachment_target_label(target_kind, step_ref)}: {exc}"
+        ) from exc
     safe_artifact_id = _safe_segment(artifact_id)
     raw_input_ref = _artifact_ref(artifact_id)
+    filename = _optional_text(attachment.get("filename") or attachment.get("name"))
     if target_kind == "objective":
         derived_context_ref = f"prepared-context://objective/{safe_artifact_id}"
+        workspace_path = _workspace_path(
+            artifact_id=artifact_id,
+            filename=filename,
+            target_kind=target_kind,
+        )
     else:
         safe_step_ref = _safe_segment(step_ref or "")
         derived_context_ref = (
             f"prepared-context://steps/{safe_step_ref}/{safe_artifact_id}"
         )
+        workspace_path = _workspace_path(
+            artifact_id=artifact_id,
+            filename=filename,
+            target_kind=target_kind,
+            step_ref=step_ref,
+        )
     return PreparedInputEntry(
         artifactId=artifact_id,
-        filename=_optional_text(attachment.get("filename") or attachment.get("name")),
+        filename=filename,
         contentType=_optional_text(
             attachment.get("contentType") or attachment.get("mimeType")
         ),
@@ -272,9 +295,20 @@ def _entry_from_attachment(
         targetKind=target_kind,
         rawInputRef=raw_input_ref,
         derivedContextRef=derived_context_ref,
+        workspacePath=workspace_path,
         stepRef=step_ref,
         stepOrdinal=step_ordinal,
     )
+
+
+def _attachment_target_label(
+    target_kind: TargetKind,
+    step_ref: str | None,
+) -> str:
+    label = f"input attachment targetKind={target_kind}"
+    if target_kind == "step" and step_ref:
+        label = f"{label} stepRef={step_ref}"
+    return label
 
 
 def _task_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -301,9 +335,13 @@ def _step_ref(step: Mapping[str, Any], index: int) -> str:
         step.get("id")
         or step.get("stepRef")
         or step.get("ref")
-        or step.get("name")
     )
-    return candidate or f"step-{index}"
+    if not candidate:
+        raise ValueError(
+            "stable stepRef is required for step inputAttachments; "
+            f"task.steps[{index - 1}] must include id, stepRef, or ref"
+        )
+    return candidate
 
 
 def _artifact_id(attachment: Mapping[str, Any]) -> str:
@@ -362,6 +400,37 @@ def _optional_int(value: Any) -> int | None:
 def _safe_segment(value: str) -> str:
     cleaned = _SAFE_SEGMENT_RE.sub("-", value.strip()).strip("-")
     return cleaned or "input"
+
+
+def _workspace_path(
+    *,
+    artifact_id: str,
+    filename: str | None,
+    target_kind: TargetKind,
+    step_ref: str | None = None,
+) -> str:
+    output_name = (
+        f"{_workspace_segment(artifact_id, fallback='artifact')}-"
+        f"{_workspace_segment(filename, fallback='attachment')}"
+    )
+    if target_kind == "objective":
+        return (Path(".moonmind") / "inputs" / "objective" / output_name).as_posix()
+    if target_kind == "step" and step_ref:
+        return (
+            Path(".moonmind")
+            / "inputs"
+            / "steps"
+            / _workspace_segment(step_ref, fallback="step")
+            / output_name
+        ).as_posix()
+    raise ValueError("stable stepRef is required for step inputAttachments")
+
+
+def _workspace_segment(value: Any, *, fallback: str) -> str:
+    text = str(value or "").replace("\\", "/").strip()
+    basename = Path(text).name
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", basename).strip("._")
+    return sanitized or fallback
 
 
 def _dedupe_refs(refs: Sequence[str]) -> list[str]:
