@@ -231,6 +231,25 @@ def mark_step_checkpoint_evidence(
         return row
     raise KeyError(f"Unknown logical step id: {logical_step_id}")
 
+
+def clear_step_checkpoint_evidence(
+    rows: list[dict[str, Any]],
+    logical_step_id: str,
+    *,
+    updated_at: datetime,
+) -> dict[str, Any]:
+    """Clear attempt-scoped checkpoint evidence before a new step attempt starts."""
+
+    for row in rows:
+        if row.get("logicalStepId") != logical_step_id:
+            continue
+        row.pop("stateCheckpointRef", None)
+        row.pop("resumePreservation", None)
+        row["updatedAt"] = updated_at.isoformat()
+        return row
+    raise KeyError(f"Unknown logical step id: {logical_step_id}")
+
+
 def build_progress_summary(
     rows: list[dict[str, Any]],
     *,

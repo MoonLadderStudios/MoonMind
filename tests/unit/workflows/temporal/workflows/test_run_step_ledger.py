@@ -820,6 +820,65 @@ def test_run_marks_completed_step_without_checkpoint_ineligible(
     assert step["resumePreservation"]["reason"] == "missing_state_checkpoint"
     assert step.get("stateCheckpointRef") is None
 
+
+def test_run_clears_stale_checkpoint_ref_before_successful_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 36, tzinfo=UTC)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._record_step_result_evidence(
+        "implement",
+        execution_result={
+            "status": "FAILED",
+            "outputs": {
+                "outputPrimaryRef": "artifact://failed-output",
+                "stateCheckpointRef": "artifact://stale-checkpoint",
+            },
+        },
+        updated_at=now,
+    )
+    workflow._mark_step_terminal(
+        "implement",
+        status="failed",
+        updated_at=now,
+        summary="Failed",
+        last_error="execution_error",
+    )
+
+    workflow._mark_step_running("implement", updated_at=now, summary="Retrying")
+    workflow._record_step_result_evidence(
+        "implement",
+        execution_result={
+            "status": "COMPLETED",
+            "outputs": {
+                "outputPrimaryRef": "artifact://successful-output",
+            },
+        },
+        updated_at=now,
+    )
+    workflow._mark_step_terminal(
+        "implement",
+        status="succeeded",
+        updated_at=now,
+        summary="Implemented",
+    )
+    workflow._record_step_checkpoint_evidence("implement", updated_at=now)
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step.get("stateCheckpointRef") is None
+    assert step["artifacts"]["outputPrimary"] == "artifact://successful-output"
+    assert step["resumePreservation"]["eligible"] is False
+    assert step["resumePreservation"]["reason"] == "missing_state_checkpoint"
+
+
 def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

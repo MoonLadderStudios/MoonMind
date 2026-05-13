@@ -6432,6 +6432,21 @@ export interface components {
             taskRunId?: string | null;
         };
         /**
+         * StepLedgerResumePreservationModel
+         * @description Bounded failed-step Resume preservation eligibility for one source step.
+         */
+        StepLedgerResumePreservationModel: {
+            /** Eligible */
+            eligible: boolean;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "complete" | "not_completed" | "missing_output_refs" | "missing_state_checkpoint";
+            /** Message */
+            message?: string | null;
+        };
+        /**
          * StepLedgerRowModel
          * @description Current/latest attempt state for one logical step in the active run.
          */
@@ -6479,6 +6494,9 @@ export interface components {
             refs?: components["schemas"]["StepLedgerRefsModel"];
             artifacts?: components["schemas"]["StepLedgerArtifactsModel"];
             preservedFrom?: components["schemas"]["PreservedStepProvenanceModel"] | null;
+            /** Statecheckpointref */
+            stateCheckpointRef?: string | null;
+            resumePreservation?: components["schemas"]["StepLedgerResumePreservationModel"] | null;
             workload?: components["schemas"]["StepLedgerWorkloadModel"] | null;
             /** Lasterror */
             lastError?: string | null;
@@ -6498,6 +6516,8 @@ export interface components {
              * @constant
              */
             runScope: "latest";
+            /** Preparedartifactrefs */
+            preparedArtifactRefs?: string[];
             /** Steps */
             steps?: components["schemas"]["StepLedgerRowModel"][];
         };

@@ -77,6 +77,7 @@ from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     build_progress_summary,
     build_step_ledger_snapshot,
+    clear_step_checkpoint_evidence,
     materialize_preserved_steps,
     mark_step_checkpoint_evidence,
     refresh_ready_steps,
@@ -706,6 +707,15 @@ class MoonMindRunWorkflow:
             increment_attempt=True,
             set_started_at=True,
         ):
+            return
+        self._step_checkpoint_refs.pop(logical_step_id, None)
+        try:
+            clear_step_checkpoint_evidence(
+                self._step_ledger_rows,
+                logical_step_id,
+                updated_at=updated_at,
+            )
+        except KeyError:
             return
         # First time a logical step crosses into "running" is the closest
         # existing semantic boundary for "real work began". Stamp the

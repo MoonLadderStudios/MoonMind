@@ -595,8 +595,8 @@ class ResumeCheckpointModel(BaseModel):
             value, field_name="resumeWorkspace"
         )
         for raw_key in compact:
-            key = str(raw_key).strip().lower()
-            if "inline" in key and "checkpoint" in key and "payload" in key:
+            key = str(raw_key).strip()
+            if key.lower() == "inlinecheckpointpayload":
                 raise ValueError(
                     "resumeWorkspace must not contain inline checkpoint payload"
                 )
@@ -1119,7 +1119,9 @@ class StepLedgerResumePreservationModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     eligible: bool = Field(..., alias="eligible")
-    reason: str = Field(..., alias="reason", min_length=1)
+    reason: Literal[
+        "complete", "not_completed", "missing_output_refs", "missing_state_checkpoint"
+    ] = Field(..., alias="reason")
     message: str | None = Field(None, alias="message")
 
 
