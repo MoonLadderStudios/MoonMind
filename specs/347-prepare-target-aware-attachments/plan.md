@@ -23,7 +23,7 @@ Deliver `MM-648` by tightening existing target-aware attachment preparation so s
 | FR-010 | implemented_verified | `spec.md`, this plan, `tasks.md`, and `verification.md` preserve `MM-648` and the original preset brief | Keep traceability through final delivery metadata | final verification |
 | SC-001 | implemented_verified | Worker manifest tests assert one entry per authored objective/step attachment | No additional implementation | unit |
 | SC-002 | implemented_verified | Prepared-context tests cover reorder and text edit binding stability | No additional implementation | unit |
-| SC-003 | implemented_unverified | Unit worker failure tests identify failed target; no integration test currently proves target-specific preparation failure | add integration verification first; repair preparation boundary only if verification fails | integration + conditional implementation |
+| SC-003 | implemented_verified | Integration coverage in `tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py` proves invalid step attachment preparation fails with target-specific diagnostics; unit worker failure tests identify failed targets | No additional implementation | integration + unit |
 | SC-004 | implemented_verified | Existing vision/target-aware workflow evidence plus focused integration confirms per-target refs | No additional implementation | integration |
 | SC-005 | implemented_verified | Verification report maps `MM-648`, DESIGN-REQ-002, DESIGN-REQ-020, and DESIGN-REQ-029 | No additional implementation | final verification |
 | DESIGN-REQ-002 | implemented_verified | Binary inputs remain artifact/workspace refs and are not embedded in workflow-visible payloads | No additional implementation | unit + final verification |

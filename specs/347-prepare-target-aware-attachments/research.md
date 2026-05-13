@@ -58,11 +58,11 @@ Test implications: Unit tests directly cover the normalization/contract risk.
 
 ## FR-007 and SC-003 Explicit Preparation Failure
 
-Decision: FR-007 is implemented_verified; SC-003 is implemented_unverified pending integration-level failure coverage.
-Evidence: Worker tests cover failed artifact download diagnostics and stable-ref validation. Repository search found unit coverage for target-specific preparation failure, but no integration test that proves preparation failure surfaces target-specific diagnostics.
+Decision: FR-007 and SC-003 are implemented_verified.
+Evidence: Worker tests cover failed artifact download diagnostics and stable-ref validation. Integration coverage in `tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py` proves invalid step attachment preparation returns an explicit target-specific failure containing the logical step, target kind, stable step ref, and reason.
 Rationale: Preparation must stop before downstream execution sees incomplete target state, and SC-003 specifically requires integration evidence.
 Alternatives considered: Treating unit worker failure coverage as sufficient for SC-003 was rejected because the success criterion explicitly names integration coverage.
-Test implications: Add or run integration verification for target-specific preparation failure first; repair the preparation boundary only if that integration evidence exposes a real behavior gap.
+Test implications: Keep both the integration boundary test and worker unit failure diagnostics in the required evidence set.
 
 ## FR-010 and SC-005 Traceability
 

@@ -250,8 +250,13 @@ def _entry_from_attachment(
     step_ref: str | None = None,
     step_ordinal: int | None = None,
 ) -> PreparedInputEntry:
-    _reject_inline_attachment_content(attachment)
-    artifact_id = _artifact_id(attachment)
+    try:
+        _reject_inline_attachment_content(attachment)
+        artifact_id = _artifact_id(attachment)
+    except ValueError as exc:
+        raise ValueError(
+            f"{_attachment_target_label(target_kind, step_ref)}: {exc}"
+        ) from exc
     safe_artifact_id = _safe_segment(artifact_id)
     raw_input_ref = _artifact_ref(artifact_id)
     if target_kind == "objective":
@@ -294,6 +299,16 @@ def _entry_from_attachment(
         stepRef=step_ref,
         stepOrdinal=step_ordinal,
     )
+
+
+def _attachment_target_label(
+    target_kind: TargetKind,
+    step_ref: str | None,
+) -> str:
+    label = f"input attachment targetKind={target_kind}"
+    if target_kind == "step" and step_ref:
+        label = f"{label} stepRef={step_ref}"
+    return label
 
 
 def _task_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:

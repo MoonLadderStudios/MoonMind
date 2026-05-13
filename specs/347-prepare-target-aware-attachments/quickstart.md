@@ -9,5 +9,6 @@
    `./tools/test_integration.sh`
 5. If Docker is unavailable, run the focused local workflow boundary fallback and document the Docker blocker:
    `pytest tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py -q --tb=short`
-6. Add or run integration-level coverage proving missing or invalid attachment preparation fails with the affected target before final `/moonspec-verify` closes SC-003.
+6. Run integration-level coverage proving missing or invalid attachment preparation fails with the affected target before final `/moonspec-verify` closes SC-003:
+   `pytest tests/integration/workflows/temporal/workflows/test_run_target_aware_inputs.py -q --tb=short`
 7. Inspect generated or fixture manifests and verify each attachment entry preserves `targetKind`, stable `stepRef` for step targets, `workspacePath`, and `status`, with no binary bytes.
