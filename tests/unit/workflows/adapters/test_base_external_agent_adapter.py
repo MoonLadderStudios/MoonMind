@@ -172,6 +172,57 @@ async def test_start_injects_correlation_metadata():
     assert moonmind.get("correlationId") == "corr-1"
     assert moonmind.get("idempotencyKey") == "idem-1"
 
+
+async def test_start_forwards_raw_refs_without_mutating_prepared_context_metadata():
+    adapter = _StubAdapter()
+    req = _request().model_copy(
+        update={
+            "input_refs": [
+                "artifact://objective-image",
+                "artifact://current-step-image",
+            ],
+            "parameters": {
+                "title": "Test task",
+                "metadata": {
+                    "moonmind": {
+                        "preparedContext": {
+                            "logicalStepId": "current-step",
+                            "rawInputRefs": [
+                                "artifact://objective-image",
+                                "artifact://current-step-image",
+                            ],
+                            "inputRefs": [
+                                "prepared-context://objective/objective-image",
+                                "prepared-context://steps/current-step/current-step-image",
+                                "artifact://objective-image",
+                                "artifact://current-step-image",
+                            ],
+                        }
+                    }
+                },
+            },
+        }
+    )
+
+    await adapter.start(req)
+
+    call = adapter.do_start_calls[0]
+    assert call["description"] == (
+        "MoonMind artifact refs: "
+        "artifact://objective-image, artifact://current-step-image"
+    )
+    prepared_context = call["metadata"]["moonmind"]["preparedContext"]
+    assert prepared_context["rawInputRefs"] == [
+        "artifact://objective-image",
+        "artifact://current-step-image",
+    ]
+    assert prepared_context["inputRefs"] == [
+        "prepared-context://objective/objective-image",
+        "prepared-context://steps/current-step/current-step-image",
+        "artifact://objective-image",
+        "artifact://current-step-image",
+    ]
+
 # ---------------------------------------------------------------------------
 # Forwarding to provider hooks
 # ---------------------------------------------------------------------------

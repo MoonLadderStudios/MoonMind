@@ -42,6 +42,7 @@ with workflow.unsafe.imports_passed_through():
         build_prepared_input_manifest,
         build_resume_prepared_artifact_refs,
         merge_prepared_input_refs,
+        merge_prepared_raw_input_refs,
         select_step_prepared_context,
     )
     from moonmind.workflows.agent_skills.selection import selected_agent_skill
@@ -5467,7 +5468,7 @@ class MoonMindRunWorkflow:
                     )
                     if prepared_context.input_refs:
                         if agent_kind != "managed":
-                            input_refs = merge_prepared_input_refs(
+                            input_refs = merge_prepared_raw_input_refs(
                                 input_refs,
                                 prepared_context,
                             )

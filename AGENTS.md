@@ -276,6 +276,8 @@ Key diagnostics:
 - Existing Temporal workflow state/history, Temporal artifact metadata/content store, execution source records; no new persistent database table planned (345-step-ledger-checkpoint-durability)
 - Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind workflow/task contract helpers (348-target-aware-step-scope)
 - Existing workflow history and artifact refs only; no new persistent storage planned (348-target-aware-step-scope)
+- Python 3.12 + Pydantic v2 models, Temporal Python SDK workflows/activities, existing MoonMind runtime adapters, existing vision context service (349-runtime-prompt-boundary)
+- Existing artifact store and workspace-local prepared files/manifests only; no new persistent storage planned (349-runtime-prompt-boundary)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

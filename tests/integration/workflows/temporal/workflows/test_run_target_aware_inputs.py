@@ -103,6 +103,56 @@ def test_agent_run_child_input_scope_is_parent_selected() -> None:
     assert "first-step-artifact" not in str(dumped)
 
 
+def test_external_runtime_receives_raw_refs_without_context_refs() -> None:
+    wf = MoonMindRunWorkflow()
+    task_payload = {
+        "inputAttachments": [{"artifactId": "objective-artifact"}],
+        "steps": [
+            {
+                "id": "first-step",
+                "inputAttachments": [{"artifactId": "first-step-artifact"}],
+            },
+            {
+                "id": "second-step",
+                "inputAttachments": [{"artifactId": "second-step-artifact"}],
+            },
+        ],
+    }
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=SimpleNamespace(
+            workflow_id="run-target-aware-raw-refs",
+            run_id="run-id-1",
+            namespace="default",
+        ),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={
+                "runtime": {"mode": "jules"},
+                "inputRefs": ["artifact://explicit-node-input"],
+            },
+            node_id="second-step",
+            tool_name="jules",
+            workflow_parameters={"task": task_payload},
+        )
+
+    prepared_context = request.parameters["metadata"]["moonmind"]["preparedContext"]
+
+    assert request.input_refs == [
+        "artifact://explicit-node-input",
+        "artifact://objective-artifact",
+        "artifact://second-step-artifact",
+    ]
+    assert prepared_context["inputRefs"] == [
+        "prepared-context://objective/objective-artifact",
+        "prepared-context://steps/second-step/second-step-artifact",
+        "artifact://objective-artifact",
+        "artifact://second-step-artifact",
+    ]
+    assert "prepared-context://" not in str(request.input_refs)
+    assert "first-step-artifact" not in str(request.model_dump(by_alias=True))
+
+
 def test_same_workspace_materialization_excludes_sibling_step_refs() -> None:
     wf = MoonMindRunWorkflow()
     with patch(

@@ -30,6 +30,40 @@ def test_build_openclaw_chat_messages_includes_workspace_and_description() -> No
     assert "Patch the null check" in user
     assert "main" in user
 
+def test_build_openclaw_chat_messages_uses_raw_input_refs_only() -> None:
+    req = AgentExecutionRequest(
+        agentKind="external",
+        agentId="openclaw",
+        executionProfileRef="profile:test",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        inputRefs=[
+            "artifact://objective-image",
+            "artifact://current-step-image",
+        ],
+        parameters={
+            "title": "Inspect images",
+            "metadata": {
+                "moonmind": {
+                    "preparedContext": {
+                        "inputRefs": [
+                            "prepared-context://objective/objective-image",
+                            "prepared-context://steps/current-step/current-step-image",
+                            "artifact://objective-image",
+                            "artifact://current-step-image",
+                        ]
+                    }
+                }
+            },
+        },
+    )
+
+    messages = build_openclaw_chat_messages(req)
+    user = messages[1]["content"]
+
+    assert "Input refs: artifact://objective-image, artifact://current-step-image" in user
+    assert "prepared-context://" not in user
+
 def test_openclaw_success_result_truncates_long_summary() -> None:
     req = AgentExecutionRequest(
         agentKind="external",
