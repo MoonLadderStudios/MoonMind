@@ -278,6 +278,8 @@ Key diagnostics:
 - Existing workflow history and artifact refs only; no new persistent storage planned (348-target-aware-step-scope)
 - Python 3.12 + Pydantic v2 models, Temporal Python SDK workflows/activities, existing MoonMind runtime adapters, existing vision context service (349-runtime-prompt-boundary)
 - Existing artifact store and workspace-local prepared files/manifests only; no new persistent storage planned (349-runtime-prompt-boundary)
+- Python 3.12; TypeScript/React for Mission Control task detail UI + FastAPI, Pydantic v2, SQLAlchemy async ORM, Temporal Python SDK, React, TanStack Query, Zod, generated OpenAPI types (350-operator-observability-diagnostics)
+- Existing Temporal execution records, execution parameters/memo/search attributes, task input snapshot artifacts, and Temporal artifact refs; no new persistent storage planned (350-operator-observability-diagnostics)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
