@@ -17,6 +17,7 @@ _RATE_LIMIT_MARKERS = (
     "rate-limit",
     "too many requests",
     "usage limit",
+    "usage_limit_reached",
     "hit your limit",
     "send a request to your admin",
 )
@@ -107,6 +108,19 @@ def provider_error_requires_cooldown(
         PROVIDER_CAPACITY_ERROR_CODE,
     } or normalized_retry == RETRY_AFTER_COOLDOWN_RECOMMENDATION
 
+def provider_failure_search_markers() -> tuple[str, ...]:
+    """Return the provider-failure markers suitable for coarse log searches."""
+
+    return tuple(
+        dict.fromkeys(
+            (
+                *_AUTH_FAILURE_MARKERS,
+                *_RATE_LIMIT_MARKERS,
+                *_CAPACITY_MARKERS,
+            )
+        )
+    )
+
 __all__ = [
     "PROVIDER_AUTH_ERROR_CODE",
     "PROVIDER_CAPACITY_ERROR_CODE",
@@ -115,5 +129,6 @@ __all__ = [
     "RETRY_AFTER_COOLDOWN_RECOMMENDATION",
     "ProviderFailureClassification",
     "classify_provider_failure",
+    "provider_failure_search_markers",
     "provider_error_requires_cooldown",
 ]

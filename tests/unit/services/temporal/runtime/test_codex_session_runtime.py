@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import UTC, datetime, timedelta
 import sqlite3
 from pathlib import Path
@@ -49,6 +50,32 @@ def _write_fake_codex_logs(
             connection.execute(
                 "INSERT INTO logs (feedback_log_body) VALUES (?)",
                 (entry,),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    return log_path
+
+def _write_fake_codex_logs_with_timestamps(
+    codex_home_path: str | Path,
+    *,
+    entries: list[tuple[int, str]],
+    filename: str = "logs_1.sqlite",
+) -> Path:
+    log_path = Path(codex_home_path) / filename
+    connection = sqlite3.connect(log_path)
+    try:
+        connection.execute(
+            "CREATE TABLE logs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "ts INTEGER, "
+            "feedback_log_body TEXT"
+            ")"
+        )
+        for timestamp, entry in entries:
+            connection.execute(
+                "INSERT INTO logs (ts, feedback_log_body) VALUES (?, ?)",
+                (timestamp, entry),
             )
         connection.commit()
     finally:
@@ -759,6 +786,77 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
         == "codex app-server task_complete produced no assistant output"
     )
     assert "lastAssistantText" not in handle.metadata
+
+def test_runtime_send_turn_recovers_usage_limit_from_recent_log_for_empty_task_complete(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "04"
+        / "10"
+        / "rollout-2026-04-10T17-55-14-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        start_thread_path=str(transcript_path),
+        rollout_entries_on_read=[
+            {
+                "timestamp": "2026-04-10T17:57:55.661Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "vendor-turn-1",
+                    "last_agent_message": None,
+                },
+            }
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    quota_summary = (
+        "You've hit your usage limit. To get more access now, send a request "
+        "to your admin or try again at May 13th, 2026 1:35 AM."
+    )
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        entries=[
+            (
+                int(time.time()) + 1,
+                "session_loop{thread_id=vendor-thread-1}:run_turn: "
+                f"Turn error: {quota_summary}",
+            )
+        ],
+    )
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata == {
+        "failureClass": "permanent",
+        "reason": quota_summary,
+    }
 
 def _spool_skill_outcome_path(request: LaunchCodexManagedSessionRequest) -> Path:
     return Path(request.artifact_spool_path) / "skill_outcome.json"
@@ -2030,6 +2128,121 @@ def test_runtime_extract_turn_error_from_logs_recovers_provider_error_message(
     )
 
     assert runtime._extract_turn_error_from_logs("vendor-turn-1") == "http 404"
+
+def test_runtime_extract_turn_error_from_logs_recovers_recent_provider_error_without_turn_id(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", "-c", "raise SystemExit(0)"),
+    )
+    turn_started_at = int(time.time())
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        entries=[
+            (
+                turn_started_at - 60,
+                "Turn error: You've hit your usage limit from an older turn.",
+            ),
+            (
+                turn_started_at,
+                "Received message "
+                '{"type":"error","error":{"type":"usage_limit_reached",'
+                '"message":"The usage limit has been reached"},'
+                '"status_code":429}',
+            ),
+        ],
+    )
+
+    assert (
+        runtime._extract_turn_error_from_logs(
+            "vendor-turn-without-log-row",
+            turn_started_at=turn_started_at,
+        )
+        == "The usage limit has been reached (status 429)"
+    )
+
+def test_runtime_extract_turn_error_from_logs_ignores_provider_error_before_turn_start(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", "-c", "raise SystemExit(0)"),
+    )
+    turn_started_at = int(time.time())
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        entries=[
+            (
+                turn_started_at - 1,
+                "Turn error: You've hit your usage limit from a previous turn.",
+            ),
+        ],
+    )
+
+    assert (
+        runtime._extract_turn_error_from_logs(
+            "vendor-turn-without-log-row",
+            turn_started_at=turn_started_at,
+        )
+        is None
+    )
+
+def test_runtime_extract_turn_error_from_logs_applies_global_provider_row_limit(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", "-c", "raise SystemExit(0)"),
+    )
+    turn_started_at = int(time.time())
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        filename="logs_10.sqlite",
+        entries=[
+            (turn_started_at, "provider marker 429 without parseable error")
+            for _ in range(200)
+        ],
+    )
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        filename="logs_9.sqlite",
+        entries=[
+            (
+                turn_started_at,
+                "Turn error: You've hit your usage limit in an older shard.",
+            ),
+        ],
+    )
+
+    assert (
+        runtime._extract_turn_error_from_logs(
+            "vendor-turn-without-log-row",
+            turn_started_at=turn_started_at,
+        )
+        is None
+    )
 
 @pytest.mark.parametrize(
     ("thread_status_type", "thread_status_reason", "expected_status", "expected_reason"),
