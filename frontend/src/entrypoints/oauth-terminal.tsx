@@ -591,6 +591,9 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           <span className="oauth-terminal-status">{formatStatusLabel(status)}</span>
         </div>
       </header>
+      <section className="oauth-terminal-surface" aria-label="OAuth terminal output">
+        <div ref={terminalElementRef} className="oauth-terminal-xterm" />
+      </section>
       <section className="oauth-terminal-paste-box">
         <label className="oauth-terminal-paste-label" htmlFor="oauth-terminal-paste-input">
           Paste authentication code
@@ -616,56 +619,8 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           </button>
         </div>
       </section>
-      <section className="oauth-terminal-surface" aria-label="OAuth terminal output">
-        <div ref={terminalElementRef} className="oauth-terminal-xterm" />
-      </section>
       {session ? (
-        <section className="oauth-terminal-session-panel" aria-label="OAuth session details">
-          <dl>
-            <div>
-              <dt>Profile</dt>
-              <dd>{session.profile_summary?.profile_id ?? session.profile_id ?? 'Unknown profile'}</dd>
-            </div>
-            <div>
-              <dt>Runtime</dt>
-              <dd>{formatStatusLabel(session.runtime_id ?? 'unknown')}</dd>
-            </div>
-            <div>
-              <dt>Status</dt>
-              <dd>{oauthStatusLabel(session.status)}</dd>
-            </div>
-            {session.profile_summary ? (
-              <div>
-                <dt>Provider</dt>
-                <dd>
-                  {session.profile_summary.provider_label ??
-                    session.profile_summary.provider_id}
-                </dd>
-              </div>
-            ) : null}
-            {session.expires_at ? (
-              <div>
-                <dt>Expiry</dt>
-                <dd>{session.expires_at}</dd>
-              </div>
-            ) : null}
-            {session.profile_summary ? (
-              <div>
-                <dt>Account</dt>
-                <dd>
-                  {session.profile_summary.account_label ??
-                    session.profile_summary.provider_label ??
-                    session.profile_summary.provider_id}
-                </dd>
-              </div>
-            ) : null}
-            {session.failure_reason ? (
-              <div>
-                <dt>Failure</dt>
-                <dd>{safeDisplayText(session.failure_reason)}</dd>
-              </div>
-            ) : null}
-          </dl>
+        <section className="oauth-terminal-session-panel" aria-label="OAuth session actions">
           <div className="oauth-terminal-session-actions">
             {TERMINAL_FINALIZE_STATUSES.includes(session.status) ? (
               <button
@@ -700,6 +655,11 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
               </button>
             ) : null}
           </div>
+          {session.failure_reason ? (
+            <p role="alert" className="oauth-terminal-finalize-result oauth-terminal-finalize-result--error">
+              {safeDisplayText(session.failure_reason)}
+            </p>
+          ) : null}
           {session.status === 'succeeded' ? (
             <p role="status" className="oauth-terminal-finalize-result oauth-terminal-finalize-result--success">
               Provider profile registered successfully.
