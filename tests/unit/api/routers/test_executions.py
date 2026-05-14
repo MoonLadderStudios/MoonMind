@@ -1743,6 +1743,55 @@ def test_create_task_shaped_execution_allows_jira_orchestrate_pr_publish(
     assert initial_parameters["task"]["publish"]["mode"] == "pr"
 
 
+def test_create_task_shaped_execution_allows_jira_orchestrate_first_step_skill_pr_publish(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publishMode": "pr",
+                "task": {
+                    "instructions": "Run Jira Orchestrate for THOR-352.",
+                    "tool": {"type": "skill", "name": "jira-issue-updater"},
+                    "skill": {"id": "jira-issue-updater"},
+                    "runtime": {"mode": "codex"},
+                    "publish": {"mode": "pr"},
+                    "steps": [
+                        {
+                            "id": "tpl:jira-orchestrate:1.0.0:01",
+                            "title": "Move Jira issue",
+                            "instructions": "Transition THOR-352 to In Progress.",
+                            "skill": {"id": "jira-issue-updater", "args": {}},
+                        }
+                    ],
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "jira-orchestrate",
+                            "version": "1.0.0",
+                            "stepIds": ["tpl:jira-orchestrate:1.0.0:01"],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    service.create_execution.assert_awaited_once()
+    initial_parameters = service.create_execution.call_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["publishMode"] == "pr"
+    assert initial_parameters["task"]["publish"]["mode"] == "pr"
+    assert initial_parameters["task"]["skill"]["name"] == "jira-issue-updater"
+
+
 def test_create_task_shaped_execution_rejects_pr_publish_for_jira_updater(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -1765,15 +1814,9 @@ def test_create_task_shaped_execution_rejects_pr_publish_for_jira_updater(
                         "implementation starts."
                     ),
                     "tool": {"type": "skill", "name": "jira-issue-updater"},
+                    "skill": {"id": "jira-issue-updater"},
                     "runtime": {"mode": "claude_code"},
                     "publish": {"mode": "pr"},
-                    "appliedStepTemplates": [
-                        {
-                            "slug": "jira-orchestrate",
-                            "version": "1.0.0",
-                            "stepIds": ["tpl:jira-orchestrate:1.0.0:01"],
-                        }
-                    ],
                 },
             },
         },

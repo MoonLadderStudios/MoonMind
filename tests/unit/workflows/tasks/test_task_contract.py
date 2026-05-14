@@ -619,6 +619,38 @@ def test_jira_side_effect_skills_reject_repository_publish_modes(
     assert resolve_publish_mode_for_skill(skill_id, "none") == "none"
 
 
+def test_jira_orchestrate_preset_context_allows_first_step_skill_pr_publish() -> None:
+    result = build_canonical_task_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {
+                "instructions": "Run Jira Orchestrate for THOR-352.",
+                "skill": {"id": "jira-issue-updater"},
+                "publish": {"mode": "pr"},
+                "steps": [
+                    {
+                        "id": "tpl:jira-orchestrate:1.0.0:01",
+                        "title": "Move Jira issue",
+                        "instructions": "Transition THOR-352 to In Progress.",
+                        "skill": {"id": "jira-issue-updater", "args": {}},
+                    }
+                ],
+                "appliedStepTemplates": [
+                    {
+                        "slug": "jira-orchestrate",
+                        "version": "1.0.0",
+                        "stepIds": ["tpl:jira-orchestrate:1.0.0:01"],
+                    }
+                ],
+            },
+        },
+    )
+
+    assert result["task"]["publish"]["mode"] == "pr"
+    assert "gh" in result["requiredCapabilities"]
+
+
 def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> None:
     task_skills = TaskExecutionSpec.model_validate(
         {

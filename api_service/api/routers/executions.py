@@ -118,6 +118,7 @@ from moonmind.workflows.tasks.task_contract import (
     TaskInputAttachmentRef,
     TaskProposalPolicy,
     TaskSkillSelectors,
+    allows_repository_publish_for_skill_context,
     build_authoritative_task_input_snapshot,
     is_self_managed_publish_skill,
     resolve_publish_mode_for_skill,
@@ -4082,6 +4083,9 @@ def _resolve_task_publish_payload(
         publish_mode = resolve_publish_mode_for_skill(
             skill_id,
             requested_mode,
+            allow_repository_publish=allows_repository_publish_for_skill_context(
+                task_payload
+            ),
         )
     except TaskContractError as exc:
         raise _invalid_task_request(str(exc)) from exc
