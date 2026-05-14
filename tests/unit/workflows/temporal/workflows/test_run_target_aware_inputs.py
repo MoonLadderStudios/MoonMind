@@ -142,6 +142,36 @@ def test_managed_codex_request_keeps_prepared_context_out_of_input_refs() -> Non
     ]
 
 
+def test_agent_request_includes_trusted_jira_previous_outputs_in_instruction_ref() -> None:
+    wf = MoonMindRunWorkflow()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={
+                "runtime": {"mode": "claude_code"},
+                "instructions": "Classify request and resume point.",
+                "previousOutputs": {
+                    "trustedSource": "moonmind.jira.get_issue",
+                    "jiraIssueKey": "MM-657",
+                    "jiraPresetBrief": "MM-657: Settings HTTP API surface",
+                    "jiraIssue": {"status": "In Progress"},
+                },
+            },
+            node_id="classify",
+            tool_name="claude_code",
+            workflow_parameters={"task": {}},
+        )
+
+    assert request.instruction_ref is not None
+    assert request.instruction_ref.startswith("Classify request and resume point.")
+    assert "MoonMind trusted previous step context:" in request.instruction_ref
+    assert "moonmind.jira.get_issue" in request.instruction_ref
+    assert "MM-657: Settings HTTP API surface" in request.instruction_ref
+    assert "Do not use provider-native Jira/Atlassian connectors" in request.instruction_ref
+
+
 def test_prepare_failure_prevents_unbounded_context_dispatch() -> None:
     wf = MoonMindRunWorkflow()
     with patch(

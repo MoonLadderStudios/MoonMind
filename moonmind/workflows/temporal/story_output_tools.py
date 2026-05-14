@@ -29,6 +29,7 @@ from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 JIRA_CREATE_ISSUES_TOOL_NAME = "story.create_jira_issues"
 JIRA_ORCHESTRATE_TASKS_TOOL_NAME = "story.create_jira_orchestrate_tasks"
 JIRA_CHECK_BLOCKERS_TOOL_NAME = "jira.check_blockers"
+JIRA_LOAD_PRESET_BRIEF_TOOL_NAME = "jira.load_preset_brief"
 JIRA_STORY_TOOL_NAMES = frozenset(
     {JIRA_CREATE_ISSUES_TOOL_NAME, JIRA_ORCHESTRATE_TASKS_TOOL_NAME}
 )
@@ -38,6 +39,9 @@ JIRA_DEPENDENCY_MODE_NONE = "none"
 JIRA_DEPENDENCY_MODE_LINEAR_BLOCKER_CHAIN = "linear_blocker_chain"
 JIRA_DEPENDENCY_MODES = frozenset(
     {JIRA_DEPENDENCY_MODE_NONE, JIRA_DEPENDENCY_MODE_LINEAR_BLOCKER_CHAIN}
+)
+_ACCEPTANCE_HEADING_RE = re.compile(
+    r"(?im)^\s*(acceptance\s+criteria|acceptance|ac)\s*:?\s*$"
 )
 
 DOCUMENT_DISCOVER_TOOL_NAME = "document.discover"
@@ -67,6 +71,88 @@ def _list(value: Any) -> list[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return list(value)
     return []
+
+def _collapse_jira_text(value: str) -> str:
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in value.splitlines()]
+    collapsed: list[str] = []
+    previous_blank = False
+    for line in lines:
+        if not line:
+            if not previous_blank and collapsed:
+                collapsed.append("")
+            previous_blank = True
+            continue
+        collapsed.append(line)
+        previous_blank = False
+    return "\n".join(collapsed).strip()
+
+def _collect_adf_text(node: Any) -> list[str]:
+    if not isinstance(node, Mapping):
+        return []
+    node_type = node.get("type")
+    if node_type == "text":
+        return [str(node.get("text") or "")]
+    if node_type == "hardBreak":
+        return ["\n"]
+    content = node.get("content")
+    if not isinstance(content, list):
+        return []
+    parts: list[str] = []
+    inline = node_type in {"paragraph", "heading", "listItem"}
+    for child in content:
+        child_parts = _collect_adf_text(child)
+        if inline:
+            parts.extend(child_parts)
+        else:
+            text = _collapse_jira_text("".join(child_parts))
+            if text:
+                parts.append(text)
+    if inline:
+        return [_collapse_jira_text("".join(parts))]
+    return parts
+
+def _normalize_jira_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return _collapse_jira_text(value)
+    if isinstance(value, Mapping):
+        return _collapse_jira_text("\n".join(_collect_adf_text(value)))
+    if isinstance(value, list):
+        parts = [_normalize_jira_text(item) for item in value]
+        return _collapse_jira_text("\n".join(part for part in parts if part))
+    return _collapse_jira_text(str(value))
+
+def _extract_acceptance_criteria(
+    fields: Mapping[str, Any],
+    names: Mapping[str, Any],
+) -> str:
+    for field_key, field_name in names.items():
+        normalized_name = str(field_name or "").lower()
+        if "acceptance" not in normalized_name and "criteria" not in normalized_name:
+            continue
+        text = _normalize_jira_text(fields.get(field_key))
+        if text:
+            return text
+    return ""
+
+def _split_description_acceptance(description_text: str) -> tuple[str, str]:
+    match = _ACCEPTANCE_HEADING_RE.search(description_text)
+    if match is None:
+        return description_text, ""
+    before = description_text[: match.start()].strip()
+    after = description_text[match.end() :].strip()
+    return before, after
+
+def _issue_url(payload: Mapping[str, Any]) -> str | None:
+    browse = _string(payload.get("browseUrl") or payload.get("url"))
+    if browse:
+        return browse
+    self_url = _string(payload.get("self"))
+    marker = "/rest/api/"
+    if marker in self_url:
+        return f"{self_url.split(marker, 1)[0]}/browse/{payload.get('key')}"
+    return None
 
 def _first_string(*values: Any) -> str:
     for value in values:
@@ -1825,6 +1911,95 @@ async def check_jira_blockers(
         },
     )
 
+def _load_preset_brief_issue_key(inputs: Mapping[str, Any]) -> str:
+    nested = _mapping(inputs.get("jira") or inputs.get("issue"))
+    return _string(
+        inputs.get("issueKey")
+        or inputs.get("issue_key")
+        or inputs.get("jiraIssueKey")
+        or inputs.get("jira_issue_key")
+        or nested.get("issueKey")
+        or nested.get("issue_key")
+        or nested.get("key")
+    ).upper()
+
+async def load_jira_preset_brief(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    jira_service_factory: JiraServiceFactory = JiraToolService,
+) -> ToolResult:
+    """Load a compact Jira preset brief through MoonMind's trusted Jira service."""
+
+    issue_key = _load_preset_brief_issue_key(inputs)
+    if not issue_key:
+        raise ValueError("issueKey is required for Jira preset brief loading.")
+
+    service = jira_service_factory()
+    try:
+        issue_payload = await service.get_issue(
+            GetIssueRequest(issueKey=issue_key, expand=["names"])
+        )
+    except Exception as exc:
+        code = _string(getattr(exc, "code", "")) or exc.__class__.__name__
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "error": (
+                    f"Could not load Jira preset brief for {issue_key} through "
+                    f"trusted Jira data ({code})."
+                ),
+                "jiraIssueKey": issue_key,
+            },
+        )
+
+    issue = _mapping(issue_payload)
+    fields = _mapping(issue.get("fields"))
+    names = _mapping(issue.get("names"))
+    summary = _string(fields.get("summary"))
+    description_text = _normalize_jira_text(fields.get("description"))
+    acceptance_text = _extract_acceptance_criteria(fields, names)
+    if not acceptance_text:
+        description_text, acceptance_text = _split_description_acceptance(description_text)
+    status = _mapping(fields.get("status"))
+    issue_type = _mapping(fields.get("issuetype"))
+    assignee = _mapping(fields.get("assignee"))
+    resolved_key = _string(issue.get("key")).upper() or issue_key
+
+    preset_parts = [f"{resolved_key}: {summary}".strip()]
+    if description_text:
+        preset_parts.append(description_text)
+    if acceptance_text:
+        preset_parts.append(f"Acceptance criteria\n{acceptance_text}")
+    preset_brief = "\n\n".join(part for part in preset_parts if part)
+    step_parts = [f"Complete Jira issue {resolved_key}: {summary}".strip()]
+    if description_text:
+        step_parts.append(f"Description\n{description_text}")
+    if acceptance_text:
+        step_parts.append(f"Acceptance criteria\n{acceptance_text}")
+    step_instructions = "\n\n".join(part for part in step_parts if part)
+
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "trustedSource": "moonmind.jira.get_issue",
+            "jiraIssueKey": resolved_key,
+            "jiraPresetBrief": preset_brief,
+            "jiraStepInstructions": step_instructions,
+            "jiraIssue": {
+                "key": resolved_key,
+                "summary": summary,
+                "descriptionText": description_text,
+                "acceptanceCriteriaText": acceptance_text,
+                "status": _string(status.get("name")),
+                "issueType": _string(issue_type.get("name")),
+                "assignee": _string(assignee.get("displayName")),
+                "url": _issue_url(issue),
+            },
+            "summary": f"Loaded Jira preset brief for {resolved_key} from trusted Jira data.",
+        },
+    )
+
 async def discover_documents(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -2222,6 +2397,18 @@ def register_story_output_tool_handlers(
         handler=_check_jira_blockers,
     )
 
+    async def _load_jira_preset_brief(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await load_jira_preset_brief(inputs, context)
+
+    dispatcher.register_skill(
+        skill_name=JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
+        version="1.0",
+        handler=_load_jira_preset_brief,
+    )
+
     async def _discover_documents(
         inputs: Mapping[str, Any],
         context: Mapping[str, Any] | None = None,
@@ -2252,12 +2439,14 @@ def register_story_output_tool_handlers(
 
 __all__ = [
     "JIRA_CHECK_BLOCKERS_TOOL_NAME",
+    "JIRA_LOAD_PRESET_BRIEF_TOOL_NAME",
     "JIRA_STORY_TOOL_NAMES",
     "check_jira_blockers",
     "create_jira_issues_from_stories",
     "create_jira_orchestrate_tasks_from_issue_mappings",
     "discover_documents",
     "create_document_update_tasks_from_paths",
+    "load_jira_preset_brief",
     "DOCUMENT_DISCOVER_TOOL_NAME",
     "DOCUMENT_UPDATE_TASKS_TOOL_NAME",
     "register_story_output_tool_handlers",

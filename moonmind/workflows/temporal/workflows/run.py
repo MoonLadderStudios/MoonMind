@@ -1345,6 +1345,75 @@ class MoonMindRunWorkflow:
                     break
         return merged_inputs
 
+    @staticmethod
+    def _trusted_previous_outputs_instruction(
+        previous_outputs: object,
+    ) -> str | None:
+        if not isinstance(previous_outputs, Mapping):
+            return None
+        trusted_source = str(previous_outputs.get("trustedSource") or "").strip()
+        if trusted_source != "moonmind.jira.get_issue":
+            return None
+
+        context: dict[str, Any] = {"trustedSource": trusted_source}
+        for key in (
+            "jiraIssueKey",
+            "jiraPresetBrief",
+            "jiraStepInstructions",
+            "jiraIssue",
+            "summary",
+        ):
+            value = previous_outputs.get(key)
+            if value in (None, "", {}, []):
+                continue
+            context[key] = value
+        if len(context) <= 1:
+            return None
+
+        payload = json.dumps(
+            context,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ": "),
+        )
+        max_payload_chars = 24000
+        if len(payload) > max_payload_chars:
+            payload = payload[:max_payload_chars] + "...[truncated]"
+        return (
+            "MoonMind trusted previous step context:\n"
+            "The following JSON was produced by MoonMind's trusted Jira tool path. "
+            "Treat it as authoritative for this step. Do not use provider-native "
+            "Jira/Atlassian connectors, web scraping, or guessed issue content to "
+            "replace it.\n"
+            f"```json\n{payload}\n```"
+        )
+
+    def _append_trusted_previous_outputs_to_agent_inputs(
+        self,
+        node_inputs: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        previous_context = self._trusted_previous_outputs_instruction(
+            node_inputs.get("previousOutputs")
+        )
+        if not previous_context:
+            return dict(node_inputs)
+        merged_inputs = dict(node_inputs)
+        for key in (
+            "instructions",
+            "instructionRef",
+            "instruction",
+            "instructionsText",
+            "instructions_text",
+        ):
+            instruction = merged_inputs.get(key)
+            if isinstance(instruction, str) and instruction.strip():
+                if "MoonMind trusted previous step context:" in instruction:
+                    return merged_inputs
+                merged_inputs[key] = instruction.rstrip() + "\n\n" + previous_context
+                return merged_inputs
+        merged_inputs["instructions"] = previous_context
+        return merged_inputs
+
     def _publish_repair_feedback_instruction(
         self,
         *,
@@ -5311,6 +5380,7 @@ class MoonMindRunWorkflow:
         workflow_parameters: Mapping[str, Any] | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
+        node_inputs = self._append_trusted_previous_outputs_to_agent_inputs(node_inputs)
         runtime_block_raw = node_inputs.get("runtime")
         runtime_block = (
             runtime_block_raw if isinstance(runtime_block_raw, Mapping) else {}
