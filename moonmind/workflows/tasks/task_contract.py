@@ -34,6 +34,10 @@ _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"
 _PROPOSAL_POLICY_TARGETS = ("project", "moonmind")
 _PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 _SELF_MANAGED_PUBLISH_SKILLS = frozenset({"pr-resolver", "batch-pr-resolver"})
+_NON_REPOSITORY_SIDE_EFFECT_SKILLS = frozenset(
+    {"jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"}
+)
+_JIRA_ORCHESTRATE_PRESET_SLUGS = frozenset({"jira-orchestrate"})
 _RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
     r"\bresolve(?:d|s|ing)?\s+(?:an?\s+|the\s+)?(?:pr|pull\s+request)\b",
     re.IGNORECASE,
@@ -253,14 +257,53 @@ def is_self_managed_publish_skill(skill_id: object) -> bool:
 
     return _normalize_skill_id(skill_id) in _SELF_MANAGED_PUBLISH_SKILLS
 
-def resolve_publish_mode_for_skill(skill_id: object, requested_mode: object) -> str:
+def _iter_applied_step_templates(value: object) -> list[object]:
+    if isinstance(value, Mapping):
+        return _safe_list(value.get("appliedStepTemplates"))
+    model_extra = getattr(value, "model_extra", None)
+    if isinstance(model_extra, Mapping):
+        return _safe_list(model_extra.get("appliedStepTemplates"))
+    return []
+
+
+def _has_jira_orchestrate_preset_context(value: object) -> bool:
+    for template in _iter_applied_step_templates(value):
+        if not isinstance(template, Mapping):
+            continue
+        slug = _normalize_skill_id(template.get("slug") or template.get("presetSlug"))
+        if slug in _JIRA_ORCHESTRATE_PRESET_SLUGS:
+            return True
+    return False
+
+
+def allows_repository_publish_for_skill_context(value: object) -> bool:
+    """Return True when task provenance represents a repository-publishing workflow."""
+
+    return _has_jira_orchestrate_preset_context(value)
+
+
+def resolve_publish_mode_for_skill(
+    skill_id: object,
+    requested_mode: object,
+    *,
+    allow_repository_publish: bool = False,
+) -> str:
     """Resolve publish mode for a skill while enforcing self-managed constraints."""
 
     publish_mode = _normalize_publish_mode(requested_mode)
-    if is_self_managed_publish_skill(skill_id):
+    normalized_skill_id = _normalize_skill_id(skill_id)
+    if is_self_managed_publish_skill(normalized_skill_id):
         if publish_mode != "none":
             raise TaskContractError(
-                f"task.publish.mode must be 'none' when using skill '{_normalize_skill_id(skill_id)}'"
+                f"task.publish.mode must be 'none' when using skill '{normalized_skill_id}'"
+            )
+        return "none"
+    if normalized_skill_id in _NON_REPOSITORY_SIDE_EFFECT_SKILLS:
+        if allow_repository_publish:
+            return publish_mode
+        if publish_mode != "none":
+            raise TaskContractError(
+                f"task.publish.mode must be 'none' when using non-repository skill '{normalized_skill_id}'"
             )
         return "none"
     return publish_mode
@@ -1405,6 +1448,7 @@ class TaskExecutionSpec(BaseModel):
 
     @model_validator(mode="after")
     def _validate_skill_publish_compatibility(self) -> "TaskExecutionSpec":
+        allow_repository_publish = allows_repository_publish_for_skill_context(self)
         skill_ids: set[str] = {_normalize_skill_id(self.skill.id)}
         for step in self.steps:
             if step.skill is None:
@@ -1412,7 +1456,11 @@ class TaskExecutionSpec(BaseModel):
             skill_ids.add(_normalize_skill_id(step.skill.id))
 
         for skill_id in skill_ids:
-            resolve_publish_mode_for_skill(skill_id, self.publish.mode)
+            resolve_publish_mode_for_skill(
+                skill_id,
+                self.publish.mode,
+                allow_repository_publish=allow_repository_publish,
+            )
         return self
 
     @model_validator(mode="after")
@@ -1852,7 +1900,11 @@ def build_canonical_task_view(
     skill_node = task.get("skill") or {}
     skill = skill_node if isinstance(skill_node, Mapping) else {}
     skill_id = skill.get("id")
-    publish_mode = resolve_publish_mode_for_skill(skill_id, publish_mode_candidate)
+    publish_mode = resolve_publish_mode_for_skill(
+        skill_id,
+        publish_mode_candidate,
+        allow_repository_publish=allows_repository_publish_for_skill_context(task),
+    )
     canonical["task"]["publish"]["mode"] = publish_mode
     if publish_mode == "pr":
         required.append("gh")
@@ -2270,6 +2322,7 @@ __all__ = [
     "build_authoritative_task_input_snapshot",
     "build_task_stage_plan",
     "build_canonical_task_view",
+    "allows_repository_publish_for_skill_context",
     "has_attachment_mutation_fields",
     "is_self_managed_publish_skill",
     "normalize_queue_job_payload",
