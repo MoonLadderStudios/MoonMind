@@ -6025,6 +6025,12 @@ class TemporalAgentRuntimeActivities:
     @staticmethod
     def _parse_git_status_paths(status_output: bytes) -> tuple[str, ...]:
         """Extract changed paths from `git status --porcelain=v1 -z` output."""
+        records = TemporalAgentRuntimeActivities._parse_git_status_records(status_output)
+        return tuple(path for _status, path in records)
+
+    @staticmethod
+    def _parse_git_status_records(status_output: bytes) -> tuple[tuple[str, str], ...]:
+        """Extract ``(status, path)`` records from `git status --porcelain=v1 -z`."""
 
         def _decode_path(path_bytes: bytes) -> str:
             return os.fsdecode(path_bytes)
@@ -6034,7 +6040,7 @@ class TemporalAgentRuntimeActivities:
             return ()
 
         entries = raw_output.split(b"\0")
-        paths: list[str] = []
+        records: list[tuple[str, str]] = []
         index = 0
         while index < len(entries):
             record = entries[index]
@@ -6048,7 +6054,7 @@ class TemporalAgentRuntimeActivities:
             path_bytes = record[3:]
             if not path_bytes:
                 raise ValueError(f"missing path in git status record: {record!r}")
-            paths.append(_decode_path(path_bytes))
+            records.append((status, _decode_path(path_bytes)))
 
             if "R" in status or "C" in status:
                 index += 1
@@ -6061,11 +6067,14 @@ class TemporalAgentRuntimeActivities:
                     raise ValueError(
                         f"missing original path for git rename/copy record: {record!r}"
                     )
-                paths.append(_decode_path(original_path_bytes))
+                records.append((status, _decode_path(original_path_bytes)))
 
             index += 1
 
-        return tuple(dict.fromkeys(paths))
+        deduped: dict[str, tuple[str, str]] = {}
+        for status, path in records:
+            deduped.setdefault(path, (status, path))
+        return tuple(deduped.values())
 
     @staticmethod
     def _should_exclude_publish_path(
@@ -6362,41 +6371,61 @@ class TemporalAgentRuntimeActivities:
 
         try:
             workspace_path = Path(workspace).expanduser().resolve()
-            changed_paths = tuple(
-                path
-                for path in self._parse_git_status_paths(status_stdout)
-                if not self._should_exclude_publish_path(
+            tracked_paths: list[str] = []
+            untracked_paths: list[str] = []
+            for status, path in self._parse_git_status_records(status_stdout):
+                if self._should_exclude_publish_path(
                     path,
                     workspace=workspace_path,
-                )
-            )
+                ):
+                    continue
+                if status == "??":
+                    untracked_paths.append(path)
+                elif status != "!!":
+                    tracked_paths.append(path)
         except ValueError as exc:
             return {
                 "push_status": "failed",
                 "push_error": f"could not parse workspace changes: {exc}",
             }
-        if not changed_paths:
+        if not tracked_paths and not untracked_paths:
             return {}
 
-        add_proc = await asyncio.create_subprocess_exec(
-            *self._workspace_git_command(
-                workspace, "add", "-A", "--", *changed_paths,
-            ),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=command_env,
-        )
-        add_stdout, add_stderr = await asyncio.wait_for(
-            add_proc.communicate(), timeout=30,
-        )
-        if add_proc.returncode != 0:
-            detail = add_stderr.decode("utf-8", errors="replace").strip() or (
-                add_stdout.decode("utf-8", errors="replace").strip() or "(no stderr)"
+        async def _stage_paths(
+            *,
+            mode: str,
+            paths: Sequence[str],
+        ) -> dict[str, str] | None:
+            if not paths:
+                return None
+            add_proc = await asyncio.create_subprocess_exec(
+                *self._workspace_git_command(
+                    workspace, "add", mode, "--", *paths,
+                ),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=command_env,
             )
-            return {
-                "push_status": "failed",
-                "push_error": f"could not stage workspace changes: {detail}",
-            }
+            add_stdout, add_stderr = await asyncio.wait_for(
+                add_proc.communicate(), timeout=30,
+            )
+            if add_proc.returncode != 0:
+                detail = add_stderr.decode("utf-8", errors="replace").strip() or (
+                    add_stdout.decode("utf-8", errors="replace").strip()
+                    or "(no stderr)"
+                )
+                return {
+                    "push_status": "failed",
+                    "push_error": f"could not stage workspace changes: {detail}",
+                }
+            return None
+
+        stage_error = await _stage_paths(mode="-u", paths=tracked_paths)
+        if stage_error is not None:
+            return stage_error
+        stage_error = await _stage_paths(mode="-A", paths=untracked_paths)
+        if stage_error is not None:
+            return stage_error
 
         staged_proc = await asyncio.create_subprocess_exec(
             *self._workspace_git_command(

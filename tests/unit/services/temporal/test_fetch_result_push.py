@@ -885,27 +885,30 @@ class TestPushWorkspaceBranch:
                     return_value=(b" M api_service/main.py\0?? tests/new_test.py\0", b"")
                 )
                 proc.returncode = 0
-            elif call_count == 3:  # git add -A with runtime exclusions
+            elif call_count == 3:  # git add -u for tracked changes
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 4:  # staged diff check
+            elif call_count == 4:  # git add -A for untracked changes
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # staged diff check
                 proc.communicate = AsyncMock(
                     return_value=(b"api_service/main.py\ntests/new_test.py\n", b"")
                 )
                 proc.returncode = 0
-            elif call_count == 5:  # commit
+            elif call_count == 6:  # commit
                 proc.communicate = AsyncMock(return_value=(b"[auto-dirty123 abc123] msg\n", b""))
                 proc.returncode = 0
-            elif call_count == 6:  # remote default branch
+            elif call_count == 7:  # remote default branch
                 proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
                 proc.returncode = 0
-            elif call_count == 7:  # remote branch sha before push
+            elif call_count == 8:  # remote branch sha before push
                 proc.communicate = AsyncMock(return_value=(b"dirty-remote-sha\n", b""))
                 proc.returncode = 0
-            elif call_count == 8:  # push
+            elif call_count == 9:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 9:  # rev-parse HEAD
+            elif call_count == 10:  # rev-parse HEAD
                 proc.communicate = AsyncMock(return_value=(b"dirty-head-sha\n", b""))
                 proc.returncode = 0
             else:  # rev-list --count
@@ -924,14 +927,83 @@ class TestPushWorkspaceBranch:
         assert result["push_commit_count"] == 1
         assert result["push_head_sha"] == "dirty-head-sha"
         assert result["push_commit_message"] == "Ship dirty workspace"
-        add_call = recorded_calls[2]
-        assert list(add_call[-3:]) == [
+        tracked_add_call = recorded_calls[2]
+        assert list(tracked_add_call[-3:]) == [
+            "-u",
             "--",
             "api_service/main.py",
+        ]
+        untracked_add_call = recorded_calls[3]
+        assert list(untracked_add_call[-3:]) == [
+            "-A",
+            "--",
             "tests/new_test.py",
         ]
         commit_call = next(call for call in recorded_calls if "commit" in call)
         assert list(commit_call[-3:]) == ["commit", "-m", "Ship dirty workspace"]
+
+    @pytest.mark.asyncio
+    async def test_push_stages_tracked_artifact_under_ignored_parent_with_update(self):
+        """Tracked handoff files under ignored artifact dirs must not fail staging."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+        recorded_calls: list[tuple[object, ...]] = []
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            recorded_calls.append(args)
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"auto-artifact123\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(
+                    return_value=(b" M artifacts/jira-orchestrate-pr.json\0", b"")
+                )
+                proc.returncode = 0
+            elif call_count == 3:  # git add -u for tracked ignored-parent file
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # staged diff check
+                proc.communicate = AsyncMock(
+                    return_value=(b"artifacts/jira-orchestrate-pr.json\n", b"")
+                )
+                proc.returncode = 0
+            elif call_count == 5:  # commit
+                proc.communicate = AsyncMock(
+                    return_value=(b"[auto-artifact123 abc123] msg\n", b"")
+                )
+                proc.returncode = 0
+            elif call_count == 6:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif call_count == 7:  # remote branch sha before push
+                proc.communicate = AsyncMock(return_value=(b"artifact-remote-sha\n", b""))
+                proc.returncode = 0
+            elif call_count == 8:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 9:  # rev-parse HEAD
+                proc.communicate = AsyncMock(return_value=(b"artifact-head-sha\n", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "pushed"
+        add_calls = [call for call in recorded_calls if "add" in call]
+        assert len(add_calls) == 1
+        assert list(add_calls[0][-3:]) == [
+            "-u",
+            "--",
+            "artifacts/jira-orchestrate-pr.json",
+        ]
 
     @pytest.mark.asyncio
     async def test_push_dirty_workspace_commit_failure_returns_failed(self):
