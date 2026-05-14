@@ -12,8 +12,10 @@ from unittest.mock import AsyncMock, Mock, call, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.api.routers.executions import (
@@ -27,14 +29,21 @@ from api_service.api.routers.executions import (
     get_temporal_client,
     _serialize_execution,
     router,
+    update_execution as update_execution_route,
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import (
+    Base,
     MoonMindWorkflowState,
+    TemporalArtifact,
     TemporalArtifactEncryption,
+    TemporalArtifactRedactionLevel,
     TemporalArtifactLink,
+    TemporalArtifactRetentionClass,
+    TemporalArtifactStorageBackend,
     TemporalArtifactStatus,
+    TemporalArtifactUploadMode,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionRecord,
     TemporalWorkflowType,
@@ -50,7 +59,9 @@ from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
     StepLedgerSnapshotModel,
+    UpdateExecutionRequest,
 )
+from moonmind.workflows.temporal.service import TemporalExecutionService
 
 
 class _ScalarRows:
@@ -6348,6 +6359,104 @@ def test_request_rerun_update_redirects_response_to_created_rerun_execution() ->
         assert service.describe_execution.await_args_list[-1].args == (
             "mm:rerun-created",
         )
+
+
+@pytest.mark.asyncio
+async def test_request_rerun_update_flushes_snapshot_reuse_before_serializing_response(
+    tmp_path,
+) -> None:
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/rerun_update_response.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            service = TemporalExecutionService(session)
+            service._client_adapter.start_workflow = AsyncMock(
+                return_value=SimpleNamespace(run_id="run-source")
+            )
+            service._client_adapter.cancel_workflow = AsyncMock()
+            service._client_adapter.update_workflow = AsyncMock()
+
+            user = SimpleNamespace(
+                id=uuid4(),
+                email="rerun@example.com",
+                is_active=True,
+                is_superuser=False,
+            )
+            created = await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=user.id,
+                title="Rerun source",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"task": {"instructions": "Do the work."}},
+                idempotency_key=None,
+            )
+            source_workflow_id = created.workflow_id
+            await service.cancel_execution(
+                workflow_id=source_workflow_id,
+                reason="terminal source",
+                graceful=True,
+            )
+
+            session.add(
+                TemporalArtifact(
+                    artifact_id="art_snapshot_route_flush",
+                    storage_key="tests/art_snapshot_route_flush.json",
+                    storage_backend=TemporalArtifactStorageBackend.S3,
+                    encryption=TemporalArtifactEncryption.NONE,
+                    status=TemporalArtifactStatus.COMPLETE,
+                    retention_class=TemporalArtifactRetentionClass.LONG,
+                    redaction_level=TemporalArtifactRedactionLevel.NONE,
+                    upload_mode=TemporalArtifactUploadMode.SINGLE_PUT,
+                    metadata_json={},
+                )
+            )
+            source_records = []
+            for record_type in (
+                TemporalExecutionCanonicalRecord,
+                TemporalExecutionRecord,
+            ):
+                source_record = await session.get(record_type, source_workflow_id)
+                assert source_record is not None
+                source_record.memo = {
+                    **dict(source_record.memo or {}),
+                    "task_input_snapshot_ref": "art_snapshot_route_flush",
+                    "task_input_snapshot_version": 1,
+                    "task_input_snapshot_source_kind": "create",
+                }
+                source_record.artifact_refs = [
+                    *list(source_record.artifact_refs or []),
+                    "art_snapshot_route_flush",
+                ]
+                source_records.append(source_record)
+            await session.commit()
+            for source_record in source_records:
+                await session.refresh(source_record)
+
+            response = await update_execution_route(
+                workflow_id=source_workflow_id,
+                payload=UpdateExecutionRequest(updateName="RequestRerun"),
+                response=Response(),
+                service=service,
+                session=session,
+                user=user,
+                _actions_enabled=None,
+            )
+
+        assert response.accepted is True
+        assert response.execution.workflow_id != source_workflow_id
+        assert response.execution.redirect_path == (
+            f"/tasks/{response.execution.workflow_id}?source=temporal"
+        )
+    finally:
+        await engine.dispose()
 
 
 def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact(
