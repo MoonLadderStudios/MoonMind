@@ -34,6 +34,9 @@ _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"
 _PROPOSAL_POLICY_TARGETS = ("project", "moonmind")
 _PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 _SELF_MANAGED_PUBLISH_SKILLS = frozenset({"pr-resolver", "batch-pr-resolver"})
+_NON_REPOSITORY_SIDE_EFFECT_SKILLS = frozenset(
+    {"jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"}
+)
 _RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
     r"\bresolve(?:d|s|ing)?\s+(?:an?\s+|the\s+)?(?:pr|pull\s+request)\b",
     re.IGNORECASE,
@@ -257,10 +260,17 @@ def resolve_publish_mode_for_skill(skill_id: object, requested_mode: object) -> 
     """Resolve publish mode for a skill while enforcing self-managed constraints."""
 
     publish_mode = _normalize_publish_mode(requested_mode)
-    if is_self_managed_publish_skill(skill_id):
+    normalized_skill_id = _normalize_skill_id(skill_id)
+    if is_self_managed_publish_skill(normalized_skill_id):
         if publish_mode != "none":
             raise TaskContractError(
-                f"task.publish.mode must be 'none' when using skill '{_normalize_skill_id(skill_id)}'"
+                f"task.publish.mode must be 'none' when using skill '{normalized_skill_id}'"
+            )
+        return "none"
+    if normalized_skill_id in _NON_REPOSITORY_SIDE_EFFECT_SKILLS:
+        if publish_mode != "none":
+            raise TaskContractError(
+                f"task.publish.mode must be 'none' when using non-repository skill '{normalized_skill_id}'"
             )
         return "none"
     return publish_mode

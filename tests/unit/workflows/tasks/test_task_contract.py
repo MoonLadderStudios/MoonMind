@@ -9,6 +9,7 @@ from moonmind.workflows.tasks.task_contract import (
     build_effective_task_skill_selectors,
     CanonicalTaskPayload,
     ResumeFromFailedStepRef,
+    resolve_publish_mode_for_skill,
     TaskContractError,
     TaskExecutionSpec,
     TaskRecoveryProvenance,
@@ -603,6 +604,20 @@ def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
 
     assert "task.steps[].tool.id" in str(excinfo.value)
     assert "tool.name" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "skill_id",
+    ["jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"],
+)
+def test_jira_side_effect_skills_reject_repository_publish_modes(
+    skill_id: str,
+) -> None:
+    with pytest.raises(TaskContractError, match="non-repository skill"):
+        resolve_publish_mode_for_skill(skill_id, "pr")
+
+    assert resolve_publish_mode_for_skill(skill_id, "none") == "none"
+
 
 def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> None:
     task_skills = TaskExecutionSpec.model_validate(
