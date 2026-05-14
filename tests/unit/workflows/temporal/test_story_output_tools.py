@@ -180,6 +180,34 @@ async def test_load_jira_preset_brief_uses_trusted_jira_issue_payload():
     assert "Given an operator" in result.outputs["jiraPresetBrief"]
     assert result.outputs["jiraIssue"]["status"] == "In Progress"
 
+
+@pytest.mark.asyncio
+async def test_load_jira_preset_brief_ignores_criteria_only_custom_fields():
+    service = _FakeJiraService()
+    service.issue_responses["MM-657"] = {
+        "key": "MM-657",
+        "names": {
+            "customfield_10001": "Exit Criteria",
+            "customfield_10042": "Acceptance Criteria",
+        },
+        "fields": {
+            "summary": "Settings HTTP API surface",
+            "description": "Expose catalog and audit endpoints.",
+            "customfield_10001": "Wrong criteria text",
+            "customfield_10042": "Given an operator\nThen settings are auditable",
+        },
+    }
+
+    result = await load_jira_preset_brief(
+        {"issueKey": "MM-657"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert "Given an operator" in result.outputs["jiraPresetBrief"]
+    assert "Wrong criteria text" not in result.outputs["jiraPresetBrief"]
+
+
 @pytest.mark.asyncio
 async def test_create_jira_issues_resolves_issue_type_name_from_story_breakdown_source():
     service = _FakeJiraService()

@@ -129,7 +129,7 @@ def _extract_acceptance_criteria(
 ) -> str:
     for field_key, field_name in names.items():
         normalized_name = str(field_name or "").lower()
-        if "acceptance" not in normalized_name and "criteria" not in normalized_name:
+        if "acceptance" not in normalized_name:
             continue
         text = _normalize_jira_text(fields.get(field_key))
         if text:

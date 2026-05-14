@@ -385,6 +385,7 @@ class MoonMindRunWorkflow:
         self._last_publish_repair_node_id: str | None = None
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
+        self._trusted_jira_context: dict[str, Any] | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
         self._progress_snapshot: dict[str, Any] = {
@@ -1346,9 +1347,34 @@ class MoonMindRunWorkflow:
         return merged_inputs
 
     @staticmethod
-    def _trusted_previous_outputs_instruction(
+    def _truncate_json_context_value(value: Any, *, max_chars: int) -> Any:
+        suffix = "...[truncated]"
+        if isinstance(value, str):
+            if len(value) <= max_chars:
+                return value
+            return value[: max(0, max_chars - len(suffix))] + suffix
+        if isinstance(value, Mapping):
+            return {
+                str(key): MoonMindRunWorkflow._truncate_json_context_value(
+                    nested,
+                    max_chars=max_chars,
+                )
+                for key, nested in value.items()
+            }
+        if isinstance(value, list):
+            return [
+                MoonMindRunWorkflow._truncate_json_context_value(
+                    nested,
+                    max_chars=max_chars,
+                )
+                for nested in value
+            ]
+        return value
+
+    @staticmethod
+    def _trusted_previous_outputs_context(
         previous_outputs: object,
-    ) -> str | None:
+    ) -> dict[str, Any] | None:
         if not isinstance(previous_outputs, Mapping):
             return None
         trusted_source = str(previous_outputs.get("trustedSource") or "").strip()
@@ -1369,16 +1395,63 @@ class MoonMindRunWorkflow:
             context[key] = value
         if len(context) <= 1:
             return None
+        return context
 
+    @staticmethod
+    def _trusted_context_payload(context: Mapping[str, Any]) -> str:
+        max_payload_chars = 24000
+        compact_context = {
+            key: MoonMindRunWorkflow._truncate_json_context_value(
+                value,
+                max_chars=6000,
+            )
+            for key, value in context.items()
+        }
         payload = json.dumps(
-            context,
+            compact_context,
             ensure_ascii=True,
             sort_keys=True,
             separators=(",", ": "),
         )
-        max_payload_chars = 24000
-        if len(payload) > max_payload_chars:
-            payload = payload[:max_payload_chars] + "...[truncated]"
+        if len(payload) <= max_payload_chars:
+            return payload
+
+        essential_context = {
+            key: compact_context[key]
+            for key in (
+                "trustedSource",
+                "jiraIssueKey",
+                "summary",
+                "jiraPresetBrief",
+                "jiraStepInstructions",
+            )
+            if key in compact_context
+        }
+        essential_context = {
+            key: MoonMindRunWorkflow._truncate_json_context_value(
+                value,
+                max_chars=3000,
+            )
+            for key, value in essential_context.items()
+        }
+        return json.dumps(
+            essential_context,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ": "),
+        )
+
+    @staticmethod
+    def _trusted_previous_outputs_instruction(
+        previous_outputs: object,
+    ) -> str | None:
+        context = MoonMindRunWorkflow._trusted_previous_outputs_context(
+            previous_outputs
+        )
+        if not context:
+            return None
+
+        payload = MoonMindRunWorkflow._trusted_context_payload(context)
         return (
             "MoonMind trusted previous step context:\n"
             "The following JSON was produced by MoonMind's trusted Jira tool path. "
@@ -1401,9 +1474,6 @@ class MoonMindRunWorkflow:
         for key in (
             "instructions",
             "instructionRef",
-            "instruction",
-            "instructionsText",
-            "instructions_text",
         ):
             instruction = merged_inputs.get(key)
             if isinstance(instruction, str) and instruction.strip():
@@ -1413,6 +1483,24 @@ class MoonMindRunWorkflow:
                 return merged_inputs
         merged_inputs["instructions"] = previous_context
         return merged_inputs
+
+    def _record_trusted_jira_context(self, outputs: Mapping[str, Any]) -> None:
+        context = self._trusted_previous_outputs_context(outputs)
+        if context:
+            self._trusted_jira_context = context
+
+    def _merge_trusted_jira_context(
+        self,
+        previous_outputs: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        if not self._trusted_jira_context:
+            return previous_outputs
+        if self._trusted_previous_outputs_context(previous_outputs):
+            return previous_outputs
+        merged = dict(previous_outputs)
+        for key, value in self._trusted_jira_context.items():
+            merged.setdefault(key, value)
+        return merged
 
     def _publish_repair_feedback_instruction(
         self,
@@ -2797,6 +2885,9 @@ class MoonMindRunWorkflow:
                     node_id,
                     previous_step_outputs,
                 )
+                current_previous_outputs = self._merge_trusted_jira_context(
+                    current_previous_outputs
+                )
                 if current_previous_outputs:
                     node_inputs["previousOutputs"] = dict(current_previous_outputs)
 
@@ -3259,6 +3350,7 @@ class MoonMindRunWorkflow:
                 execution_result, "outputs"
             )
             if isinstance(outputs_for_story_output, Mapping):
+                self._record_trusted_jira_context(outputs_for_story_output)
                 previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
                 if isinstance(story_output_result, Mapping):
