@@ -227,6 +227,35 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
                 "expected_versions": {"workflow.github_token": 1},
             },
         )
+        secret_ref = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"integrations.github.token_ref": "db://missing-token"},
+                "expected_versions": {"integrations.github.token_ref": 1},
+            },
+        )
+        provider_profile = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.default_provider_profile_ref": "missing-profile"},
+                "expected_versions": {"workflow.default_provider_profile_ref": 1},
+            },
+        )
+        scope_not_allowed = await client.post(
+            "/api/v1/settings/validate",
+            json={
+                "scope": "user",
+                "changes": {"workflow.default_publish_mode": "branch"},
+                "expected_versions": {"workflow.default_publish_mode": 1},
+            },
+        )
+        requires_confirmation = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.operation_mode": "maintenance"},
+                "expected_versions": {"workflow.operation_mode": 1},
+            },
+        )
 
     assert denied.status_code == 403
     assert denied.json()["error"] == "permission_denied"
@@ -239,3 +268,12 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
     assert "missing-token" not in missing_ref.text
     assert invalid_key.status_code == 404
     assert invalid_key.json()["error"] == "setting_not_exposed"
+    assert secret_ref.status_code == 400
+    assert secret_ref.json()["error"] == "secret_ref_not_resolvable"
+    assert "missing-token" not in secret_ref.text
+    assert provider_profile.status_code == 400
+    assert provider_profile.json()["error"] == "provider_profile_not_found"
+    assert scope_not_allowed.status_code == 400
+    assert scope_not_allowed.json()["error"] == "scope_not_allowed"
+    assert requires_confirmation.status_code == 428
+    assert requires_confirmation.json()["error"] == "requires_confirmation"

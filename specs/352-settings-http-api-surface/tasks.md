@@ -125,6 +125,8 @@
 
 T034 evidence: `./tools/test_integration.sh` was executed on 2026-05-14 but Docker-backed compose startup was blocked before pytest by the managed environment: Docker reported `403 Forbidden` from administrative rules after the buildx plugin warning. Focused hermetic integration coverage for MM-657 passed with `pytest tests/integration/api/test_settings_http_api_surface_contract.py tests/integration/api/test_settings_overrides_contract.py tests/integration/api/test_settings_effective_values_contract.py -m 'integration_ci' -q`.
 
+Remediation evidence: The 2026-05-14 `ADDITIONAL_WORK_NEEDED` verification gaps for FR-013, SC-004, and DESIGN-REQ-007 were addressed by adding exact public SettingsError mappings for `scope_not_allowed`, `operator_locked`, `secret_ref_not_resolvable`, `provider_profile_not_found`, and `requires_confirmation`. Red-first focused checks first failed on the old mappings with `pytest tests/unit/api_service/api/routers/test_settings_api.py tests/integration/api/test_settings_http_api_surface_contract.py -q`, then passed after remediation. The verification-report focused commands also passed: `pytest tests/unit/api_service/api/routers/test_settings_api.py tests/unit/services/test_settings_catalog.py -q` and `pytest tests/integration/api/test_settings_http_api_surface_contract.py tests/integration/api/test_settings_overrides_contract.py tests/integration/api/test_settings_effective_values_contract.py -m 'integration_ci' -q`.
+
 ---
 
 ## Dependencies And Execution Order

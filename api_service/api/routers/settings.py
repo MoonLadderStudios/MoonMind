@@ -51,12 +51,14 @@ class SettingsPatchRequest(BaseModel):
     changes: dict[str, Any] = Field(default_factory=dict)
     expected_versions: dict[str, int] = Field(default_factory=dict)
     reason: str | None = None
+    confirmation: str | None = None
 
 
 class SettingsProposalRequest(BaseModel):
     scope: str = "workspace"
     changes: dict[str, Any] = Field(default_factory=dict)
     expected_versions: dict[str, int] = Field(default_factory=dict)
+    confirmation: str | None = None
 
 
 async def probe_github_token(
@@ -149,8 +151,10 @@ def _validation_blocker_response(
         return None
     route_blockers = {
         "setting_not_exposed": (404, "setting_not_exposed"),
-        "unsupported_scope": (400, "invalid_scope"),
-        "locked_setting": (423, "read_only_setting"),
+        "unsupported_scope": (400, "scope_not_allowed"),
+        "read_only_setting": (423, "read_only_setting"),
+        "operator_locked": (423, "operator_locked"),
+        "requires_confirmation": (428, "requires_confirmation"),
         "version_conflict": (409, "version_conflict"),
     }
     if not response.issues:
@@ -183,12 +187,20 @@ def _invalid_scope_response(scope: str) -> JSONResponse:
     return _error_response(
         400,
         settings_error(
-            "invalid_scope",
+            "scope_not_allowed",
             f"Unknown settings scope: {scope}.",
             scope=scope,
             details={"allowed_scopes": sorted(VALID_SETTING_SCOPES)},
         ),
     )
+
+
+def _settings_validation_status(error: SettingsError) -> int:
+    if error.error == "operator_locked":
+        return 423
+    if error.error == "requires_confirmation":
+        return 428
+    return 400
 
 
 def _coerce_scope(scope: str) -> SettingScope | JSONResponse:
@@ -461,6 +473,7 @@ async def validate_settings(
                 scope=resolved_scope,
                 changes=payload.changes,
                 expected_versions=payload.expected_versions,
+                confirmation=payload.confirmation,
             )
     except SQLAlchemyError:
         return _settings_db_error_response(scope=resolved_scope)
@@ -509,6 +522,7 @@ async def preview_settings(
                 scope=resolved_scope,
                 changes=payload.changes,
                 expected_versions=payload.expected_versions,
+                confirmation=payload.confirmation,
             )
     except SQLAlchemyError:
         return _settings_db_error_response(scope=resolved_scope)
@@ -622,10 +636,11 @@ async def patch_settings(
                 ),
             )
         except PermissionError as exc:
+            error_code = service.write_lock_error_code(key)
             return _error_response(
                 423,
                 settings_error(
-                    "read_only_setting",
+                    error_code,
                     str(exc),
                     key=key,
                     scope=resolved_scope,
@@ -641,9 +656,11 @@ async def patch_settings(
                 changes=payload.changes,
                 expected_versions=payload.expected_versions,
                 reason=payload.reason,
+                confirmation=payload.confirmation,
             )
     except SettingsValidationError as exc:
-        return _error_response(400, exc.to_settings_error())
+        error = exc.to_settings_error()
+        return _error_response(_settings_validation_status(error), error)
     except ValueError as exc:
         if str(exc) == "version_conflict":
             status_code = 409

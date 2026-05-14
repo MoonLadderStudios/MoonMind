@@ -382,7 +382,7 @@ async def test_effective_settings_endpoint_surfaces_db_read_failure(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_effective_settings_endpoint_returns_structured_invalid_scope_error():
+async def test_effective_settings_endpoint_returns_structured_scope_not_allowed_error():
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -393,7 +393,7 @@ async def test_effective_settings_endpoint_returns_structured_invalid_scope_erro
 
     assert response.status_code == 400
     body = response.json()
-    assert body["error"] == "invalid_scope"
+    assert body["error"] == "scope_not_allowed"
     assert body["scope"] == "organization"
     assert body["details"]["allowed_scopes"] == [
         "operator",
@@ -404,7 +404,7 @@ async def test_effective_settings_endpoint_returns_structured_invalid_scope_erro
 
 
 @pytest.mark.asyncio
-async def test_patch_settings_invalid_scope_uses_settings_error_contract():
+async def test_patch_settings_scope_not_allowed_uses_settings_error_contract():
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -415,7 +415,7 @@ async def test_patch_settings_invalid_scope_uses_settings_error_contract():
 
     assert response.status_code == 400
     body = response.json()
-    assert body["error"] == "invalid_scope"
+    assert body["error"] == "scope_not_allowed"
     assert body["scope"] == "organization"
 
 
@@ -656,7 +656,7 @@ async def test_mm656_patch_settings_rejects_missing_secret_ref_with_sanitized_de
 
     body = rejected.json()
     assert rejected.status_code == 400
-    assert body["error"] == "invalid_setting_value"
+    assert body["error"] == "secret_ref_not_resolvable"
     assert body["key"] == "integrations.github.token_ref"
     assert body["details"]["code"] == "secret_ref_unresolved"
     assert body["details"]["boundary"] == "write_request"
@@ -958,7 +958,29 @@ async def test_mm657_preview_reports_missing_references_without_secret_material(
 
 
 @pytest.mark.asyncio
-async def test_mm657_validate_preview_error_envelope_matrix(settings_api_db):
+async def test_mm657_documented_error_code_envelope_matrix(
+    settings_api_db,
+    monkeypatch,
+):
+    locked_entry = SettingRegistryEntry(
+        key="test.locked",
+        title="Locked",
+        category="Test",
+        section="user-workspace",
+        value_type="string",
+        ui="input",
+        scopes=("workspace",),
+        default_value="built-in",
+        operator_locked_value="operator-value",
+        operator_lock_reason="Controlled by operator policy.",
+        order=1,
+    )
+
+    def _factory(*args, **kwargs):
+        kwargs["registry"] = (locked_entry,)
+        kwargs["env"] = {}
+        return SettingsCatalogService(*args, **kwargs)
+
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -977,12 +999,53 @@ async def test_mm657_validate_preview_error_envelope_matrix(settings_api_db):
                 "changes": {"workflow.default_publish_mode": "branch"},
             },
         )
-        read_only = await client.post(
+        scope_not_allowed = await client.post(
+            "/api/v1/settings/validate",
+            json={
+                "scope": "user",
+                "changes": {"workflow.default_publish_mode": "branch"},
+                "expected_versions": {"workflow.default_publish_mode": 1},
+            },
+        )
+        secret_ref = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"integrations.github.token_ref": "db://missing-token"},
+                "expected_versions": {"integrations.github.token_ref": 1},
+            },
+        )
+        provider_profile = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.default_provider_profile_ref": "missing-profile"},
+                "expected_versions": {"workflow.default_provider_profile_ref": 1},
+            },
+        )
+        version_conflict = await client.post(
             "/api/v1/settings/validate",
             json={
                 "scope": "workspace",
                 "changes": {"workflow.default_task_runtime": "codex"},
                 "expected_versions": {"workflow.default_task_runtime": 99},
+            },
+        )
+        requires_confirmation = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"workflow.operation_mode": "maintenance"},
+                "expected_versions": {"workflow.operation_mode": 1},
+            },
+        )
+
+    monkeypatch.setattr(settings_router, "SettingsCatalogService", _factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        operator_locked = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {"test.locked": "client-value"},
+                "expected_versions": {"test.locked": 1},
             },
         )
 
@@ -996,14 +1059,50 @@ async def test_mm657_validate_preview_error_envelope_matrix(settings_api_db):
     assert bad_scope.status_code == 400
     _assert_settings_error_envelope(
         bad_scope.json(),
-        error="invalid_scope",
+        error="scope_not_allowed",
         scope="organization",
     )
-    assert read_only.status_code == 409
+    assert scope_not_allowed.status_code == 400
     _assert_settings_error_envelope(
-        read_only.json(),
+        scope_not_allowed.json(),
+        error="scope_not_allowed",
+        key="workflow.default_publish_mode",
+        scope="user",
+    )
+    assert secret_ref.status_code == 400
+    _assert_settings_error_envelope(
+        secret_ref.json(),
+        error="secret_ref_not_resolvable",
+        key="integrations.github.token_ref",
+        scope="workspace",
+    )
+    assert "missing-token" not in secret_ref.text
+    assert provider_profile.status_code == 400
+    _assert_settings_error_envelope(
+        provider_profile.json(),
+        error="provider_profile_not_found",
+        key="workflow.default_provider_profile_ref",
+        scope="workspace",
+    )
+    assert version_conflict.status_code == 409
+    _assert_settings_error_envelope(
+        version_conflict.json(),
         error="version_conflict",
         key="workflow.default_task_runtime",
+        scope="workspace",
+    )
+    assert requires_confirmation.status_code == 428
+    _assert_settings_error_envelope(
+        requires_confirmation.json(),
+        error="requires_confirmation",
+        key="workflow.operation_mode",
+        scope="workspace",
+    )
+    assert operator_locked.status_code == 423
+    _assert_settings_error_envelope(
+        operator_locked.json(),
+        error="operator_locked",
+        key="test.locked",
         scope="workspace",
     )
 

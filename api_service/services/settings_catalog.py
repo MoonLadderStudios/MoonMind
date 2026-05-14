@@ -179,6 +179,17 @@ class SettingsValidationError(ValueError):
 
     def to_settings_error(self) -> "SettingsError":
         issue = self.first_issue
+        error_code_by_issue_code = {
+            "operator_locked": "operator_locked",
+            "provider_profile_not_found": "provider_profile_not_found",
+            "requires_confirmation": "requires_confirmation",
+            "secret_ref_unresolved": "secret_ref_not_resolvable",
+            "unsupported_scope": "scope_not_allowed",
+        }
+        error_code = error_code_by_issue_code.get(
+            issue.code,
+            "invalid_setting_value",
+        )
         details = issue.model_dump(mode="json")
         details.pop("key", None)
         details.pop("scope", None)
@@ -188,7 +199,7 @@ class SettingsValidationError(ValueError):
                 item.model_dump(mode="json") for item in self.issues
             ]
         return settings_error(
-            "invalid_setting_value",
+            error_code,
             issue.message,
             key=issue.key,
             scope=issue.scope,
@@ -981,6 +992,12 @@ class SettingsCatalogService:
         if self._read_only(entry):
             raise PermissionError(self._read_only_reason(entry) or "Setting is read-only.")
 
+    def write_lock_error_code(self, key: str) -> str:
+        entry = self._entries_by_key.get(key)
+        if entry is not None and self._is_operator_locked(entry):
+            return "operator_locked"
+        return "read_only_setting"
+
     def _descriptor(
         self,
         entry: SettingRegistryEntry,
@@ -1176,11 +1193,13 @@ class SettingsCatalogService:
         scope: SettingScope,
         changes: dict[str, Any],
         expected_versions: dict[str, int] | None = None,
+        confirmation: str | None = None,
     ) -> SettingsValidationResponse:
         context = await self._validate_preview_context(
             scope=scope,
             changes=changes,
             expected_versions=expected_versions,
+            confirmation=confirmation,
         )
         return self._validation_response(scope=scope, issues=context["issues"])
 
@@ -1190,11 +1209,13 @@ class SettingsCatalogService:
         scope: SettingScope,
         changes: dict[str, Any],
         expected_versions: dict[str, int] | None = None,
+        confirmation: str | None = None,
     ) -> SettingsPreviewResponse:
         context = await self._validate_preview_context(
             scope=scope,
             changes=changes,
             expected_versions=expected_versions,
+            confirmation=confirmation,
         )
         issues: list[SettingValidationIssue] = context["issues"]
         entries: dict[str, SettingRegistryEntry] = context["entries"]
@@ -1286,6 +1307,7 @@ class SettingsCatalogService:
         scope: SettingScope,
         changes: dict[str, Any],
         expected_versions: dict[str, int] | None,
+        confirmation: str | None,
     ) -> dict[str, Any]:
         expected_versions = expected_versions or {}
         entries: dict[str, SettingRegistryEntry] = {}
@@ -1353,11 +1375,16 @@ class SettingsCatalogService:
                 )
                 continue
             if self._read_only(entry):
+                code = (
+                    "operator_locked"
+                    if self._is_operator_locked(entry)
+                    else "read_only_setting"
+                )
                 validation_issues.append(
                     self._validation_issue(
                         entry,
                         scope,
-                        code="locked_setting",
+                        code=code,
                         message=self._read_only_reason(entry) or "Setting is read-only.",
                         boundary="write_request",
                         rule="write_lock",
@@ -1412,6 +1439,14 @@ class SettingsCatalogService:
                 boundary="write_request",
             )
         )
+        validation_issues.extend(
+            self._confirmation_issues_for_changes(
+                entries,
+                changes,
+                scope=scope,
+                confirmation=confirmation,
+            )
+        )
         return {
             "entries": entries,
             "current_resolved": current_resolved,
@@ -1453,6 +1488,7 @@ class SettingsCatalogService:
         changes: dict[str, Any],
         expected_versions: dict[str, int] | None = None,
         reason: str | None = None,
+        confirmation: str | None = None,
     ) -> EffectiveSettingsResponse:
         if self._session is None:
             raise RuntimeError("settings override persistence requires a DB session")
@@ -1518,11 +1554,16 @@ class SettingsCatalogService:
                 )
                 continue
             if self._read_only(entry):
+                code = (
+                    "operator_locked"
+                    if self._is_operator_locked(entry)
+                    else "read_only_setting"
+                )
                 validation_issues.append(
                     self._validation_issue(
                         entry,
                         scope,
-                        code="locked_setting",
+                        code=code,
                         message=self._read_only_reason(entry) or "Setting is read-only.",
                         boundary="write_request",
                         rule="write_lock",
@@ -1556,6 +1597,14 @@ class SettingsCatalogService:
                 proposed_values,
                 scope=scope,
                 boundary="write_request",
+            )
+        )
+        validation_issues.extend(
+            self._confirmation_issues_for_changes(
+                entries,
+                changes,
+                scope=scope,
+                confirmation=confirmation,
             )
         )
         if validation_issues:
@@ -2893,6 +2942,37 @@ class SettingsCatalogService:
         issues.extend(
             self._policy_issues_for_changes(values, scope=scope, boundary=boundary)
         )
+        return issues
+
+    def _confirmation_issues_for_changes(
+        self,
+        entries: dict[str, SettingRegistryEntry],
+        changes: dict[str, Any],
+        *,
+        scope: SettingScope,
+        confirmation: str | None,
+    ) -> list[SettingValidationIssue]:
+        if confirmation is not None and confirmation.strip():
+            return []
+        issues: list[SettingValidationIssue] = []
+        for key in changes:
+            entry = entries.get(key)
+            if entry is None or entry.apply_mode != "manual_operation":
+                continue
+            issues.append(
+                self._validation_issue(
+                    entry,
+                    scope,
+                    code="requires_confirmation",
+                    message=f"{key} requires confirmation before it can be changed.",
+                    boundary="write_request",
+                    rule="confirmation",
+                    details={
+                        "apply_mode": entry.apply_mode,
+                        "applies_to": list(entry.applies_to),
+                    },
+                )
+            )
         return issues
 
     def _validation_issue(
