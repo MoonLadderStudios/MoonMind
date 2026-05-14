@@ -209,6 +209,38 @@ def _coerce_scope(scope: str) -> SettingScope | JSONResponse:
     return scope  # type: ignore[return-value]
 
 
+def _proposal_scope_or_error(
+    payload: SettingsProposalRequest,
+    user: Any,
+) -> SettingScope | JSONResponse:
+    resolved_scope = _coerce_scope(payload.scope)
+    if isinstance(resolved_scope, JSONResponse):
+        return resolved_scope
+    required_permission = _write_permission_for_scope(resolved_scope)
+    if required_permission is None:
+        return _error_response(
+            400,
+            settings_error(
+                "invalid_scope",
+                f"Setting writes are not available at scope {resolved_scope}.",
+                scope=resolved_scope,
+            ),
+        )
+    denied = _require_permission(user, required_permission)
+    if denied is not None:
+        return denied
+    if not payload.changes:
+        return _error_response(
+            400,
+            settings_error(
+                "no_settings_changed",
+                "No settings were changed.",
+                scope=resolved_scope,
+            ),
+        )
+    return resolved_scope
+
+
 def _coerce_section(section: str | None) -> SettingSection | JSONResponse | None:
     if section is not None and section not in VALID_SETTING_SECTIONS:
         return _error_response(
@@ -431,7 +463,7 @@ async def get_settings_diagnostics(
                 key=key,
                 scope=scope,
             ),
-            )
+        )
 
 
 @router.post("/validate")
@@ -439,31 +471,9 @@ async def validate_settings(
     payload: SettingsProposalRequest,
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
-    resolved_scope = _coerce_scope(payload.scope)
+    resolved_scope = _proposal_scope_or_error(payload, user)
     if isinstance(resolved_scope, JSONResponse):
         return resolved_scope
-    required_permission = _write_permission_for_scope(resolved_scope)
-    if required_permission is None:
-        return _error_response(
-            400,
-            settings_error(
-                "invalid_scope",
-                f"Setting writes are not available at scope {resolved_scope}.",
-                scope=resolved_scope,
-            ),
-        )
-    denied = _require_permission(user, required_permission)
-    if denied is not None:
-        return denied
-    if not payload.changes:
-        return _error_response(
-            400,
-            settings_error(
-                "no_settings_changed",
-                "No settings were changed.",
-                scope=resolved_scope,
-            ),
-        )
     try:
         async with db_base.async_session_maker() as session:
             service = SettingsCatalogService(
@@ -488,31 +498,9 @@ async def preview_settings(
     payload: SettingsProposalRequest,
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
-    resolved_scope = _coerce_scope(payload.scope)
+    resolved_scope = _proposal_scope_or_error(payload, user)
     if isinstance(resolved_scope, JSONResponse):
         return resolved_scope
-    required_permission = _write_permission_for_scope(resolved_scope)
-    if required_permission is None:
-        return _error_response(
-            400,
-            settings_error(
-                "invalid_scope",
-                f"Setting writes are not available at scope {resolved_scope}.",
-                scope=resolved_scope,
-            ),
-        )
-    denied = _require_permission(user, required_permission)
-    if denied is not None:
-        return denied
-    if not payload.changes:
-        return _error_response(
-            400,
-            settings_error(
-                "no_settings_changed",
-                "No settings were changed.",
-                scope=resolved_scope,
-            ),
-        )
     try:
         async with db_base.async_session_maker() as session:
             service = SettingsCatalogService(

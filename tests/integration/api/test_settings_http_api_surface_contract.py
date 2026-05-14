@@ -249,6 +249,14 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
                 "expected_versions": {"workflow.default_publish_mode": 1},
             },
         )
+        unsupported_system_scope = await client.post(
+            "/api/v1/settings/validate",
+            json={
+                "scope": "system",
+                "changes": {"workflow.default_publish_mode": "branch"},
+                "expected_versions": {"workflow.default_publish_mode": 1},
+            },
+        )
         requires_confirmation = await client.patch(
             "/api/v1/settings/workspace",
             json={
@@ -275,5 +283,8 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
     assert provider_profile.json()["error"] == "provider_profile_not_found"
     assert scope_not_allowed.status_code == 400
     assert scope_not_allowed.json()["error"] == "scope_not_allowed"
+    assert unsupported_system_scope.status_code == 400
+    assert unsupported_system_scope.json()["error"] == "scope_not_allowed"
+    assert unsupported_system_scope.json()["scope"] == "system"
     assert requires_confirmation.status_code == 428
     assert requires_confirmation.json()["error"] == "requires_confirmation"

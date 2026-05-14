@@ -1317,7 +1317,7 @@ class SettingsCatalogService:
             validation_issues.append(
                 self._validation_issue_for_key(
                     next(iter(changes), "*"),
-                    scope if scope in {"user", "workspace"} else "workspace",
+                    scope,
                     code="unsupported_scope",
                     message=f"Setting writes are not available at scope {scope}.",
                     boundary="write_request",

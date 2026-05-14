@@ -674,6 +674,24 @@ async def test_mm657_validate_changes_returns_version_and_value_issues(
 
 
 @pytest.mark.asyncio
+async def test_mm657_validate_changes_preserves_unsupported_requested_scope(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+
+        response = await service.validate_changes(
+            scope="system",
+            changes={"workflow.default_publish_mode": "branch"},
+            expected_versions={"workflow.default_publish_mode": 1},
+        )
+
+    assert response.accepted is False
+    assert response.issues[0].code == "unsupported_scope"
+    assert response.issues[0].scope == "system"
+
+
+@pytest.mark.asyncio
 async def test_mm657_preview_changes_reports_diffs_reload_and_no_commit(
     settings_session_maker,
 ):
