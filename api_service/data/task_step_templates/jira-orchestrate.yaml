@@ -102,15 +102,18 @@ steps:
           targetIssueKey: "{{ inputs.jira_issue_key }}"
           linkType: Blocks
   - title: Load Jira preset brief
+    type: tool
     instructions: |-
-      Fetch Jira issue {{ inputs.jira_issue_key }} through the trusted Jira tool surface.
+      Fetch Jira issue {{ inputs.jira_issue_key }} through the deterministic trusted Jira tool surface.
 
       Build the canonical MoonSpec orchestration input from the issue's Jira preset brief. Prefer a normalized preset brief or recommended preset instructions when the Jira issue response exposes one. If that field is unavailable, synthesize the brief from the issue key, summary, description, acceptance criteria, and relevant implementation notes.
 
       Preserve the issue key in the brief so downstream spec artifacts and the pull request can reference {{ inputs.jira_issue_key }}.
-    skill:
-      id: auto
+    tool:
+      id: jira.load_preset_brief
       args: {}
+      inputs:
+        issueKey: "{{ inputs.jira_issue_key }}"
   - title: Classify request and resume point
     instructions: |-
       Use the Jira preset brief for {{ inputs.jira_issue_key }} as the canonical Moon Spec orchestration input.

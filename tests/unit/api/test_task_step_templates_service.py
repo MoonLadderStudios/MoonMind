@@ -2233,7 +2233,7 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             ] == [
                 "jira-issue-updater",
                 "jira.check_blockers",
-                "auto",
+                "jira.load_preset_brief",
                 "auto",
                 "moonspec-specify",
                 "auto",
@@ -2298,6 +2298,9 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "stop the orchestration immediately" in expanded["steps"][1][
                 "instructions"
             ]
+            assert expanded["steps"][2]["type"] == "tool"
+            assert expanded["steps"][2]["tool"]["id"] == "jira.load_preset_brief"
+            assert expanded["steps"][2]["tool"]["inputs"] == {"issueKey": "MM-328"}
             assert "Jira preset brief" in expanded["steps"][2]["instructions"]
             assert "Keep the scope narrow." in expanded["steps"][3]["instructions"]
             assert expanded["steps"][11]["title"] == "Remediate verification gaps"
