@@ -120,6 +120,7 @@ from moonmind.workflows.tasks.task_contract import (
     TaskSkillSelectors,
     allows_repository_publish_for_skill_context,
     build_authoritative_task_input_snapshot,
+    is_non_repository_side_effect_skill,
     is_self_managed_publish_skill,
     resolve_publish_mode_for_skill,
 )
@@ -4065,15 +4066,25 @@ def _resolve_task_publish_payload(
     task_publish = _normalize_publish_payload(task_payload.get("publish"))
     top_publish = _normalize_publish_payload(payload.get("publish"))
 
-    requested_mode = _first_present_publish_mode(
+    task_requested_mode = _first_present_publish_mode(
         (task_publish, "mode"),
         (task_payload, "publishMode"),
         (task_payload, "publish_mode"),
+    )
+    requested_mode = _first_present_publish_mode(
+        ({"mode": task_requested_mode}, "mode"),
         (top_publish, "mode"),
         (payload, "publishMode"),
         (payload, "publish_mode"),
     )
     skill_id = _task_publish_skill_id(task_payload, normalized_tool)
+    allow_repository_publish = allows_repository_publish_for_skill_context(task_payload)
+    if (
+        task_requested_mode is None
+        and is_non_repository_side_effect_skill(skill_id)
+        and not allow_repository_publish
+    ):
+        requested_mode = None
     if (
         requested_mode is None
         or (isinstance(requested_mode, str) and not requested_mode.strip())
@@ -4083,9 +4094,7 @@ def _resolve_task_publish_payload(
         publish_mode = resolve_publish_mode_for_skill(
             skill_id,
             requested_mode,
-            allow_repository_publish=allows_repository_publish_for_skill_context(
-                task_payload
-            ),
+            allow_repository_publish=allow_repository_publish,
         )
     except TaskContractError as exc:
         raise _invalid_task_request(str(exc)) from exc
