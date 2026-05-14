@@ -256,23 +256,28 @@ def is_self_managed_publish_skill(skill_id: object) -> bool:
 
     return _normalize_skill_id(skill_id) in _SELF_MANAGED_PUBLISH_SKILLS
 
-def resolve_publish_mode_for_skill(skill_id: object, requested_mode: object) -> str:
-    """Resolve publish mode for a skill while enforcing self-managed constraints."""
+def is_non_repository_side_effect_skill(skill_id: object) -> bool:
+    """Return True when the selected skill performs side effects outside git publish."""
 
-    publish_mode = _normalize_publish_mode(requested_mode)
+    return _normalize_skill_id(skill_id) in _NON_REPOSITORY_SIDE_EFFECT_SKILLS
+
+def resolve_publish_mode_for_skill(skill_id: object, requested_mode: object) -> str:
+    """Resolve publish mode for a skill while enforcing skill publish constraints."""
+
     normalized_skill_id = _normalize_skill_id(skill_id)
-    if is_self_managed_publish_skill(normalized_skill_id):
+    is_self_managed = is_self_managed_publish_skill(normalized_skill_id)
+    is_non_repository = is_non_repository_side_effect_skill(normalized_skill_id)
+    if is_self_managed or is_non_repository:
+        if requested_mode is None:
+            return "none"
+        publish_mode = _normalize_publish_mode(requested_mode)
         if publish_mode != "none":
+            qualifier = "non-repository " if is_non_repository else ""
             raise TaskContractError(
-                f"task.publish.mode must be 'none' when using skill '{normalized_skill_id}'"
+                f"task.publish.mode must be 'none' when using {qualifier}skill '{normalized_skill_id}'"
             )
         return "none"
-    if normalized_skill_id in _NON_REPOSITORY_SIDE_EFFECT_SKILLS:
-        if publish_mode != "none":
-            raise TaskContractError(
-                f"task.publish.mode must be 'none' when using non-repository skill '{normalized_skill_id}'"
-            )
-        return "none"
+    publish_mode = _normalize_publish_mode(requested_mode)
     return publish_mode
 
 def _is_resolve_pr_objective(value: object) -> bool:
@@ -1421,8 +1426,11 @@ class TaskExecutionSpec(BaseModel):
                 continue
             skill_ids.add(_normalize_skill_id(step.skill.id))
 
+        requested_publish_mode = (
+            self.publish.mode if "mode" in self.publish.model_fields_set else None
+        )
         for skill_id in skill_ids:
-            resolve_publish_mode_for_skill(skill_id, self.publish.mode)
+            resolve_publish_mode_for_skill(skill_id, requested_publish_mode)
         return self
 
     @model_validator(mode="after")
@@ -2281,6 +2289,7 @@ __all__ = [
     "build_task_stage_plan",
     "build_canonical_task_view",
     "has_attachment_mutation_fields",
+    "is_non_repository_side_effect_skill",
     "is_self_managed_publish_skill",
     "normalize_queue_job_payload",
     "resolve_publish_mode_for_skill",

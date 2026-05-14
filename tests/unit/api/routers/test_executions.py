@@ -1790,6 +1790,44 @@ def test_create_task_shaped_execution_rejects_pr_publish_for_jira_updater(
     service.create_execution.assert_not_awaited()
 
 
+def test_create_task_shaped_execution_defaults_jira_updater_publish_none(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publishMode": "pr",
+                "task": {
+                    "title": "Change Jira issue MM-657 to status In Progress.",
+                    "instructions": "Change Jira issue MM-657 to status In Progress.",
+                    "tool": {"type": "skill", "name": "jira-issue-updater"},
+                    "runtime": {"mode": "claude_code"},
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "jira-orchestrate",
+                            "version": "1.0.0",
+                            "stepIds": ["tpl:jira-orchestrate:1.0.0:01"],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.call_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["publishMode"] == "none"
+    assert initial_parameters["task"]["publish"]["mode"] == "none"
+
+
 def test_create_task_shaped_execution_allows_jira_orchestrate_publish_none(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

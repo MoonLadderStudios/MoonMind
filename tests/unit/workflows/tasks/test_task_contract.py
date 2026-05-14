@@ -616,6 +616,7 @@ def test_jira_side_effect_skills_reject_repository_publish_modes(
     with pytest.raises(TaskContractError, match="non-repository skill"):
         resolve_publish_mode_for_skill(skill_id, "pr")
 
+    assert resolve_publish_mode_for_skill(skill_id, None) == "none"
     assert resolve_publish_mode_for_skill(skill_id, "none") == "none"
 
 

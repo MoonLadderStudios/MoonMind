@@ -170,7 +170,7 @@ type RuntimeCommandInvocation = {
   runtimeCapabilityVersion?: string;
   hintCatalogVersion?: string;
 
-  detectedAt: string;
+  detectionPhase: string;
 };
 ```
 
@@ -192,7 +192,7 @@ Example:
   "requiresRuntimeRecognition": true,
   "runtimeCapabilityVersion": "2026-05-13",
   "hintCatalogVersion": "2026-05-13",
-  "detectedAt": "submit"
+  "detectionPhase": "submit"
 }
 ```
 
@@ -241,7 +241,7 @@ The authoritative task input snapshot should include both authored instructions 
       "requiresRuntimeRecognition": true,
       "runtimeCapabilityVersion": "2026-05-13",
       "hintCatalogVersion": "2026-05-13",
-      "detectedAt": "submit"
+      "detectionPhase": "submit"
     }
   },
   "runtime": {
@@ -273,7 +273,7 @@ For multi-step drafts, the command may appear at the task level or step level:
         "requiresRuntimeRecognition": true,
         "runtimeCapabilityVersion": "2026-05-13",
         "hintCatalogVersion": "2026-05-13",
-        "detectedAt": "submit"
+        "detectionPhase": "submit"
       }
     }
   ]
@@ -353,7 +353,7 @@ MoonMind stores:
     "hintStatus": "opaque",
     "recognitionMode": "escaped_literal",
     "requiresRuntimeRecognition": false,
-    "detectedAt": "submit"
+    "detectionPhase": "submit"
   }
 }
 ```
