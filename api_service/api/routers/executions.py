@@ -118,6 +118,7 @@ from moonmind.workflows.tasks.task_contract import (
     TaskInputAttachmentRef,
     TaskProposalPolicy,
     TaskSkillSelectors,
+    allows_repository_publish_for_skill_context,
     build_authoritative_task_input_snapshot,
     is_non_repository_side_effect_skill,
     is_self_managed_publish_skill,
@@ -4077,7 +4078,12 @@ def _resolve_task_publish_payload(
         (payload, "publish_mode"),
     )
     skill_id = _task_publish_skill_id(task_payload, normalized_tool)
-    if task_requested_mode is None and is_non_repository_side_effect_skill(skill_id):
+    allow_repository_publish = allows_repository_publish_for_skill_context(task_payload)
+    if (
+        task_requested_mode is None
+        and is_non_repository_side_effect_skill(skill_id)
+        and not allow_repository_publish
+    ):
         requested_mode = None
     if (
         requested_mode is None
@@ -4088,6 +4094,7 @@ def _resolve_task_publish_payload(
         publish_mode = resolve_publish_mode_for_skill(
             skill_id,
             requested_mode,
+            allow_repository_publish=allow_repository_publish,
         )
     except TaskContractError as exc:
         raise _invalid_task_request(str(exc)) from exc
@@ -6754,6 +6761,13 @@ async def update_execution(
                 "applied": applied,
             },
         )
+    if snapshot_ref:
+        await session.flush()
+        if isinstance(
+            refreshed_record,
+            (TemporalExecutionRecord, TemporalExecutionCanonicalRecord),
+        ):
+            await session.refresh(refreshed_record)
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:
         _mark_execution_alias_usage(

@@ -12,6 +12,7 @@ from moonmind.workflows.temporal.story_output_tools import (
     create_jira_issues_from_stories,
     create_jira_orchestrate_tasks_from_issue_mappings,
     discover_documents,
+    load_jira_preset_brief,
 )
 
 class _FakeJiraService:
@@ -133,6 +134,79 @@ async def test_create_jira_issues_from_inline_story_breakdown():
     assert request.summary == "Create proposal intent records"
     assert request.fields["labels"] == ["moonmind"]
     assert "Intent is visible" in request.description
+
+@pytest.mark.asyncio
+async def test_load_jira_preset_brief_uses_trusted_jira_issue_payload():
+    service = _FakeJiraService()
+    service.issue_responses["MM-657"] = {
+        "key": "MM-657",
+        "self": "https://jira.example/rest/api/3/issue/657",
+        "names": {"customfield_10042": "Acceptance Criteria"},
+        "fields": {
+            "summary": "Settings HTTP API surface",
+            "description": {
+                "type": "doc",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Expose catalog and audit endpoints.",
+                            }
+                        ],
+                    }
+                ],
+            },
+            "customfield_10042": "Given an operator\nThen settings are auditable",
+            "status": {"name": "In Progress"},
+            "issuetype": {"name": "Story"},
+            "assignee": {"displayName": "Nate"},
+        },
+    }
+
+    result = await load_jira_preset_brief(
+        {"issueKey": "MM-657"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert service.get_issue_requests[0].issue_key == "MM-657"
+    assert service.get_issue_requests[0].expand == ["names"]
+    assert result.outputs["trustedSource"] == "moonmind.jira.get_issue"
+    assert result.outputs["jiraIssueKey"] == "MM-657"
+    assert "MM-657: Settings HTTP API surface" in result.outputs["jiraPresetBrief"]
+    assert "Expose catalog and audit endpoints." in result.outputs["jiraPresetBrief"]
+    assert "Given an operator" in result.outputs["jiraPresetBrief"]
+    assert result.outputs["jiraIssue"]["status"] == "In Progress"
+
+
+@pytest.mark.asyncio
+async def test_load_jira_preset_brief_ignores_criteria_only_custom_fields():
+    service = _FakeJiraService()
+    service.issue_responses["MM-657"] = {
+        "key": "MM-657",
+        "names": {
+            "customfield_10001": "Exit Criteria",
+            "customfield_10042": "Acceptance Criteria",
+        },
+        "fields": {
+            "summary": "Settings HTTP API surface",
+            "description": "Expose catalog and audit endpoints.",
+            "customfield_10001": "Wrong criteria text",
+            "customfield_10042": "Given an operator\nThen settings are auditable",
+        },
+    }
+
+    result = await load_jira_preset_brief(
+        {"issueKey": "MM-657"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert "Given an operator" in result.outputs["jiraPresetBrief"]
+    assert "Wrong criteria text" not in result.outputs["jiraPresetBrief"]
+
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_resolves_issue_type_name_from_story_breakdown_source():

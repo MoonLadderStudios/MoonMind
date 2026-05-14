@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -140,6 +141,88 @@ def test_managed_codex_request_keeps_prepared_context_out_of_input_refs() -> Non
         "artifact://objective-image",
         "artifact://collect-notes",
     ]
+
+
+def test_agent_request_includes_trusted_jira_previous_outputs_in_instruction_ref() -> None:
+    wf = MoonMindRunWorkflow()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={
+                "runtime": {"mode": "claude_code"},
+                "instructions": "Classify request and resume point.",
+                "previousOutputs": {
+                    "trustedSource": "moonmind.jira.get_issue",
+                    "jiraIssueKey": "MM-657",
+                    "jiraPresetBrief": "MM-657: Settings HTTP API surface",
+                    "jiraIssue": {"status": "In Progress"},
+                },
+            },
+            node_id="classify",
+            tool_name="claude_code",
+            workflow_parameters={"task": {}},
+        )
+
+    assert request.instruction_ref is not None
+    assert request.instruction_ref.startswith("Classify request and resume point.")
+    assert "MoonMind trusted previous step context:" in request.instruction_ref
+    assert "moonmind.jira.get_issue" in request.instruction_ref
+    assert "MM-657: Settings HTTP API surface" in request.instruction_ref
+    assert "Do not use provider-native Jira/Atlassian connectors" in request.instruction_ref
+
+
+def test_trusted_jira_context_persists_after_intermediate_step_output() -> None:
+    wf = MoonMindRunWorkflow()
+    wf._record_trusted_jira_context(
+        {
+            "trustedSource": "moonmind.jira.get_issue",
+            "jiraIssueKey": "MM-657",
+            "jiraPresetBrief": "MM-657: Settings HTTP API surface",
+        }
+    )
+
+    merged = wf._merge_trusted_jira_context({"storyOutput": {"status": "COMPLETED"}})
+
+    assert merged["storyOutput"] == {"status": "COMPLETED"}
+    assert merged["trustedSource"] == "moonmind.jira.get_issue"
+    assert merged["jiraIssueKey"] == "MM-657"
+    assert merged["jiraPresetBrief"] == "MM-657: Settings HTTP API surface"
+
+
+def test_trusted_jira_context_uses_valid_json_after_truncation() -> None:
+    instruction = MoonMindRunWorkflow._trusted_previous_outputs_instruction(
+        {
+            "trustedSource": "moonmind.jira.get_issue",
+            "jiraIssueKey": "MM-657",
+            "jiraPresetBrief": "A" * 30000,
+        }
+    )
+
+    assert instruction is not None
+    payload = instruction.split("```json\n", 1)[1].split("\n```", 1)[0]
+    parsed = json.loads(payload)
+    assert parsed["trustedSource"] == "moonmind.jira.get_issue"
+    assert parsed["jiraPresetBrief"].endswith("...[truncated]")
+
+
+def test_trusted_jira_context_ignores_unconsumed_instruction_aliases() -> None:
+    wf = MoonMindRunWorkflow()
+    merged = wf._append_trusted_previous_outputs_to_agent_inputs(
+        {
+            "runtime": {"mode": "claude_code"},
+            "instruction": "Unused alias",
+            "previousOutputs": {
+                "trustedSource": "moonmind.jira.get_issue",
+                "jiraIssueKey": "MM-657",
+                "jiraPresetBrief": "MM-657: Settings HTTP API surface",
+            },
+        }
+    )
+
+    assert merged["instruction"] == "Unused alias"
+    assert "MoonMind trusted previous step context:" in merged["instructions"]
 
 
 def test_prepare_failure_prevents_unbounded_context_dispatch() -> None:
