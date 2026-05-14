@@ -36,7 +36,7 @@ Run the full required hermetic integration suite before finalizing:
 Focused iteration for MM-657:
 
 ```bash
-pytest tests/integration/api/test_settings_overrides_contract.py tests/integration/api/test_settings_effective_values_contract.py -m 'integration_ci' -q
+pytest tests/integration/api/test_settings_http_api_surface_contract.py tests/integration/api/test_settings_overrides_contract.py tests/integration/api/test_settings_effective_values_contract.py -m 'integration_ci' -q
 ```
 
 Integration coverage should prove:

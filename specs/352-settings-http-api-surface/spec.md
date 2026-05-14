@@ -163,7 +163,7 @@ Resume decision: no existing Moon Spec feature directory preserving the `MM-657`
 
 ### Measurable Outcomes
 
-- **SC-001**: Contract tests cover all seven documented settings API families: catalog, effective list, effective by key, update, reset, validate, preview, and audit.
+- **SC-001**: Contract tests cover all documented settings API families: catalog, effective reads (list and by key), update, reset, validate, preview, and audit.
 - **SC-002**: At least one validation path confirms catalog responses include all three top-level sections: `providers-secrets`, `user-workspace`, and `operations`.
 - **SC-003**: At least one validation path confirms stale update requests return `version_conflict` and do not commit changes.
 - **SC-004**: At least one validation path confirms every documented settings error code maps to the structured envelope fields `error`, `message`, `key`, `scope`, and `details`.

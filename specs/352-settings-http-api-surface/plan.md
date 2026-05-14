@@ -64,7 +64,7 @@ MM-657 requires the Settings System to expose one coherent HTTP API surface for 
 **Primary Dependencies**: FastAPI, Pydantic v2, SQLAlchemy async ORM, pytest, httpx ASGI transport, existing Settings catalog/service models  
 **Storage**: Existing `settings_overrides`, settings audit, managed secret, and provider profile rows only; no new persistent table planned  
 **Unit Testing**: `./tools/test_unit.sh`; focused iteration with `pytest tests/unit/services/test_settings_catalog.py tests/unit/api_service/api/routers/test_settings_api.py -q`  
-**Integration Testing**: `./tools/test_integration.sh` for required hermetic `integration_ci`; focused iteration with `pytest tests/integration/api/test_settings_overrides_contract.py tests/integration/api/test_settings_effective_values_contract.py -m 'integration_ci'`  
+**Integration Testing**: `./tools/test_integration.sh` for required hermetic `integration_ci`; focused iteration with `pytest tests/integration/api/test_settings_http_api_surface_contract.py tests/integration/api/test_settings_overrides_contract.py tests/integration/api/test_settings_effective_values_contract.py -m 'integration_ci'`  
 **Target Platform**: MoonMind API service in Linux containers  
 **Project Type**: Backend FastAPI web service with API-visible settings contracts  
 **Performance Goals**: Validation and preview evaluate only submitted keys plus affected effective-value dependencies; no external provider calls during request handling  
