@@ -6752,6 +6752,13 @@ async def update_execution(
                 "applied": applied,
             },
         )
+    if snapshot_ref:
+        await session.flush()
+        if isinstance(
+            refreshed_record,
+            (TemporalExecutionRecord, TemporalExecutionCanonicalRecord),
+        ):
+            await session.refresh(refreshed_record)
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:
         _mark_execution_alias_usage(
