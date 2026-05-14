@@ -15,10 +15,12 @@ from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
 from api_service.services.settings_catalog import (
     SettingsAuditResponse,
+    SettingsPreviewResponse,
     SettingScope,
     SettingSection,
     SettingsCatalogService,
     SettingsError,
+    SettingsValidationResponse,
     SettingsValidationError,
     has_settings_permission,
     settings_error,
@@ -49,6 +51,12 @@ class SettingsPatchRequest(BaseModel):
     changes: dict[str, Any] = Field(default_factory=dict)
     expected_versions: dict[str, int] = Field(default_factory=dict)
     reason: str | None = None
+
+
+class SettingsProposalRequest(BaseModel):
+    scope: str = "workspace"
+    changes: dict[str, Any] = Field(default_factory=dict)
+    expected_versions: dict[str, int] = Field(default_factory=dict)
 
 
 async def probe_github_token(
@@ -130,6 +138,43 @@ def _settings_db_error_response(*, key: str | None = None, scope: str) -> JSONRe
             "Settings persistence is unavailable.",
             key=key,
             scope=scope,
+        ),
+    )
+
+
+def _validation_blocker_response(
+    response: SettingsValidationResponse,
+) -> JSONResponse | None:
+    if response.accepted:
+        return None
+    route_blockers = {
+        "setting_not_exposed": (404, "setting_not_exposed"),
+        "unsupported_scope": (400, "invalid_scope"),
+        "locked_setting": (423, "read_only_setting"),
+        "version_conflict": (409, "version_conflict"),
+    }
+    if not response.issues:
+        return None
+    blocker_codes = {issue.code for issue in response.issues}
+    if len(blocker_codes) != 1:
+        return None
+    issue = response.issues[0]
+    route = route_blockers.get(issue.code)
+    if route is None:
+        return None
+    status_code, error_code = route
+    details = issue.model_dump(mode="json")
+    details.pop("key", None)
+    details.pop("scope", None)
+    details.pop("message", None)
+    return _error_response(
+        status_code,
+        settings_error(
+            error_code,
+            issue.message,
+            key=issue.key,
+            scope=issue.scope,
+            details=details,
         ),
     )
 
@@ -374,7 +419,103 @@ async def get_settings_diagnostics(
                 key=key,
                 scope=scope,
             ),
+            )
+
+
+@router.post("/validate")
+async def validate_settings(
+    payload: SettingsProposalRequest,
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
+):
+    resolved_scope = _coerce_scope(payload.scope)
+    if isinstance(resolved_scope, JSONResponse):
+        return resolved_scope
+    required_permission = _write_permission_for_scope(resolved_scope)
+    if required_permission is None:
+        return _error_response(
+            400,
+            settings_error(
+                "invalid_scope",
+                f"Setting writes are not available at scope {resolved_scope}.",
+                scope=resolved_scope,
+            ),
         )
+    denied = _require_permission(user, required_permission)
+    if denied is not None:
+        return denied
+    if not payload.changes:
+        return _error_response(
+            400,
+            settings_error(
+                "no_settings_changed",
+                "No settings were changed.",
+                scope=resolved_scope,
+            ),
+        )
+    try:
+        async with db_base.async_session_maker() as session:
+            service = SettingsCatalogService(
+                session=session, **_service_context_kwargs(user)
+            )
+            response = await service.validate_changes(
+                scope=resolved_scope,
+                changes=payload.changes,
+                expected_versions=payload.expected_versions,
+            )
+    except SQLAlchemyError:
+        return _settings_db_error_response(scope=resolved_scope)
+    blocker = _validation_blocker_response(response)
+    if blocker is not None:
+        return blocker
+    return response
+
+
+@router.post("/preview")
+async def preview_settings(
+    payload: SettingsProposalRequest,
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
+):
+    resolved_scope = _coerce_scope(payload.scope)
+    if isinstance(resolved_scope, JSONResponse):
+        return resolved_scope
+    required_permission = _write_permission_for_scope(resolved_scope)
+    if required_permission is None:
+        return _error_response(
+            400,
+            settings_error(
+                "invalid_scope",
+                f"Setting writes are not available at scope {resolved_scope}.",
+                scope=resolved_scope,
+            ),
+        )
+    denied = _require_permission(user, required_permission)
+    if denied is not None:
+        return denied
+    if not payload.changes:
+        return _error_response(
+            400,
+            settings_error(
+                "no_settings_changed",
+                "No settings were changed.",
+                scope=resolved_scope,
+            ),
+        )
+    try:
+        async with db_base.async_session_maker() as session:
+            service = SettingsCatalogService(
+                session=session, **_service_context_kwargs(user)
+            )
+            response: SettingsPreviewResponse = await service.preview_changes(
+                scope=resolved_scope,
+                changes=payload.changes,
+                expected_versions=payload.expected_versions,
+            )
+    except SQLAlchemyError:
+        return _settings_db_error_response(scope=resolved_scope)
+    blocker = _validation_blocker_response(response)
+    if blocker is not None:
+        return blocker
+    return response
 
 
 @router.post("/github/token-probe")

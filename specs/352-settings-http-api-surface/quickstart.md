@@ -55,7 +55,7 @@ Integration coverage should prove:
 2. Read `GET /api/v1/settings/effective?scope=workspace`.
 3. Read `GET /api/v1/settings/effective/workflow.default_publish_mode?scope=workspace`.
 4. Submit `POST /api/v1/settings/validate` with a valid proposed change and confirm no persisted override.
-5. Submit `POST /api/v1/settings/preview` with the same change and confirm proposed diffs and reload metadata.
+5. Submit `POST /api/v1/settings/preview` with the same change and confirm `diffs`, `dependency_warnings`, and `reload_requirements` are returned without persistence.
 6. Submit `PATCH /api/v1/settings/workspace` with matching `expected_versions` and confirm a refreshed effective value.
 7. Submit the same patch with stale `expected_versions` and confirm `version_conflict` with no mutation.
 8. Submit `DELETE /api/v1/settings/workspace/workflow.default_publish_mode` and confirm the inherited effective value.

@@ -315,6 +315,51 @@ class EffectiveSettingsResponse(BaseModel):
     values: dict[str, EffectiveSettingValue]
 
 
+class SettingsValidationResponse(BaseModel):
+    scope: SettingScope
+    accepted: bool
+    issues: list[SettingValidationIssue] = Field(default_factory=list)
+    issues_by_key: dict[str, list[SettingValidationIssue]] = Field(default_factory=dict)
+
+
+class SettingsPreviewValue(BaseModel):
+    value: Any = None
+    source: str
+    value_version: int = 1
+    activation_state: SettingActivationState
+
+
+class SettingsPreviewDiff(BaseModel):
+    key: str
+    scope: SettingScope
+    before: SettingsPreviewValue
+    after: SettingsPreviewValue
+    redacted: bool = False
+
+
+class SettingsDependencyWarning(BaseModel):
+    key: str
+    dependency_key: str | None = None
+    message: str
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class SettingsReloadRequirement(BaseModel):
+    key: str
+    apply_mode: SettingApplyMode
+    requires_reload: bool = False
+    requires_worker_restart: bool = False
+    requires_process_restart: bool = False
+    applies_to: list[str] = Field(default_factory=list)
+    completion_guidance: str | None = None
+
+
+class SettingsPreviewResponse(SettingsValidationResponse):
+    diffs: list[SettingsPreviewDiff] = Field(default_factory=list)
+    dependency_warnings: list[SettingsDependencyWarning] = Field(default_factory=list)
+    reload_requirements: list[SettingsReloadRequirement] = Field(default_factory=list)
+
+
 class SettingsError(BaseModel):
     error: str
     message: str
@@ -548,7 +593,7 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         title="GitHub Token Reference",
         description="Secret reference used for GitHub API access.",
         category="Integrations",
-        section="user-workspace",
+        section="providers-secrets",
         value_type="secret_ref",
         ui="secret_ref_picker",
         scopes=("user", "workspace"),
@@ -1124,6 +1169,282 @@ class SettingsCatalogService:
                 diagnostics=diagnostics,
             )
         return EffectiveSettingsResponse(scope=scope, values=values)
+
+    async def validate_changes(
+        self,
+        *,
+        scope: SettingScope,
+        changes: dict[str, Any],
+        expected_versions: dict[str, int] | None = None,
+    ) -> SettingsValidationResponse:
+        context = await self._validate_preview_context(
+            scope=scope,
+            changes=changes,
+            expected_versions=expected_versions,
+        )
+        return self._validation_response(scope=scope, issues=context["issues"])
+
+    async def preview_changes(
+        self,
+        *,
+        scope: SettingScope,
+        changes: dict[str, Any],
+        expected_versions: dict[str, int] | None = None,
+    ) -> SettingsPreviewResponse:
+        context = await self._validate_preview_context(
+            scope=scope,
+            changes=changes,
+            expected_versions=expected_versions,
+        )
+        issues: list[SettingValidationIssue] = context["issues"]
+        entries: dict[str, SettingRegistryEntry] = context["entries"]
+        current_resolved: dict[str, tuple[Any, str, int, bool]] = context[
+            "current_resolved"
+        ]
+        proposed_values: dict[str, Any] = context["proposed_values"]
+
+        diffs: list[SettingsPreviewDiff] = []
+        reload_requirements: list[SettingsReloadRequirement] = []
+        for key in changes:
+            entry = entries.get(key)
+            if entry is None:
+                continue
+            before_value, before_source, before_version, _override_present = (
+                current_resolved[key]
+            )
+            after_value = proposed_values.get(key)
+            redacted = self._should_redact_preview_value(entry, before_value) or (
+                self._should_redact_preview_value(entry, after_value)
+            )
+            before_activation = self._activation_metadata(entry, before_value)
+            after_activation = self._activation_metadata(
+                entry,
+                after_value,
+                pending_activation=True,
+            )
+            diffs.append(
+                SettingsPreviewDiff(
+                    key=key,
+                    scope=scope,
+                    before=SettingsPreviewValue(
+                        value=None if redacted else before_value,
+                        source=before_source,
+                        value_version=before_version,
+                        activation_state=before_activation["activation_state"],
+                    ),
+                    after=SettingsPreviewValue(
+                        value=None if redacted else after_value,
+                        source=f"{scope}_preview",
+                        value_version=before_version,
+                        activation_state=after_activation["activation_state"],
+                    ),
+                    redacted=redacted,
+                )
+            )
+            if (
+                entry.apply_mode != "immediate"
+                or entry.requires_reload
+                or entry.requires_worker_restart
+                or entry.requires_process_restart
+            ):
+                reload_requirements.append(
+                    SettingsReloadRequirement(
+                        key=key,
+                        apply_mode=entry.apply_mode,
+                        requires_reload=entry.requires_reload,
+                        requires_worker_restart=entry.requires_worker_restart,
+                        requires_process_restart=entry.requires_process_restart,
+                        applies_to=list(entry.applies_to),
+                        completion_guidance=after_activation["completion_guidance"],
+                    )
+                )
+
+        dependency_warnings = [
+            SettingsDependencyWarning(
+                key=issue.key,
+                dependency_key=issue.details.get("dependency_key"),
+                message=issue.message,
+                details=issue.details,
+            )
+            for issue in issues
+            if issue.code == "dependency_not_satisfied"
+        ]
+        validation = self._validation_response(scope=scope, issues=issues)
+        return SettingsPreviewResponse(
+            scope=scope,
+            accepted=validation.accepted,
+            issues=validation.issues,
+            issues_by_key=validation.issues_by_key,
+            diffs=diffs,
+            dependency_warnings=dependency_warnings,
+            reload_requirements=reload_requirements,
+        )
+
+    async def _validate_preview_context(
+        self,
+        *,
+        scope: SettingScope,
+        changes: dict[str, Any],
+        expected_versions: dict[str, int] | None,
+    ) -> dict[str, Any]:
+        expected_versions = expected_versions or {}
+        entries: dict[str, SettingRegistryEntry] = {}
+        validation_issues: list[SettingValidationIssue] = []
+
+        if scope not in _PERSISTED_SCOPES:
+            validation_issues.append(
+                self._validation_issue_for_key(
+                    next(iter(changes), "*"),
+                    scope if scope in {"user", "workspace"} else "workspace",
+                    code="unsupported_scope",
+                    message=f"Setting writes are not available at scope {scope}.",
+                    boundary="write_request",
+                    rule="scope",
+                )
+            )
+            return {
+                "entries": entries,
+                "current_resolved": {},
+                "proposed_values": {},
+                "issues": validation_issues,
+            }
+
+        for key, value in changes.items():
+            migration_rule = self._rules_by_old_key.get(key)
+            if migration_rule is not None and migration_rule.state in {
+                "renamed",
+                "deprecated",
+                "removed",
+            }:
+                validation_issues.append(
+                    self._validation_issue_for_key(
+                        key,
+                        scope,
+                        code="setting_not_exposed",
+                        message=migration_rule.message,
+                        boundary="write_request",
+                        rule="migration_state",
+                    )
+                )
+                continue
+            entry = self._entries_by_key.get(key)
+            if entry is None:
+                validation_issues.append(
+                    self._validation_issue_for_key(
+                        key,
+                        scope,
+                        code="setting_not_exposed",
+                        message=f"Setting {key} is not exposed through the Settings API.",
+                        boundary="write_request",
+                        rule="exposed_setting",
+                    )
+                )
+                continue
+            if scope not in entry.scopes:
+                validation_issues.append(
+                    self._validation_issue(
+                        entry,
+                        scope,
+                        code="unsupported_scope",
+                        message=f"Setting {key} is not available at scope {scope}.",
+                        boundary="write_request",
+                        rule="scope",
+                    )
+                )
+                continue
+            if self._read_only(entry):
+                validation_issues.append(
+                    self._validation_issue(
+                        entry,
+                        scope,
+                        code="locked_setting",
+                        message=self._read_only_reason(entry) or "Setting is read-only.",
+                        boundary="write_request",
+                        rule="write_lock",
+                    )
+                )
+                continue
+            entries[key] = entry
+
+        effective_entries = self._entries_for_scope(scope)
+        overrides = await self._get_effective_overrides(
+            scope=scope,
+            keys=[entry.key for entry in effective_entries],
+        )
+        current_resolved = {
+            entry.key: self._resolve_value_from_overrides(
+                entry,
+                scope=scope,
+                overrides=overrides,
+            )
+            for entry in effective_entries
+        }
+
+        for key in entries:
+            row = overrides.get((scope, key))
+            current_version = row.value_version if row is not None else 1
+            expected = expected_versions.get(key)
+            if expected is not None and expected != current_version:
+                validation_issues.append(
+                    self._validation_issue(
+                        entries[key],
+                        scope,
+                        code="version_conflict",
+                        message="Expected setting version does not match current version.",
+                        boundary="write_request",
+                        rule="expected_version",
+                        details={
+                            "expected_version": expected,
+                            "current_version": current_version,
+                        },
+                    )
+                )
+
+        proposed_values = {
+            key: data[0] for key, data in current_resolved.items()
+        }
+        proposed_values.update({key: changes[key] for key in entries})
+        await self._prime_referenced_resources(proposed_values)
+        validation_issues.extend(
+            self._validate_values(
+                proposed_values,
+                scope=scope,
+                boundary="write_request",
+            )
+        )
+        return {
+            "entries": entries,
+            "current_resolved": current_resolved,
+            "proposed_values": proposed_values,
+            "issues": validation_issues,
+        }
+
+    def _validation_response(
+        self,
+        *,
+        scope: SettingScope,
+        issues: list[SettingValidationIssue],
+    ) -> SettingsValidationResponse:
+        issues_by_key: dict[str, list[SettingValidationIssue]] = {}
+        for issue in issues:
+            issues_by_key.setdefault(issue.key, []).append(issue)
+        return SettingsValidationResponse(
+            scope=scope,
+            accepted=not issues,
+            issues=issues,
+            issues_by_key=issues_by_key,
+        )
+
+    def _should_redact_preview_value(
+        self,
+        entry: SettingRegistryEntry,
+        value: Any,
+    ) -> bool:
+        return bool(
+            entry.sensitive
+            or entry.audit.redact
+            or self._contains_secret_like_value(value)
+        )
 
     async def apply_overrides(
         self,

@@ -126,7 +126,7 @@ Request:
 
 Success:
 - Evaluates proposed changes without committing them.
-- Returns whether changes are accepted and any validation issues grouped by key.
+- Returns `scope`, `accepted`, `issues`, and `issues_by_key`.
 - Uses the same validation rules as write requests.
 - Returns no raw secret plaintext.
 
@@ -152,9 +152,7 @@ Request:
 
 Success:
 - Evaluates proposed changes without committing them.
-- Returns proposed effective-value diffs.
-- Returns dependency warnings and reload/restart requirements.
-- Returns validation issues for blocking changes.
+- Returns `scope`, `accepted`, `issues`, `issues_by_key`, proposed effective-value `diffs`, `dependency_warnings`, and `reload_requirements`.
 - Redacts sensitive values in diffs and diagnostics.
 
 Required no-commit behavior:

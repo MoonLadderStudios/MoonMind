@@ -64,7 +64,7 @@ Fields:
 - `scope`.
 - `accepted`: boolean.
 - `issues`: structured validation issues grouped or listed by key.
-- `diagnostics`: redacted setting diagnostics where applicable.
+- `issues_by_key`: structured validation issues grouped by setting key.
 
 Validation rules:
 - Produces no override rows and no settings audit mutation.
@@ -78,11 +78,11 @@ Represents non-committing preview output for proposed changes.
 Fields:
 - `scope`.
 - `accepted`: boolean.
-- `values`: proposed effective values for changed or affected settings.
 - `diffs`: old/new effective-value differences with redaction.
 - `dependency_warnings`: warnings for dependent settings or runtime effects.
 - `reload_requirements`: affected systems and reload/restart flags.
 - `issues`: blocking validation issues.
+- `issues_by_key`: blocking validation issues grouped by setting key.
 
 Validation rules:
 - Produces no override rows and no settings audit mutation.

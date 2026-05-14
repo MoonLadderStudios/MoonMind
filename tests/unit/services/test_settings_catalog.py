@@ -229,6 +229,34 @@ def _assert_validation_issue(
     assert "active-secret-plaintext" not in dumped
 
 
+def _assert_preview_issue(
+    response,
+    *,
+    key: str,
+    code: str,
+) -> None:
+    assert response.accepted is False
+    assert response.issues_by_key[key][0].code == code
+    dumped = response.model_dump_json()
+    assert ("gh" + "p_raw_plaintext") not in dumped
+    assert "active-secret-plaintext" not in dumped
+
+
+def _assert_redacted_diff(response, *, key: str) -> None:
+    diff = next(item for item in response.diffs if item.key == key)
+    assert diff.redacted is True
+    assert diff.after.value is None
+    dumped = diff.model_dump_json()
+    assert "missing-token" not in dumped
+
+
+def _assert_reload_requirement(response, *, key: str) -> None:
+    requirement = next(item for item in response.reload_requirements if item.key == key)
+    assert requirement.requires_reload is True
+    assert requirement.apply_mode == "worker_reload"
+    assert requirement.applies_to
+
+
 @pytest.mark.asyncio
 async def test_mm656_value_type_matrix_accepts_and_rejects_supported_categories(
     settings_session_maker,
@@ -581,6 +609,154 @@ def test_mm656_boundary_validation_helpers_return_structured_issues():
         "readiness_diagnostics"
     )
     assert readiness["workflow.default_publish_mode"][0].blocks == ["readiness"]
+
+
+@pytest.mark.asyncio
+async def test_mm657_validate_changes_accepts_without_rows_or_audit(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+
+        response = await service.validate_changes(
+            scope="workspace",
+            changes={"workflow.default_publish_mode": "branch"},
+            expected_versions={"workflow.default_publish_mode": 1},
+        )
+        rows = (
+            await settings_session.execute(select(SettingsOverride))
+        ).scalars().all()
+        audit_count = await service.audit_event_count()
+
+    assert response.accepted is True
+    assert response.issues == []
+    assert response.issues_by_key == {}
+    assert rows == []
+    assert audit_count == 0
+
+
+@pytest.mark.asyncio
+async def test_mm657_validate_changes_returns_version_and_value_issues(
+    settings_session_maker,
+):
+    raw_secret_value = "gh" + "p_raw_plaintext"
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+
+        response = await service.validate_changes(
+            scope="workspace",
+            changes={
+                "workflow.default_publish_mode": "not-supported",
+                "integrations.github.token_ref": raw_secret_value,
+            },
+            expected_versions={
+                "workflow.default_publish_mode": 99,
+                "integrations.github.token_ref": 1,
+            },
+        )
+        rows = (
+            await settings_session.execute(select(SettingsOverride))
+        ).scalars().all()
+
+    assert response.accepted is False
+    assert response.issues_by_key["workflow.default_publish_mode"][0].code == (
+        "version_conflict"
+    )
+    assert any(
+        issue.code == "enum_value_invalid"
+        for issue in response.issues_by_key["workflow.default_publish_mode"]
+    )
+    assert response.issues_by_key["integrations.github.token_ref"][0].code == (
+        "unsafe_setting_payload"
+    )
+    assert rows == []
+    assert raw_secret_value not in response.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_mm657_preview_changes_reports_diffs_reload_and_no_commit(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+
+        response = await service.preview_changes(
+            scope="workspace",
+            changes={"skills.policy_mode": "allowlist"},
+            expected_versions={"skills.policy_mode": 1},
+        )
+        persisted = await service.effective_value_async(
+            "skills.policy_mode", scope="workspace"
+        )
+        rows = (
+            await settings_session.execute(select(SettingsOverride))
+        ).scalars().all()
+        audit_count = await service.audit_event_count()
+
+    assert response.accepted is True
+    assert response.issues == []
+    assert response.diffs[0].key == "skills.policy_mode"
+    assert response.diffs[0].before.value != response.diffs[0].after.value
+    assert response.diffs[0].after.value == "allowlist"
+    _assert_reload_requirement(response, key="skills.policy_mode")
+    assert response.dependency_warnings == []
+    assert persisted.value != "allowlist"
+    assert rows == []
+    assert audit_count == 0
+
+
+@pytest.mark.asyncio
+async def test_mm657_preview_changes_reports_dependency_warnings_and_redacted_refs(
+    settings_session_maker,
+):
+    registry = (
+        *_mm656_registry(),
+        SettingRegistryEntry(
+            key="test.dependent",
+            title="Dependent",
+            category="MM-657",
+            section="user-workspace",
+            value_type="string",
+            ui="input",
+            scopes=("workspace",),
+            default_value="off",
+            depends_on=(
+                SettingDependency(
+                    key="test.boolean",
+                    required_value=True,
+                    reason="dependent mode requires enablement",
+                ),
+            ),
+            order=100,
+        ),
+    )
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(
+            env={},
+            registry=registry,
+            session=settings_session,
+        )
+
+        dependency_response = await service.preview_changes(
+            scope="workspace",
+            changes={"test.dependent": "on"},
+            expected_versions={"test.dependent": 1},
+        )
+        secret_response = await service.preview_changes(
+            scope="workspace",
+            changes={"test.secret_ref": "db://missing-token"},
+            expected_versions={"test.secret_ref": 1},
+        )
+
+    assert dependency_response.accepted is False
+    assert dependency_response.dependency_warnings[0].key == "test.dependent"
+    assert dependency_response.dependency_warnings[0].dependency_key == "test.boolean"
+    _assert_preview_issue(
+        secret_response,
+        key="test.secret_ref",
+        code="secret_ref_unresolved",
+    )
+    _assert_redacted_diff(secret_response, key="test.secret_ref")
 
 
 @pytest.mark.asyncio
