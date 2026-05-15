@@ -34,6 +34,7 @@ MM658_ISSUE_KEY = "MM-658"
 IN_PROGRESS_TARGET_NAME = "In Progress"
 _IN_PROGRESS_NORMALIZED = IN_PROGRESS_TARGET_NAME.strip().lower()
 _ERROR_REASON_MAX = 500
+_REPORT_SECRET_REDACTOR = SecretRedactor()
 
 
 Action = Literal["transitioned", "noop_already_in_progress", "stopped"]
@@ -180,8 +181,7 @@ def _redact_report_string(text: str | None) -> str | None:
         return None
     if text == "":
         return ""
-    redactor = SecretRedactor()
-    redacted = redact_sensitive_text(redactor.scrub(str(text)))
+    redacted = redact_sensitive_text(_REPORT_SECRET_REDACTOR.scrub(str(text)))
     if len(redacted) > _ERROR_REASON_MAX:
         redacted = redacted[: _ERROR_REASON_MAX - 1] + "…"
     return redacted
@@ -270,6 +270,14 @@ def build_outcome(
         if not transition:
             raise ValueError("transitioned outcome requires a transition payload")
         transition_payload: dict[str, str | None] = {
+            "id": _redact_report_string(str(transition.get("id") or "")),
+            "name": _redact_report_string(str(transition.get("name") or "")),
+            "toStatusName": _redact_report_string(
+                str(transition.get("toStatusName") or "")
+            ),
+        }
+    elif outcome == "stopped:final_status_mismatch" and transition:
+        transition_payload = {
             "id": _redact_report_string(str(transition.get("id") or "")),
             "name": _redact_report_string(str(transition.get("name") or "")),
             "toStatusName": _redact_report_string(
@@ -435,6 +443,12 @@ async def transition_mm658_to_in_progress(
             exc=exc,
             fallback_outcome="stopped:transient_failure",
         )
+    except Exception as exc:  # noqa: BLE001 — deterministic stopped report
+        return _build_stopped_from_exception(
+            prior_status=None,
+            exc=exc,
+            fallback_outcome="stopped:tool_unavailable",
+        )
 
     prior_status = _status_name(issue_payload)
     if is_already_in_progress(issue_payload):
@@ -457,6 +471,12 @@ async def transition_mm658_to_in_progress(
             exc=exc,
             fallback_outcome="stopped:transient_failure",
         )
+    except Exception as exc:  # noqa: BLE001 — deterministic stopped report
+        return _build_stopped_from_exception(
+            prior_status=prior_status,
+            exc=exc,
+            fallback_outcome="stopped:tool_unavailable",
+        )
 
     raw_transitions = []
     if isinstance(transitions_payload, Mapping):
@@ -464,7 +484,6 @@ async def transition_mm658_to_in_progress(
         if isinstance(raw, list):
             raw_transitions = [item for item in raw if isinstance(item, Mapping)]
 
-    available_for_report = [_serialize_transition(item) for item in raw_transitions]
     selection = select_in_progress_transition(raw_transitions)
 
     if selection.kind == "no_match":
@@ -472,7 +491,9 @@ async def transition_mm658_to_in_progress(
             prior_status=prior_status,
             action="stopped",
             outcome="stopped:no_matching_transition",
-            available_transitions=available_for_report,
+            available_transitions=[
+                _serialize_transition(item) for item in raw_transitions
+            ],
             error_class="NoMatchingTransition",
             error_reason=(
                 f"No available transition for {MM658_ISSUE_KEY} targets {IN_PROGRESS_TARGET_NAME!r}."
@@ -526,6 +547,12 @@ async def transition_mm658_to_in_progress(
             exc=exc,
             fallback_outcome="stopped:transient_failure",
         )
+    except Exception as exc:  # noqa: BLE001 — deterministic stopped report
+        return _build_stopped_from_exception(
+            prior_status=prior_status,
+            exc=exc,
+            fallback_outcome="stopped:tool_unavailable",
+        )
 
     # Call 4 — verification get_issue.
     try:
@@ -535,6 +562,12 @@ async def transition_mm658_to_in_progress(
             prior_status=prior_status,
             exc=exc,
             fallback_outcome="stopped:transient_failure",
+        )
+    except Exception as exc:  # noqa: BLE001 — deterministic stopped report
+        return _build_stopped_from_exception(
+            prior_status=prior_status,
+            exc=exc,
+            fallback_outcome="stopped:tool_unavailable",
         )
 
     verified_status = _status_name(verification_payload)
@@ -560,7 +593,7 @@ async def transition_mm658_to_in_progress(
         prior_status=prior_status,
         action="stopped",
         outcome="stopped:final_status_mismatch",
-        transition=None,
+        transition=transition_payload,
         verified_final_status=verified_status,
         error_class="FinalStatusMismatch",
         error_reason=(
