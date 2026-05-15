@@ -167,6 +167,71 @@ function withAttachmentPolicy(payload: BootPayload = mockPayload): BootPayload {
   };
 }
 
+function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      system?: Record<string, unknown>;
+    };
+  };
+  const system = initialData.dashboardConfig.system || {};
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        system: {
+          ...system,
+          supportedTaskRuntimes: [
+            "codex_cli",
+            "gemini_cli",
+            "claude_code",
+            "codex_cloud",
+          ],
+          runtimeCommandPreview: {
+            capabilityVersion: "2026-05-13",
+            hintCatalogVersion: "2026-05-13",
+            runtimes: {
+              codex_cli: {
+                slashCommandPassthrough: true,
+                renderMode: "prompt_prefix",
+                commandHintsRef: "codex_cli",
+              },
+              claude_code: {
+                slashCommandPassthrough: true,
+                renderMode: "prompt_prefix",
+                commandHintsRef: "claude_code",
+              },
+              gemini_cli: {
+                slashCommandPassthrough: true,
+                renderMode: "prompt_prefix",
+                commandHintsRef: "gemini_cli",
+              },
+              codex_cloud: {
+                slashCommandPassthrough: false,
+                renderMode: "plain_prompt",
+              },
+            },
+            knownRuntimeCommandHints: {
+              review: {
+                label: "Review",
+                aliases: ["/review"],
+                description:
+                  "Ask the selected runtime to review the current task or code state.",
+              },
+              simplify: {
+                label: "Simplify",
+                aliases: ["/simplify"],
+                description: "Ask the selected runtime to simplify the implementation.",
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
 function withRepositoryOptions(payload: BootPayload = mockPayload): BootPayload {
   const initialData = payload.initialData as {
     dashboardConfig: {
@@ -15403,6 +15468,184 @@ describe("Task Create governed Tool authoring", () => {
     });
     expect((within(step).getByLabelText("Tool ID") as HTMLInputElement).value)
       .toBe("jira.get_issue");
+  });
+});
+
+describe("Task Create runtime command previews", () => {
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    vi.mocked(navigateTo).mockReset();
+    fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/tasks/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: { worker: ["speckit-orchestrate"] },
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/task-step-templates")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        if (url.startsWith("/api/v1/provider-profiles")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [],
+          } as Response);
+        }
+        if (url === "/api/executions") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:workflow-123",
+              runId: "run-123",
+              namespace: "moonmind",
+              redirectPath: "/tasks/mm:workflow-123?source=temporal",
+            }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({}),
+        } as Response);
+      });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+  });
+
+  it("previews known runtime commands for objective and step instructions", async () => {
+    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+
+    const primaryStep = await screen.findByText("Step 1");
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "/review\nCheck this branch." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const secondStep = await screen.findByText("Step 2");
+    fireEvent.change(
+      within(secondStep.closest("section") as HTMLElement).getByLabelText(
+        "Instructions",
+      ),
+      {
+        target: { value: "/review\nCheck step scope." },
+      },
+    );
+
+    expect(primaryStep).toBeTruthy();
+    expect(screen.getAllByText("Runtime command: /review")).toHaveLength(2);
+    expect(
+      screen.getAllByText(
+        "Ask the selected runtime to review the current task or code state.",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("previews unknown valid slash commands as opaque pass-through", async () => {
+    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "/foo\nUse provider behavior." },
+    });
+
+    expect(await screen.findByText("Runtime command: /foo")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Pass-through runtime command. No local hint is available; provider behavior will decide it.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/does not pass through slash commands/i)).toBeNull();
+  });
+
+  it("recomputes unsupported runtime warnings without mutating instructions", async () => {
+    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+
+    const instructions = await screen.findByLabelText("Instructions");
+    fireEvent.change(instructions, {
+      target: { value: "/review\nKeep this exact text." },
+    });
+    fireEvent.change(screen.getByLabelText("Runtime"), {
+      target: { value: "codex_cloud" },
+    });
+
+    expect((instructions as HTMLTextAreaElement).value).toBe(
+      "/review\nKeep this exact text.",
+    );
+    expect(await screen.findByText("Unsupported runtime command: /review")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This runtime does not pass through slash commands. Choose a slash-command capable runtime or escape the slash for literal text.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("previews escaped and malformed slash text as literal without command markup", async () => {
+    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+
+    const instructions = await screen.findByLabelText("Instructions");
+    fireEvent.change(instructions, {
+      target: { value: "\\/review\nTreat as text." },
+    });
+    expect(await screen.findByText("Literal text: /review")).toBeTruthy();
+    expect(screen.queryByText("Runtime command: /review")).toBeNull();
+
+    fireEvent.change(instructions, {
+      target: { value: " /review\nWhitespace means plain text." },
+    });
+    expect(screen.queryByText(/Runtime command:/)).toBeNull();
+    expect(screen.queryByText(/Literal text:/)).toBeNull();
+
+    fireEvent.change(instructions, {
+      target: { value: "Please run /review inside the sentence." },
+    });
+    expect(screen.queryByText(/Runtime command:/)).toBeNull();
+
+    fireEvent.change(instructions, {
+      target: { value: "/src/app.ts is broken" },
+    });
+    expect(await screen.findByText("Literal slash text")).toBeTruthy();
+  });
+
+  it("submits authored slash instructions without preview-only runtime command metadata", async () => {
+    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "/review\nCheck this branch." },
+    });
+    fireEvent.change(screen.getByLabelText("GitHub Repo"), {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+
+    expect(request.payload.task.instructions).toBe(
+      "/review\nCheck this branch.",
+    );
+    expect(request.payload.task.runtimeCommand).toBeUndefined();
+    expect(request.payload.task.steps?.[0]?.runtimeCommand).toBeUndefined();
   });
 });
 

@@ -28,8 +28,8 @@
 
 **Purpose**: Confirm active artifacts and test tooling before test-first work.
 
-- [ ] T001 Confirm `specs/355-slash-command-previews/spec.md`, `specs/355-slash-command-previews/plan.md`, `specs/355-slash-command-previews/research.md`, `specs/355-slash-command-previews/data-model.md`, `specs/355-slash-command-previews/contracts/runtime-command-preview.md`, and `specs/355-slash-command-previews/quickstart.md` are present and preserve `MM-685` for FR-011/SC-006.
-- [ ] T002 Confirm existing frontend and Python test tooling commands in `package.json`, `./tools/test_unit.sh`, and `./tools/test_integration.sh` match the commands listed in `specs/355-slash-command-previews/quickstart.md`.
+- [X] T001 Confirm `specs/355-slash-command-previews/spec.md`, `specs/355-slash-command-previews/plan.md`, `specs/355-slash-command-previews/research.md`, `specs/355-slash-command-previews/data-model.md`, `specs/355-slash-command-previews/contracts/runtime-command-preview.md`, and `specs/355-slash-command-previews/quickstart.md` are present and preserve `MM-685` for FR-011/SC-006.
+- [X] T002 Confirm existing frontend and Python test tooling commands in `package.json`, `./tools/test_unit.sh`, and `./tools/test_integration.sh` match the commands listed in `specs/355-slash-command-previews/quickstart.md`.
 
 ---
 
@@ -37,8 +37,8 @@
 
 **Purpose**: Establish shared assumptions before writing story tests. No production story implementation occurs in this phase.
 
-- [ ] T003 Inspect existing backend runtime command normalization in `moonmind/workflows/tasks/task_contract.py` and existing coverage in `tests/unit/workflows/tasks/test_task_contract.py` to align frontend preview semantics for DESIGN-REQ-001 through DESIGN-REQ-005.
-- [ ] T004 Inspect existing Create page runtime, objective, step, and edit-mode state paths in `frontend/src/entrypoints/task-create.tsx` and `frontend/src/lib/temporalTaskEditing.ts` to identify exact insertion points for FR-001, FR-004, and FR-009.
+- [X] T003 Inspect existing backend runtime command normalization in `moonmind/workflows/tasks/task_contract.py` and existing coverage in `tests/unit/workflows/tasks/test_task_contract.py` to align frontend preview semantics for DESIGN-REQ-001 through DESIGN-REQ-005.
+- [X] T004 Inspect existing Create page runtime, objective, step, and edit-mode state paths in `frontend/src/entrypoints/task-create.tsx` and `frontend/src/lib/temporalTaskEditing.ts` to identify exact insertion points for FR-001, FR-004, and FR-009.
 
 **Checkpoint**: Foundation ready - story test and implementation work can now begin.
 
@@ -64,22 +64,22 @@
 
 ### Unit Tests (write first)
 
-- [ ] T005 Add failing frontend unit tests for objective and step known command previews covering FR-001, SCN-001, SC-001, DESIGN-REQ-001, DESIGN-REQ-002, and DESIGN-REQ-007 in `frontend/src/entrypoints/task-create.test.tsx`.
-- [ ] T006 Add failing frontend unit tests for unknown valid `/foo` pass-through previews covering FR-003, SCN-002, SC-002, DESIGN-REQ-003, DESIGN-REQ-005, and DESIGN-REQ-007 in `frontend/src/entrypoints/task-create.test.tsx`.
-- [ ] T007 Add failing frontend unit tests for unsupported runtime warnings and runtime switching text preservation covering FR-004, SCN-003, SC-003, SC-005, DESIGN-REQ-006, DESIGN-REQ-007, and DESIGN-REQ-008 in `frontend/src/entrypoints/task-create.test.tsx`.
-- [ ] T008 Add failing frontend unit tests for escaped literals, whitespace-prefixed slash text, inline slash text, and path-like malformed slash text covering FR-005, FR-006, FR-007, SCN-004, SC-004, DESIGN-REQ-004, and DESIGN-REQ-010 in `frontend/src/entrypoints/task-create.test.tsx`.
-- [ ] T009 [P] Add failing frontend unit tests for edit-mode runtime command metadata reconstruction covering FR-009, SCN-005, DESIGN-REQ-009, and SC-006 in `frontend/src/lib/temporalTaskEditing.test.ts`.
-- [ ] T010 [P] Add failing Python unit tests for browser-safe runtime command preview boot metadata covering FR-002, FR-008, and DESIGN-REQ-006 in `tests/unit/api/routers/test_task_dashboard_view_model.py`.
+- [X] T005 Add failing frontend unit tests for objective and step known command previews covering FR-001, SCN-001, SC-001, DESIGN-REQ-001, DESIGN-REQ-002, and DESIGN-REQ-007 in `frontend/src/entrypoints/task-create.test.tsx`.
+- [X] T006 Add failing frontend unit tests for unknown valid `/foo` pass-through previews covering FR-003, SCN-002, SC-002, DESIGN-REQ-003, DESIGN-REQ-005, and DESIGN-REQ-007 in `frontend/src/entrypoints/task-create.test.tsx`.
+- [X] T007 Add failing frontend unit tests for unsupported runtime warnings and runtime switching text preservation covering FR-004, SCN-003, SC-003, SC-005, DESIGN-REQ-006, DESIGN-REQ-007, and DESIGN-REQ-008 in `frontend/src/entrypoints/task-create.test.tsx`.
+- [X] T008 Add failing frontend unit tests for escaped literals, whitespace-prefixed slash text, inline slash text, and path-like malformed slash text covering FR-005, FR-006, FR-007, SCN-004, SC-004, DESIGN-REQ-004, and DESIGN-REQ-010 in `frontend/src/entrypoints/task-create.test.tsx`.
+- [X] T009 [P] Add failing frontend unit tests for edit-mode runtime command metadata reconstruction covering FR-009, SCN-005, DESIGN-REQ-009, and SC-006 in `frontend/src/lib/temporalTaskEditing.test.ts`.
+- [X] T010 [P] Add failing Python unit tests for browser-safe runtime command preview boot metadata covering FR-002, FR-008, and DESIGN-REQ-006 in `tests/unit/api/routers/test_task_dashboard_view_model.py`.
 
 ### Integration Tests (write first)
 
-- [ ] T011 [P] Add failing API integration test for dashboard boot payload runtime command preview metadata covering FR-002, SCN-001, SCN-002, DESIGN-REQ-006, and the contract in `specs/355-slash-command-previews/contracts/runtime-command-preview.md` in `tests/integration/api/test_task_runtime_command_preview_boot_payload.py`.
-- [ ] T012 [P] Add failing Create page browser integration test for visible objective and step preview behavior covering FR-001, FR-003, FR-004, FR-005, SCN-001, SCN-002, SCN-003, SCN-004, and DESIGN-REQ-007 in `tests/e2e/test_task_create_submit_browser.py`.
+- [X] T011 [P] Add failing API integration test for dashboard boot payload runtime command preview metadata covering FR-002, SCN-001, SCN-002, DESIGN-REQ-006, and the contract in `specs/355-slash-command-previews/contracts/runtime-command-preview.md` in `tests/integration/api/test_task_runtime_command_preview_boot_payload.py`.
+- [X] T012 [P] Add failing Create page browser integration test for visible objective and step preview behavior covering FR-001, FR-003, FR-004, FR-005, SCN-001, SCN-002, SCN-003, SCN-004, and DESIGN-REQ-007 in `tests/e2e/test_task_create_submit_browser.py`.
 
 ### Red-First Confirmation
 
-- [ ] T013 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx frontend/src/lib/temporalTaskEditing.test.ts` and confirm T005-T009 fail for missing preview behavior before production code changes.
-- [ ] T014 Run `./tools/test_unit.sh tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/workflows/tasks/test_task_contract.py` and confirm T010 fails for missing boot metadata while existing backend runtime command tests still pass.
+- [X] T013 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx frontend/src/lib/temporalTaskEditing.test.ts` and confirm T005-T009 fail for missing preview behavior before production code changes.
+- [X] T014 Run `./tools/test_unit.sh tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/workflows/tasks/test_task_contract.py` and confirm T010 fails for missing boot metadata while existing backend runtime command tests still pass.
 - [ ] T015 Run `./tools/test_integration.sh` or the narrowest available integration command for `tests/integration/api/test_task_runtime_command_preview_boot_payload.py` and `tests/e2e/test_task_create_submit_browser.py`, then confirm T011-T012 fail for missing preview/metadata behavior.
 
 ### Conditional Fallback For Implemented-Unverified Traceability
@@ -88,21 +88,21 @@
 
 ### Implementation
 
-- [ ] T017 Export a browser-safe runtime command preview capability and hint catalog aligned with backend normalization semantics for FR-002, FR-003, FR-008, DESIGN-REQ-001, DESIGN-REQ-003, DESIGN-REQ-005, and DESIGN-REQ-006 in `moonmind/workflows/tasks/task_contract.py`.
-- [ ] T018 Add runtime command preview metadata to the dashboard boot payload for FR-002, FR-008, DESIGN-REQ-006, and the contract in `api_service/api/routers/task_dashboard_view_model.py`.
-- [ ] T019 Add TaskCreatePage dashboard config typing for runtime command preview metadata covering FR-002 and DESIGN-REQ-006 in `frontend/src/entrypoints/task-create.tsx`.
-- [ ] T020 Implement provider-neutral runtime command preview derivation for detected, unknown, unsupported, escaped, whitespace-prefixed, inline, and path-like malformed states covering FR-001, FR-003, FR-005, FR-006, FR-007, DESIGN-REQ-002, DESIGN-REQ-004, and DESIGN-REQ-010 in `frontend/src/entrypoints/task-create.tsx`.
-- [ ] T021 Render objective instruction runtime command preview status, hint text, pass-through text, literal text intent, and unsupported-runtime warning for FR-001, FR-002, FR-003, FR-005, FR-007, SCN-001, SCN-002, SCN-003, SCN-004, and DESIGN-REQ-007 in `frontend/src/entrypoints/task-create.tsx`.
-- [ ] T022 Render step instruction runtime command previews for FR-001, FR-002, FR-003, FR-005, FR-007, SCN-001, SCN-002, SCN-003, SCN-004, and DESIGN-REQ-007 in `frontend/src/entrypoints/task-create.tsx`.
-- [ ] T023 Wire runtime change recomputation without mutating authored instructions for FR-004, FR-008, SC-003, SC-005, DESIGN-REQ-001, and DESIGN-REQ-008 in `frontend/src/entrypoints/task-create.tsx`.
-- [ ] T024 Extend Temporal edit/rerun draft types and reconstruction to carry objective and step `runtimeCommand` metadata for preview-only restoration covering FR-009, SCN-005, DESIGN-REQ-009, and SC-006 in `frontend/src/lib/temporalTaskEditing.ts`.
-- [ ] T025 Ensure task submission payloads remain authored-instruction based and do not submit preview-only provider markup for FR-008, FR-009, DESIGN-REQ-001, and DESIGN-REQ-003 in `frontend/src/entrypoints/task-create.tsx`.
-- [ ] T026 Add or adjust minimal Create page styling for preview status, warning, and literal states while preserving mobile layout for FR-001, FR-004, FR-005, and SC-005 in `frontend/src/styles/mission-control.css`.
+- [X] T017 Export a browser-safe runtime command preview capability and hint catalog aligned with backend normalization semantics for FR-002, FR-003, FR-008, DESIGN-REQ-001, DESIGN-REQ-003, DESIGN-REQ-005, and DESIGN-REQ-006 in `moonmind/workflows/tasks/task_contract.py`.
+- [X] T018 Add runtime command preview metadata to the dashboard boot payload for FR-002, FR-008, DESIGN-REQ-006, and the contract in `api_service/api/routers/task_dashboard_view_model.py`.
+- [X] T019 Add TaskCreatePage dashboard config typing for runtime command preview metadata covering FR-002 and DESIGN-REQ-006 in `frontend/src/entrypoints/task-create.tsx`.
+- [X] T020 Implement provider-neutral runtime command preview derivation for detected, unknown, unsupported, escaped, whitespace-prefixed, inline, and path-like malformed states covering FR-001, FR-003, FR-005, FR-006, FR-007, DESIGN-REQ-002, DESIGN-REQ-004, and DESIGN-REQ-010 in `frontend/src/entrypoints/task-create.tsx`.
+- [X] T021 Render objective instruction runtime command preview status, hint text, pass-through text, literal text intent, and unsupported-runtime warning for FR-001, FR-002, FR-003, FR-005, FR-007, SCN-001, SCN-002, SCN-003, SCN-004, and DESIGN-REQ-007 in `frontend/src/entrypoints/task-create.tsx`.
+- [X] T022 Render step instruction runtime command previews for FR-001, FR-002, FR-003, FR-005, FR-007, SCN-001, SCN-002, SCN-003, SCN-004, and DESIGN-REQ-007 in `frontend/src/entrypoints/task-create.tsx`.
+- [X] T023 Wire runtime change recomputation without mutating authored instructions for FR-004, FR-008, SC-003, SC-005, DESIGN-REQ-001, and DESIGN-REQ-008 in `frontend/src/entrypoints/task-create.tsx`.
+- [X] T024 Extend Temporal edit/rerun draft types and reconstruction to carry objective and step `runtimeCommand` metadata for preview-only restoration covering FR-009, SCN-005, DESIGN-REQ-009, and SC-006 in `frontend/src/lib/temporalTaskEditing.ts`.
+- [X] T025 Ensure task submission payloads remain authored-instruction based and do not submit preview-only provider markup for FR-008, FR-009, DESIGN-REQ-001, and DESIGN-REQ-003 in `frontend/src/entrypoints/task-create.tsx`.
+- [X] T026 Add or adjust minimal Create page styling for preview status, warning, and literal states while preserving mobile layout for FR-001, FR-004, FR-005, and SC-005 in `frontend/src/styles/mission-control.css`.
 
 ### Story Validation
 
-- [ ] T027 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx frontend/src/lib/temporalTaskEditing.test.ts` and verify all frontend preview unit tests pass for FR-001 through FR-010.
-- [ ] T028 Run `./tools/test_unit.sh tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/workflows/tasks/test_task_contract.py` and verify Python boot metadata and backend normalization tests pass for FR-002, FR-008, DESIGN-REQ-006, and DESIGN-REQ-010.
+- [X] T027 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx frontend/src/lib/temporalTaskEditing.test.ts` and verify all frontend preview unit tests pass for FR-001 through FR-010.
+- [X] T028 Run `./tools/test_unit.sh tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/workflows/tasks/test_task_contract.py` and verify Python boot metadata and backend normalization tests pass for FR-002, FR-008, DESIGN-REQ-006, and DESIGN-REQ-010.
 - [ ] T029 Run `./tools/test_integration.sh` and verify integration coverage passes for SCN-001 through SCN-005 and the runtime command preview contract.
 - [ ] T030 Manually execute `specs/355-slash-command-previews/quickstart.md` Create page checks and record evidence for SC-001 through SC-006 in `specs/355-slash-command-previews/verification.md`.
 
@@ -114,10 +114,10 @@
 
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
-- [ ] T031 Review `frontend/src/entrypoints/task-create.tsx` and `frontend/src/lib/temporalTaskEditing.ts` for unnecessary duplication and refactor only within the preview helpers for FR-008 and DESIGN-REQ-001.
-- [ ] T032 [P] Review `frontend/src/styles/mission-control.css` preview styles for text overflow, mobile layout, and accessible contrast covering SC-005.
-- [ ] T033 Confirm no Codex-specific or Claude-specific command markup was added to Create page preview behavior for FR-008, DESIGN-REQ-001, and DESIGN-REQ-003 in `frontend/src/entrypoints/task-create.tsx`.
-- [ ] T034 Run `./tools/test_unit.sh` for the full required unit suite after focused tests pass.
+- [X] T031 Review `frontend/src/entrypoints/task-create.tsx` and `frontend/src/lib/temporalTaskEditing.ts` for unnecessary duplication and refactor only within the preview helpers for FR-008 and DESIGN-REQ-001.
+- [X] T032 [P] Review `frontend/src/styles/mission-control.css` preview styles for text overflow, mobile layout, and accessible contrast covering SC-005.
+- [X] T033 Confirm no Codex-specific or Claude-specific command markup was added to Create page preview behavior for FR-008, DESIGN-REQ-001, and DESIGN-REQ-003 in `frontend/src/entrypoints/task-create.tsx`.
+- [X] T034 Run `./tools/test_unit.sh` for the full required unit suite after focused tests pass.
 - [ ] T035 Run `/moonspec-verify` for `specs/355-slash-command-previews` after implementation and tests pass, preserving `MM-685`, original preset brief, test evidence, and requirement coverage for FR-011/SC-006.
 
 ---

@@ -41,9 +41,27 @@ _JIRA_ORCHESTRATE_PRESET_SLUGS = frozenset({"jira-orchestrate"})
 _RUNTIME_COMMAND_CAPABILITY_VERSION = "2026-05-13"
 _RUNTIME_COMMAND_HINT_CATALOG_VERSION = "2026-05-13"
 _SLASH_COMMAND_PASSTHROUGH_RUNTIMES = frozenset(
-    {"codex", "codex_cli", "claude", "gemini_cli", "universal"}
+    {"codex", "codex_cli", "claude", "claude_code", "gemini_cli", "universal"}
 )
 _KNOWN_RUNTIME_COMMAND_HINTS = frozenset({"review", "simplify"})
+_RUNTIME_COMMAND_HINT_DETAILS: dict[str, dict[str, Any]] = {
+    "review": {
+        "label": "Review",
+        "aliases": ["/review"],
+        "description": (
+            "Ask the selected runtime to review the current task or code state."
+        ),
+        "argumentPolicy": {"allowed": True, "required": False},
+        "bodyPolicy": {"allowed": True, "required": False},
+    },
+    "simplify": {
+        "label": "Simplify",
+        "aliases": ["/simplify"],
+        "description": "Ask the selected runtime to simplify the implementation.",
+        "argumentPolicy": {"allowed": True, "required": False},
+        "bodyPolicy": {"allowed": True, "required": False},
+    },
+}
 _RUNTIME_COMMAND_TOKEN_PATTERN = re.compile(
     r"^/([A-Za-z][A-Za-z0-9_-]*(?::[A-Za-z0-9_-]+)?)(?:\s+(.*))?$"
 )
@@ -281,6 +299,33 @@ def _runtime_mode_from_task(
 
 def _runtime_supports_slash_passthrough(runtime_mode: str | None) -> bool:
     return (runtime_mode or DEFAULT_TASK_RUNTIME) in _SLASH_COMMAND_PASSTHROUGH_RUNTIMES
+
+
+def build_runtime_command_preview_config() -> dict[str, Any]:
+    """Return browser-safe slash-command preview capabilities and hints."""
+
+    runtime_ids = ("codex_cli", "gemini_cli", "claude_code", "codex_cloud")
+    runtimes: dict[str, dict[str, Any]] = {}
+    for runtime_id in runtime_ids:
+        supports_passthrough = _runtime_supports_slash_passthrough(runtime_id)
+        runtimes[runtime_id] = {
+            "slashCommandPassthrough": supports_passthrough,
+            "renderMode": "prompt_prefix" if supports_passthrough else "plain_prompt",
+            **(
+                {"commandHintsRef": runtime_id}
+                if supports_passthrough
+                else {}
+            ),
+        }
+    return {
+        "capabilityVersion": _RUNTIME_COMMAND_CAPABILITY_VERSION,
+        "hintCatalogVersion": _RUNTIME_COMMAND_HINT_CATALOG_VERSION,
+        "runtimes": runtimes,
+        "knownRuntimeCommandHints": {
+            command: dict(_RUNTIME_COMMAND_HINT_DETAILS[command])
+            for command in sorted(_KNOWN_RUNTIME_COMMAND_HINTS)
+        },
+    }
 
 
 def _runtime_command_hint_status(command: str) -> str:
@@ -2570,6 +2615,7 @@ __all__ = [
     "ResumeFromFailedStepRef",
     "TaskStepSource",
     "build_authoritative_task_input_snapshot",
+    "build_runtime_command_preview_config",
     "build_task_stage_plan",
     "build_canonical_task_view",
     "allows_repository_publish_for_skill_context",
