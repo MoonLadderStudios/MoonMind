@@ -720,7 +720,7 @@ class ManagedRuntimeLauncher:
             by_alias=True,
             exclude_none=True,
         )
-        if result.status == "failed":
+        if result.status in {"failed", "unsupported"}:
             reason = result.failure_reason or "runtime_command_render_failed"
             raise RuntimeError(reason)
         if result.rendered_instruction is not None:

@@ -79,6 +79,11 @@ def test_agent_execution_request_accepts_runtime_command_metadata() -> None:
             "detectionStatus": "detected",
             "hintStatus": "hinted",
             "recognitionMode": "hinted_runtime_passthrough",
+            "renderMode": "materialized_command",
+            "materializedCommand": {
+                "path": ".claude/commands/review.md",
+                "invocation": "/project:review",
+            },
             "requiresRuntimeRecognition": True,
             "runtimeCapabilityVersion": "2026-05-13",
             "hintCatalogVersion": "2026-05-13",
@@ -88,6 +93,11 @@ def test_agent_execution_request_accepts_runtime_command_metadata() -> None:
 
     assert request.runtime_command is not None
     assert request.runtime_command.command == "review"
+    assert request.runtime_command.render_mode == "materialized_command"
+    assert request.runtime_command.materialized_command == {
+        "path": ".claude/commands/review.md",
+        "invocation": "/project:review",
+    }
     assert request.model_dump(by_alias=True)["runtimeCommand"]["rawCommand"] == "/review"
 
 def test_runtime_command_render_result_supports_failure_and_prompt_prefix() -> None:

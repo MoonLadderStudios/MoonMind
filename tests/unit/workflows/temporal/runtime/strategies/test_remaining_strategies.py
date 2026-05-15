@@ -62,17 +62,20 @@ def _runtime_command(
     raw_command: str = "/review",
     instruction_body: str = "Check this branch.",
     command: str = "review",
+    args: str = "",
     hint_status: str = "hinted",
     recognition_mode: str = "hinted_runtime_passthrough",
     requires_runtime_recognition: bool = True,
+    render_mode: str | None = None,
+    materialized_command: dict[str, Any] | None = None,
 ) -> RuntimeCommandInvocation:
-    return RuntimeCommandInvocation(
+    payload: dict[str, Any] = dict(
         kind="slash_command",
         source="leading_slash",
         sourcePath="objective.instructions",
         command=command,
         rawCommand=raw_command,
-        args="",
+        args=args,
         instructionBody=instruction_body,
         targetRuntime="codex_cli",
         detectionStatus="detected",
@@ -83,6 +86,11 @@ def _runtime_command(
         hintCatalogVersion="2026-05-13",
         detectionPhase="submit",
     )
+    if render_mode is not None:
+        payload["renderMode"] = render_mode
+    if materialized_command is not None:
+        payload["materializedCommand"] = materialized_command
+    return RuntimeCommandInvocation(**payload)
 
 # ---------------------------------------------------------------------------
 # Registry completeness
@@ -325,6 +333,115 @@ class TestRuntimeCommandRendering:
         assert result.diagnostics == {
             "message": "Invalid runtime command metadata.",
         }
+
+    def test_native_command_strategy_returns_structured_payload(self) -> None:
+        class NativeGeminiStrategy(GeminiCliStrategy):
+            def supports_native_command_transport(self) -> bool:
+                return True
+
+        strategy = NativeGeminiStrategy()
+        request = _make_request(
+            instruction_ref="Inspect changes.\n\nPrepared context.",
+            runtime_command=_runtime_command(
+                raw_command="/review staged",
+                args="staged",
+                instruction_body="Inspect changes.",
+                render_mode="native_command",
+            ),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "ok"
+        assert result.render_mode == "native_command"
+        assert result.rendered_instruction is None
+        assert result.native_command_payload == {
+            "type": "runtime.command",
+            "command": "review",
+            "args": "staged",
+            "rawCommand": "/review staged",
+            "instructionBody": "Inspect changes.",
+            "preparedContext": "Prepared context.",
+        }
+        assert result.materialized_targets == []
+
+    def test_claude_materialized_review_uses_allowlisted_project_command(self) -> None:
+        strategy = ClaudeCodeStrategy()
+        request = _make_request(
+            instruction_ref="Focus on regressions.\n\nPrepared context.",
+            runtime_command=_runtime_command(
+                instruction_body="Focus on regressions.",
+                render_mode="materialized_command",
+                materialized_command={
+                    "path": ".claude/commands/review.md",
+                    "invocation": "/project:review",
+                },
+            ),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "ok"
+        assert result.render_mode == "materialized_command"
+        assert result.rendered_instruction is not None
+        assert result.rendered_instruction.startswith("/project:review")
+        assert "Focus on regressions." in result.rendered_instruction
+        assert "Prepared context." in result.rendered_instruction
+        assert result.materialized_targets == [
+            {
+                "path": ".claude/commands/review.md",
+                "command": "review",
+                "invocation": "/project:review",
+            }
+        ]
+
+    def test_opaque_command_requested_for_materialization_fails_before_target(self) -> None:
+        strategy = ClaudeCodeStrategy()
+        request = _make_request(
+            instruction_ref="Use provider feature.\n\nPrepared context.",
+            runtime_command=_runtime_command(
+                raw_command="/future-command now",
+                command="future-command",
+                args="now",
+                instruction_body="Use provider feature.",
+                hint_status="opaque",
+                recognition_mode="runtime_passthrough",
+                render_mode="materialized_command",
+                materialized_command={
+                    "path": ".claude/commands/future-command.md",
+                    "invocation": "/project:future-command",
+                },
+            ),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "failed"
+        assert result.failure_reason == "runtime_command_render_failed"
+        assert result.materialized_targets == []
+
+    def test_materialized_command_rejects_target_outside_allowlist(self) -> None:
+        strategy = ClaudeCodeStrategy()
+        request = _make_request(
+            instruction_ref="Focus on regressions.\n\nPrepared context.",
+            runtime_command=_runtime_command(
+                instruction_body="Focus on regressions.",
+                render_mode="materialized_command",
+                materialized_command={
+                    "path": ".claude/commands/other.md",
+                    "invocation": "/project:review",
+                },
+            ),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "failed"
+        assert result.failure_reason == "runtime_command_render_failed"
+        assert result.diagnostics == {
+            "message": "Materialized command target is outside the allowlist."
+        }
+        assert result.materialized_targets == []
 
 # ---------------------------------------------------------------------------
 # ClaudeCodeStrategy.prepare_workspace

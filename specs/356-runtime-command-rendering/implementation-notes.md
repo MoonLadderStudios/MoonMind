@@ -58,3 +58,23 @@ commands first in the runtime-visible input.
 - Escaped slash literals render through a non-command literal wrapper.
 - Unsupported runtimes receive an audited literal fallback event.
 - Render diagnostics are redacted before being stored in runtime metadata.
+
+## Remediation Evidence
+
+- Remediation source: `specs/356-runtime-command-rendering/moonspec_verify_report.md`
+  verdict `ADDITIONAL_WORK_NEEDED`.
+- Implemented bounded remediation for structured native command render outcomes,
+  Claude known-command materialized allowlist rendering, and opaque-command
+  materialization rejection.
+- Focused unit command:
+  `./tools/test_unit.sh tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py tests/unit/services/temporal/runtime/test_launcher.py tests/unit/workflows/tasks/test_task_contract.py tests/unit/schemas/test_agent_runtime_models.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py`
+- Focused unit result:
+  `285 passed, 2 subtests passed`; frontend runner also passed with
+  `21 passed` test files and `351 passed | 229 skipped` tests.
+- Focused integration command:
+  `pytest tests/integration/workflows/temporal/test_managed_session_retrieval_context.py -q --tb=short`
+- Focused integration result:
+  `9 passed`.
+- Full hermetic integration remains blocked in this managed environment by
+  Docker daemon policy: `403 Forbidden` / `Request forbidden by administrative
+  rules`.

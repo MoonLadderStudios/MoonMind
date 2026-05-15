@@ -203,3 +203,4 @@ Task: "Implement Claude Code runtime command rendering in moonmind/workflows/tem
 - Do not implement `tasks.md` work during task generation; this file is the handoff to `/moonspec-implement`.
 - Implementation evidence is recorded in `specs/356-runtime-command-rendering/implementation-notes.md`.
 - `./tools/test_integration.sh` is blocked in this managed environment by Docker daemon policy: `403 Forbidden` / `Request forbidden by administrative rules`. Targeted hermetic integration coverage for the modified launcher path passes with `pytest tests/integration/workflows/temporal/test_managed_session_retrieval_context.py -q --tb=short`.
+- Remediation for the `ADDITIONAL_WORK_NEEDED` verification report added structured native-command render support at the strategy boundary, Claude known-command materialized allowlist rendering, and focused unit/integration coverage. Full hermetic integration remains blocked by the same Docker daemon policy.

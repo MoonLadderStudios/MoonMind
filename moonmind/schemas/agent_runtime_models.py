@@ -63,6 +63,10 @@ class RuntimeCommandInvocation(BaseModel):
     detection_status: str = Field(..., alias="detectionStatus", min_length=1)
     hint_status: str = Field(..., alias="hintStatus", min_length=1)
     recognition_mode: str = Field(..., alias="recognitionMode", min_length=1)
+    render_mode: RuntimeCommandRenderMode | None = Field(None, alias="renderMode")
+    materialized_command: dict[str, Any] | None = Field(
+        None, alias="materializedCommand"
+    )
     requires_runtime_recognition: bool = Field(
         False, alias="requiresRuntimeRecognition"
     )

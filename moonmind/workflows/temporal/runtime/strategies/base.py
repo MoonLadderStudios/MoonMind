@@ -87,6 +87,16 @@ class ManagedRuntimeStrategy(ABC):
 
         return False
 
+    def supports_native_command_transport(self) -> bool:
+        """Whether this runtime can receive a structured command payload."""
+
+        return False
+
+    def materialized_command_allowlist(self) -> Mapping[str, Mapping[str, str]]:
+        """Runtime-owned allowlist for known command materialization targets."""
+
+        return {}
+
     def render_runtime_command(self, request: Any) -> RuntimeCommandRenderResult:
         """Render final instruction text after MoonMind context preparation."""
 
@@ -113,6 +123,10 @@ class ManagedRuntimeStrategy(ABC):
                 failureReason="runtime_command_render_failed",
                 diagnostics={"message": "Invalid runtime command metadata."},
             )
+        if command.render_mode == "native_command":
+            return self._render_native_runtime_command(instruction, command)
+        if command.render_mode == "materialized_command":
+            return self._render_materialized_runtime_command(instruction, command)
         if command.recognition_mode == "escaped_literal" or not command.requires_runtime_recognition:
             literal = command.instruction_body or instruction
             prepared = self._prepared_context_after_runtime_command(
@@ -153,6 +167,88 @@ class ManagedRuntimeStrategy(ABC):
             status="ok",
             renderMode="prompt_prefix",
             renderedInstruction=rendered,
+            invocation=command,
+        )
+
+    def _render_native_runtime_command(
+        self,
+        instruction: str,
+        command: RuntimeCommandInvocation,
+    ) -> RuntimeCommandRenderResult:
+        if not self.supports_native_command_transport():
+            return RuntimeCommandRenderResult(
+                status="unsupported",
+                renderMode="unsupported",
+                renderedInstruction=instruction,
+                failureReason="runtime_command_render_failed",
+                diagnostics={
+                    "message": "Runtime does not support native command transport."
+                },
+                invocation=command,
+            )
+        prepared = self._prepared_context_after_runtime_command(instruction, command)
+        return RuntimeCommandRenderResult(
+            status="ok",
+            renderMode="native_command",
+            nativeCommandPayload={
+                "type": "runtime.command",
+                "command": command.command,
+                "args": command.args,
+                "rawCommand": command.raw_command,
+                "instructionBody": command.instruction_body,
+                "preparedContext": prepared,
+            },
+            invocation=command,
+        )
+
+    def _render_materialized_runtime_command(
+        self,
+        instruction: str,
+        command: RuntimeCommandInvocation,
+    ) -> RuntimeCommandRenderResult:
+        allowlist = self.materialized_command_allowlist()
+        target = allowlist.get(command.command)
+        materialized_command = command.materialized_command or {}
+        if command.hint_status != "hinted" or target is None:
+            return RuntimeCommandRenderResult(
+                status="failed",
+                failureReason="runtime_command_render_failed",
+                diagnostics={
+                    "message": "Command is not allowlisted for materialized rendering."
+                },
+                invocation=command,
+            )
+        target_path = str(target.get("path") or "")
+        invocation = str(target.get("invocation") or "")
+        requested_path = str(materialized_command.get("path") or target_path)
+        requested_invocation = str(
+            materialized_command.get("invocation") or invocation
+        )
+        if requested_path != target_path or requested_invocation != invocation:
+            return RuntimeCommandRenderResult(
+                status="failed",
+                failureReason="runtime_command_render_failed",
+                diagnostics={
+                    "message": "Materialized command target is outside the allowlist."
+                },
+                invocation=command,
+            )
+        prepared = self._prepared_context_after_runtime_command(instruction, command)
+        return RuntimeCommandRenderResult(
+            status="ok",
+            renderMode="materialized_command",
+            renderedInstruction=self._join_instruction_parts(
+                invocation,
+                command.instruction_body,
+                prepared,
+            ),
+            materializedTargets=[
+                {
+                    "path": target_path,
+                    "command": command.command,
+                    "invocation": invocation,
+                }
+            ],
             invocation=command,
         )
 
