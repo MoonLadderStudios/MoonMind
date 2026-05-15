@@ -1,7 +1,7 @@
 # Implementation Plan: Menu Action Availability and Unavailable Presentation
 
 **Branch**: `[354-menu-action-availability]` | **Date**: 2026-05-15 | **Spec**: [spec.md](./spec.md)
-**Input**: Single-story feature specification from `/work/agent_jobs/mm:77a58456-73de-47fa-bf11-8f027af0e7c3/repo/specs/354-menu-action-availability/spec.md`
+**Input**: Single-story feature specification from ./spec.md
 
 ## Summary
 

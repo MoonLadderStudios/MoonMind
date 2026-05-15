@@ -1,6 +1,6 @@
 # Tasks: Menu Action Availability and Unavailable Presentation
 
-**Input**: Design documents from `/work/agent_jobs/mm:77a58456-73de-47fa-bf11-8f027af0e7c3/repo/specs/354-menu-action-availability/`
+**Input**: Design documents from ./
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/menu-action-availability-contract.md, quickstart.md
 
 **Tests**: Unit tests and integration tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement production code until they pass.
