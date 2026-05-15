@@ -5,6 +5,7 @@
 - `research.md`: Added explicit MM-684 source traceability.
 - `data-model.md`: Added explicit MM-684 source traceability.
 - `contracts/runtime-command-snapshot.md`: Added explicit MM-684 source traceability.
+- `quickstart.md`: Aligned final verification command with `tasks.md` as `/moonspec-verify specs/353-normalize-slash-commands`.
 
 ## Key Decisions
 
@@ -17,6 +18,7 @@
 - `spec.md`, `plan.md`, `tasks.md`, `research.md`, `data-model.md`, `contracts/runtime-command-snapshot.md`, and `quickstart.md` have no unresolved clarification markers.
 - Every in-scope `FR-*`, `SC-*`, and `DESIGN-REQ-*` has task coverage in `tasks.md`.
 - TDD order is preserved: tests and red-first confirmation precede implementation tasks.
+- Downstream task gate re-check confirms one story phase, explicit unit/integration test tasks, story validation, implementation tasks, and final `/moonspec-verify` work.
 
 ## Remaining Risks
 

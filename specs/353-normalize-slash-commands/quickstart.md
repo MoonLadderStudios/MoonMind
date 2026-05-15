@@ -42,7 +42,7 @@ Expected result: full unit suite passes in the managed-agent local test mode.
 Run final verification after implementation and tests:
 
 ```bash
-/speckit.verify specs/353-normalize-slash-commands
+/moonspec-verify specs/353-normalize-slash-commands
 ```
 
 Verification must confirm that `MM-684`, the canonical Jira preset brief, and all in-scope `DESIGN-REQ-*` mappings remain preserved.
