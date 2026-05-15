@@ -76,6 +76,23 @@ async def mock_provider_profile_list(request: dict) -> dict:
                 "max_lease_duration_seconds": 7200,
                 "enabled": True,
             },
+            {
+                "profile_id": "alternate-managed",
+                "runtime_id": request.get("runtime_id", "test-agent"),
+                "provider_id": "anthropic",
+                "auth_mode": "volume",
+                "volume_ref": "test-volume",
+                "volume_mount_path": "/tmp/auth",
+                "account_label": "alternate",
+                "api_key_ref": None,
+                "runtime_env_overrides": {},
+                "api_key_env_var": None,
+                "max_parallel_runs": 1,
+                "cooldown_after_429_seconds": 900,
+                "rate_limit_policy": "pause_and_retry",
+                "max_lease_duration_seconds": 7200,
+                "enabled": True,
+            },
         ]
     }
 
@@ -106,6 +123,17 @@ async def mock_agent_runtime_launch(request: dict) -> dict:
         "agent_id": request.get("agent_id", "test-agent"),
     }
 
+@_activity.defn(name="agent_runtime.build_launch_context")
+async def mock_agent_runtime_build_launch_context(request: dict) -> dict:
+    profile = request["profile"]
+    return {
+        "profile_id": profile["profile_id"],
+        "credential_source": "volume",
+        "delta_env_overrides": {},
+        "passthrough_env_keys": [],
+        "env_keys_count": 0,
+    }
+
 @_activity.defn(name="agent_runtime.status")
 async def mock_agent_runtime_status(request: dict) -> dict:
     """Simulate polling the agent's execution status."""
@@ -125,6 +153,7 @@ async def mock_agent_runtime_fetch_result(request: dict) -> dict:
 # Add launch/status/fetch_result to the common activities list
 _COMMON_AGENT_RUN_ACTIVITIES.extend([
     mock_agent_runtime_launch,
+    mock_agent_runtime_build_launch_context,
     mock_agent_runtime_status,
     mock_agent_runtime_fetch_result,
 ])
@@ -307,6 +336,61 @@ class TestAgentRunParent:
             id=f"{workflow.info().workflow_id}:child",
             task_queue="agent-run-task-queue",
         )
+
+@workflow.defn(name="MoonMind.ProviderProfileManager")
+class RuntimeUpdateProviderProfileManager:
+    def __init__(self) -> None:
+        self.pending_requests: list[dict] = []
+        self.assignable_profile_id = "alternate-managed"
+
+    @workflow.signal
+    def request_slot(self, payload: dict) -> None:
+        requester = payload["requester_workflow_id"]
+        self.pending_requests = [
+            req
+            for req in self.pending_requests
+            if req.get("requester_workflow_id") != requester
+        ]
+        self.pending_requests.append(dict(payload))
+
+    @workflow.signal
+    def release_slot(self, payload: dict) -> None:
+        requester = payload.get("requester_workflow_id")
+        self.pending_requests = [
+            req
+            for req in self.pending_requests
+            if req.get("requester_workflow_id") != requester
+        ]
+
+    @workflow.signal
+    def report_cooldown(self, payload: dict) -> None:
+        return None
+
+    @workflow.signal
+    def sync_profiles(self, payload: dict) -> None:
+        return None
+
+    @workflow.query
+    def get_state(self) -> dict:
+        return {"pending_requests": list(self.pending_requests)}
+
+    @workflow.run
+    async def run(self, input_payload: dict) -> dict:
+        while True:
+            await workflow.wait_condition(lambda: bool(self.pending_requests))
+            req = self.pending_requests[0]
+            if req.get("execution_profile_ref") != self.assignable_profile_id:
+                await workflow.sleep(1)
+                continue
+            self.pending_requests.pop(0)
+            handle = workflow.get_external_workflow_handle(
+                req["requester_workflow_id"]
+            )
+            await handle.signal(
+                "slot_assigned",
+                {"profile_id": self.assignable_profile_id},
+            )
+            await workflow.sleep(3600)
 
 @_activity.defn(name="agent_runtime.status")
 async def mock_agent_runtime_status_rate_limited(request: dict) -> dict:
@@ -498,6 +582,89 @@ async def test_agent_run_reports_managed_429_retry_summary_to_parent():
                 await parent_handle.cancel()
                 with pytest.raises(WorkflowFailureError):
                     await parent_handle.result()
+
+@pytest.mark.asyncio
+async def test_managed_agent_runtime_selection_update_replaces_slot_wait_request():
+    """Provider/model edits while awaiting slot should affect the active child."""
+    _managed_launch_requests.clear()
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with (
+            Worker(
+                env.client,
+                task_queue="agent-run-task-queue-runtime-update",
+                workflows=[MoonMindAgentRun, RuntimeUpdateProviderProfileManager],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.artifacts",
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.agent_runtime",
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+        ):
+            manager_id = "provider-profile-manager:gemini_cli"
+            await env.client.start_workflow(
+                RuntimeUpdateProviderProfileManager.run,
+                {"runtime_id": "gemini_cli"},
+                id=manager_id,
+                task_queue="agent-run-task-queue-runtime-update",
+            )
+            manager_handle = env.client.get_workflow_handle(manager_id)
+            child_id = "test-agent-runtime-selection-update"
+            child_handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                AgentExecutionRequest(
+                    agent_kind="managed",
+                    agent_id="gemini_cli",
+                    execution_profile_ref="default-managed",
+                    correlation_id="corr-runtime-update",
+                    idempotency_key="idem-runtime-update",
+                    parameters={
+                        "model": "old-model",
+                        "profileId": "default-managed",
+                    },
+                ),
+                id=child_id,
+                task_queue="agent-run-task-queue-runtime-update",
+            )
+            await asyncio.sleep(0.1)
+
+            await child_handle.signal(
+                "update_runtime_selection",
+                {
+                    "executionProfileRef": "alternate-managed",
+                    "model": "new-model",
+                    "parametersPatch": {
+                        "model": "new-model",
+                        "profileId": "alternate-managed",
+                    },
+                },
+            )
+
+            for _ in range(80):
+                if _managed_launch_requests:
+                    break
+                await asyncio.sleep(0.1)
+            manager_state = await manager_handle.query(
+                RuntimeUpdateProviderProfileManager.get_state
+            )
+            assert _managed_launch_requests, manager_state
+            launched_request = _managed_launch_requests[-1]["request"]
+            assert launched_request["executionProfileRef"] == "alternate-managed"
+            assert launched_request["parameters"]["model"] == "new-model"
+            assert launched_request["parameters"]["profileId"] == "alternate-managed"
+
+            await child_handle.signal(
+                MoonMindAgentRun.completion_signal,
+                {"summary": "completed after runtime update"},
+            )
+            result = await child_handle.result()
+            assert result.summary == "completed after runtime update"
 
 @pytest.mark.asyncio
 async def test_agent_run_binds_managed_launch_to_parent_workflow_for_new_histories():

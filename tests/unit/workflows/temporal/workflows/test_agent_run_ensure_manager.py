@@ -11,7 +11,37 @@ import ast
 import inspect
 import textwrap
 
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+
+
+def _agent_request(**overrides):
+    payload = {
+        "agentKind": "managed",
+        "agentId": "codex_cli",
+        "executionProfileRef": "codex-openrouter",
+        "correlationId": "corr-1",
+        "idempotencyKey": "idem-1",
+        "parameters": {
+            "targetRuntime": "codex_cli",
+            "profileSelector": {"providerId": "openrouter"},
+            "task": {
+                "runtime": {
+                    "mode": "codex_cli",
+                    "profileSelector": {"providerId": "openrouter"},
+                }
+            },
+            "authoredTaskInput": {
+                "runtime": {
+                    "mode": "codex_cli",
+                    "profileSelector": {"providerId": "openrouter"},
+                }
+            },
+        },
+        "profileSelector": {"providerId": "openrouter"},
+    }
+    payload.update(overrides)
+    return AgentExecutionRequest.model_validate(payload)
 
 class TestEnsureManagerAutoStart:
     """Verify request_slot is routed through the auto-start fallback."""
@@ -277,6 +307,105 @@ class TestEnsureManagerAutoStart:
         raise AssertionError(
             "Could not find _ensure_manager_and_signal call in MoonMindAgentRun.run"
         )
+
+    def test_runtime_selection_update_refreshes_agent_id_and_clears_stale_selector(self):
+        """Exact profile edits must not keep selector constraints from the old provider."""
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request()
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "claude_code",
+                "executionProfileRef": "claude-anthropic",
+                "model": "claude-opus-4-7",
+            },
+        )
+
+        assert request.agent_id == "claude_code"
+        assert request.execution_profile_ref == "claude-anthropic"
+        assert request.profile_selector.provider_id is None
+        assert request.parameters["targetRuntime"] == "claude_code"
+        assert request.parameters["task"]["runtime"]["mode"] == "claude_code"
+        assert "profileSelector" not in request.parameters
+        assert "profileSelector" not in request.parameters["task"]["runtime"]
+
+    def test_runtime_selection_update_uses_explicit_profile_selector_patch(self):
+        """A supplied selector must replace stale criteria for the new slot request."""
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(executionProfileRef=None)
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "codex_cli",
+                "parametersPatch": {
+                    "profileSelector": {"providerId": "openai"},
+                    "task": {"runtime": {"profileSelector": {"providerId": "openai"}}},
+                },
+            },
+        )
+
+        assert request.profile_selector.provider_id == "openai"
+        assert request.parameters["profileSelector"]["providerId"] == "openai"
+        assert request.parameters["task"]["runtime"]["profileSelector"] == {
+            "providerId": "openai",
+            "tagsAny": [],
+            "tagsAll": [],
+        }
+
+    def test_slot_wait_runtime_update_returns_refreshed_manager_and_runtime_ids(self):
+        """The slot-wait caller must update local manager/runtime identifiers."""
+        source = textwrap.dedent(
+            inspect.getsource(
+                MoonMindAgentRun._consume_runtime_selection_update_for_slot_wait
+            )
+        )
+
+        assert "runtime_id = self._managed_runtime_id(request.agent_id)" in source
+        assert "manager_id = self._manager_workflow_id(runtime_id)" in source
+        assert "return manager_handle, manager_id, runtime_id" in source
+
+        run_source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        tree = ast.parse(run_source)
+        tuple_assignment_count = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if not isinstance(node.value, ast.Await):
+                continue
+            call = node.value.value
+            if not (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "_consume_runtime_selection_update_for_slot_wait"
+            ):
+                continue
+            if not node.targets or not isinstance(node.targets[0], ast.Tuple):
+                continue
+            names = [
+                elt.id for elt in node.targets[0].elts if isinstance(elt, ast.Name)
+            ]
+            if names == ["manager_handle", "manager_id", "runtime_id"]:
+                tuple_assignment_count += 1
+
+        assert tuple_assignment_count == 2
+
+    def test_slot_wait_runtime_update_validates_after_profile_sync(self):
+        """Edited exact profiles must fail fast after the refreshed profile snapshot."""
+        source = textwrap.dedent(
+            inspect.getsource(
+                MoonMindAgentRun._consume_runtime_selection_update_for_slot_wait
+            )
+        )
+
+        sync_index = source.index("_sync_manager_profiles")
+        validate_index = source.index("_validate_synced_profile_selection")
+        request_index = source.index(
+            "manager_handle = await self._ensure_manager_and_signal"
+        )
+
+        assert sync_index < validate_index < request_index
 
     def test_manager_signal_payload_carries_execution_profile_ref(self):
         """The auto-start helper must include execution_profile_ref in request_slot payloads."""

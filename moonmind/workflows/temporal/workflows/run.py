@@ -7285,6 +7285,94 @@ class MoonMindRunWorkflow:
         self._update_memo()
         return True
 
+    @staticmethod
+    def _runtime_selection_from_source(
+        source: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not isinstance(source, Mapping):
+            return {}
+        selection: dict[str, Any] = {}
+        for source_key, target_key in (
+            ("executionProfileRef", "executionProfileRef"),
+            ("execution_profile_ref", "executionProfileRef"),
+            ("profileId", "executionProfileRef"),
+            ("profile_id", "executionProfileRef"),
+            ("providerProfile", "executionProfileRef"),
+            ("model", "model"),
+            ("requestedModel", "model"),
+            ("requested_model", "model"),
+            ("effort", "effort"),
+            ("targetRuntime", "targetRuntime"),
+            ("target_runtime", "targetRuntime"),
+            ("mode", "targetRuntime"),
+        ):
+            value = source.get(source_key)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    continue
+            selection[target_key] = value
+        return selection
+
+    def _runtime_selection_update_payload(
+        self, payload: Mapping[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if not isinstance(payload, Mapping):
+            return None
+        parameters_patch = payload.get("parameters_patch") or payload.get(
+            "parametersPatch"
+        )
+        if not isinstance(parameters_patch, Mapping):
+            return None
+
+        selection: dict[str, Any] = {}
+        for source in (parameters_patch,):
+            selection.update(self._runtime_selection_from_source(source))
+
+        runtime_block = parameters_patch.get("runtime")
+        if isinstance(runtime_block, Mapping):
+            selection.update(self._runtime_selection_from_source(runtime_block))
+
+        task_payload = parameters_patch.get("task")
+        if isinstance(task_payload, Mapping):
+            task_runtime = task_payload.get("runtime")
+            if isinstance(task_runtime, Mapping):
+                selection.update(self._runtime_selection_from_source(task_runtime))
+
+        authored_payload = parameters_patch.get("authoredTaskInput")
+        if isinstance(authored_payload, Mapping):
+            authored_runtime = authored_payload.get("runtime")
+            if isinstance(authored_runtime, Mapping):
+                selection.update(self._runtime_selection_from_source(authored_runtime))
+
+        if not selection:
+            return None
+        selection["parametersPatch"] = dict(parameters_patch)
+        return selection
+
+    async def _forward_runtime_selection_update_to_active_child(
+        self, payload: Mapping[str, Any] | None
+    ) -> bool:
+        if not self._active_agent_child_workflow_id:
+            return False
+        if str(self._active_agent_id or "").strip().lower() in {
+            "jules",
+            "jules_api",
+        }:
+            return False
+        runtime_update = self._runtime_selection_update_payload(payload)
+        if runtime_update is None:
+            return False
+        handle = workflow.get_external_workflow_handle(
+            self._active_agent_child_workflow_id
+        )
+        await handle.signal("update_runtime_selection", runtime_update)
+        self._summary = "Runtime selection update sent to active agent."
+        self._update_memo()
+        return True
+
     @workflow.update
     def update_title(self, new_title: str) -> None:
         self._title = new_title
@@ -7305,8 +7393,15 @@ class MoonMindRunWorkflow:
         if isinstance(parameters_patch, Mapping):
             self._parameters_updated = True
             self._updated_parameters = dict(parameters_patch)
+        forwarded_runtime_update = (
+            await self._forward_runtime_selection_update_to_active_child(payload)
+        )
         forwarded = await self._forward_operator_message_to_active_child(payload)
-        return {"accepted": True, "forwardedOperatorMessage": forwarded}
+        return {
+            "accepted": True,
+            "forwardedOperatorMessage": forwarded,
+            "forwardedRuntimeSelectionUpdate": forwarded_runtime_update,
+        }
 
     @workflow.query
     def get_status(self) -> dict[str, Any]:
