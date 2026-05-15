@@ -94,7 +94,7 @@ specs/356-runtime-command-rendering/
 │   └── runtime-command-rendering.md
 ├── checklists/
 │   └── requirements.md
-└── tasks.md             # Created later by /speckit.tasks
+└── tasks.md
 ```
 
 ### Source Code (repository root)
@@ -117,6 +117,8 @@ moonmind/
 
 tests/
 ├── unit/
+│   ├── schemas/test_agent_runtime_models.py
+│   ├── workflows/temporal/workflows/test_run_agent_dispatch.py
 │   ├── workflows/tasks/test_task_contract.py
 │   ├── workflows/temporal/runtime/strategies/test_remaining_strategies.py
 │   └── services/temporal/runtime/test_launcher.py

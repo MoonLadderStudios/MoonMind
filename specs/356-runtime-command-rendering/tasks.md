@@ -50,7 +50,7 @@
 - [ ] T004 [P] Add or extend runtime strategy test helpers for render inputs and fake profiles in `tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py` covering FR-002, DESIGN-REQ-012.
 - [ ] T005 [P] Add or extend launcher subprocess-capture helpers for rendered prompt assertions in `tests/unit/services/temporal/runtime/test_launcher.py` covering SCN-001, SCN-006.
 - [ ] T006 [P] Add or extend integration launcher fixture helpers in `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` covering retrieval context and prompt capture for SCN-001, SCN-002.
-- [ ] T007 Build the story traceability inventory in `specs/356-runtime-command-rendering/tasks.md` and keep all FR, SCN, SC, and DESIGN-REQ rows mapped to later tasks for FR-016/SC-007.
+- [ ] T007 Build the story traceability inventory in `specs/356-runtime-command-rendering/tasks.md` and keep all FR, SCN, SC, and DESIGN-REQ rows mapped throughout this task list for FR-016/SC-007.
 
 **Checkpoint**: Foundation ready - story test and implementation work can now begin.
 
@@ -71,7 +71,7 @@
 
 ### Unit Tests (write first) ⚠️
 
-> **NOTE: Write these tests FIRST. Run them, confirm they FAIL for the expected reason, then implement only enough code to make them pass.
+> **NOTE: Write these tests FIRST. Run them, confirm they FAIL for the expected reason, then implement only enough code to make them pass.**
 
 - [ ] T008 [P] Add failing unit tests for Codex CLI prompt-prefix rendering, prepared-context ordering, and `/review` first-position recognition in `tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py` covering FR-001, FR-003, FR-007, SCN-001, SC-001, DESIGN-REQ-011, DESIGN-REQ-013.
 - [ ] T009 [P] Add failing unit tests for Claude Code prompt-prefix rendering, prepared-context ordering, and no Create-page provider markup dependency in `tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py` covering FR-003, FR-007, SCN-002, SC-001, DESIGN-REQ-013.
@@ -200,4 +200,4 @@ Task: "Implement Claude Code runtime command rendering in moonmind/workflows/tem
 - Unit and integration tests are mandatory and precede implementation.
 - No provider verification tests are required; all planned integration coverage is hermetic.
 - Do not add Create page preview scope; MM-686 consumes existing preview/normalization behavior and focuses on managed runtime rendering.
-- Do not implement `tasks.md` work during task generation; this file is the handoff to `/speckit.implement`.
+- Do not implement `tasks.md` work during task generation; this file is the handoff to `/moonspec-implement`.

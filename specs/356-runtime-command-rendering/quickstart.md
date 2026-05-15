@@ -7,7 +7,7 @@ Use Jira issue `MM-686` and the original preset brief preserved in `spec.md` as 
 1. Add strategy/renderer tests before production changes:
 
 ```bash
-./tools/test_unit.sh tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py tests/unit/services/temporal/runtime/test_launcher.py
+./tools/test_unit.sh tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py tests/unit/services/temporal/runtime/test_launcher.py tests/unit/schemas/test_agent_runtime_models.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py tests/unit/workflows/tasks/test_task_contract.py
 ```
 
 Expected before implementation: new tests fail because no final runtime command renderer exists and command builders append the mutated instruction text directly.
@@ -47,13 +47,14 @@ Expected before implementation: new integration tests fail because retrieval con
 After production changes:
 
 ```bash
-./tools/test_unit.sh tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py tests/unit/services/temporal/runtime/test_launcher.py tests/unit/workflows/tasks/test_task_contract.py
+./tools/test_unit.sh tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py tests/unit/services/temporal/runtime/test_launcher.py tests/unit/schemas/test_agent_runtime_models.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py tests/unit/workflows/tasks/test_task_contract.py
 ./tools/test_integration.sh
 ```
 
 Final verification should confirm:
-- `MM-686` remains in `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/runtime-command-rendering.md`, `quickstart.md`, later tasks, commit text, and pull request metadata.
+- `MM-686` remains in `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/runtime-command-rendering.md`, `quickstart.md`, `tasks.md`, commit text, and pull request metadata.
 - Prompt-prefix commands remain first after all MoonMind-prepared context.
 - Unknown commands remain pass-through for slash-capable runtimes.
 - Escaped literal commands do not execute.
 - Render failures are typed or explicitly represented as approved fallback events.
+- `/moonspec-verify` passes after implementation and required tests pass.
