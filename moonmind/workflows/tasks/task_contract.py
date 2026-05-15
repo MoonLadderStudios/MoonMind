@@ -63,7 +63,7 @@ _RUNTIME_COMMAND_HINT_DETAILS: dict[str, dict[str, Any]] = {
     },
 }
 _RUNTIME_COMMAND_TOKEN_PATTERN = re.compile(
-    r"^/([A-Za-z][A-Za-z0-9_-]*(?::[A-Za-z0-9_-]+)?)(?:\s+(.*))?$"
+    r"^/([A-Za-z][A-Za-z0-9_-]*(?:(?::|\.)[A-Za-z0-9_-]+)?)(?:\s+(.*))?$"
 )
 _RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
     r"\bresolve(?:d|s|ing)?\s+(?:an?\s+|the\s+)?(?:pr|pull\s+request)\b",
@@ -304,7 +304,7 @@ def _runtime_supports_slash_passthrough(runtime_mode: str | None) -> bool:
 def build_runtime_command_preview_config() -> dict[str, Any]:
     """Return browser-safe slash-command preview capabilities and hints."""
 
-    runtime_ids = ("codex_cli", "gemini_cli", "claude_code", "codex_cloud")
+    runtime_ids = sorted(_SLASH_COMMAND_PASSTHROUGH_RUNTIMES | {"codex_cloud"})
     runtimes: dict[str, dict[str, Any]] = {}
     for runtime_id in runtime_ids:
         supports_passthrough = _runtime_supports_slash_passthrough(runtime_id)
@@ -417,26 +417,22 @@ def _build_runtime_command_metadata(
     match = _RUNTIME_COMMAND_TOKEN_PATTERN.fullmatch(first_line)
     if match:
         command = match.group(1)
-        args = match.group(2) or ""
+        args = "" if "." in command else match.group(2) or ""
     else:
-        command_parts = first_line[1:].split(maxsplit=1)
-        if not command_parts:
-            payload.update(
-                {
-                    "command": "",
-                    "rawCommand": first_line,
-                    "args": "",
-                    "instructionBody": raw_instructions,
-                    "detectionStatus": "malformed",
-                    "hintStatus": "opaque",
-                    "recognitionMode": "escaped_literal",
-                    "requiresRuntimeRecognition": False,
-                    "detectionPhase": "submit",
-                }
-            )
-            return payload
-        command = command_parts[0]
-        args = ""
+        payload.update(
+            {
+                "command": "",
+                "rawCommand": first_line,
+                "args": "",
+                "instructionBody": raw_instructions,
+                "detectionStatus": "malformed",
+                "hintStatus": "opaque",
+                "recognitionMode": "escaped_literal",
+                "requiresRuntimeRecognition": False,
+                "detectionPhase": "submit",
+            }
+        )
+        return payload
     hint_status = _runtime_command_hint_status(command)
     passthrough = _runtime_supports_slash_passthrough(target_runtime)
     if passthrough:

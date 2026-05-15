@@ -1317,7 +1317,7 @@ function createStepStateEntry(
 }
 
 const RUNTIME_COMMAND_TOKEN_PATTERN =
-  /^\/([A-Za-z][A-Za-z0-9_-]*(?::[A-Za-z0-9_-]+)?)(?:\s+(.*))?$/;
+  /^\/([A-Za-z][A-Za-z0-9_-]*(?:(?::|\.)[A-Za-z0-9_-]+)?)(?:\s+(.*))?$/;
 
 function firstLineAndBody(value: string): { firstLine: string; body: string } {
   const lineEnd = value.indexOf("\n");
@@ -1436,7 +1436,7 @@ function deriveRuntimeCommandPreview({
     };
   }
   const command = match[1] || "";
-  const args = match[2] || "";
+  const args = command.includes(".") ? "" : match[2] || "";
   const hint = config.knownRuntimeCommandHints?.[command];
   const supportsPassthrough = Boolean(
     config.runtimes?.[runtime]?.slashCommandPassthrough,
@@ -8369,7 +8369,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 runtime,
                 sourcePath: index === 0
                   ? "objective.instructions"
-                  : `steps[${index}].instructions`,
+                  : `steps[${index - 1}].instructions`,
                 config: dashboardConfig.system?.runtimeCommandPreview,
                 storedRuntimeCommand: step.runtimeCommand,
               });

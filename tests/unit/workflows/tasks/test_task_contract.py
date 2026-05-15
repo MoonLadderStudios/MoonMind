@@ -7,6 +7,7 @@ from moonmind.workflows.tasks.task_contract import (
     build_canonical_task_view,
     build_authoritative_task_input_snapshot,
     build_effective_task_skill_selectors,
+    build_runtime_command_preview_config,
     CanonicalTaskPayload,
     ResumeFromFailedStepRef,
     resolve_publish_mode_for_skill,
@@ -181,6 +182,25 @@ def test_runtime_command_preserves_opaque_provider_command_lines() -> None:
     assert command["hintStatus"] == "opaque"
 
 
+@pytest.mark.parametrize(
+    "instructions", ["/ review\nKeep literal.", "/review!\nKeep literal."]
+)
+def test_runtime_command_malformed_token_input_is_literal(instructions: str) -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": instructions,
+            "runtime": {"mode": "codex"},
+        }
+    )
+
+    command = snapshot["objective"]["runtimeCommand"]
+    assert command["detectionStatus"] == "malformed"
+    assert command["recognitionMode"] == "escaped_literal"
+    assert command["requiresRuntimeRecognition"] is False
+    assert command["command"] == ""
+    assert command["instructionBody"] == instructions
+
+
 def test_runtime_command_escaped_slash_records_literal_metadata() -> None:
     snapshot = build_authoritative_task_input_snapshot(
         task_payload={
@@ -256,6 +276,18 @@ def test_runtime_command_unsupported_runtime_does_not_require_recognition() -> N
     assert command["detectionStatus"] == "detected"
     assert command["recognitionMode"] == "runtime_does_not_support_slash_commands"
     assert command["requiresRuntimeRecognition"] is False
+
+
+def test_runtime_command_preview_config_includes_all_passthrough_runtime_ids() -> None:
+    config = build_runtime_command_preview_config()
+
+    assert config["runtimes"]["codex"]["slashCommandPassthrough"] is True
+    assert config["runtimes"]["codex_cli"]["slashCommandPassthrough"] is True
+    assert config["runtimes"]["claude"]["slashCommandPassthrough"] is True
+    assert config["runtimes"]["claude_code"]["slashCommandPassthrough"] is True
+    assert config["runtimes"]["gemini_cli"]["slashCommandPassthrough"] is True
+    assert config["runtimes"]["universal"]["slashCommandPassthrough"] is True
+    assert config["runtimes"]["codex_cloud"]["slashCommandPassthrough"] is False
 
 
 def test_runtime_command_leading_whitespace_is_not_detected() -> None:

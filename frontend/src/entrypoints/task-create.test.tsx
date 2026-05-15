@@ -15568,6 +15568,12 @@ describe("Task Create runtime command previews", () => {
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/does not pass through slash commands/i)).toBeNull();
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "/provider.command now\nUse provider behavior." },
+    });
+
+    expect(await screen.findByText("Runtime command: /provider.command")).toBeTruthy();
   });
 
   it("recomputes unsupported runtime warnings without mutating instructions", async () => {
@@ -15617,6 +15623,18 @@ describe("Task Create runtime command previews", () => {
       target: { value: "/src/app.ts is broken" },
     });
     expect(await screen.findByText("Literal slash text")).toBeTruthy();
+
+    fireEvent.change(instructions, {
+      target: { value: "/review!\nTreat as text." },
+    });
+    expect(await screen.findByText("Literal slash text")).toBeTruthy();
+    expect(screen.queryByText("Runtime command: /review!")).toBeNull();
+
+    fireEvent.change(instructions, {
+      target: { value: "/ review\nTreat as text." },
+    });
+    expect(await screen.findByText("Literal slash text")).toBeTruthy();
+    expect(screen.queryByText(/Runtime command:/)).toBeNull();
   });
 
   it("submits authored slash instructions without preview-only runtime command metadata", async () => {
