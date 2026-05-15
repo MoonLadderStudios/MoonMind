@@ -77,7 +77,7 @@
 
 ### Integration Tests (write first)
 
-- [ ] T019 Add failing automation test for Home native fallback initial focus covering FR-003, FR-009, FR-010, SCN-001, SC-001, and SC-006 in Source/ThorTactics/Tests/Frontend/MenuInputFocusContractFlowAutomationTest.cpp
+- [ ] T019 Add failing automation test for Home native fallback initial focus covering FR-003, FR-009, FR-010, SCN-001, SCN-002, SC-001, and SC-006 in Source/ThorTactics/Tests/Frontend/MenuInputFocusContractFlowAutomationTest.cpp
 - [ ] T020 Add failing automation test for generated action activation parity across mouse click, keyboard confirm, and controller confirm covering FR-004, FR-010, SCN-003, SC-002, and SC-006 in Source/ThorTactics/Tests/Frontend/MenuInputFocusContractFlowAutomationTest.cpp
 - [ ] T021 Add failing automation test for Back/Cancel returning from Play to Home and restoring Play focus covering FR-005, FR-006, FR-010, SCN-004, SCN-005, SC-003, SC-004, and SC-006 in Source/ThorTactics/Tests/Frontend/MenuInputFocusContractFlowAutomationTest.cpp
 - [ ] T022 Add failing automation test for Back/Cancel returning from Options to Home and restoring Options focus covering FR-005, FR-007, FR-010, SCN-004, SCN-006, SC-003, SC-005, and SC-006 in Source/ThorTactics/Tests/Frontend/MenuInputFocusContractFlowAutomationTest.cpp
