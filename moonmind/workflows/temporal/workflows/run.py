@@ -3118,6 +3118,7 @@ class MoonMindRunWorkflow:
                                 node_id=node_id,
                                 tool_name=tool_name,
                                 tool_type=tool_type,
+                                failure_mode=failure_mode,
                             )
                         )
                         if self._cancel_requested:
@@ -3868,6 +3869,9 @@ class MoonMindRunWorkflow:
 
     def _clear_jira_blocker_wait(self) -> None:
         self._jira_blocker_wait_active = False
+        self._jira_blocker_wait_started_at = None
+        self._jira_blocker_wait_issue_keys = []
+        self._jira_blocker_wait_summary = None
         if self._waiting_reason == "jira_blocker_wait":
             self._waiting_reason = None
         self._attention_required = False
@@ -3881,6 +3885,7 @@ class MoonMindRunWorkflow:
         node_id: str,
         tool_name: str,
         tool_type: str,
+        failure_mode: str,
     ) -> tuple[Any, bool]:
         skipped = False
         recheck_count = 0
@@ -3896,10 +3901,15 @@ class MoonMindRunWorkflow:
             )
             try:
                 await workflow.wait_condition(
-                    lambda: self._cancel_requested or self._jira_blocker_wait_skipped,
+                    lambda: (
+                        self._cancel_requested
+                        or self._jira_blocker_wait_skipped
+                        or self._paused
+                    ),
                     timeout=DEPENDENCY_RECONCILE_INTERVAL,
                 )
             except asyncio.TimeoutError:
+                # Timeout is the expected path for periodic blocker rechecks.
                 pass
             if self._cancel_requested:
                 return current_result, skipped
@@ -3909,6 +3919,9 @@ class MoonMindRunWorkflow:
 
             recheck_count += 1
             self._clear_jira_blocker_wait()
+            await self._wait_if_paused_at_safe_boundary()
+            if self._cancel_requested:
+                return current_result, skipped
             self._set_state(STATE_EXECUTING, summary="Re-checking Jira blockers.")
             self._mark_step_running(
                 node_id,
@@ -3921,12 +3934,24 @@ class MoonMindRunWorkflow:
                 recheck_payload["idempotency_key"] = (
                     f"{idempotency_key}_jira_blocker_recheck_{recheck_count}"
                 )
-            current_result = await workflow.execute_activity(
-                route.activity_type,
-                recheck_payload,
-                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                **self._execute_kwargs_for_route(route),
-            )
+            try:
+                current_result = await workflow.execute_activity(
+                    route.activity_type,
+                    recheck_payload,
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                    **self._execute_kwargs_for_route(route),
+                )
+            except Exception:
+                self._mark_step_terminal(
+                    node_id,
+                    status="failed",
+                    updated_at=workflow.now(),
+                    summary=f"Re-check of Jira blockers for {tool_name} failed",
+                    last_error="execution_error",
+                )
+                if failure_mode == "FAIL_FAST":
+                    raise
+                break
             self._record_step_result_evidence(
                 node_id,
                 execution_result=current_result,
@@ -7358,8 +7383,6 @@ class MoonMindRunWorkflow:
         if self._state != STATE_WAITING_ON_DEPENDENCIES:
             raise ValueError("Workflow is not waiting on dependencies.")
         if self._jira_blocker_wait_active:
-            if not self._jira_blocker_wait_issue_keys:
-                raise ValueError("Workflow has no unresolved Jira blockers.")
             return
         if self._dependency_failure is not None:
             raise ValueError("Cannot skip dependency wait after dependency failure.")
