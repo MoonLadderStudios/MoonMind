@@ -51,7 +51,7 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
       rawCommand: "/review",
       sourcePath: "objective.instructions",
     });
-    expect(draft.steps[0].runtimeCommand).toMatchObject({
+    expect(draft.steps[0]?.runtimeCommand).toMatchObject({
       command: "simplify",
       rawCommand: "/simplify",
       targetStepId: "step-review",

@@ -1363,8 +1363,8 @@ function deriveRuntimeCommandPreview({
   instructions: string;
   runtime: string;
   sourcePath: string;
-  config?: RuntimeCommandPreviewConfig;
-  storedRuntimeCommand?: Record<string, unknown>;
+  config: RuntimeCommandPreviewConfig | undefined;
+  storedRuntimeCommand: Record<string, unknown> | undefined;
 }): RuntimeCommandPreviewState | null {
   if (!instructions || !config) {
     return null;
