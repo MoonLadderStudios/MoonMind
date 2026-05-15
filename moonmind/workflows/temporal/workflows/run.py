@@ -52,6 +52,9 @@ with workflow.unsafe.imports_passed_through():
         JIRA_AGENT_SKILLS,
         JIRA_BACKED_AGENT_SKILLS,
     )
+    from moonmind.workflows.temporal.story_output_tools import (
+        JIRA_CHECK_BLOCKERS_TOOL_NAME,
+    )
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
     from moonmind.workflows.tasks.task_contract import (
         build_effective_task_skill_selectors,
@@ -186,6 +189,7 @@ RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release
 # Replay-stable patch id for task-scoped Codex terminate activity+signal finalization.
 RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
 RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
+RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
 # Replay-stable patch id for the v2 task-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
 # Temporal external workflow handles expose the session control surface by signal.
@@ -338,6 +342,11 @@ class MoonMindRunWorkflow:
         self._awaiting_external: bool = False
         self._waiting_reason: Optional[str] = None
         self._attention_required: bool = False
+        self._jira_blocker_wait_active: bool = False
+        self._jira_blocker_wait_skipped: bool = False
+        self._jira_blocker_wait_started_at: datetime | None = None
+        self._jira_blocker_wait_issue_keys: list[str] = []
+        self._jira_blocker_wait_summary: str | None = None
 
         # Action flags
         self._cancel_requested = False
@@ -2865,6 +2874,7 @@ class MoonMindRunWorkflow:
             result_status: str | None = None
             execution_result = None
             accepted_execution = False
+            blocked_outcome_wait_skipped = False
             current_review_attempt = 1
 
             while current_review_attempt <= (max_review_attempts + 1):
@@ -3091,6 +3101,36 @@ class MoonMindRunWorkflow:
                         execution_result=execution_result,
                         updated_at=workflow.now(),
                     )
+                    if (
+                        result_status == "COMPLETED"
+                        and workflow.patched(RUN_JIRA_BLOCKER_RECHECK_PATCH)
+                        and self._jira_blocker_waitable_result(
+                            execution_result,
+                            tool_type=tool_type,
+                            tool_name=tool_name,
+                        )
+                    ):
+                        execution_result, blocked_outcome_wait_skipped = (
+                            await self._wait_for_jira_blocker_resolution(
+                                execution_result=execution_result,
+                                route=route,
+                                execute_payload=execute_payload,
+                                node_id=node_id,
+                                tool_name=tool_name,
+                                tool_type=tool_type,
+                                failure_mode=failure_mode,
+                            )
+                        )
+                        if self._cancel_requested:
+                            return
+                        result_status = self._activity_result_status(execution_result)
+                        if result_status is None:
+                            if failure_mode == "FAIL_FAST":
+                                raise ValueError(
+                                    "plan node execution result is missing required "
+                                    "status field"
+                                )
+                            break
                     if result_status != "COMPLETED":
                         failure_message = self._activity_result_failure_message(
                             execution_result
@@ -3294,7 +3334,11 @@ class MoonMindRunWorkflow:
                 node_id=node_id,
                 execution_result=execution_result,
             )
-            blocked_message = self._blocked_outcome_message(execution_result)
+            blocked_message = (
+                None
+                if blocked_outcome_wait_skipped
+                else self._blocked_outcome_message(execution_result)
+            )
             if (
                 blocked_message
                 and workflow.patched(RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH)
@@ -3750,6 +3794,176 @@ class MoonMindRunWorkflow:
                     return message
 
         return None
+
+    def _jira_blocker_waitable_result(
+        self,
+        execution_result: Any,
+        *,
+        tool_type: str,
+        tool_name: str,
+    ) -> bool:
+        if tool_type != "skill" or tool_name != JIRA_CHECK_BLOCKERS_TOOL_NAME:
+            return False
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return False
+        return self._is_blocked_outcome_value(outputs.get("decision"))
+
+    def _jira_blocker_issue_keys(self, execution_result: Any) -> list[str]:
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return []
+        issue_keys: list[str] = []
+        blockers = outputs.get("blockingIssues")
+        if blockers is None:
+            blockers = outputs.get("blocking_issues")
+        if isinstance(blockers, Sequence) and not isinstance(blockers, (str, bytes)):
+            for blocker in blockers:
+                if not isinstance(blocker, Mapping):
+                    continue
+                issue_key = self._coerce_text(
+                    blocker.get("issueKey") or blocker.get("issue_key"),
+                    max_chars=80,
+                )
+                if issue_key and issue_key not in issue_keys:
+                    issue_keys.append(issue_key)
+        if issue_keys:
+            return issue_keys
+        target_issue_key = self._coerce_text(
+            outputs.get("targetIssueKey")
+            or outputs.get("target_issue_key")
+            or outputs.get("issueKey")
+            or outputs.get("jiraIssueKey"),
+            max_chars=80,
+        )
+        return [target_issue_key] if target_issue_key else []
+
+    def _enter_jira_blocker_wait(
+        self,
+        *,
+        node_id: str,
+        execution_result: Any,
+    ) -> None:
+        summary = self._blocked_outcome_message(execution_result) or (
+            "Waiting for Jira blocker resolution."
+        )
+        issue_keys = self._jira_blocker_issue_keys(execution_result)
+        if self._jira_blocker_wait_started_at is None:
+            self._jira_blocker_wait_started_at = workflow.now()
+        self._jira_blocker_wait_active = True
+        self._jira_blocker_wait_skipped = False
+        self._jira_blocker_wait_issue_keys = issue_keys
+        self._jira_blocker_wait_summary = summary
+        self._waiting_reason = "jira_blocker_wait"
+        self._attention_required = False
+        self._set_state(STATE_WAITING_ON_DEPENDENCIES, summary=summary)
+        self._mark_step_waiting(
+            node_id,
+            status="awaiting_external",
+            updated_at=workflow.now(),
+            waiting_reason="Waiting for Jira blocker resolution",
+            summary=summary,
+        )
+        self._update_search_attributes()
+        self._update_memo()
+
+    def _clear_jira_blocker_wait(self) -> None:
+        self._jira_blocker_wait_active = False
+        self._jira_blocker_wait_started_at = None
+        self._jira_blocker_wait_issue_keys = []
+        self._jira_blocker_wait_summary = None
+        if self._waiting_reason == "jira_blocker_wait":
+            self._waiting_reason = None
+        self._attention_required = False
+
+    async def _wait_for_jira_blocker_resolution(
+        self,
+        *,
+        execution_result: Any,
+        route: Any,
+        execute_payload: Mapping[str, Any],
+        node_id: str,
+        tool_name: str,
+        tool_type: str,
+        failure_mode: str,
+    ) -> tuple[Any, bool]:
+        skipped = False
+        recheck_count = 0
+        current_result = execution_result
+        while self._jira_blocker_waitable_result(
+            current_result,
+            tool_type=tool_type,
+            tool_name=tool_name,
+        ):
+            self._enter_jira_blocker_wait(
+                node_id=node_id,
+                execution_result=current_result,
+            )
+            try:
+                await workflow.wait_condition(
+                    lambda: (
+                        self._cancel_requested
+                        or self._jira_blocker_wait_skipped
+                        or self._paused
+                    ),
+                    timeout=DEPENDENCY_RECONCILE_INTERVAL,
+                )
+            except asyncio.TimeoutError:
+                # Timeout is the expected path for periodic blocker rechecks.
+                pass
+            if self._cancel_requested:
+                return current_result, skipped
+            if self._jira_blocker_wait_skipped:
+                skipped = True
+                break
+
+            recheck_count += 1
+            self._clear_jira_blocker_wait()
+            await self._wait_if_paused_at_safe_boundary()
+            if self._cancel_requested:
+                return current_result, skipped
+            self._set_state(STATE_EXECUTING, summary="Re-checking Jira blockers.")
+            self._mark_step_running(
+                node_id,
+                updated_at=workflow.now(),
+                summary=f"Re-checking Jira blockers for {tool_name}",
+            )
+            recheck_payload = dict(execute_payload)
+            idempotency_key = recheck_payload.get("idempotency_key")
+            if isinstance(idempotency_key, str) and idempotency_key.strip():
+                recheck_payload["idempotency_key"] = (
+                    f"{idempotency_key}_jira_blocker_recheck_{recheck_count}"
+                )
+            try:
+                current_result = await workflow.execute_activity(
+                    route.activity_type,
+                    recheck_payload,
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                    **self._execute_kwargs_for_route(route),
+                )
+            except Exception:
+                self._mark_step_terminal(
+                    node_id,
+                    status="failed",
+                    updated_at=workflow.now(),
+                    summary=f"Re-check of Jira blockers for {tool_name} failed",
+                    last_error="execution_error",
+                )
+                if failure_mode == "FAIL_FAST":
+                    raise
+                break
+            self._record_step_result_evidence(
+                node_id,
+                execution_result=current_result,
+                updated_at=workflow.now(),
+            )
+            if self._activity_result_status(current_result) != "COMPLETED":
+                break
+
+        self._clear_jira_blocker_wait()
+        self._update_search_attributes()
+        self._update_memo()
+        return current_result, skipped
 
     def _mark_remaining_plan_steps_skipped(
         self,
@@ -6799,6 +7013,27 @@ class MoonMindRunWorkflow:
             metadata["dependency_failure"] = dict(self._dependency_failure)
         return metadata
 
+    def _jira_blocker_wait_metadata(self) -> dict[str, Any]:
+        if (
+            not self._jira_blocker_wait_active
+            and not self._jira_blocker_wait_issue_keys
+            and not self._jira_blocker_wait_summary
+        ):
+            return {}
+        wait_duration_ms = 0
+        if self._jira_blocker_wait_started_at is not None:
+            elapsed = workflow.now() - self._jira_blocker_wait_started_at
+            wait_duration_ms = max(0, int(elapsed.total_seconds() * 1000))
+        return {
+            "jira_blocker_wait": {
+                "active": self._jira_blocker_wait_active,
+                "skipped": self._jira_blocker_wait_skipped,
+                "issueKeys": list(self._jira_blocker_wait_issue_keys),
+                "summary": self._jira_blocker_wait_summary,
+                "waitDurationMs": wait_duration_ms,
+            }
+        }
+
     def _mark_real_work_started(self, *, now: datetime | None = None) -> None:
         """Stamp ``mm_started_at`` once, when the workflow first does real work.
 
@@ -6940,6 +7175,7 @@ class MoonMindRunWorkflow:
         if merge_automation_summary:
             memo_dict["merge_automation"] = merge_automation_summary
         memo_dict.update(self._dependency_metadata())
+        memo_dict.update(self._jira_blocker_wait_metadata())
 
         try:
             workflow.upsert_memo(memo_dict)
@@ -7122,6 +7358,13 @@ class MoonMindRunWorkflow:
 
     @workflow.update(name="SkipDependencyWait")
     def skip_dependency_wait(self) -> None:
+        if self._jira_blocker_wait_active:
+            self._jira_blocker_wait_skipped = True
+            self._paused = False
+            self._summary = "Jira blocker wait skipped by operator."
+            self._update_search_attributes()
+            self._update_memo()
+            return
         self._update_dependency_wait_duration()
         self._dependency_manual_override_unresolved_count = len(
             self._unresolved_dependency_ids
@@ -7141,6 +7384,8 @@ class MoonMindRunWorkflow:
             raise ValueError("Cannot skip dependency wait for a completed workflow.")
         if self._state != STATE_WAITING_ON_DEPENDENCIES:
             raise ValueError("Workflow is not waiting on dependencies.")
+        if self._jira_blocker_wait_active:
+            return
         if self._dependency_failure is not None:
             raise ValueError("Cannot skip dependency wait after dependency failure.")
         if not self._unresolved_dependency_ids:
