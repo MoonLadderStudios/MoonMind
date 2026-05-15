@@ -15,7 +15,7 @@ Represents one level of runtime proof validation.
 Validation rules:
 
 - Every required tier must produce an evidence record.
-- `ci_only` is valid only after local tooling is unavailable and Docker fallback has been attempted.
+- `ci_only` is valid only after local tooling is unavailable and Docker fallback has been attempted, or Docker fallback is explicitly unavailable with a concrete recorded reason.
 - `passed` requires exit code `0` and enough evidence to satisfy the tier's required coverage.
 
 ## Runtime Evidence Record
