@@ -3,6 +3,7 @@
 ## Preconditions
 
 - Use the THOR Tactics repository for implementation. The current MoonMind managed workspace does not contain the target Unreal/game source files.
+- Confirm that the proposed target paths in `plan.md` match the THOR repository, or adapt them to the established equivalent frontend module before writing tests.
 - Preserve the Jira issue key `THOR-402` and the spec path `specs/353-native-options-menu-surface/spec.md` in implementation notes and final verification.
 - Do not add settings persistence in this story.
 
@@ -31,6 +32,7 @@ Required unit coverage:
 - Fallback category list construction with missing authored data.
 - No settings persistence dependency.
 - Back/Cancel state transitions and return focus target.
+- Repeated enter/exit state does not lose the return focus target.
 
 ## Integration Test Strategy
 
@@ -44,6 +46,7 @@ Required integration coverage:
 - Trigger Back or Cancel.
 - Confirm the view returns to Home.
 - Confirm focus is restored to the Options navigation action.
+- Repeat the Home -> Options -> Back path during one session.
 
 ## End-to-End Verification
 

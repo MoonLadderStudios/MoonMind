@@ -75,22 +75,25 @@ specs/353-native-options-menu-surface/
 ### Source Code (target repository)
 
 ```text
-<THOR Tactics repository>/
+THOR Tactics repository root/
 ├── Source/
-│   └── <game menu/frontend module>/
-│       ├── <Home menu navigation code>
-│       ├── <Options surface code>
-│       └── <Options category data/fallback code>
-├── Content/
-│   └── <optional authored Options presentation/data assets>
-└── Tests/
-    ├── Unit/
-    │   └── <Options category and navigation state tests>
-    └── Automation/
-        └── <Home -> Options -> Back flow test>
+│   └── ThorTactics/
+│       ├── Frontend/
+│       │   ├── ThorHomeMenuWidget.h
+│       │   ├── ThorHomeMenuWidget.cpp
+│       │   ├── ThorOptionsMenuWidget.h
+│       │   ├── ThorOptionsMenuWidget.cpp
+│       │   ├── ThorOptionsMenuTypes.h
+│       │   └── ThorOptionsMenuTypes.cpp
+│       └── Tests/
+│           └── Frontend/
+│               ├── OptionsMenuUnitTests.cpp
+│               └── OptionsMenuFlowAutomationTest.cpp
+└── Content/
+    └── Optional authored Options presentation/data assets
 ```
 
-**Structure Decision**: The current workspace is MoonMind and lacks the target game project. The implementation structure above records the required target-repository areas for `/speckit.tasks`; exact file paths must be resolved from the THOR Tactics repository during implementation.
+**Structure Decision**: The current workspace is MoonMind and lacks the target game project. The implementation structure above records concrete proposed THOR target paths for `/speckit.tasks`; the first setup tasks must confirm these paths against the actual THOR repository and adapt them only if the repository has an established equivalent frontend module layout.
 
 ## Complexity Tracking
 

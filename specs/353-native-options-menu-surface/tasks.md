@@ -7,7 +7,7 @@
 
 **Organization**: Tasks cover exactly one story: Native Options Menu Surface for THOR-402.
 
-**Source Traceability**: Original Jira issue THOR-402 and preset brief are preserved in `spec.md` `**Input**`. All plan `## Requirement Status` rows are `missing`, so each FR requires test-and-code coverage.
+**Source Traceability**: Original Jira issue THOR-402 and preset brief are preserved in `spec.md` `**Input**`. All plan `## Requirement Status` rows are `missing`, so each FR requires test-and-code coverage. The THOR paths below are concrete proposed target paths and must be confirmed against the actual THOR repository during setup.
 
 **Test Commands**:
 
@@ -69,7 +69,7 @@
 - [ ] T011 Add failing unit tests for authored category data rendering and required category preservation covering FR-003, SCN-002 in Source/ThorTactics/Tests/Frontend/OptionsMenuUnitTests.cpp
 - [ ] T012 Add failing unit tests for empty and partial authored data fallback category entries covering FR-004, SCN-003, SC-003 in Source/ThorTactics/Tests/Frontend/OptionsMenuUnitTests.cpp
 - [ ] T013 Add failing unit tests for Back and Cancel state transitions covering FR-006, SCN-004 in Source/ThorTactics/Tests/Frontend/OptionsMenuUnitTests.cpp
-- [ ] T014 Add failing unit tests for restoring focus to the Home Options action covering FR-007, SC-004 in Source/ThorTactics/Tests/Frontend/OptionsMenuUnitTests.cpp
+- [ ] T014 Add failing unit tests for restoring focus to the Home Options action, including repeated enter/exit state, covering FR-007, SC-004 and repeated-entry edge case in Source/ThorTactics/Tests/Frontend/OptionsMenuUnitTests.cpp
 - [ ] T015 Add failing unit test that category actions do not require saved settings state covering FR-008, SCN-005 in Source/ThorTactics/Tests/Frontend/OptionsMenuUnitTests.cpp
 
 ### Integration Tests (write first)
@@ -78,7 +78,7 @@
 - [ ] T017 Add failing automation test that Video, Audio, and Input category actions are visible without authored category data covering FR-002, FR-004, FR-005, SCN-003, SC-002, SC-003 in Source/ThorTactics/Tests/Frontend/OptionsMenuFlowAutomationTest.cpp
 - [ ] T018 Add failing automation test for Back returning to Home and restoring focus covering FR-006, FR-007, SCN-004, SC-004 in Source/ThorTactics/Tests/Frontend/OptionsMenuFlowAutomationTest.cpp
 - [ ] T019 Add failing automation test for Cancel returning to Home and restoring focus covering FR-006, FR-007, SCN-004, SC-004 in Source/ThorTactics/Tests/Frontend/OptionsMenuFlowAutomationTest.cpp
-- [ ] T020 Add contract-focused automation assertions for `contracts/options-menu-ui-contract.md` covering FR-009 in Source/ThorTactics/Tests/Frontend/OptionsMenuFlowAutomationTest.cpp
+- [ ] T020 Add contract-focused automation assertions and repeated Home -> Options -> Back coverage for `contracts/options-menu-ui-contract.md` covering FR-009 and repeated-entry edge case in Source/ThorTactics/Tests/Frontend/OptionsMenuFlowAutomationTest.cpp
 
 ### Red-First Confirmation
 
@@ -111,7 +111,7 @@
 **Purpose**: Strengthen the completed story without adding settings persistence or unrelated menu scope.
 
 - [ ] T034 [P] Review and remove any temporary debug-only labels, routes, or flags from Source/ThorTactics/Frontend/ThorOptionsMenuWidget.cpp
-- [ ] T035 [P] Review unit edge-case coverage for repeated enter/exit and partial authored category data in Source/ThorTactics/Tests/Frontend/OptionsMenuUnitTests.cpp
+- [ ] T035 [P] Review unit edge-case coverage for repeated enter/exit focus state and partial authored category data in Source/ThorTactics/Tests/Frontend/OptionsMenuUnitTests.cpp
 - [ ] T036 [P] Review integration coverage for both Back and Cancel return paths in Source/ThorTactics/Tests/Frontend/OptionsMenuFlowAutomationTest.cpp
 - [ ] T037 Run the quickstart validation sequence from specs/353-native-options-menu-surface/quickstart.md
 - [ ] T038 Run `/moonspec-verify` for specs/353-native-options-menu-surface/spec.md after implementation and tests pass

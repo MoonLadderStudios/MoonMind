@@ -4,7 +4,7 @@
 
 Decision: Treat all THOR-402 implementation requirements as missing in the current workspace.
 Evidence: `git remote -v` points at `MoonLadderStudios/MoonMind`; scans found no `.uproject`, `*.Build.cs`, `*.Target.cs`, C++ menu source, `frontend.nav.options`, or `frontend.options.*` identifiers outside this feature spec.
-Rationale: The Jira brief targets THOR Tactics menu work, while the active workspace contains MoonMind orchestration code. Planning can define the target behavior, but implementation tasks must resolve real THOR file paths later.
+Rationale: The Jira brief targets THOR Tactics menu work, while the active workspace contains MoonMind orchestration code. Planning can define the target behavior and propose concrete THOR paths, but implementation must confirm those paths against the actual THOR repository before editing code.
 Alternatives considered: Mark behavior as implemented_unverified based on similar wording in docs or tests; rejected because no target runtime code exists here.
 Test implications: Both unit and integration tests are required in the target THOR repository.
 
