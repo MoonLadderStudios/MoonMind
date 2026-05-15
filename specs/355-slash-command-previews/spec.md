@@ -126,7 +126,7 @@ Resume decision: no existing Moon Spec feature directory preserving the `MM-685`
 | DESIGN-REQ-009 | `docs/Steps/SlashCommands.md` lines 540-547, Edit mode | Edit mode must restore authored instructions and command metadata from the task input snapshot when present, and re-detection must not silently alter the historical raw instruction value. | In scope | FR-009 |
 | DESIGN-REQ-010 | `docs/Steps/SlashCommands.md` lines 861-895, Testing Strategy | Parser and Create page validation must cover known commands, unknown commands, whitespace-prefixed input, escaped literals, malformed path-like text, runtime changes, and preservation of authored instructions. | In scope | FR-010 |
 | DESIGN-REQ-011 | `docs/Steps/SlashCommands.md` lines 555-638, Backend behavior and runtime preparation pipeline | Backend authoritative normalization and final runtime rendering after context preparation are required by the broader design. | Out of scope for this Create page preview story; handled by separate runtime/backend slices. | None |
-| DESIGN-REQ-012 | `docs/Steps/SlashCommands.md` lines 672-717, Runtime strategy integration | Runtime-specific Codex and Claude renderers decide how to make slash commands recognized during execution. | Out of scope for this Create page preview story; the Create page must remain provider-neutral. | FR-008 |
+| DESIGN-REQ-012 | `docs/Steps/SlashCommands.md` lines 672-717, Runtime strategy integration | Runtime-specific Codex and Claude renderers decide how to make slash commands recognized during execution. | Out of scope for this Create page preview story; handled by separate runtime adapter slices while this story keeps the Create page provider-neutral. | None |
 
 ## Requirements *(mandatory)*
 
