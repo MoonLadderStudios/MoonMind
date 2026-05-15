@@ -8,6 +8,7 @@ import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
 import {
   buildTemporalArtifactEditUpdatePayload,
+  buildRuntimeCommandVersionWarnings,
   buildTemporalSubmissionDraftFromExecution,
   recordTemporalTaskEditingClientEvent,
   resolveTaskSubmitPageMode,
@@ -1450,6 +1451,15 @@ function deriveRuntimeCommandPreview({
   )
     ? "snapshot"
     : "derived";
+  const versionWarnings =
+    source === "snapshot"
+      ? buildRuntimeCommandVersionWarnings(storedRuntimeCommand, {
+          capabilityVersion: config.capabilityVersion,
+          hintCatalogVersion: config.hintCatalogVersion,
+        })
+      : [];
+  const warningSuffix =
+    versionWarnings.length > 0 ? ` ${versionWarnings.join(" ")}` : "";
   if (!supportsPassthrough) {
     return {
       sourcePath,
@@ -1465,7 +1475,8 @@ function deriveRuntimeCommandPreview({
       messageSeverity: "warning",
       label: `Unsupported runtime command: /${command}`,
       description:
-        "This runtime does not pass through slash commands. Choose a slash-command capable runtime or escape the slash for literal text.",
+        "This runtime does not pass through slash commands. Choose a slash-command capable runtime or escape the slash for literal text." +
+        warningSuffix,
       source,
     };
   }
@@ -1483,8 +1494,9 @@ function deriveRuntimeCommandPreview({
     messageSeverity: "info",
     label: `Runtime command: /${command}`,
     description:
-      hint?.description ||
-      "Pass-through runtime command. No local hint is available; provider behavior will decide it.",
+      (hint?.description ||
+        "Pass-through runtime command. No local hint is available; provider behavior will decide it.") +
+      warningSuffix,
     source,
   };
 }

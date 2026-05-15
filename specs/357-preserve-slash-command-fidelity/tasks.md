@@ -27,10 +27,10 @@
 
 **Purpose**: Confirm the existing feature artifacts and test harness are ready before story work.
 
-- [ ] T001 Verify active feature pointer references `specs/357-preserve-slash-command-fidelity` in `.specify/feature.json` for MM-687 traceability FR-013 SC-007
-- [ ] T002 [P] Confirm frontend test dependencies are available for `./tools/test_unit.sh --ui-args frontend/src/lib/temporalTaskEditing.test.ts` using `package-lock.json`
-- [ ] T003 [P] Confirm Python unit and integration test runners are available through `./tools/test_unit.sh` and `./tools/test_integration.sh`
-- [ ] T004 [P] Review `specs/357-preserve-slash-command-fidelity/contracts/slash-command-fidelity.md` against `specs/357-preserve-slash-command-fidelity/spec.md` before test authoring FR-013 DESIGN-REQ-002 DESIGN-REQ-015
+- [X] T001 Verify active feature pointer references `specs/357-preserve-slash-command-fidelity` in `.specify/feature.json` for MM-687 traceability FR-013 SC-007
+- [X] T002 [P] Confirm frontend test dependencies are available for `./tools/test_unit.sh --ui-args frontend/src/lib/temporalTaskEditing.test.ts` using `package-lock.json`
+- [X] T003 [P] Confirm Python unit and integration test runners are available through `./tools/test_unit.sh` and `./tools/test_integration.sh`
+- [X] T004 [P] Review `specs/357-preserve-slash-command-fidelity/contracts/slash-command-fidelity.md` against `specs/357-preserve-slash-command-fidelity/spec.md` before test authoring FR-013 DESIGN-REQ-002 DESIGN-REQ-015
 
 ---
 
@@ -40,10 +40,10 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete.
 
-- [ ] T005 Create shared slash-command historical snapshot fixtures in `frontend/src/lib/temporalTaskEditing.test.ts` covering task-level and step-level `runtimeCommand` metadata FR-001 FR-002 DESIGN-REQ-002
-- [ ] T006 [P] Create shared Task Detail slash-command fixture data in `frontend/src/entrypoints/task-detail.test.tsx` covering original instructions, runtime, render mode, status, and catalog versions FR-008 FR-009 DESIGN-REQ-015
-- [ ] T007 [P] Create shared Python runtime command snapshot/event fixtures in `tests/unit/workflows/tasks/test_task_contract.py` covering detected, rendered, pass-through, and missing-metadata cases FR-001 FR-010 DESIGN-REQ-002 DESIGN-REQ-018
-- [ ] T008 [P] Create integration fixture plan in `tests/integration/api/test_runtime_command_historical_fidelity.py` for artifact-backed task input snapshots, rerun source data, and observability events FR-005 FR-010 FR-012
+- [X] T005 Create shared slash-command historical snapshot fixtures in `frontend/src/lib/temporalTaskEditing.test.ts` covering task-level and step-level `runtimeCommand` metadata FR-001 FR-002 DESIGN-REQ-002
+- [X] T006 [P] Create shared Task Detail slash-command fixture data in `frontend/src/entrypoints/task-detail.test.tsx` covering original instructions, runtime, render mode, status, and catalog versions FR-008 FR-009 DESIGN-REQ-015
+- [X] T007 [P] Create shared Python runtime command snapshot/event fixtures in `tests/unit/workflows/tasks/test_task_contract.py` covering detected, rendered, pass-through, and missing-metadata cases FR-001 FR-010 DESIGN-REQ-002 DESIGN-REQ-018
+- [X] T008 [P] Create integration fixture plan in `tests/integration/api/test_runtime_command_historical_fidelity.py` for artifact-backed task input snapshots, rerun source data, and observability events FR-005 FR-010 FR-012
 
 **Checkpoint**: Shared fixtures and test files are ready; story test authoring may begin.
 
@@ -71,47 +71,47 @@
 
 > Write these tests FIRST. Run them, confirm they FAIL for the expected reason, then implement only enough code to make them pass.
 
-- [ ] T009 [P] Add failing unit tests in `frontend/src/lib/temporalTaskEditing.test.ts` for edit-mode restoration of authored instructions and `runtimeCommand` metadata from snapshots FR-001 FR-002 FR-003 FR-004 SCN-001 SC-001 DESIGN-REQ-002 DESIGN-REQ-003
-- [ ] T010 Add failing unit tests in `frontend/src/lib/temporalTaskEditing.test.ts` for historical snapshots without `runtimeCommand` staying preview-only and preserving raw instructions FR-004 SCN-002 SC-002 DESIGN-REQ-003
-- [ ] T011 [P] Add failing unit tests in `frontend/src/entrypoints/task-create.test.tsx` for exact rerun preserving `runtimeCommand`, `runtimeCapabilityVersion`, and `hintCatalogVersion` FR-005 SCN-003 SC-003 DESIGN-REQ-014
-- [ ] T012 Add failing unit tests in `frontend/src/entrypoints/task-create.test.tsx` for edit-for-rerun showing current version-drift warnings without mutating source-run command metadata FR-006 FR-007 SCN-004 SC-004 DESIGN-REQ-014
-- [ ] T013 [P] Add failing unit tests in `frontend/src/entrypoints/task-detail.test.tsx` for displaying original authored instructions and missing-metadata state for slash-command tasks FR-008 SCN-005 SC-005 DESIGN-REQ-015
-- [ ] T014 Add failing unit tests in `frontend/src/entrypoints/task-detail.test.tsx` for displaying runtime command interpretation including command, runtime, render mode, status, and catalog versions FR-009 SCN-005 SC-005 DESIGN-REQ-015
-- [ ] T015 [P] Add failing Python unit tests in `tests/unit/workflows/tasks/test_task_contract.py` for durable task input snapshot preservation of task-level and step-level runtime command metadata FR-001 FR-002 DESIGN-REQ-002
-- [ ] T016 [P] Add failing Python unit tests in `tests/unit/workflows/temporal/runtime/test_runtime_command_audit_events.py` for `runtime_command.detected`, `runtime_command.rendered`, and `runtime_command.passthrough` event construction and secret-safe sanitization FR-010 FR-011 SCN-006 SC-006 DESIGN-REQ-018
-- [ ] T017 Run `./tools/test_unit.sh --ui-args frontend/src/lib/temporalTaskEditing.test.ts frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx` and targeted `./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/runtime/test_runtime_command_audit_events.py` to confirm T009-T016 fail for the expected missing behavior
+- [X] T009 [P] Add failing unit tests in `frontend/src/lib/temporalTaskEditing.test.ts` for edit-mode restoration of authored instructions and `runtimeCommand` metadata from snapshots FR-001 FR-002 FR-003 FR-004 SCN-001 SC-001 DESIGN-REQ-002 DESIGN-REQ-003
+- [X] T010 Add failing unit tests in `frontend/src/lib/temporalTaskEditing.test.ts` for historical snapshots without `runtimeCommand` staying preview-only and preserving raw instructions FR-004 SCN-002 SC-002 DESIGN-REQ-003
+- [X] T011 [P] Add failing unit tests in `frontend/src/entrypoints/task-create.test.tsx` for exact rerun preserving `runtimeCommand`, `runtimeCapabilityVersion`, and `hintCatalogVersion` FR-005 SCN-003 SC-003 DESIGN-REQ-014
+- [X] T012 Add failing unit tests in `frontend/src/entrypoints/task-create.test.tsx` for edit-for-rerun showing current version-drift warnings without mutating source-run command metadata FR-006 FR-007 SCN-004 SC-004 DESIGN-REQ-014
+- [X] T013 [P] Add failing unit tests in `frontend/src/entrypoints/task-detail.test.tsx` for displaying original authored instructions and missing-metadata state for slash-command tasks FR-008 SCN-005 SC-005 DESIGN-REQ-015
+- [X] T014 Add failing unit tests in `frontend/src/entrypoints/task-detail.test.tsx` for displaying runtime command interpretation including command, runtime, render mode, status, and catalog versions FR-009 SCN-005 SC-005 DESIGN-REQ-015
+- [X] T015 [P] Add failing Python unit tests in `tests/unit/workflows/tasks/test_task_contract.py` for durable task input snapshot preservation of task-level and step-level runtime command metadata FR-001 FR-002 DESIGN-REQ-002
+- [X] T016 [P] Add failing Python unit tests in `tests/unit/workflows/temporal/runtime/test_runtime_command_audit_events.py` for `runtime_command.detected`, `runtime_command.rendered`, and `runtime_command.passthrough` event construction and secret-safe sanitization FR-010 FR-011 SCN-006 SC-006 DESIGN-REQ-018
+- [X] T017 Run `./tools/test_unit.sh --ui-args frontend/src/lib/temporalTaskEditing.test.ts frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx` and targeted `./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/runtime/test_runtime_command_audit_events.py` to confirm T009-T016 fail for the expected missing behavior
 
 ### Integration Tests (write first)
 
-- [ ] T018 Add failing hermetic `integration_ci` integration test in `tests/integration/api/test_runtime_command_historical_fidelity.py` for artifact-backed edit/detail reconstruction of original instructions and runtime command metadata FR-001 FR-002 FR-003 FR-008 FR-009 SCN-001 SCN-005 DESIGN-REQ-002 DESIGN-REQ-015
-- [ ] T019 Add failing hermetic `integration_ci` integration test in `tests/integration/api/test_runtime_command_historical_fidelity.py` for exact rerun and edit-for-rerun preserving source-run metadata while surfacing current warnings FR-005 FR-006 FR-007 SCN-003 SCN-004 DESIGN-REQ-014
-- [ ] T020 Add failing hermetic `integration_ci` integration test in `tests/integration/api/test_runtime_command_historical_fidelity.py` for detected/rendered/pass-through audit events excluding secrets and exposing operator-readable command evidence FR-010 FR-011 FR-012 SCN-006 SC-006 DESIGN-REQ-018
-- [ ] T021 Run focused integration coverage for `tests/integration/api/test_runtime_command_historical_fidelity.py` with `./tools/test_integration.sh` or the documented `integration_ci` equivalent to confirm T018-T020 fail for the expected missing behavior
+- [X] T018 Add failing hermetic `integration_ci` integration test in `tests/integration/api/test_runtime_command_historical_fidelity.py` for artifact-backed edit/detail reconstruction of original instructions and runtime command metadata FR-001 FR-002 FR-003 FR-008 FR-009 SCN-001 SCN-005 DESIGN-REQ-002 DESIGN-REQ-015
+- [X] T019 Add failing hermetic `integration_ci` integration test in `tests/integration/api/test_runtime_command_historical_fidelity.py` for exact rerun and edit-for-rerun preserving source-run metadata while surfacing current warnings FR-005 FR-006 FR-007 SCN-003 SCN-004 DESIGN-REQ-014
+- [X] T020 Add failing hermetic `integration_ci` integration test in `tests/integration/api/test_runtime_command_historical_fidelity.py` for detected/rendered/pass-through audit events excluding secrets and exposing operator-readable command evidence FR-010 FR-011 FR-012 SCN-006 SC-006 DESIGN-REQ-018
+- [X] T021 Run focused integration coverage for `tests/integration/api/test_runtime_command_historical_fidelity.py` with `./tools/test_integration.sh` or the documented `integration_ci` equivalent to confirm T018-T020 fail for the expected missing behavior
 
 ### Conditional Verification Fallbacks
 
-- [ ] T022 If T009 or T015 unexpectedly pass without code changes, record existing evidence for FR-003 SCN-001 SC-001 in `specs/357-preserve-slash-command-fidelity/research.md`; otherwise keep implementation tasks T024-T027 active
-- [ ] T023 If traceability checks for FR-013 SC-007 fail, update `specs/357-preserve-slash-command-fidelity/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/slash-command-fidelity.md`, `quickstart.md`, and `tasks.md` to preserve MM-687 and the original Jira preset brief
+- [X] T022 If T009 or T015 unexpectedly pass without code changes, record existing evidence for FR-003 SCN-001 SC-001 in `specs/357-preserve-slash-command-fidelity/research.md`; otherwise keep implementation tasks T024-T027 active
+- [X] T023 If traceability checks for FR-013 SC-007 fail, update `specs/357-preserve-slash-command-fidelity/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/slash-command-fidelity.md`, `quickstart.md`, and `tasks.md` to preserve MM-687 and the original Jira preset brief
 
 ### Implementation
 
-- [ ] T024 Update snapshot and draft reconstruction logic in `frontend/src/lib/temporalTaskEditing.ts` so edit mode and rerun drafts restore historical authored instructions and `runtimeCommand` metadata while preserving absent-metadata raw instructions FR-001 FR-002 FR-003 FR-004 SCN-001 SCN-002 DESIGN-REQ-002 DESIGN-REQ-003
-- [ ] T025 Update rerun submit behavior in `frontend/src/entrypoints/task-create.tsx` so exact rerun preserves source runtime command metadata and edit-for-rerun warning recomputation cannot mutate source-run evidence FR-005 FR-006 FR-007 SCN-003 SCN-004 DESIGN-REQ-014
-- [ ] T026 Update backend rerun/source metadata handling in `moonmind/workflows/temporal/service.py` only if T011/T019 prove source runtime command metadata or catalog versions are dropped across exact rerun FR-005 FR-006 SCN-003 DESIGN-REQ-014
-- [ ] T027 Update authoritative task input snapshot behavior in `moonmind/workflows/tasks/task_contract.py` only if T015 proves task-level or step-level `runtimeCommand` fields are incomplete or dropped FR-001 FR-002 DESIGN-REQ-002
-- [ ] T028 Update Task Detail API/view model mapping in `api_service/api/routers/executions.py` or `api_service/api/routers/task_dashboard_view_model.py` to expose original instructions and runtime command interpretation for detail views FR-008 FR-009 SCN-005 DESIGN-REQ-015
-- [ ] T029 Update Task Detail UI in `frontend/src/entrypoints/task-detail.tsx` to show original authored instructions alongside command, runtime, render mode, status, and version details when available FR-008 FR-009 SCN-005 SC-005 DESIGN-REQ-015
-- [ ] T030 Add runtime command version-drift warning model and display behavior in `frontend/src/lib/temporalTaskEditing.ts` and `frontend/src/entrypoints/task-create.tsx` for edit-for-rerun/current-preview warnings FR-006 FR-007 SCN-004 SC-004 DESIGN-REQ-014
-- [ ] T031 Implement runtime command audit event construction and sanitization in `moonmind/workflows/temporal/runtime/launcher.py` or a new helper under `moonmind/workflows/temporal/runtime/` for detected, rendered, and pass-through cases FR-010 FR-011 SCN-006 DESIGN-REQ-018
-- [ ] T032 Wire runtime command audit events through existing observability or control-event surfaces in `api_service/api/routers/task_runs.py` and `moonmind/workflows/temporal/runtime/launcher.py` without adding new persistent tables FR-010 FR-011 FR-012 SCN-006 SC-006 DESIGN-REQ-018
-- [ ] T033 Ensure UI display and audit serialization treat command names, args, instruction bodies, and diagnostics as untrusted text in `frontend/src/entrypoints/task-detail.tsx`, `frontend/src/entrypoints/task-create.tsx`, and `moonmind/workflows/temporal/runtime/launcher.py` FR-011 DESIGN-REQ-018
+- [X] T024 Update snapshot and draft reconstruction logic in `frontend/src/lib/temporalTaskEditing.ts` so edit mode and rerun drafts restore historical authored instructions and `runtimeCommand` metadata while preserving absent-metadata raw instructions FR-001 FR-002 FR-003 FR-004 SCN-001 SCN-002 DESIGN-REQ-002 DESIGN-REQ-003
+- [X] T025 Update rerun submit behavior in `frontend/src/entrypoints/task-create.tsx` so exact rerun preserves source runtime command metadata and edit-for-rerun warning recomputation cannot mutate source-run evidence FR-005 FR-006 FR-007 SCN-003 SCN-004 DESIGN-REQ-014
+- [X] T026 Update backend rerun/source metadata handling in `moonmind/workflows/temporal/service.py` only if T011/T019 prove source runtime command metadata or catalog versions are dropped across exact rerun FR-005 FR-006 SCN-003 DESIGN-REQ-014
+- [X] T027 Update authoritative task input snapshot behavior in `moonmind/workflows/tasks/task_contract.py` only if T015 proves task-level or step-level `runtimeCommand` fields are incomplete or dropped FR-001 FR-002 DESIGN-REQ-002
+- [X] T028 Update Task Detail API/view model mapping in `api_service/api/routers/executions.py` or `api_service/api/routers/task_dashboard_view_model.py` to expose original instructions and runtime command interpretation for detail views FR-008 FR-009 SCN-005 DESIGN-REQ-015
+- [X] T029 Update Task Detail UI in `frontend/src/entrypoints/task-detail.tsx` to show original authored instructions alongside command, runtime, render mode, status, and version details when available FR-008 FR-009 SCN-005 SC-005 DESIGN-REQ-015
+- [X] T030 Add runtime command version-drift warning model and display behavior in `frontend/src/lib/temporalTaskEditing.ts` and `frontend/src/entrypoints/task-create.tsx` for edit-for-rerun/current-preview warnings FR-006 FR-007 SCN-004 SC-004 DESIGN-REQ-014
+- [X] T031 Implement runtime command audit event construction and sanitization in `moonmind/workflows/temporal/runtime/launcher.py` or a new helper under `moonmind/workflows/temporal/runtime/` for detected, rendered, and pass-through cases FR-010 FR-011 SCN-006 DESIGN-REQ-018
+- [X] T032 Wire runtime command audit events through existing observability or control-event surfaces in `api_service/api/routers/task_runs.py` and `moonmind/workflows/temporal/runtime/launcher.py` without adding new persistent tables FR-010 FR-011 FR-012 SCN-006 SC-006 DESIGN-REQ-018
+- [X] T033 Ensure UI display and audit serialization treat command names, args, instruction bodies, and diagnostics as untrusted text in `frontend/src/entrypoints/task-detail.tsx`, `frontend/src/entrypoints/task-create.tsx`, and `moonmind/workflows/temporal/runtime/launcher.py` FR-011 DESIGN-REQ-018
 
 ### Story Validation
 
-- [ ] T034 Run focused frontend unit tests with `./tools/test_unit.sh --ui-args frontend/src/lib/temporalTaskEditing.test.ts frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx` and fix failures in `frontend/src/lib/temporalTaskEditing.ts`, `frontend/src/entrypoints/task-create.tsx`, and `frontend/src/entrypoints/task-detail.tsx`
-- [ ] T035 Run focused Python unit tests with `./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/runtime/test_runtime_command_audit_events.py` and fix failures in `moonmind/workflows/tasks/task_contract.py` and `moonmind/workflows/temporal/runtime/launcher.py`
-- [ ] T036 Run focused integration coverage for `tests/integration/api/test_runtime_command_historical_fidelity.py` with `./tools/test_integration.sh` or the documented integration_ci equivalent and fix failures in API/workflow boundaries
-- [ ] T037 Verify the single story end to end against `specs/357-preserve-slash-command-fidelity/quickstart.md`, including edit mode, exact rerun, edit-for-rerun, task details, and audit event checks FR-012 SC-001 SC-002 SC-003 SC-004 SC-005 SC-006
+- [X] T034 Run focused frontend unit tests with `./tools/test_unit.sh --ui-args frontend/src/lib/temporalTaskEditing.test.ts frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx` and fix failures in `frontend/src/lib/temporalTaskEditing.ts`, `frontend/src/entrypoints/task-create.tsx`, and `frontend/src/entrypoints/task-detail.tsx`
+- [X] T035 Run focused Python unit tests with `./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/runtime/test_runtime_command_audit_events.py` and fix failures in `moonmind/workflows/tasks/task_contract.py` and `moonmind/workflows/temporal/runtime/launcher.py`
+- [X] T036 Run focused integration coverage for `tests/integration/api/test_runtime_command_historical_fidelity.py` with `./tools/test_integration.sh` or the documented integration_ci equivalent and fix failures in API/workflow boundaries
+- [X] T037 Verify the single story end to end against `specs/357-preserve-slash-command-fidelity/quickstart.md`, including edit mode, exact rerun, edit-for-rerun, task details, and audit event checks FR-012 SC-001 SC-002 SC-003 SC-004 SC-005 SC-006
 
 **Checkpoint**: The MM-687 story is fully functional, covered by unit and integration tests, and independently testable.
 
@@ -121,12 +121,12 @@
 
 **Purpose**: Strengthen the completed story without adding scope.
 
-- [ ] T038 [P] Review `specs/357-preserve-slash-command-fidelity/contracts/slash-command-fidelity.md` against implemented UI/API/audit behavior and update only if implementation reveals contract drift FR-013 SC-007
-- [ ] T039 Add or refine edge-case tests for escaped literal slash text, malformed command metadata, opaque unknown commands, and missing historical metadata in `frontend/src/entrypoints/task-create.test.tsx`, `frontend/src/entrypoints/task-detail.test.tsx`, and `tests/unit/workflows/temporal/runtime/test_runtime_command_audit_events.py` FR-004 FR-010 FR-011 DESIGN-REQ-018
-- [ ] T040 [P] Confirm no secret-like values are emitted by new audit/detail payloads by reviewing tests in `tests/unit/workflows/temporal/runtime/test_runtime_command_audit_events.py` and `tests/integration/api/test_runtime_command_historical_fidelity.py` FR-011 DESIGN-REQ-018
-- [ ] T041 Run full unit suite with `./tools/test_unit.sh` after focused tests pass
-- [ ] T042 Run hermetic integration suite with `./tools/test_integration.sh` after unit tests pass, or document the managed-environment blocker in `specs/357-preserve-slash-command-fidelity/quickstart.md` if Docker is unavailable
-- [ ] T043 Verify MM-687 and the original Jira preset brief remain preserved in `specs/357-preserve-slash-command-fidelity/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/slash-command-fidelity.md`, `quickstart.md`, `tasks.md`, implementation notes, commit text, and pull request metadata FR-013 SC-007
+- [X] T038 [P] Review `specs/357-preserve-slash-command-fidelity/contracts/slash-command-fidelity.md` against implemented UI/API/audit behavior and update only if implementation reveals contract drift FR-013 SC-007
+- [X] T039 Add or refine edge-case tests for escaped literal slash text, malformed command metadata, opaque unknown commands, and missing historical metadata in `frontend/src/entrypoints/task-create.test.tsx`, `frontend/src/entrypoints/task-detail.test.tsx`, and `tests/unit/workflows/temporal/runtime/test_runtime_command_audit_events.py` FR-004 FR-010 FR-011 DESIGN-REQ-018
+- [X] T040 [P] Confirm no secret-like values are emitted by new audit/detail payloads by reviewing tests in `tests/unit/workflows/temporal/runtime/test_runtime_command_audit_events.py` and `tests/integration/api/test_runtime_command_historical_fidelity.py` FR-011 DESIGN-REQ-018
+- [X] T041 Run full unit suite with `./tools/test_unit.sh` after focused tests pass
+- [X] T042 Run hermetic integration suite with `./tools/test_integration.sh` after unit tests pass, or document the managed-environment blocker in `specs/357-preserve-slash-command-fidelity/quickstart.md` if Docker is unavailable
+- [X] T043 Verify MM-687 and the original Jira preset brief remain preserved in `specs/357-preserve-slash-command-fidelity/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/slash-command-fidelity.md`, `quickstart.md`, `tasks.md`, implementation notes, commit text, and pull request metadata FR-013 SC-007
 - [ ] T044 Run `/speckit.verify` against `specs/357-preserve-slash-command-fidelity/spec.md` after implementation and required tests pass, validating MM-687, the original preset brief, source design mappings, requirement coverage, and test evidence
 
 ---

@@ -170,6 +170,49 @@ export type TemporalArtifactEditUpdatePayload = {
   parametersPatch?: Record<string, unknown>;
 };
 
+export type RuntimeCommandVersionConfig = {
+  capabilityVersion?: unknown;
+  hintCatalogVersion?: unknown;
+};
+
+export function buildRuntimeCommandVersionWarnings(
+  runtimeCommand: Record<string, unknown> | null | undefined,
+  currentConfig: RuntimeCommandVersionConfig | null | undefined,
+): string[] {
+  const command = objectValue(runtimeCommand);
+  const config = objectValue(currentConfig);
+  if (Object.keys(command).length === 0 || Object.keys(config).length === 0) {
+    return [];
+  }
+
+  const warnings: string[] = [];
+  const storedCapabilityVersion = stringValue(command.runtimeCapabilityVersion);
+  const currentCapabilityVersion = stringValue(config.capabilityVersion);
+  if (
+    storedCapabilityVersion &&
+    currentCapabilityVersion &&
+    storedCapabilityVersion !== currentCapabilityVersion
+  ) {
+    warnings.push(
+      `Runtime command capability version changed from ${storedCapabilityVersion} to ${currentCapabilityVersion}.`,
+    );
+  }
+
+  const storedHintCatalogVersion = stringValue(command.hintCatalogVersion);
+  const currentHintCatalogVersion = stringValue(config.hintCatalogVersion);
+  if (
+    storedHintCatalogVersion &&
+    currentHintCatalogVersion &&
+    storedHintCatalogVersion !== currentHintCatalogVersion
+  ) {
+    warnings.push(
+      `Runtime command hint catalog version changed from ${storedHintCatalogVersion} to ${currentHintCatalogVersion}.`,
+    );
+  }
+
+  return warnings;
+}
+
 export function buildTemporalArtifactEditUpdatePayload({
   updateName,
   inputArtifactRef,
@@ -358,10 +401,11 @@ function firstObjectValue(...values: unknown[]): Record<string, unknown> {
 
 function taskInstructionsFrom(...tasks: Record<string, unknown>[]): string {
   for (const task of tasks) {
-    const instructions = [
-      stringValue(task.instructions),
-      ...stepInstructions(task.steps),
-    ].filter(Boolean);
+    const objectiveInstructions = stringValue(task.instructions);
+    if (objectiveInstructions) {
+      return objectiveInstructions;
+    }
+    const instructions = stepInstructions(task.steps);
     if (instructions.length > 0) {
       return instructions.join('\n\n');
     }
@@ -667,6 +711,14 @@ function snapshotDraftTask(
   const task: Record<string, unknown> = {
     ...(stringValue(snapshotDraft.instructions)
       ? { instructions: stringValue(snapshotDraft.instructions) }
+      : {}),
+    ...(Object.keys(firstObjectValue(snapshotDraft.runtimeCommand, snapshotDraft.runtime_command)).length > 0
+      ? {
+          runtimeCommand: firstObjectValue(
+            snapshotDraft.runtimeCommand,
+            snapshotDraft.runtime_command,
+          ),
+        }
       : {}),
     ...(Object.keys(primarySkill).length > 0
       ? {

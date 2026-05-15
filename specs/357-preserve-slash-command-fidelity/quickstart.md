@@ -70,3 +70,10 @@ Run before handing off to `/moonspec.verify`:
 ```
 
 If Docker is unavailable for integration tests in the managed environment, record the blocker and keep the focused unit evidence plus any integration tests added.
+
+## Managed Environment Evidence
+
+- 2026-05-15: Focused Python unit coverage passed with `./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/runtime/test_runtime_command_audit_events.py`.
+- 2026-05-15: Full frontend Vitest coverage passed with `./node_modules/.bin/vitest run --config frontend/vite.config.ts`.
+- 2026-05-15: Focused hermetic integration coverage passed with `pytest tests/integration/api/test_runtime_command_historical_fidelity.py -q --tb=short`.
+- 2026-05-15: Full `./tools/test_integration.sh` could not run in this managed environment because Docker image build access returned `403 Forbidden` from administrative rules.

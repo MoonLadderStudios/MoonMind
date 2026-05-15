@@ -14,6 +14,7 @@ import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
 import {
   buildTemporalArtifactEditUpdatePayload,
+  buildRuntimeCommandVersionWarnings,
   buildTemporalSubmissionDraftFromExecution,
   resolveTaskSubmitPageMode,
 } from "../lib/temporalTaskEditing";
@@ -82,6 +83,22 @@ const mockPayload: BootPayload = {
       },
     },
   },
+};
+
+const historicalRuntimeCommand = {
+  kind: "slash_command",
+  sourcePath: "objective.instructions",
+  command: "review",
+  rawCommand: "/review",
+  args: "",
+  instructionBody: "Check the branch.",
+  detectionStatus: "detected",
+  hintStatus: "hinted",
+  recognitionMode: "hinted_runtime_passthrough",
+  targetRuntime: "codex_cli",
+  runtimeCapabilityVersion: "2026-05-12",
+  hintCatalogVersion: "2026-05-12",
+  detectionPhase: "submit",
 };
 
 function withJiraIntegration(payload: BootPayload = mockPayload): BootPayload {
@@ -2020,6 +2037,7 @@ describe.skip("Task Create Entrypoint", () => {
                   task: {
                     title: "Break down the Grid UI overlay plan.",
                     instructions: "Break down the Grid UI overlay plan.",
+                    runtimeCommand: historicalRuntimeCommand,
                     runtime: {
                       mode: "codex_cli",
                       model: "gpt-5.5",
@@ -3818,6 +3836,38 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
+  it("preserves historical runtime command metadata and catalog versions for exact rerun drafts", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:slash-rerun",
+        workflowType: "MoonMind.Run",
+        runId: "run-source",
+        targetRuntime: "codex_cli",
+        inputParameters: {
+          task: {
+            instructions: "Inline fallback should not replace the snapshot.",
+          },
+        },
+      },
+      {
+        snapshotVersion: 1,
+        draft: {
+          taskShape: "skill_only",
+          instructions: "/review\nCheck the branch.",
+          runtime: "codex_cli",
+          runtimeCommand: historicalRuntimeCommand,
+        },
+      },
+    );
+
+    expect(draft.taskInstructions).toBe("/review\nCheck the branch.");
+    expect(draft.runtimeCommand).toMatchObject({
+      command: "review",
+      runtimeCapabilityVersion: "2026-05-12",
+      hintCatalogVersion: "2026-05-12",
+    });
+  });
+
   it("submits edit-for-rerun with edited_full_retry provenance pinned to the source run", async () => {
     window.history.pushState(
       {},
@@ -3862,6 +3912,22 @@ describe.skip("Task Create Entrypoint", () => {
           },
         },
       },
+    });
+  });
+
+  it("reports current preview version drift without mutating source-run command metadata", () => {
+    const warnings = buildRuntimeCommandVersionWarnings(historicalRuntimeCommand, {
+      capabilityVersion: "2026-05-13",
+      hintCatalogVersion: "2026-05-13",
+    });
+
+    expect(warnings).toEqual([
+      "Runtime command capability version changed from 2026-05-12 to 2026-05-13.",
+      "Runtime command hint catalog version changed from 2026-05-12 to 2026-05-13.",
+    ]);
+    expect(historicalRuntimeCommand).toMatchObject({
+      runtimeCapabilityVersion: "2026-05-12",
+      hintCatalogVersion: "2026-05-12",
     });
   });
 
