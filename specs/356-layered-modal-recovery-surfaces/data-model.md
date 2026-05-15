@@ -10,13 +10,13 @@ Fields and state:
 - `message`: Player-facing modal text or status content.
 - `blocks_interaction`: Whether non-modal player interaction is blocked while active.
 - `available_actions`: Ordered modal actions available to the player.
-- `prior_state`: Optional frontend destination for Dismiss.
+- `prior_state_id`: Optional frontend destination for Dismiss.
 - `recovery_action`: Optional captured action available to Retry.
 
 Validation rules:
 - Progress and blocking error modal states must block conflicting non-modal interaction.
 - Retry must only be available or executable when a valid recovery action exists.
-- Dismiss must resolve to `prior_state` when present, otherwise Home.
+- Dismiss must resolve to `prior_state_id` when present, otherwise Home.
 - Confirmation modals must define explicit outcomes before presentation.
 
 ## Recovery Action

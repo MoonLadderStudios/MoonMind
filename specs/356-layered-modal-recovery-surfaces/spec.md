@@ -27,14 +27,14 @@ As a player, I want progress, error, retry, dismiss, and confirmation modals to 
 
 **Acceptance Scenarios**:
 
-1. **Given** a production frontend flow needs to show a progress state, **When** the progress modal is presented, **Then** it appears through the modal layer and blocks conflicting interaction until dismissed or replaced by the next outcome.
-2. **Given** a production frontend flow encounters a blocking error, **When** the error modal is presented, **Then** it appears through the modal layer with the same base interaction behavior used by other modal states.
-3. **Given** a retryable failure captures a recovery action, **When** the player chooses Retry, **Then** the captured recovery action is executed exactly once for that retry attempt.
-4. **Given** a modal is dismissed without an explicit prior state, **When** the player chooses Dismiss, **Then** the frontend returns to Home.
-5. **Given** a modal is dismissed with an explicit prior state configured, **When** the player chooses Dismiss, **Then** the frontend returns to that prior state instead of Home.
-6. **Given** a confirmation modal asks the player to confirm or cancel an action, **When** the player chooses either option, **Then** the selected outcome is routed consistently and the modal leaves the layer stack.
-7. **Given** authored presentation assets are unavailable, **When** native fallback modals are used, **Then** progress, error, retry, dismiss, and confirmation flows remain usable without authored subclasses.
-8. **Given** modal flows are exercised by automation, **When** progress, blocking error, retry, dismiss, and layer push/dismiss behaviors run, **Then** each required behavior is verified independently.
+1. **SCN-001**: **Given** a production frontend flow needs to show a progress state, **When** the progress modal is presented, **Then** it appears through the modal layer and blocks conflicting interaction until dismissed or replaced by the next outcome.
+2. **SCN-002**: **Given** a production frontend flow encounters a blocking error, **When** the error modal is presented, **Then** it appears through the modal layer with the same base interaction behavior used by other modal states.
+3. **SCN-003**: **Given** a retryable failure captures a recovery action, **When** the player chooses Retry, **Then** the captured recovery action is executed exactly once for that retry attempt.
+4. **SCN-004**: **Given** a modal is dismissed without an explicit prior state, **When** the player chooses Dismiss, **Then** the frontend returns to Home.
+5. **SCN-005**: **Given** a modal is dismissed with an explicit prior state configured, **When** the player chooses Dismiss, **Then** the frontend returns to that prior state instead of Home.
+6. **SCN-006**: **Given** a confirmation modal asks the player to confirm or cancel an action, **When** the player chooses either option, **Then** the selected outcome is routed consistently and the modal leaves the layer stack.
+7. **SCN-007**: **Given** authored presentation assets are unavailable, **When** native fallback modals are used, **Then** progress, error, retry, dismiss, and confirmation flows remain usable without authored subclasses.
+8. **SCN-008**: **Given** modal flows are exercised by automation, **When** progress, blocking error, retry, dismiss, and layer push/dismiss behaviors run, **Then** each required behavior is verified independently.
 
 ### Edge Cases
 

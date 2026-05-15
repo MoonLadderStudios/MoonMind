@@ -12,8 +12,7 @@ Checked `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/modal-r
 ## Prerequisite Check
 
 - Attempted `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks`.
-- Result: blocked because the current branch is `run-jira-orchestrate-for-thor-405-c25a6886`, while the script expects a numeric Moon Spec branch name such as `356-layered-modal-recovery-surfaces`.
-- Re-run with `SPECIFY_FEATURE=356-layered-modal-recovery-surfaces`: PASS; available docs are `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `tasks.md`.
+- Result: PASS on branch `356-layered-modal-recovery-surfaces`; available docs are `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `tasks.md`.
 
 ## Findings
 
@@ -30,9 +29,9 @@ Checked `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/modal-r
 
 ## Changes Applied
 
-- Created this alignment report to record post-task-generation alignment and the prerequisite-script branch-name blocker.
+- Created this alignment report to record post-task-generation alignment and prerequisite-script verification.
 
 ## Residual Risks
 
 - Runtime implementation and test execution are blocked until the workflow runs in the actual THOR Tactics repository.
-- The prerequisite script requires `SPECIFY_FEATURE=356-layered-modal-recovery-surfaces` in this managed branch unless the branch is renamed to a numeric Moon Spec branch.
+- The prerequisite script requires the PR branch to remain aligned with `356-layered-modal-recovery-surfaces` for default branch-based detection.
