@@ -34,7 +34,7 @@ description: "Tasks for transitioning Jira issue MM-658 to status 'In Progress' 
 | FR-004 (only via trusted Jira tools, no raw HTTP) | implemented_verified | Existing evidence; preserved through final validation only. |
 | FR-005 (re-read and report verified final status) | implemented_unverified | Verification test on `jira.get_issue` post-call + run-report assertion. Verification-only; conditional fallback if verification fails. |
 | FR-006 (already `In Progress` ⇒ no-op) | partial | Unit + integration test asserting zero `transition_issue` invocation when prior status equals `In Progress`. Code-and-test work. |
-| FR-007 (named errors: no-match / ambiguous / not-found / missing-fields / tool-unavailable / auth-or-permission / transient / final-status-mismatch) | partial | Unit + integration tests for each named error path; assert no mutation. Code-and-test work. |
+| FR-007 (named errors: no-match / ambiguous / not-found / missing-fields / tool-unavailable / auth-or-permission / transient / validation / final-status-mismatch) | partial | Unit + integration tests for each named error path; assert no mutation. Code-and-test work. |
 | FR-008 (no other field updates, no other issues) | implemented_verified | Existing evidence; preserved through final validation; integration test asserts `fields={}` and `update={}`. |
 | FR-009 (no secrets in any output) | implemented_verified | Existing redactor pipeline; preserved through final validation; run-report scan in quickstart. |
 | FR-010 (final report: issue key, prior status, action, verified final status) | implemented_unverified | Verification test on the run-report shape (per `data-model.md`) + conditional fallback emission. |
@@ -133,12 +133,13 @@ Status counts: `partial` = 9, `implemented_unverified` = 7, `implemented_verifie
 - [ ] T021 [P] Add failing integration test for `stopped:transient_failure` (call 2 or 3 raises 5xx/rate-limit `JiraToolError`; assert no ad-hoc retry, no claim of success, `priorStatus` preserved) covering FR-004, FR-007, SC-002 in tests/integration/workflows/temporal/test_transition_mm658_integration.py
 - [ ] T022 [P] Add failing integration test for `stopped:missing_required_fields` (matched transition declares `required: true` field; assert `missingFields` lists field IDs only and zero `jira.transition_issue` call) covering FR-007, FR-008, FR-009, SC-002 in tests/integration/workflows/temporal/test_transition_mm658_integration.py
 - [ ] T023 [P] Add failing integration test for `stopped:final_status_mismatch` (call 4 returns a status other than `In Progress`; assert `verifiedFinalStatus=<observed>` and `outcome="stopped:final_status_mismatch"`) covering FR-005, FR-007, FR-010, SC-002 in tests/integration/workflows/temporal/test_transition_mm658_integration.py
+- [ ] T023a [P] Add failing integration test for `stopped:validation_failure` (call 2 or 3 raises a non-auth 4xx `JiraToolError` such as 400 or 422 that is not a missing-required-field surface; assert `outcome="stopped:validation_failure"`, no `jira.transition_issue` retry, and a sanitized `errorReason`) covering FR-007, FR-009, SC-002, SC-003 in tests/integration/workflows/temporal/test_transition_mm658_integration.py
 - [ ] T024 [P] Add failing integration assertion that across every scenario, no Jira tool call uses an `issue_key` other than `"MM-658"` and `jira.edit_issue` / `jira.add_comment` / `jira.create_subtask` are never invoked covering FR-001, FR-008, DESIGN-REQ-001, DESIGN-REQ-003, SC-004 in tests/integration/workflows/temporal/test_transition_mm658_integration.py
 
 ### Red-First Confirmation
 
 - [ ] T025 Run `./tools/test_unit.sh tests/unit/workflows/temporal/test_transition_mm658.py` and confirm T008–T013 fail for the expected reason (missing inline orchestration / missing run-report builder), capturing the failure output for the run record (FR-001, FR-003, FR-006, FR-007, FR-009, FR-010, SC-002, SC-003)
-- [ ] T026 Run `./tools/test_integration.sh -- tests/integration/workflows/temporal/test_transition_mm658_integration.py` and confirm T014–T024 fail for the expected reason (no orchestration emits the run-report), capturing the failure output for the run record (SCN-001, SCN-002, SCN-003, SCN-004, FR-005, FR-007, FR-008, SC-001, SC-002, SC-004)
+- [ ] T026 Run `./tools/test_integration.sh -- tests/integration/workflows/temporal/test_transition_mm658_integration.py` and confirm T014–T023a and T024 fail for the expected reason (no orchestration emits the run-report), capturing the failure output for the run record (SCN-001, SCN-002, SCN-003, SCN-004, FR-005, FR-007, FR-008, SC-001, SC-002, SC-004)
 
 ### Verification of Already-Implemented Behavior (before fallback work)
 
@@ -201,7 +202,7 @@ Status counts: `partial` = 9, `implemented_unverified` = 7, `implemented_verifie
 ### Within The Story
 
 - T008–T013 (unit tests) MUST be authored before any implementation task.
-- T014–T024 (integration tests) MUST be authored before any implementation task.
+- T014–T024 (integration tests, including T023a) MUST be authored before any implementation task.
 - T025–T026 (red-first confirmation) MUST run and confirm failure before T035–T041 begin.
 - T027–T030 (verification tests) MUST run before T031–T034 (conditional fallbacks); T031–T034 are skipped when their paired verification passes.
 - T035–T041 (orchestration implementation) MUST run after red-first confirmation and conditional fallbacks have settled.
@@ -212,7 +213,7 @@ Status counts: `partial` = 9, `implemented_unverified` = 7, `implemented_verifie
 
 - T002–T005 in Phase 1 are `[P]` and can run together (different concerns / different reservation actions).
 - T008–T013 are `[P]` because they describe distinct, non-overlapping test functions in tests/unit/workflows/temporal/test_transition_mm658.py; serialize if your repo's test-edit policy requires single-author edits to a file.
-- T014–T024 are `[P]` for the same reason as T008–T013, in tests/integration/workflows/temporal/test_transition_mm658_integration.py.
+- T014–T024 (including T023a) are `[P]` for the same reason as T008–T013, in tests/integration/workflows/temporal/test_transition_mm658_integration.py.
 - T048–T050 in Phase 4 are `[P]` (different files / different scopes).
 
 ---
