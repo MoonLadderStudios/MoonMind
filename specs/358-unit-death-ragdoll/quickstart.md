@@ -56,3 +56,10 @@ Target command:
 ## Current Workspace Blocker
 
 This managed run is operating in the MoonMind repository, not the THOR Tactics gameplay repository. No runtime implementation or gameplay test execution can be completed here until the target source is available.
+
+Implementation attempt evidence:
+
+- Checklist gate passed: `specs/358-unit-death-ragdoll/checklists/requirements.md` has 21 completed items and 0 incomplete items.
+- MoonSpec prerequisite script could not resolve the active feature because the managed branch is `run-jira-orchestrate-for-thor-407-5bc400d9`, not an `NNN-feature-name` branch.
+- Target workspace check found no `.uproject`, no `Source/ThorTactics`, no `Source/ThorTactics/Units/UnitDeathState.h`, no `Source/ThorTactics/Tests/Units/UnitDeathStateTests.cpp`, and no `Docs/TacticsUnits_Core/UnitDeathAndRagdoll.md` in this checkout.
+- `tasks.md` task T001 remains incomplete because there is no target THOR gameplay workspace path to record.
