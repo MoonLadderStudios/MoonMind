@@ -29,6 +29,7 @@ const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
 const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
+const JIRA_IMPLEMENT_PRESET_SLUG = "jira-implement";
 const SELF_MANAGED_PUBLISH_SKILLS = new Set([
   ...PR_RESOLVER_SKILLS,
   JIRA_BREAKDOWN_PRESET_SLUG,
@@ -41,6 +42,7 @@ const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
     "sourcedesignpath",
     "constraints",
   ]),
+  [JIRA_IMPLEMENT_PRESET_SLUG]: new Set(["constraints"]),
   [MOONSPEC_ORCHESTRATE_PRESET_SLUG]: new Set(["orchestrationmode"]),
 };
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";

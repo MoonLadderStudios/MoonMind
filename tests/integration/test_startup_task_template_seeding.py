@@ -181,6 +181,75 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         result = await session.execute(
             select(TaskStepTemplate)
             .where(
+                TaskStepTemplate.slug == "jira-implement",
+                TaskStepTemplate.scope_type == TaskTemplateScopeType.GLOBAL,
+                TaskStepTemplate.scope_ref.is_(None),
+            )
+            .options(selectinload(TaskStepTemplate.latest_version))
+        )
+        jira_implement_template = result.scalar_one_or_none()
+        assert jira_implement_template is not None
+        assert jira_implement_template.latest_version is not None
+        implement_annotations = (
+            jira_implement_template.latest_version.annotations or {}
+        )
+        assert implement_annotations["inputSchema"]["required"] == ["jira_issue"]
+        assert implement_annotations["inputSchema"]["properties"]["jira_issue"][
+            "required"
+        ] == ["key"]
+        assert (
+            implement_annotations["uiSchema"]["jira_issue"]["widget"]
+            == "jira.issue-picker"
+        )
+        assert (
+            implement_annotations["uiSchema"]["jira_issue"]["allowManualKeyEntry"]
+            is True
+        )
+        assert (
+            implement_annotations.get("postMergeJiraCompletion") == "done_category"
+        )
+        jira_implement_steps = [
+            (step.get("skill") or step.get("tool"))["id"]
+            for step in jira_implement_template.latest_version.steps
+        ]
+        assert jira_implement_steps[0] == "jira-issue-updater"
+        assert jira_implement_steps[1] == "jira.check_blockers"
+        assert jira_implement_steps[2] == "jira.load_preset_brief"
+        assert jira_implement_steps[-1] == "jira-issue-updater"
+        assert len(jira_implement_steps) == 7
+        implement_step_titles = [
+            step["title"] for step in jira_implement_template.latest_version.steps
+        ]
+        assert implement_step_titles[0] == "Move Jira issue to In Progress"
+        assert "Implement the Jira issue" in implement_step_titles
+        assert "Create pull request" in implement_step_titles
+        assert implement_step_titles[-1] == "Move Jira issue to Code Review"
+        implement_blocker_step = jira_implement_template.latest_version.steps[1]
+        assert implement_blocker_step["type"] == "tool"
+        assert implement_blocker_step["tool"]["id"] == "jira.check_blockers"
+        assert (
+            "deterministic trusted Jira blocker preflight"
+            in implement_blocker_step["instructions"]
+        )
+        implement_brief_step = jira_implement_template.latest_version.steps[2]
+        assert implement_brief_step["type"] == "tool"
+        assert implement_brief_step["tool"]["id"] == "jira.load_preset_brief"
+        implement_pr_step = next(
+            step
+            for step in jira_implement_template.latest_version.steps
+            if step["title"] == "Create pull request"
+        )
+        assert "merge automation" in implement_pr_step["instructions"]
+        assert "Done automatically" in implement_pr_step["instructions"]
+        assert "artifacts/jira-implement-pr.json" in implement_pr_step["instructions"]
+        implement_code_review_step = jira_implement_template.latest_version.steps[-1]
+        assert implement_code_review_step["title"] == "Move Jira issue to Code Review"
+        assert "Code Review" in implement_code_review_step["instructions"]
+        assert "pull_request_url" in implement_code_review_step["instructions"]
+
+        result = await session.execute(
+            select(TaskStepTemplate)
+            .where(
                 TaskStepTemplate.slug == "jira-breakdown-orchestrate",
                 TaskStepTemplate.scope_type == TaskTemplateScopeType.GLOBAL,
                 TaskStepTemplate.scope_ref.is_(None),
