@@ -15,6 +15,7 @@ with workflow.unsafe.imports_passed_through():
         AgentRunHandle,
         AgentRunResult,
         AgentRunStatus as AgentRunStatusModel,
+        ProfileSelector,
         _MAX_SUMMARY_CHARS,
     )
     from moonmind.schemas.temporal_activity_models import (
@@ -1092,6 +1093,11 @@ class MoonMindAgentRun:
         )
         if isinstance(parameters_patch, Mapping):
             update_payload["parametersPatch"] = dict(parameters_patch)
+        profile_selector = payload.get("profileSelector") or payload.get(
+            "profile_selector"
+        )
+        if isinstance(profile_selector, Mapping):
+            update_payload["profileSelector"] = dict(profile_selector)
         if update_payload:
             self._pending_runtime_selection_update = update_payload
             self.runtime_selection_updated_event.set()
@@ -1164,9 +1170,77 @@ class MoonMindAgentRun:
 
         target_runtime = str(payload.get("targetRuntime") or "").strip()
         if target_runtime:
+            request.agent_id = target_runtime
             params["targetRuntime"] = target_runtime
             task_runtime["mode"] = target_runtime
             authored_runtime["mode"] = target_runtime
+
+        profile_selector_payload = payload.get("profileSelector")
+        if not isinstance(profile_selector_payload, Mapping):
+            candidate_selector = (
+                parameters_patch.get("profileSelector")
+                or parameters_patch.get("profile_selector")
+                if isinstance(parameters_patch, Mapping)
+                else None
+            )
+            if isinstance(candidate_selector, Mapping):
+                profile_selector_payload = candidate_selector
+        if not isinstance(profile_selector_payload, Mapping):
+            task_patch = (
+                parameters_patch.get("task")
+                if isinstance(parameters_patch, Mapping)
+                else None
+            )
+            task_runtime_patch = (
+                task_patch.get("runtime") if isinstance(task_patch, Mapping) else None
+            )
+            task_selector = (
+                task_runtime_patch.get("profileSelector")
+                or task_runtime_patch.get("profile_selector")
+                if isinstance(task_runtime_patch, Mapping)
+                else None
+            )
+            if isinstance(task_selector, Mapping):
+                profile_selector_payload = task_selector
+        if not isinstance(profile_selector_payload, Mapping):
+            authored_patch = (
+                parameters_patch.get("authoredTaskInput")
+                if isinstance(parameters_patch, Mapping)
+                else None
+            )
+            authored_runtime_patch = (
+                authored_patch.get("runtime")
+                if isinstance(authored_patch, Mapping)
+                else None
+            )
+            authored_selector = (
+                authored_runtime_patch.get("profileSelector")
+                or authored_runtime_patch.get("profile_selector")
+                if isinstance(authored_runtime_patch, Mapping)
+                else None
+            )
+            if isinstance(authored_selector, Mapping):
+                profile_selector_payload = authored_selector
+
+        if isinstance(profile_selector_payload, Mapping):
+            request.profile_selector = ProfileSelector.model_validate(
+                dict(profile_selector_payload)
+            )
+            selector_params = request.profile_selector.model_dump(
+                by_alias=True,
+                exclude_none=True,
+            )
+            params["profileSelector"] = selector_params
+            task_runtime["profileSelector"] = selector_params
+            authored_runtime["profileSelector"] = selector_params
+        elif profile_id:
+            request.profile_selector = ProfileSelector()
+            params.pop("profileSelector", None)
+            params.pop("profile_selector", None)
+            task_runtime.pop("profileSelector", None)
+            task_runtime.pop("profile_selector", None)
+            authored_runtime.pop("profileSelector", None)
+            authored_runtime.pop("profile_selector", None)
 
         if task_runtime:
             task_payload["runtime"] = task_runtime
@@ -1176,21 +1250,80 @@ class MoonMindAgentRun:
             params["authoredTaskInput"] = authored_payload
         request.parameters = params
 
+    def _validate_synced_profile_selection(
+        self,
+        *,
+        profile_count: int,
+        runtime_id: str,
+        request: AgentExecutionRequest,
+    ) -> None:
+        if profile_count == 0:
+            raise ApplicationError(
+                f"No enabled provider profiles found for runtime_id='{runtime_id}'",
+                type="ProfileResolutionError",
+                non_retryable=True,
+            )
+        if request.execution_profile_ref:
+            requested_profile_id = str(request.execution_profile_ref).strip()
+            if (
+                requested_profile_id
+                and self._profile_snapshots
+                and requested_profile_id not in self._profile_snapshots
+            ):
+                raise ApplicationError(
+                    f"Provider profile '{requested_profile_id}' not found for runtime_id='{runtime_id}'",
+                    type="ProfileResolutionError",
+                    non_retryable=True,
+                )
+
     async def _consume_runtime_selection_update_for_slot_wait(
         self,
         *,
         request: AgentExecutionRequest,
         manager_id: str,
         runtime_id: str,
-    ) -> workflow.ExternalWorkflowHandle:
+    ) -> tuple[workflow.ExternalWorkflowHandle, str, str]:
         payload = self._pending_runtime_selection_update
         self._pending_runtime_selection_update = None
         self.runtime_selection_updated_event.clear()
+        previous_manager_id = manager_id
         if payload:
             self._apply_runtime_selection_update(request, payload)
+        runtime_id = self._managed_runtime_id(request.agent_id)
+        manager_id = self._manager_workflow_id(runtime_id)
+        if manager_id != previous_manager_id:
+            previous_manager_handle = workflow.get_external_workflow_handle(
+                previous_manager_id
+            )
+            try:
+                await previous_manager_handle.signal(
+                    "release_slot",
+                    self._release_slot_payload(
+                        profile_id=self._assigned_profile_id,
+                        request=request,
+                    ),
+                )
+            except ApplicationError as exc:
+                if "ExternalWorkflowExecutionNotFound" not in (
+                    getattr(exc, "type", None) or str(exc)
+                ):
+                    raise
+            self.slot_assigned_event.clear()
+            self._assigned_profile_id = None
         selector_payload = request.profile_selector.model_dump(
             by_alias=True,
             exclude_none=True,
+        )
+        manager_handle = await self._ensure_manager_started(manager_id, runtime_id)
+        profile_count = await self._sync_manager_profiles(
+            manager_id=manager_id,
+            manager_handle=manager_handle,
+            runtime_id=runtime_id,
+        )
+        self._validate_synced_profile_selection(
+            profile_count=profile_count,
+            runtime_id=runtime_id,
+            request=request,
         )
         manager_handle = await self._ensure_manager_and_signal(
             manager_id,
@@ -1199,14 +1332,9 @@ class MoonMindAgentRun:
             execution_profile_ref=request.execution_profile_ref,
             profile_selector=selector_payload,
         )
-        await self._sync_manager_profiles(
-            manager_id=manager_id,
-            manager_handle=manager_handle,
-            runtime_id=runtime_id,
-        )
         self._awaiting_slot_reason_override = None
         self._slot_wait_timeout_override_seconds = None
-        return manager_handle
+        return manager_handle, manager_id, runtime_id
 
     @staticmethod
     def _normalize_external_status(
@@ -1480,24 +1608,11 @@ class MoonMindAgentRun:
                             manager_handle=manager_handle,
                             runtime_id=runtime_id,
                         )
-                    if profile_count == 0:
-                        raise ApplicationError(
-                            f"No enabled provider profiles found for runtime_id='{runtime_id}'",
-                            type="ProfileResolutionError",
-                            non_retryable=True,
-                        )
-                    if request.execution_profile_ref:
-                        requested_profile_id = str(request.execution_profile_ref).strip()
-                        if (
-                            requested_profile_id
-                            and self._profile_snapshots
-                            and requested_profile_id not in self._profile_snapshots
-                        ):
-                            raise ApplicationError(
-                                f"Provider profile '{requested_profile_id}' not found for runtime_id='{runtime_id}'",
-                                type="ProfileResolutionError",
-                                non_retryable=True,
-                            )
+                    self._validate_synced_profile_selection(
+                        profile_count=profile_count,
+                        runtime_id=runtime_id,
+                        request=request,
+                    )
 
                     # Wait for a provider-profile slot.
                     # Awaiting time does not count against the execution timeout;
@@ -1546,7 +1661,11 @@ class MoonMindAgentRun:
                                     self.runtime_selection_updated_event.is_set()
                                     and not self.slot_assigned_event.is_set()
                                 ):
-                                    manager_handle = await self._consume_runtime_selection_update_for_slot_wait(
+                                    (
+                                        manager_handle,
+                                        manager_id,
+                                        runtime_id,
+                                    ) = await self._consume_runtime_selection_update_for_slot_wait(
                                         request=request,
                                         manager_id=manager_id,
                                         runtime_id=runtime_id,
@@ -1636,7 +1755,11 @@ class MoonMindAgentRun:
                                 self.runtime_selection_updated_event.is_set()
                                 and not self.slot_assigned_event.is_set()
                             ):
-                                manager_handle = await self._consume_runtime_selection_update_for_slot_wait(
+                                (
+                                    manager_handle,
+                                    manager_id,
+                                    runtime_id,
+                                ) = await self._consume_runtime_selection_update_for_slot_wait(
                                     request=request,
                                     manager_id=manager_id,
                                     runtime_id=runtime_id,
