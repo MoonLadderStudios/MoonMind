@@ -26,9 +26,9 @@
 **Purpose**: Confirm the target THOR workspace and create the story-local test/code structure.
 
 - [ ] T001 Confirm the target THOR gameplay workspace contains project/build files and record the resolved project path in `specs/358-unit-death-ragdoll/quickstart.md` for THOR-407 traceability
-- [ ] T002 Create or confirm target unit death source structure in `Source/ThorTactics/Units/UnitDeathState.*`, `Source/ThorTactics/Units/UnitDeathPresentation.*`, and `Source/ThorTactics/Combat/EncounterResolution.*`
-- [ ] T003 [P] Create or confirm target unit test file `Source/ThorTactics/Tests/Units/UnitDeathStateTests.*` for FR-001 through FR-008
-- [ ] T004 [P] Create or confirm target integration test file `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.*` for SCN-001 through SCN-005
+- [ ] T002 Create or confirm target unit death source structure in `Source/ThorTactics/Units/UnitDeathState.h` and `Source/ThorTactics/Units/UnitDeathState.cpp`, `Source/ThorTactics/Units/UnitDeathPresentation.h` and `Source/ThorTactics/Units/UnitDeathPresentation.cpp`, and `Source/ThorTactics/Combat/EncounterResolution.h` and `Source/ThorTactics/Combat/EncounterResolution.cpp`
+- [ ] T003 [P] Create or confirm target unit test file `Source/ThorTactics/Tests/Units/UnitDeathStateTests.cpp` for FR-001 through FR-008
+- [ ] T004 [P] Create or confirm target integration test file `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.cpp` for SCN-001 through SCN-005
 - [ ] T005 Update target test runner configuration or local wrapper for `./tools/test_unit.sh --filter UnitDeathAndRagdoll` and `./tools/test_integration.sh --filter UnitDeathAndRagdoll` in `tools/` or the target project's equivalent test script
 
 ## Phase 2: Foundational
@@ -37,9 +37,9 @@
 
 **Checkpoint**: No story implementation work begins until this phase is complete.
 
-- [ ] T006 Add shared unit test fixture builders for living units, lethal damage, overkill damage, non-damage defeat causes, ragdoll-capable units, and non-ragdoll units in `Source/ThorTactics/Tests/Units/UnitDeathStateTests.*` covering FR-001, FR-002, FR-004, and FR-008
-- [ ] T007 Add shared integration fixture setup for encounter-like combat flow, turn order, targeting, victory checks, and cleanup in `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.*` covering SCN-001, SCN-004, and SCN-005
-- [ ] T008 Map `contracts/unit-death-ragdoll-contract.md` to target gameplay test assertions in `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.*` covering the Death Transition, Combat Participation, Presentation, and Cleanup contracts
+- [ ] T006 Add shared unit test fixture builders for living units, lethal damage, overkill damage, non-damage defeat causes, ragdoll-capable units, and non-ragdoll units in `Source/ThorTactics/Tests/Units/UnitDeathStateTests.cpp` covering FR-001, FR-002, FR-004, and FR-008
+- [ ] T007 Add shared integration fixture setup for encounter-like combat flow, turn order, targeting, victory checks, and cleanup in `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.cpp` covering SCN-001, SCN-004, and SCN-005
+- [ ] T008 Map `contracts/unit-death-ragdoll-contract.md` to target gameplay test assertions in `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.cpp` covering the Death Transition, Combat Participation, Presentation, and Cleanup contracts
 - [ ] T009 Preserve `THOR-407` and `THOR-407: Docs/TacticsUnits_Core/UnitDeathAndRagdoll.md` in implementation evidence notes in `specs/358-unit-death-ragdoll/quickstart.md` covering FR-009 and SC-006
 
 ## Phase 3: Story - Unit Death And Ragdoll
@@ -56,19 +56,19 @@
 
 ### Unit Tests
 
-- [ ] T010 [P] Add failing unit tests for lethal damage, overkill damage, and non-damage defeat causes in `Source/ThorTactics/Tests/Units/UnitDeathStateTests.*` covering FR-001 and SC-001
-- [ ] T011 [P] Add failing unit tests for exactly-one dead-state transition and repeated transition suppression in `Source/ThorTactics/Tests/Units/UnitDeathStateTests.*` covering FR-002, FR-005, and SC-004
-- [ ] T012 [P] Add failing unit tests for dead-unit action, turn, and living-combatant targeting predicates in `Source/ThorTactics/Tests/Units/UnitDeathStateTests.*` covering FR-003 and SC-002
-- [ ] T013 [P] Add failing unit tests for ragdoll-capable and non-ragdoll fallback presentation decisions in `Source/ThorTactics/Tests/Units/UnitDeathStateTests.*` covering FR-004, FR-008, and SC-003
-- [ ] T014 [P] Add failing unit tests for cleanup, despawn, or corpse persistence reference safety in `Source/ThorTactics/Tests/Units/UnitDeathStateTests.*` covering FR-007 and SCN-005
+- [ ] T010 [P] Add failing unit tests for lethal damage, overkill damage, and non-damage defeat causes in `Source/ThorTactics/Tests/Units/UnitDeathStateTests.cpp` covering FR-001 and SC-001
+- [ ] T011 [P] Add failing unit tests for exactly-one dead-state transition and repeated transition suppression in `Source/ThorTactics/Tests/Units/UnitDeathStateTests.cpp` covering FR-002, FR-005, and SC-004
+- [ ] T012 [P] Add failing unit tests for dead-unit action, turn, and living-combatant targeting predicates in `Source/ThorTactics/Tests/Units/UnitDeathStateTests.cpp` covering FR-003 and SC-002
+- [ ] T013 [P] Add failing unit tests for ragdoll-capable and non-ragdoll fallback presentation decisions in `Source/ThorTactics/Tests/Units/UnitDeathStateTests.cpp` covering FR-004, FR-008, and SC-003
+- [ ] T014 [P] Add failing unit tests for cleanup, despawn, or corpse persistence reference safety in `Source/ThorTactics/Tests/Units/UnitDeathStateTests.cpp` covering FR-007 and SCN-005
 - [ ] T015 Run `./tools/test_unit.sh --filter UnitDeathAndRagdoll` in the target THOR workspace and record expected red-first failures in `specs/358-unit-death-ragdoll/quickstart.md` covering T010 through T014
 
 ### Integration Tests
 
-- [ ] T016 [P] Add failing integration test for normal lethal damage transitioning one unit to dead and removing it from active combat in `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.*` covering SCN-001, FR-001, FR-002, FR-003, SC-001, and SC-002
-- [ ] T017 [P] Add failing integration test for death or ragdoll presentation start and fallback presentation in `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.*` covering SCN-002, FR-004, FR-008, and SC-003
-- [ ] T018 [P] Add failing integration test for repeated post-death damage, delayed effects, collisions, and duplicate notifications in `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.*` covering SCN-003, FR-005, and SC-004
-- [ ] T019 [P] Add failing integration test for turn order, targeting, victory or encounter completion, and cleanup after death in `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.*` covering SCN-004, SCN-005, FR-006, FR-007, and SC-005
+- [ ] T016 [P] Add failing integration test for normal lethal damage transitioning one unit to dead and removing it from active combat in `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.cpp` covering SCN-001, FR-001, FR-002, FR-003, SC-001, and SC-002
+- [ ] T017 [P] Add failing integration test for death or ragdoll presentation start and fallback presentation in `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.cpp` covering SCN-002, FR-004, FR-008, and SC-003
+- [ ] T018 [P] Add failing integration test for repeated post-death damage, delayed effects, collisions, and duplicate notifications in `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.cpp` covering SCN-003, FR-005, and SC-004
+- [ ] T019 [P] Add failing integration test for turn order, targeting, victory or encounter completion, and cleanup after death in `Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.cpp` covering SCN-004, SCN-005, FR-006, FR-007, and SC-005
 - [ ] T020 Run `./tools/test_integration.sh --filter UnitDeathAndRagdoll` in the target THOR workspace and record expected red-first failures in `specs/358-unit-death-ragdoll/quickstart.md` covering T016 through T019
 
 ### Red-First Confirmation
@@ -81,11 +81,11 @@
 
 ### Implementation
 
-- [ ] T023 Implement or update defeat detection in `Source/ThorTactics/Units/UnitHealth.*` and `Source/ThorTactics/Units/UnitDeathState.*` covering FR-001, SCN-001, and SC-001
-- [ ] T024 Implement stable exactly-once dead-state transition and duplicate event guards in `Source/ThorTactics/Units/UnitDeathState.*` covering FR-002, FR-005, SCN-003, and SC-004
-- [ ] T025 Implement dead-unit participation predicates and active-combat removal in `Source/ThorTactics/Combat/TurnOrder.*` and `Source/ThorTactics/Combat/Targeting.*` covering FR-003, SCN-004, and SC-002
-- [ ] T026 Implement death/ragdoll presentation trigger and non-ragdoll fallback in `Source/ThorTactics/Units/UnitDeathPresentation.*` covering FR-004, FR-008, SCN-002, and SC-003
-- [ ] T027 Implement combat flow and cleanup integration in `Source/ThorTactics/Combat/EncounterResolution.*` covering FR-006, FR-007, SCN-004, SCN-005, and SC-005
+- [ ] T023 Implement or update defeat detection in `Source/ThorTactics/Units/UnitHealth.h` and `Source/ThorTactics/Units/UnitHealth.cpp` and `Source/ThorTactics/Units/UnitDeathState.h` and `Source/ThorTactics/Units/UnitDeathState.cpp` covering FR-001, SCN-001, and SC-001
+- [ ] T024 Implement stable exactly-once dead-state transition and duplicate event guards in `Source/ThorTactics/Units/UnitDeathState.h` and `Source/ThorTactics/Units/UnitDeathState.cpp` covering FR-002, FR-005, SCN-003, and SC-004
+- [ ] T025 Implement dead-unit participation predicates and active-combat removal in `Source/ThorTactics/Combat/TurnOrder.h` and `Source/ThorTactics/Combat/TurnOrder.cpp` and `Source/ThorTactics/Combat/Targeting.h` and `Source/ThorTactics/Combat/Targeting.cpp` covering FR-003, SCN-004, and SC-002
+- [ ] T026 Implement death/ragdoll presentation trigger and non-ragdoll fallback in `Source/ThorTactics/Units/UnitDeathPresentation.h` and `Source/ThorTactics/Units/UnitDeathPresentation.cpp` covering FR-004, FR-008, SCN-002, and SC-003
+- [ ] T027 Implement combat flow and cleanup integration in `Source/ThorTactics/Combat/EncounterResolution.h` and `Source/ThorTactics/Combat/EncounterResolution.cpp` covering FR-006, FR-007, SCN-004, SCN-005, and SC-005
 - [ ] T028 Run `./tools/test_unit.sh --filter UnitDeathAndRagdoll` and `./tools/test_integration.sh --filter UnitDeathAndRagdoll` in the target THOR workspace, fix story-scoped failures, and record command results in `specs/358-unit-death-ragdoll/quickstart.md`
 - [ ] T029 Validate the single story against `specs/358-unit-death-ragdoll/spec.md` and `specs/358-unit-death-ragdoll/contracts/unit-death-ragdoll-contract.md`, confirming FR-001 through FR-009, SCN-001 through SCN-005, and SC-001 through SC-006 are covered
 
@@ -93,8 +93,8 @@
 
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
-- [ ] T030 [P] Refactor story-local unit death code in `Source/ThorTactics/Units/UnitDeathState.*` and `Source/ThorTactics/Units/UnitDeathPresentation.*` after tests are green without changing behavior
-- [ ] T031 [P] Refactor story-local combat integration code in `Source/ThorTactics/Combat/TurnOrder.*`, `Source/ThorTactics/Combat/Targeting.*`, and `Source/ThorTactics/Combat/EncounterResolution.*` after tests are green without changing behavior
+- [ ] T030 [P] Refactor story-local unit death code in `Source/ThorTactics/Units/UnitDeathState.h` and `Source/ThorTactics/Units/UnitDeathState.cpp` and `Source/ThorTactics/Units/UnitDeathPresentation.h` and `Source/ThorTactics/Units/UnitDeathPresentation.cpp` after tests are green without changing behavior
+- [ ] T031 [P] Refactor story-local combat integration code in `Source/ThorTactics/Combat/TurnOrder.h` and `Source/ThorTactics/Combat/TurnOrder.cpp`, `Source/ThorTactics/Combat/Targeting.h` and `Source/ThorTactics/Combat/Targeting.cpp`, and `Source/ThorTactics/Combat/EncounterResolution.h` and `Source/ThorTactics/Combat/EncounterResolution.cpp` after tests are green without changing behavior
 - [ ] T032 Update `specs/358-unit-death-ragdoll/quickstart.md` with final unit and integration command evidence, exit codes, and any target-workspace blockers
 - [ ] T033 Run quickstart validation from `specs/358-unit-death-ragdoll/quickstart.md` and confirm the exact unit and integration commands pass in the target THOR workspace
 - [ ] T034 Run `/speckit.verify` for `specs/358-unit-death-ragdoll/spec.md` after implementation and tests pass, and record the final verdict in `specs/358-unit-death-ragdoll/verification.md`
@@ -131,12 +131,12 @@
 
 ```bash
 # Unit test authoring in parallel:
-Task: "T010 Add failing unit tests for defeat detection in Source/ThorTactics/Tests/Units/UnitDeathStateTests.*"
-Task: "T013 Add failing unit tests for ragdoll fallback in Source/ThorTactics/Tests/Units/UnitDeathStateTests.*"
+Task: "T010 Add failing unit tests for defeat detection in Source/ThorTactics/Tests/Units/UnitDeathStateTests.cpp"
+Task: "T013 Add failing unit tests for ragdoll fallback in Source/ThorTactics/Tests/Units/UnitDeathStateTests.cpp"
 
 # Integration test authoring in parallel:
-Task: "T016 Add failing integration test for lethal damage in Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.*"
-Task: "T019 Add failing integration test for combat flow and cleanup in Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.*"
+Task: "T016 Add failing integration test for lethal damage in Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.cpp"
+Task: "T019 Add failing integration test for combat flow and cleanup in Source/ThorTactics/Tests/Units/UnitDeathIntegrationTests.cpp"
 ```
 
 ## Implementation Strategy
