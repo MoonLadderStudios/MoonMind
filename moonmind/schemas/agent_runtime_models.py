@@ -76,6 +76,18 @@ class RuntimeCommandInvocation(BaseModel):
     hint_catalog_version: str | None = Field(None, alias="hintCatalogVersion")
     detection_phase: str | None = Field(None, alias="detectionPhase")
 
+    @model_validator(mode="after")
+    def _recognized_runtime_command_has_text(self) -> "RuntimeCommandInvocation":
+        if (
+            self.requires_runtime_recognition
+            and not self.raw_command.strip()
+            and not self.command.strip()
+        ):
+            raise ValueError(
+                "runtime command recognition requires non-empty rawCommand or command"
+            )
+        return self
+
 
 class RuntimeCommandRenderResult(BaseModel):
     """Result of adapter-owned runtime command rendering before launch."""

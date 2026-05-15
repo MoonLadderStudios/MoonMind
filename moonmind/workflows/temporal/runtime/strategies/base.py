@@ -154,9 +154,19 @@ class ManagedRuntimeStrategy(ABC):
                 },
                 invocation=command,
             )
-        raw_command = command.raw_command or (
-            f"/{command.command}{(' ' + command.args) if command.args else ''}"
-        )
+        raw_command = self._runtime_command_text(command)
+        if raw_command is None:
+            return RuntimeCommandRenderResult(
+                status="failed",
+                failureReason="runtime_command_render_failed",
+                diagnostics={
+                    "message": (
+                        "Runtime command metadata must include a non-empty "
+                        "rawCommand or command."
+                    )
+                },
+                invocation=command,
+            )
         prepared = self._prepared_context_after_runtime_command(instruction, command)
         rendered = self._join_instruction_parts(
             raw_command,
@@ -270,6 +280,17 @@ class ManagedRuntimeStrategy(ABC):
             prepared_context,
         )
 
+    @staticmethod
+    def _runtime_command_text(command: RuntimeCommandInvocation) -> str | None:
+        raw_command = command.raw_command.strip()
+        if raw_command:
+            return raw_command
+        command_name = command.command.strip()
+        if not command_name:
+            return None
+        args = command.args.strip()
+        return f"/{command_name}{(' ' + args) if args else ''}"
+
     def _prepared_context_after_runtime_command(
         self,
         instruction: str,
@@ -281,9 +302,15 @@ class ManagedRuntimeStrategy(ABC):
             raw_parts.append(command.instruction_body)
         raw_instruction = "\n".join(part for part in raw_parts if part)
         for candidate in (raw_instruction, command.instruction_body):
-            if candidate and candidate in prepared:
-                prepared = prepared.replace(candidate, "", 1)
-                break
+            candidate = str(candidate or "").strip()
+            if not candidate:
+                continue
+            if prepared == candidate:
+                return ""
+            for separator in ("\n\n", "\n"):
+                prefix = f"{candidate}{separator}"
+                if prepared.startswith(prefix):
+                    return prepared[len(prefix) :].strip()
         return prepared.strip()
 
     def get_model(self, profile: Any, request: Any) -> str | None:

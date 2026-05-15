@@ -301,6 +301,49 @@ class TestRuntimeCommandRendering:
         assert result.status == "ok"
         assert result.rendered_instruction == "/review\n\nCheck this branch."
 
+    def test_prepared_context_removes_only_leading_runtime_command_block(self) -> None:
+        strategy = CodexCliStrategy()
+        request = _make_request(
+            instruction_ref=(
+                "/review\nCheck this branch.\n\n"
+                "Inspect path/to/review.py before changing behavior.\n"
+                "Check this branch remains part of retrieved context."
+            ),
+            runtime_command=_runtime_command(),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "ok"
+        assert result.rendered_instruction is not None
+        assert result.rendered_instruction.startswith("/review\n\nCheck this branch.")
+        assert "path/to/review.py" in result.rendered_instruction
+        assert "Check this branch remains part of retrieved context." in result.rendered_instruction
+
+    def test_blank_recognized_command_metadata_fails_typed(self) -> None:
+        strategy = CodexCliStrategy()
+        request = _make_request(
+            instruction_ref="Prepared context.",
+            runtime_command={
+                "kind": "slash_command",
+                "source": "leading_slash",
+                "sourcePath": "objective.instructions",
+                "command": "",
+                "rawCommand": "",
+                "args": "",
+                "instructionBody": "Prepared context.",
+                "detectionStatus": "detected",
+                "hintStatus": "hinted",
+                "recognitionMode": "hinted_runtime_passthrough",
+                "requiresRuntimeRecognition": True,
+            },
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "failed"
+        assert result.failure_reason == "runtime_command_render_failed"
+
     def test_unsupported_runtime_falls_back_without_materializing_command(self) -> None:
         strategy = GeminiCliStrategy()
         request = _make_request(
