@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -18,6 +19,13 @@ async def _immediate_wait_condition(
     **_kwargs: Any,
 ) -> None:
     assert predicate() is True
+
+async def _timeout_wait_condition(
+    predicate: Callable[[], bool],
+    **_kwargs: Any,
+) -> None:
+    assert predicate() is False
+    raise asyncio.TimeoutError
 
 def test_initialize_from_payload_captures_input_and_plan_refs(
     monkeypatch: pytest.MonkeyPatch,
@@ -677,6 +685,197 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
     assert workflow._publish_status == "not_required"
     assert steps[0]["status"] == "succeeded"
     assert steps[1]["status"] == "skipped"
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_rechecks_jira_blockers_in_dependency_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    skill_calls: list[tuple[str, str | None]] = []
+
+    registry_payload = {
+        "skills": [
+            {
+                "name": "jira.check_blockers",
+                "version": "1.0",
+                "description": "Check Jira blockers",
+                "inputs": {"schema": {"type": "object"}},
+                "outputs": {"schema": {"type": "object"}},
+                "executor": {
+                    "activity_type": "mm.skill.execute",
+                    "selector": {"mode": "by_capability"},
+                },
+                "requirements": {"capabilities": ["integration:jira"]},
+                "policies": {
+                    "timeouts": {
+                        "start_to_close_seconds": 60,
+                        "schedule_to_close_seconds": 120,
+                    },
+                    "retries": {"max_attempts": 1},
+                },
+            },
+            {
+                "name": "repo.run_tests",
+                "version": "1.0",
+                "description": "Run tests",
+                "inputs": {"schema": {"type": "object"}},
+                "outputs": {"schema": {"type": "object"}},
+                "executor": {
+                    "activity_type": "mm.skill.execute",
+                    "selector": {"mode": "by_capability"},
+                },
+                "requirements": {"capabilities": ["sandbox"]},
+                "policies": {
+                    "timeouts": {
+                        "start_to_close_seconds": 60,
+                        "schedule_to_close_seconds": 120,
+                    },
+                    "retries": {"max_attempts": 1},
+                },
+            },
+        ]
+    }
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        normalized = _normalize_payload(payload)
+        if activity_type == "artifact.read":
+            artifact_ref = normalized.get("artifact_ref")
+            if artifact_ref == "artifact://registry/jira":
+                return json.dumps(registry_payload).encode("utf-8")
+            assert artifact_ref == "art_plan_1"
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Jira Wait Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/jira",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "check-blockers",
+                            "tool": {
+                                "type": "skill",
+                                "name": "jira.check_blockers",
+                                "version": "1.0",
+                            },
+                            "inputs": {"targetIssueKey": "MM-686"},
+                        },
+                        {
+                            "id": "implement",
+                            "tool": {
+                                "type": "skill",
+                                "name": "repo.run_tests",
+                                "version": "1.0",
+                            },
+                            "inputs": {"instructions": "Continue after blockers."},
+                        },
+                    ],
+                    "edges": [{"from": "check-blockers", "to": "implement"}],
+                }
+            ).encode("utf-8")
+        if activity_type == "mm.skill.execute":
+            invocation = normalized["invocation_payload"]
+            tool_name = invocation["tool"]["name"]
+            skill_calls.append((tool_name, normalized.get("idempotency_key")))
+            if tool_name == "jira.check_blockers" and len(skill_calls) == 1:
+                return {
+                    "status": "COMPLETED",
+                    "outputs": {
+                        "targetIssueKey": "MM-686",
+                        "decision": "blocked",
+                        "blockingIssues": [
+                            {
+                                "issueKey": "MM-685",
+                                "status": "In Progress",
+                                "done": False,
+                            }
+                        ],
+                        "summary": (
+                            "MM-686 is blocked by unresolved Jira issue(s): "
+                            "MM-685 (In Progress)."
+                        ),
+                    },
+                }
+            if tool_name == "jira.check_blockers":
+                return {
+                    "status": "COMPLETED",
+                    "outputs": {
+                        "targetIssueKey": "MM-686",
+                        "decision": "continue",
+                        "blockingIssues": [],
+                        "summary": "All Jira blockers for MM-686 are Done.",
+                    },
+                }
+            return {"status": "COMPLETED", "outputs": {"summary": "Implemented."}}
+        raise AssertionError(f"unexpected activity {activity_type}")
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+            run_workflow_module.RUN_JIRA_BLOCKER_RECHECK_PATCH,
+            run_workflow_module.RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
+            "idempotency_key_phase3",
+        },
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _timeout_wait_condition,
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "none"},
+        plan_ref="art_plan_1",
+    )
+
+    steps = workflow.get_step_ledger()["steps"]
+    assert [call[0] for call in skill_calls] == [
+        "jira.check_blockers",
+        "jira.check_blockers",
+        "repo.run_tests",
+    ]
+    assert skill_calls[1][1] == "wf-1_check-blockers_execute_jira_blocker_recheck_1"
+    assert workflow._plan_blocked_message is None
+    assert workflow._jira_blocker_wait_active is False
+    assert workflow._waiting_reason is None
+    assert steps[0]["status"] == "succeeded"
+    assert steps[1]["status"] == "succeeded"
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_preserves_registry_read_for_unpatched_histories(
