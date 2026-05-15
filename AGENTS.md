@@ -280,6 +280,7 @@ Key diagnostics:
 - Existing artifact store and workspace-local prepared files/manifests only; no new persistent storage planned (349-runtime-prompt-boundary)
 - Python 3.12; TypeScript/React for Mission Control task detail UI + FastAPI, Pydantic v2, SQLAlchemy async ORM, Temporal Python SDK, React, TanStack Query, Zod, generated OpenAPI types (350-operator-observability-diagnostics)
 - Existing Temporal execution records, execution parameters/memo/search attributes, task input snapshot artifacts, and Temporal artifact refs; no new persistent storage planned (350-operator-observability-diagnostics)
+- Python 3.12 (existing MoonMind runtime); no new module files are added for this one-shot run. + Existing trusted Jira tool registry (`moonmind/mcp/jira_tool_registry.py`), `JiraToolService` (`moonmind/integrations/jira/tool.py`), `redact_sensitive_text` / `SecretRedactor` redaction helpers. (353-transition-mm658-in-progress)
 - THOR Tactics game runtime language/toolchain; target repository menu/navigation framework, authored menu data assets, and baseline runtime widget/panel primitives (current MoonMind workspace does not contain target project files) (353-native-options-menu-surface)
 - No settings persistence; no new persistent storage planned (353-native-options-menu-surface)
 
