@@ -70,8 +70,8 @@
 - [ ] T012 Add failing unit tests for enabled, disabled-visible, and hidden-by-window eligibility outcomes covering FR-001, SC-001, SC-002, and SC-003 in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityUnitTests.cpp
 - [ ] T013 Add failing unit tests for authored unavailable reason, eligibility-produced reason, and fallback reason covering FR-002 and FR-009 in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityUnitTests.cpp
 - [ ] T014 Add failing unit tests for generated button states for enabled, disabled-visible, and hidden actions covering FR-003, FR-004, and FR-005 in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityUnitTests.cpp
-- [ ] T015 Add failing unit test for hidden-by-window precedence when an action is also ineligible covering FR-001, FR-004, and edge-case coverage in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityUnitTests.cpp
-- [ ] T016 Add failing unit tests proving blocked Online Co-op selection does not call travel, matchmaking, session creation, or session joining seams covering FR-007 and SC-004 in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityUnitTests.cpp
+- [ ] T015 Add failing unit tests for hidden-by-window precedence when an action is also ineligible, action state changes between enabled and disabled-visible while a panel is open, and multiple disabled-visible actions on one panel covering FR-001, FR-004, SC-002, SC-003, and edge-case coverage in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityUnitTests.cpp
+- [ ] T016 Add failing unit tests proving blocked Online Co-op selection does not call travel, matchmaking, session creation, or session joining seams across supported pointer, keyboard, and controller activation paths covering FR-007 and SC-004 in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityUnitTests.cpp
 
 ### Integration Tests (write first)
 
@@ -79,7 +79,7 @@
 - [ ] T018 Add failing automation test for disabled-visible action rendering with unavailable copy covering FR-003, FR-010, SCN-002, and SC-002 in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityFlowAutomationTest.cpp
 - [ ] T019 Add failing automation test for hidden-by-window action omission covering FR-004, FR-010, SCN-003, and SC-003 in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityFlowAutomationTest.cpp
 - [ ] T020 Add failing automation test for blocked Online Co-op remaining visible with explicit unavailable feedback covering FR-006, FR-010, SCN-004, and SC-004 in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityFlowAutomationTest.cpp
-- [ ] T021 Add failing automation test for blocked Online Co-op selection producing feedback and zero travel/session side effects covering FR-007, FR-010, SCN-005, and SC-004 in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityFlowAutomationTest.cpp
+- [ ] T021 Add failing automation test for blocked Online Co-op selection producing feedback and zero travel/session side effects across supported keyboard/controller and pointer activation paths covering FR-007, FR-010, SCN-005, and SC-004 in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityFlowAutomationTest.cpp
 - [ ] T022 Add failing cross-panel automation coverage for Play, Home navigation, Options, and one future-panel-compatible generated-button fixture covering FR-008, SCN-006, and SC-005 in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityFlowAutomationTest.cpp
 
 ### Red-First Confirmation
@@ -113,7 +113,7 @@
 **Purpose**: Strengthen the completed story without adding unrelated menu, travel, matchmaking, or session scope.
 
 - [ ] T036 [P] Review and remove any temporary debug-only reason text, test-only action IDs, or panel-specific bypasses from Source/ThorTactics/Frontend/TacticsGeneratedMenuButton.cpp
-- [ ] T037 [P] Review unit edge-case coverage for missing unavailable reasons, multiple disabled-visible actions, and hidden precedence in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityUnitTests.cpp
+- [ ] T037 [P] Review unit edge-case coverage for missing unavailable reasons, state changes while a panel is open, multiple disabled-visible actions, supported input modalities, and hidden precedence in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityUnitTests.cpp
 - [ ] T038 [P] Review integration coverage for Play, Home navigation, Options, and future-panel fixture behavior in Source/ThorTactics/Tests/Frontend/MenuActionAvailabilityFlowAutomationTest.cpp
 - [ ] T039 Run the quickstart validation sequence from specs/354-menu-action-availability/quickstart.md
 - [ ] T040 Run `/moonspec-verify` for specs/354-menu-action-availability/spec.md after implementation and tests pass

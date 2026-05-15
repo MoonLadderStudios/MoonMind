@@ -36,8 +36,8 @@ The same rendering contract applies to Play, Home navigation, Options, and futur
 Given Online Co-op is blocked:
 - Online Co-op remains visible in the Play menu;
 - the button shows explicit unavailable feedback;
-- selection attempts present unavailable feedback;
-- selection attempts do not start travel, matchmaking, session creation, session joining, or equivalent online session side effects.
+- selection attempts through supported pointer, keyboard, and controller activation paths present unavailable feedback;
+- selection attempts through supported pointer, keyboard, and controller activation paths do not start travel, matchmaking, session creation, session joining, or equivalent online session side effects.
 
 ## Acceptance Evidence
 
@@ -45,5 +45,5 @@ The contract is satisfied when automated coverage demonstrates:
 - enabled generated action rendering and selection;
 - disabled-visible generated action rendering with unavailable copy;
 - hidden-by-window action omission;
-- blocked Online Co-op feedback with zero travel/session side effects;
+- blocked Online Co-op feedback with zero travel/session side effects across supported activation paths;
 - shared behavior across Play, Home navigation, Options, and a future-panel-compatible generated-button fixture.

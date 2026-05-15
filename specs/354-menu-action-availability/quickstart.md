@@ -32,6 +32,8 @@ Required unit coverage:
 - Authored, eligibility-produced, and fallback unavailable reasons.
 - Generated button state for enabled, disabled-visible, and hidden actions.
 - Hidden-by-window precedence over disabled-visible.
+- Action state changes between enabled and disabled-visible while a panel is open.
+- Multiple disabled-visible actions on one generated panel.
 - Blocked Online Co-op does not invoke travel/session side-effect adapters.
 
 ## Integration Test Strategy
@@ -40,7 +42,7 @@ Target command: use the THOR repository's standard game automation test runner f
 
 Required integration coverage:
 - Play panel renders Online Co-op as visible disabled when blocked.
-- Blocked Online Co-op selection shows unavailable feedback and produces no travel/session side effects.
+- Blocked Online Co-op selection shows unavailable feedback and produces no travel/session side effects across supported pointer, keyboard, and controller activation paths.
 - Home navigation and Options generated-button panels render disabled-visible actions with unavailable copy.
 - Hidden-by-window actions are absent from generated panels.
 - A future-panel-compatible generated-button fixture receives the same behavior without panel-specific logic.
