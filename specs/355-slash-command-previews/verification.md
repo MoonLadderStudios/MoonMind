@@ -19,16 +19,18 @@
 - Focused API integration validation:
   - `python -m pytest -q tests/integration/api/test_task_runtime_command_preview_boot_payload.py tests/e2e/test_task_create_submit_browser.py -q`
   - Result: PASS for API integration; e2e module skipped unless `RUN_E2E_TESTS` is set.
+- Focused browser validation:
+  - `RUN_E2E_TESTS=1 python -m pytest -q tests/e2e/test_task_create_submit_browser.py::test_create_page_shows_runtime_command_previews -q`
+  - Remediation setup: installed Python Playwright packages, installed Chromium, extracted missing Debian browser runtime libraries into `/tmp/mm-playwright-deps`, and rebuilt the stale Vite UI bundle with `./node_modules/.bin/vite build --config frontend/vite.config.ts && bash tools/run_repo_python.sh tools/verify_vite_manifest.py`.
+  - Result: PASS.
 - Full unit validation:
   - `./tools/test_unit.sh`
   - Result: PASS, Python 5072 passed, 1 xpassed, 16 subtests passed; frontend 351 passed and 229 skipped.
 
-## Blocked Manual/E2E Evidence
+## Blocked Integration Evidence
 
-- `RUN_E2E_TESTS=1 python -m pytest -q tests/e2e/test_task_create_submit_browser.py::test_create_page_shows_runtime_command_previews -q`
-  - Blocked: Python `playwright` package is not installed in the managed container.
 - `./tools/test_integration.sh`
-  - Blocked: Docker compose image build failed with administrative `403 Forbidden` while building `repo-pytest`.
+  - Blocked: Docker compose image build still fails with administrative `403 Forbidden` while building `repo-pytest`.
 
 ## Quickstart Scenario Coverage
 
@@ -36,5 +38,5 @@
 - SC-002 unknown `/foo` pass-through preview: covered by frontend unit tests.
 - SC-003 unsupported runtime warning without text mutation: covered by frontend unit tests using `codex_cloud`.
 - SC-004 escaped `\/review` literal text intent: covered by frontend unit tests.
-- SC-005 mobile-safe, non-mutating preview states: covered by focused frontend unit and CSS review; live browser e2e blocked by missing Playwright.
+- SC-005 mobile-safe, non-mutating preview states: covered by focused frontend unit and CSS review; live browser preview validation passes after rebuilding the Vite bundle for the managed runtime.
 - SC-006 edit-mode metadata restoration: covered by `frontend/src/lib/temporalTaskEditing.test.ts`.
