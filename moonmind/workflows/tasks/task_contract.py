@@ -374,7 +374,23 @@ def _build_runtime_command_metadata(
         command = match.group(1)
         args = match.group(2) or ""
     else:
-        command = first_line[1:].split(maxsplit=1)[0]
+        command_parts = first_line[1:].split(maxsplit=1)
+        if not command_parts:
+            payload.update(
+                {
+                    "command": "",
+                    "rawCommand": first_line,
+                    "args": "",
+                    "instructionBody": raw_instructions,
+                    "detectionStatus": "malformed",
+                    "hintStatus": "opaque",
+                    "recognitionMode": "escaped_literal",
+                    "requiresRuntimeRecognition": False,
+                    "detectionPhase": "submit",
+                }
+            )
+            return payload
+        command = command_parts[0]
         args = ""
     hint_status = _runtime_command_hint_status(command)
     passthrough = _runtime_supports_slash_passthrough(target_runtime)

@@ -215,6 +215,34 @@ def test_runtime_command_path_like_input_is_malformed_literal() -> None:
     assert command["command"] == ""
 
 
+@pytest.mark.parametrize(
+    ("instructions", "raw_command", "instruction_body"),
+    [
+        ("/", "/", "/"),
+        ("/   ", "/", "/   "),
+        ("/\nContinue as literal text.", "/", "/\nContinue as literal text."),
+    ],
+)
+def test_runtime_command_slash_only_input_is_malformed_literal(
+    instructions: str, raw_command: str, instruction_body: str
+) -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": instructions,
+            "runtime": {"mode": "codex"},
+        }
+    )
+
+    assert snapshot["objective"]["instructions"] == instructions
+    command = snapshot["objective"]["runtimeCommand"]
+    assert command["detectionStatus"] == "malformed"
+    assert command["recognitionMode"] == "escaped_literal"
+    assert command["requiresRuntimeRecognition"] is False
+    assert command["command"] == ""
+    assert command["rawCommand"] == raw_command
+    assert command["instructionBody"] == instruction_body
+
+
 def test_runtime_command_unsupported_runtime_does_not_require_recognition() -> None:
     snapshot = build_authoritative_task_input_snapshot(
         task_payload={
