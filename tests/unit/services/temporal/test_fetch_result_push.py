@@ -224,6 +224,118 @@ class TestPushWorkspaceBranch:
 
         assert alternates_path.read_text(encoding="utf-8") == "../objects_app\n"
 
+    def test_recover_orphan_object_stores_registers_sibling_with_loose_objects(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "mm:run-1" / "repo"
+        (workspace / ".git" / "objects" / "info").mkdir(parents=True)
+        sibling = tmp_path / "mm:run-1" / "git-objects"
+        (sibling / "6d").mkdir(parents=True)
+        # 38-char hex blob filename mimics the real loose-object layout.
+        (sibling / "6d" / "93a9ea32d2cf97dca48c5bf139829fc28516c5").write_bytes(b"x")
+
+        TemporalAgentRuntimeActivities._recover_orphan_workspace_object_stores(
+            str(workspace)
+        )
+
+        alternates_path = workspace / ".git" / "objects" / "info" / "alternates"
+        assert alternates_path.is_file()
+        contents = alternates_path.read_text(encoding="utf-8").splitlines()
+        # Path must be relative so that ':' in run ids does not break parsing.
+        assert contents == ["../../../git-objects"]
+
+    def test_recover_orphan_object_stores_appends_without_duplicating(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "mm:run-1" / "repo"
+        objects_info = workspace / ".git" / "objects" / "info"
+        objects_info.mkdir(parents=True)
+        alternates_path = objects_info / "alternates"
+        alternates_path.write_text("../../../git-objects\n", encoding="utf-8")
+        sibling = tmp_path / "mm:run-1" / "git-objects"
+        (sibling / "6d").mkdir(parents=True)
+        (sibling / "6d" / "93a9ea32d2cf97dca48c5bf139829fc28516c5").write_bytes(b"x")
+
+        TemporalAgentRuntimeActivities._recover_orphan_workspace_object_stores(
+            str(workspace)
+        )
+
+        assert (
+            alternates_path.read_text(encoding="utf-8").splitlines()
+            == ["../../../git-objects"]
+        )
+
+    def test_recover_orphan_object_stores_ignores_non_object_siblings(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "mm:run-1" / "repo"
+        (workspace / ".git" / "objects" / "info").mkdir(parents=True)
+        # A sibling that exists but is not a git object store.
+        (tmp_path / "mm:run-1" / "artifacts").mkdir()
+        (tmp_path / "mm:run-1" / "artifacts" / "notes.txt").write_text("hi")
+
+        TemporalAgentRuntimeActivities._recover_orphan_workspace_object_stores(
+            str(workspace)
+        )
+
+        alternates_path = workspace / ".git" / "objects" / "info" / "alternates"
+        assert not alternates_path.exists()
+
+    def test_recover_orphan_object_stores_accepts_pack_only_sibling(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "mm:run-1" / "repo"
+        (workspace / ".git" / "objects" / "info").mkdir(parents=True)
+        sibling = tmp_path / "mm:run-1" / "shared-objects"
+        (sibling / "pack").mkdir(parents=True)
+        (sibling / "pack" / "pack-abc.pack").write_bytes(b"\x00")
+        (sibling / "pack" / "pack-abc.idx").write_bytes(b"\x00")
+
+        TemporalAgentRuntimeActivities._recover_orphan_workspace_object_stores(
+            str(workspace)
+        )
+
+        alternates_path = workspace / ".git" / "objects" / "info" / "alternates"
+        assert alternates_path.is_file()
+        assert (
+            alternates_path.read_text(encoding="utf-8").splitlines()
+            == ["../../../shared-objects"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_push_recovers_orphan_object_store_before_branch_detection(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "mm:run-1" / "repo"
+        (workspace / ".git" / "objects" / "info").mkdir(parents=True)
+        sibling = tmp_path / "mm:run-1" / "git-objects"
+        (sibling / "6d").mkdir(parents=True)
+        (sibling / "6d" / "93a9ea32d2cf97dca48c5bf139829fc28516c5").write_bytes(b"x")
+        alternates_path = workspace / ".git" / "objects" / "info" / "alternates"
+        store = _make_mock_store(workspace_path=str(workspace))
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+
+        async def _mock_exec(*args, **kwargs):
+            # The orphan-object recovery must have already written alternates
+            # by the time any git subprocess is invoked.
+            assert alternates_path.is_file()
+            contents = alternates_path.read_text(encoding="utf-8").splitlines()
+            assert contents == ["../../../git-objects"]
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(b"main\n", b""))
+            proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "protected_branch"
+
     @pytest.mark.asyncio
     async def test_push_normalizes_git_alternates_before_branch_detection(
         self,

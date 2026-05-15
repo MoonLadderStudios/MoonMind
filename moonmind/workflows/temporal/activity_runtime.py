@@ -5524,6 +5524,9 @@ class TemporalAgentRuntimeActivities:
             if record is not None:
                 if record.workspace_path:
                     self._normalize_workspace_git_alternates(record.workspace_path)
+                    self._recover_orphan_workspace_object_stores(
+                        record.workspace_path
+                    )
                 result = self._maybe_enrich_gemini_failure_result(
                     result=result,
                     record=record,
@@ -6237,6 +6240,171 @@ class TemporalAgentRuntimeActivities:
             )
 
     @staticmethod
+    def _looks_like_git_loose_objects_dir(directory: Path) -> bool:
+        """Return True when ``directory`` contains git-style loose objects.
+
+        A git loose-objects directory has two-character hex subdirectories
+        (e.g. ``6d/``) whose children are 38-character hex blob filenames.
+        Also accepted as a positive signal: a ``pack/`` subdirectory with at
+        least one ``.pack`` file. Both signals are evaluated cheaply without
+        walking the full tree.
+        """
+        if not directory.is_dir():
+            return False
+        try:
+            entries = list(directory.iterdir())
+        except OSError:
+            return False
+
+        hex_chars = set("0123456789abcdef")
+        for entry in entries:
+            name = entry.name
+            if entry.is_dir() and name == "pack":
+                try:
+                    for child in entry.iterdir():
+                        if child.is_file() and child.name.endswith(".pack"):
+                            return True
+                except OSError:
+                    continue
+                continue
+            if (
+                entry.is_dir()
+                and len(name) == 2
+                and all(c in hex_chars for c in name.lower())
+            ):
+                try:
+                    for child in entry.iterdir():
+                        cname = child.name
+                        if (
+                            child.is_file()
+                            and len(cname) == 38
+                            and all(c in hex_chars for c in cname.lower())
+                        ):
+                            return True
+                except OSError:
+                    continue
+        return False
+
+    @staticmethod
+    def _recover_orphan_workspace_object_stores(workspace: str) -> None:
+        """Register sibling object-stores as Git alternates before commit.
+
+        Some managed-runtime images stage loose objects in a directory that
+        sits *next to* the workspace ``.git`` directory (for example
+        ``<workspace_parent>/git-objects``) without writing a corresponding
+        ``.git/objects/info/alternates`` entry. When that happens, ``git
+        commit`` later fails with ``error: invalid object ... Error building
+        trees`` because the index references blobs the object database cannot
+        resolve.
+
+        This helper finds such sibling directories, verifies they look like
+        git object stores, and appends them to ``info/alternates`` using a
+        path relative to ``.git/objects`` (so that ``:`` characters in
+        managed run ids do not break alternate parsing).
+        """
+        workspace_path = Path(workspace)
+        git_dir = workspace_path / ".git"
+        objects_dir = git_dir / "objects"
+        if not git_dir.is_dir() or not objects_dir.is_dir():
+            return
+
+        try:
+            workspace_resolved = workspace_path.resolve()
+        except OSError:
+            return
+        workspace_parent = workspace_resolved.parent
+
+        alternates_path = objects_dir / "info" / "alternates"
+        existing_lines: list[str] = []
+        if alternates_path.is_file():
+            try:
+                existing_lines = [
+                    line.strip()
+                    for line in alternates_path.read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                    if line.strip()
+                ]
+            except OSError:
+                existing_lines = []
+
+        try:
+            objects_dir_resolved = objects_dir.resolve()
+        except OSError:
+            return
+
+        registered: set[Path] = set()
+        for raw in existing_lines:
+            candidate = (
+                Path(raw)
+                if Path(raw).is_absolute()
+                else (objects_dir / raw)
+            )
+            try:
+                registered.add(candidate.resolve())
+            except OSError:
+                continue
+
+        try:
+            siblings = list(workspace_parent.iterdir())
+        except OSError:
+            return
+
+        additions: list[str] = []
+        for sibling in siblings:
+            try:
+                sibling_resolved = sibling.resolve()
+            except OSError:
+                continue
+            if sibling_resolved == workspace_resolved:
+                continue
+            if sibling_resolved == objects_dir_resolved:
+                continue
+            if sibling_resolved in registered:
+                continue
+            if (
+                not TemporalAgentRuntimeActivities
+                ._looks_like_git_loose_objects_dir(sibling)
+            ):
+                continue
+            try:
+                relative = os.path.relpath(sibling_resolved, objects_dir_resolved)
+            except ValueError:
+                relative = str(sibling_resolved)
+            additions.append(relative)
+            registered.add(sibling_resolved)
+
+        if not additions:
+            return
+
+        merged: list[str] = []
+        seen: set[str] = set()
+        for line in existing_lines + additions:
+            if line not in seen:
+                seen.add(line)
+                merged.append(line)
+
+        try:
+            (objects_dir / "info").mkdir(parents=True, exist_ok=True)
+            alternates_path.write_text(
+                "\n".join(merged) + "\n",
+                encoding="utf-8",
+            )
+            logger.info(
+                "Registered %d sibling object store(s) as Git alternates for "
+                "workspace %s: %s",
+                len(additions),
+                workspace,
+                ", ".join(additions),
+            )
+        except OSError:
+            logger.warning(
+                "Unable to register sibling object stores for workspace %s",
+                workspace,
+                exc_info=True,
+            )
+
+    @staticmethod
     def _workspace_command_env(workspace: str) -> dict[str, str]:
         """Build a subprocess env that exposes workspace-local command shims."""
         env = dict(os.environ)
@@ -6535,6 +6703,7 @@ class TemporalAgentRuntimeActivities:
         workspace = record.workspace_path
         try:
             self._normalize_workspace_git_alternates(workspace)
+            self._recover_orphan_workspace_object_stores(workspace)
             command_env = self._workspace_command_env(workspace)
             branch_proc = await asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
