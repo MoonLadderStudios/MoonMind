@@ -2341,7 +2341,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):hover {
-  background: linear-gradient(
+  background-image: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
     rgb(var(--mm-accent) / 0.98) 100%
@@ -2359,7 +2359,7 @@ button:focus-visible {
 
 button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):active,
 button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)).is-clicked {
-  background: linear-gradient(
+  background-image: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
     rgb(var(--mm-accent) / 0.98) 100%
@@ -2429,7 +2429,7 @@ button.task-list-column-filter-button.is-active {
 }
 
 .button:where(:not(.secondary, .queue-action, .queue-submit-primary)):hover {
-  background: linear-gradient(
+  background-image: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
     rgb(var(--mm-accent) / 0.98) 100%
@@ -2447,7 +2447,7 @@ button.task-list-column-filter-button.is-active {
 
 .button:where(:not(.secondary, .queue-action, .queue-submit-primary)):active,
 .button:where(:not(.secondary, .queue-action, .queue-submit-primary)).is-clicked {
-  background: linear-gradient(
+  background-image: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
     rgb(var(--mm-accent) / 0.98) 100%
