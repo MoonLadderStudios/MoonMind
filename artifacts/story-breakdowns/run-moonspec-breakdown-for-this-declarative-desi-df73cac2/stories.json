@@ -1,0 +1,745 @@
+{
+  "outputMode": "jira",
+  "source": {
+    "title": "Runtime Slash Commands on Create Task",
+    "path": "docs/Steps/SlashCommands.md",
+    "referencePath": "docs/Steps/SlashCommands.md",
+    "originalDesign": "# Runtime Slash Commands on Create Task\n\nStatus: Desired State\nOwners: MoonMind Engineering\nLast Updated: 2026-05-13\nCanonical for: Create Task runtime slash-command pass-through, command hint metadata, runtime command rendering boundaries\nRelated: `docs/UI/CreatePage.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Steps/SkillSystem.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/ClaudeCodeManagedSessions.md`\n\n---\n\n## Purpose\n\nThis document defines how MoonMind lets users pass runtime slash commands such as `/review`, `/simplify`, or newly introduced provider commands from the Create Task page as part of normal task instructions, while still allowing MoonMind to add any runtime-specific markup required for Codex CLI, Claude Code, or future managed runtimes to recognize the command as an actual command.\n\nThe system preserves the authored instructions through MoonMind's task input snapshot contract, derives a structured command invocation when the first character is `/`, and renders that invocation through a runtime-specific adapter at execution time.\n\nThis design intentionally keeps command detection and rendering out of one-off Create page logic. The Create page remains a task composition surface, consistent with the existing Create page design principles that steps and capabilities should be schema/capability-driven rather than hard-coded per workflow or preset.\n\n## Problem\n\nUsers expect to be able to write instructions like:\n\n```text\n/review\nCheck this branch for correctness, regressions, and missing tests.\n```\n\nor:\n\n```text\n/simplify\nRefactor the implementation while preserving behavior.\n```\n\nMoonMind currently passes task instructions into managed runtime launch paths. Codex CLI appends `request.instruction_ref` as the positional prompt to `codex exec`, while Claude Code appends `request.instruction_ref` after `-p --dangerously-skip-permissions`.\n\nHowever, runtime command recognition may depend on the final input shape. If MoonMind prepends skill activation summaries, retrieval context, managed runtime notes, or other wrappers before the user’s `/command`, the runtime may no longer see `/` as the first character.\n\nMoonMind therefore needs a declarative command system that:\n\n1. Detects a leading slash command from normal instructions.\n2. Preserves the raw user-authored text.\n3. Stores a structured command invocation in the task input snapshot.\n4. Lets each runtime declare whether it supports opaque slash-command pass-through.\n5. Keeps final command rendering as late as possible, after MoonMind has prepared context.\n6. Supports edit, rerun, audit, and task details without losing exactness.\n\n## Design Principles\n\n### Preserve user intent exactly\n\nThe text authored by the user is not rewritten by slash-command detection. Existing Create/API submission normalization may trim surrounding whitespace, but command parsing must not replace, alias, or reinterpret the user's command token.\n\n### Treat slash commands as structured task metadata\n\nA leading slash command is not only prompt text. It is normalized into a structured `RuntimeCommandInvocation` so MoonMind can render it safely and correctly for different runtimes.\n\nUnknown command tokens remain valid runtime command invocations when the selected runtime supports slash-command pass-through. MoonMind does not maintain a blocking allowlist of every command a provider runtime may add.\n\n### Runtime adapters own command rendering\n\nThe Create page detects and previews the command, but it does not know how Codex CLI, Claude Code, or future runtime command markup works. Runtime-specific command rendering belongs in managed-runtime strategy code.\n\n### Render at the last responsible moment\n\nMoonMind should render the final command form after RAG injection, skill activation, runtime notes, and other instruction preparation have happened.\n\n### Keep command behavior declarative\n\nRuntime slash-command support and render modes should be defined in a runtime capability catalog, not scattered across React conditionals. Optional known-command hints may enrich autocomplete, labels, descriptions, and examples, but they must not prevent unknown commands from passing through.\n\n### Preserve edit and rerun fidelity\n\nTask editing and rerun reconstruction already depend on trustworthy task instruction reconstruction. The slash command model must round-trip through the same authoritative task input snapshot path.\n\n## Goals\n\nMoonMind must support:\n\n1. Users typing `/review`, `/simplify`, or any provider/runtime slash command as the first characters of Create Task instructions.\n2. Automatic detection when `/` is the first character of a task or step instruction.\n3. Runtime-level validation of whether slash-command pass-through is available.\n4. Runtime-specific command rendering for Codex CLI, Claude Code, and future managed runtimes.\n5. Preservation of authored instructions through the task input snapshot contract.\n6. Exact reconstruction for edit, rerun, task details, and audit surfaces.\n7. Opaque pass-through for unknown commands when the selected runtime supports slash commands.\n8. An escape hatch for users who want literal text beginning with `/`.\n\n## Non-goals\n\nThis system does not:\n\n1. Require MoonMind to know every slash command supported by every runtime.\n2. Require the Create page to know provider-specific command markup.\n3. Require all runtimes to support the same commands.\n4. Replace runtime-native command systems.\n5. Treat slash commands as MoonMind workflow actions unless a command is explicitly registered that way.\n6. Infer command semantics from prompt text after runtime context has been added.\n7. Block unknown slash commands for pass-through runtimes merely because MoonMind lacks a local hint entry.\n\n## Terminology\n\n### Raw instructions\n\nThe authored instruction text as preserved by MoonMind's task input snapshot contract.\n\nExample:\n\n```text\n/review\nFocus on race conditions and missing tests.\n```\n\n### Runtime command\n\nA structured representation of a user-authored command. The command may be known to MoonMind for suggestion purposes, or it may be opaque and known only to the selected runtime.\n\nExample:\n\n```json\n{\n  \"kind\": \"slash_command\",\n  \"command\": \"review\",\n  \"rawCommand\": \"/review\"\n}\n```\n\n### Instruction body\n\nThe user-authored text after the command line.\n\nExample:\n\n```text\nFocus on race conditions and missing tests.\n```\n\n### Rendered runtime input\n\nThe final prompt, command event, materialized command file, or other runtime-specific input sent to Codex CLI, Claude Code, or another runtime.\n\n## Domain Model\n\n### RuntimeCommandInvocation\n\n```ts\ntype RuntimeCommandInvocation = {\n  kind: \"slash_command\";\n\n  source: \"leading_slash\" | \"explicit_ui\";\n  sourcePath: string;\n\n  command: string;\n  rawCommand: string;\n  args: string;\n  instructionBody: string;\n\n  targetRuntime?: string;\n  targetStepId?: string;\n\n  detectionStatus: \"detected\" | \"escaped\" | \"not_detected\" | \"malformed\";\n  hintStatus: \"hinted\" | \"opaque\";\n  recognitionMode:\n    | \"runtime_passthrough\"\n    | \"hinted_runtime_passthrough\"\n    | \"escaped_literal\"\n    | \"runtime_does_not_support_slash_commands\";\n\n  requiresRuntimeRecognition: boolean;\n  runtimeCapabilityVersion?: string;\n  hintCatalogVersion?: string;\n\n  detectionPhase: string;\n};\n```\n\nExample:\n\n```json\n{\n  \"kind\": \"slash_command\",\n  \"source\": \"leading_slash\",\n  \"sourcePath\": \"objective.instructions\",\n  \"command\": \"review\",\n  \"rawCommand\": \"/review\",\n  \"args\": \"\",\n  \"instructionBody\": \"Focus on correctness, regressions, and missing tests.\",\n  \"targetRuntime\": \"claude_code\",\n  \"detectionStatus\": \"detected\",\n  \"hintStatus\": \"hinted\",\n  \"recognitionMode\": \"hinted_runtime_passthrough\",\n  \"requiresRuntimeRecognition\": true,\n  \"runtimeCapabilityVersion\": \"2026-05-13\",\n  \"hintCatalogVersion\": \"2026-05-13\",\n  \"detectionPhase\": \"submit\"\n}\n```\n\n### RuntimeCommandRenderResult\n\n```ts\ntype RuntimeCommandRenderResult = {\n  runtimeId: string;\n  command: string;\n\n  mode:\n    | \"plain_prompt\"\n    | \"prompt_prefix\"\n    | \"native_command\"\n    | \"materialized_command\"\n    | \"unsupported\";\n\n  renderedInstructionRef?: string;\n  commandEvent?: Record<string, unknown>;\n  materializedFiles?: string[];\n\n  warning?: string;\n};\n```\n\n## Task Input Shape\n\nThe authoritative task input snapshot should include both authored instructions and derived runtime command metadata.\n\n```json\n{\n  \"objective\": {\n    \"instructions\": \"/review\\nFocus on correctness, regressions, and missing tests.\",\n    \"runtimeCommand\": {\n      \"kind\": \"slash_command\",\n      \"source\": \"leading_slash\",\n      \"sourcePath\": \"objective.instructions\",\n      \"command\": \"review\",\n      \"rawCommand\": \"/review\",\n      \"args\": \"\",\n      \"instructionBody\": \"Focus on correctness, regressions, and missing tests.\",\n      \"targetRuntime\": \"claude_code\",\n      \"detectionStatus\": \"detected\",\n      \"hintStatus\": \"hinted\",\n      \"recognitionMode\": \"hinted_runtime_passthrough\",\n      \"requiresRuntimeRecognition\": true,\n      \"runtimeCapabilityVersion\": \"2026-05-13\",\n      \"hintCatalogVersion\": \"2026-05-13\",\n      \"detectionPhase\": \"submit\"\n    }\n  },\n  \"runtime\": {\n    \"mode\": \"claude_code\"\n  }\n}\n```\n\nFor multi-step drafts, the command may appear at the task level or step level:\n\n```json\n{\n  \"steps\": [\n    {\n      \"id\": \"step-1\",\n      \"instructions\": \"/simplify\\nReduce duplication in the auth flow.\",\n      \"runtimeCommand\": {\n        \"kind\": \"slash_command\",\n        \"source\": \"leading_slash\",\n        \"sourcePath\": \"steps[0].instructions\",\n        \"command\": \"simplify\",\n        \"rawCommand\": \"/simplify\",\n        \"args\": \"\",\n        \"instructionBody\": \"Reduce duplication in the auth flow.\",\n        \"targetStepId\": \"step-1\",\n        \"detectionStatus\": \"detected\",\n        \"hintStatus\": \"hinted\",\n        \"recognitionMode\": \"hinted_runtime_passthrough\",\n        \"requiresRuntimeRecognition\": true,\n        \"runtimeCapabilityVersion\": \"2026-05-13\",\n        \"hintCatalogVersion\": \"2026-05-13\",\n        \"detectionPhase\": \"submit\"\n      }\n    }\n  ]\n}\n```\n\n## Detection Rules\n\nSlash command detection is intentionally conservative.\n\nA command is detected only when:\n\n1. The instruction string is non-empty.\n2. The first character is `/`.\n3. The first line is slash-leading and can be represented as a runtime command token plus optional arguments, or as an opaque slash-leading command line.\n4. The selected runtime either supports slash-command pass-through or MoonMind can report that this runtime will treat the text literally.\n\nThe command token does not need to be known to MoonMind. A matching but unhinted token is an opaque runtime command.\n\nRecommended parser grammar for commands MoonMind can split into `command` and `args`:\n\n```regex\n^\\/([A-Za-z][A-Za-z0-9_-]*(?::[A-Za-z0-9_-]+)?)(?:\\s+(.*))?$\n```\n\nProvider runtimes may introduce command forms outside this grammar. If the first line starts with `/` but does not match the structured grammar, MoonMind should preserve the full first line as an opaque runtime command for pass-through runtimes unless the line is clearly ordinary path text such as `/src/app.ts is broken`. Implementations should bias toward pass-through for interactive agent runtimes and toward literal text only when the input is escaped, malformed as ordinary text, or the runtime lacks slash-command support.\n\nExamples:\n\n| Input                    | Detection result                        |\n| ------------------------ | --------------------------------------- |\n| `/review`                | command `review`                        |\n| `/review focus on tests` | command `review`, args `focus on tests` |\n| `/simplify`              | command `simplify`                      |\n| ` /review`               | not detected                            |\n| `\\/review`               | escaped literal                         |\n| `/src/app.ts is broken`  | malformed command, treated as text      |\n| `/future-command now`    | opaque command `future-command`         |\n| `/provider.command now`  | opaque command line                     |\n| `Look at /review`        | not detected                            |\n\n## Unknown Command Contract\n\nUnknown valid slash commands are first-class runtime invocations for runtimes with `slashCommandPassthrough: true`.\n\nRules:\n\n1. Unknown commands are not fallbacks.\n2. Unknown commands are not warnings or errors merely because MoonMind lacks a hint.\n3. Unknown commands must remain slash-leading in the final runtime-visible input.\n4. Unknown commands must not be materialized into runtime command files.\n5. Unknown commands must not be used to construct shell commands or runtime arguments other than the final user prompt, native opaque-command event, or equivalent adapter-owned transport.\n6. Known-command hints may improve labels, descriptions, autocomplete, and examples, but absence from the hint catalog is never a rejection reason for pass-through runtimes.\n\n## Escape Behavior\n\nUsers can force literal text by escaping the slash:\n\n```text\n\\/review this should be treated as normal text\n```\n\nMoonMind stores:\n\n```json\n{\n  \"instructions\": \"/review this should be treated as normal text\",\n  \"runtimeCommand\": {\n    \"kind\": \"slash_command\",\n    \"source\": \"leading_slash\",\n    \"sourcePath\": \"objective.instructions\",\n    \"command\": \"\",\n    \"rawCommand\": \"\\\\/review\",\n    \"args\": \"\",\n    \"instructionBody\": \"/review this should be treated as normal text\",\n    \"detectionStatus\": \"escaped\",\n    \"hintStatus\": \"opaque\",\n    \"recognitionMode\": \"escaped_literal\",\n    \"requiresRuntimeRecognition\": false,\n    \"detectionPhase\": \"submit\"\n  }\n}\n```\n\nThe rendered runtime input is literal instructions. The renderer must not leave an unescaped slash command as the first runtime-visible text when the user escaped it to avoid command execution.\n\nRecommended rendering:\n\n```text\nLiteral text, not a runtime command:\n/review this should be treated as normal text\n```\n\nThe user-facing snapshot may store the literal body without the escape character, but runtime rendering must add a non-command prefix, quote block, or equivalent runtime-specific literal wrapper so the runtime does not execute `/review`.\n\n## Runtime Capabilities and Command Hints\n\nMoonMind should maintain a declarative runtime capability catalog. Capabilities are runtime-level, not a per-command allowlist.\n\n```yaml\nruntimes:\n  codex_cli:\n    slashCommandPassthrough: true\n    renderMode: prompt_prefix\n    commandHintsRef: codex_cli\n  claude_code:\n    slashCommandPassthrough: true\n    renderMode: prompt_prefix\n    commandHintsRef: claude_code\n  some_runtime_without_slash_commands:\n    slashCommandPassthrough: false\n    renderMode: plain_prompt\n```\n\nMoonMind may also maintain optional known-command hints for suggestions, autocomplete, descriptions, examples, or policy text. Hints are not validation gates.\n\n```yaml\nknownRuntimeCommandHints:\n  review:\n    label: Review\n    aliases:\n      - /review\n    description: Ask the selected runtime to review the current task or code state.\n    argumentPolicy:\n      allowed: true\n      required: false\n    bodyPolicy:\n      allowed: true\n      required: false\n\n  simplify:\n    label: Simplify\n    aliases:\n      - /simplify\n    description: Ask the selected runtime to simplify the implementation.\n    argumentPolicy:\n      allowed: true\n      required: false\n    bodyPolicy:\n      allowed: true\n      required: false\n```\n\nThe catalog may later support explicit runtime-specific materialization for commands MoonMind intentionally owns or enriches:\n\n```yaml\nknownRuntimeCommandHints:\n  review:\n    materialization:\n      claude_code:\n        renderMode: materialized_command\n        materializedCommand:\n          scope: project\n          commandName: review\n          invocation: /project:review\n          templateRef: moonmind.review\n```\n\nUnknown opaque commands must not use materialized command mode. They pass through only through render modes that preserve user text as runtime input.\n\n## Runtime Render Modes\n\n### plain_prompt\n\nThe command is not treated as a runtime command. MoonMind sends literal instructions as normal text.\n\nUsed when:\n\n1. The slash was escaped.\n2. The selected runtime does not support slash-command pass-through and policy permits literal submission.\n3. The first line is malformed and therefore is not a valid slash-command invocation.\n\nThis mode is not the fallback for unknown valid commands on runtimes that support slash-command pass-through. Unknown valid commands should remain slash-leading and pass through.\n\n### prompt_prefix\n\nMoonMind renders the slash command as the first runtime-visible text. This mode supports both known-command hints and opaque unknown commands.\n\nExample:\n\n```text\n/review\n\nFocus on correctness, regressions, and missing tests.\n\n<MoonMind-prepared context follows here>\n```\n\nThis mode is useful when the runtime recognizes slash commands based on the prompt text beginning with the slash command.\n\n### native_command\n\nMoonMind sends the command through a structured runtime/session protocol rather than prompt text.\n\nExample:\n\n```json\n{\n  \"type\": \"runtime.command\",\n  \"command\": \"review\",\n  \"body\": \"Focus on correctness, regressions, and missing tests.\"\n}\n```\n\nThis is the preferred future mode for runtimes with session control planes. The Codex managed-session design already describes a normalized control/action vocabulary around session and turn lifecycle, which is a better long-term home for structured command events than prompt rewriting.\n\nUnknown opaque commands may use native command mode only if the runtime adapter exposes a generic opaque-command transport. Otherwise they use `prompt_prefix`.\n\n### materialized_command\n\nMoonMind writes a runtime-specific command file or markup artifact, then invokes it.\n\nExample:\n\n```text\n/project:review\n\nFocus on correctness, regressions, and missing tests.\n```\n\nThe exact materialization format is runtime-owned. Materialization requires explicit known-command hint metadata and an allowlisted renderer; opaque unknown commands are not materialized.\n\n## Create Page Behavior\n\n### Default authoring behavior\n\nThe task instruction field continues to accept ordinary text.\n\nWhen the first character is `/`, the Create page parses the first line and checks the selected runtime's slash-command capability.\n\nIf the selected runtime supports slash-command pass-through, show:\n\n```text\nRuntime command: /review\nThis will be sent to Claude Code/Codex as a runtime slash command.\n```\n\nIf the command also has a known-command hint, the Create page may show the hint:\n\n```text\n/review\nReview the current code or task output.\n```\n\nIf the command has no hint, do not warn merely because it is unknown to MoonMind:\n\n```text\nRuntime command: /future-command\nMoonMind will pass this command through to the selected runtime.\n```\n\nIf the selected runtime does not support slash-command pass-through, show:\n\n```text\n/review may not be recognized by the selected runtime. Choose a slash-command capable runtime or escape it as \\/review to send literal text.\n```\n\n### Runtime changes\n\nWhen the user changes the selected runtime, the Create page recomputes `recognitionMode`.\n\nThe authored instructions do not change.\n\n### Edit mode\n\nWhen loading an existing task in edit mode:\n\n1. Authored instructions are restored from the task input snapshot.\n2. Runtime command metadata is restored from the task input snapshot when present.\n3. If metadata is absent, the Create page may re-detect the command for preview only.\n4. Re-detected metadata must not silently alter the historical raw instruction value.\n\n### Rerun mode\n\nRerun uses the original authored instructions and original command metadata.\n\nIf the runtime capability catalog or known-command hints have changed since the original run, MoonMind may display a warning, but exact rerun should preserve the original task configuration unless the user chooses edit-for-rerun. Persisted command metadata should include the runtime capability version and hint catalog version used at submit time so audits can explain whether a rerun is using the same pass-through assumptions or merely the same authored text.\n\n## Backend Behavior\n\n### Submit-time normalization\n\nOn task submit, the backend validates and canonicalizes runtime command metadata.\n\nThe frontend may provide a parsed preview, but backend normalization is authoritative.\n\nSubmit flow:\n\n```text\n1. Receive task draft.\n2. Extract task-level and step-level instruction fields.\n3. Detect leading slash commands.\n4. Validate runtime-level slash-command capability and command grammar.\n5. Store authored instructions according to the task input snapshot contract.\n6. Store RuntimeCommandInvocation metadata.\n7. Build authoritative task input snapshot.\n8. Submit workflow.\n```\n\n### Server-side parser\n\nThe parser should expose:\n\n```python\ndef parse_runtime_command(\n    *,\n    raw_instructions: str,\n    source_path: str,\n    target_runtime: str | None,\n    runtime_capabilities: RuntimeCommandCapabilities,\n    command_hints: RuntimeCommandHintCatalog | None = None,\n) -> RuntimeCommandInvocation | None:\n    ...\n```\n\n### Validation policy\n\nMoonMind should support runtime-level policies:\n\n```yaml\nruntimeCommandPolicy:\n  slashPassthroughRuntime: pass_through\n  runtimeWithoutSlashPassthrough: warn_literal | reject\n  escapedCommand: allow_plain_text\n  malformedCommand: warn_literal | reject\n```\n\nRecommended default:\n\n```yaml\nruntimeCommandPolicy:\n  slashPassthroughRuntime: pass_through\n  runtimeWithoutSlashPassthrough: warn_literal\n  escapedCommand: allow_plain_text\n  malformedCommand: warn_literal\n```\n\nUnknown valid commands are not rejected by policy when `slashPassthroughRuntime` is `pass_through`. For enterprise or tightly managed environments, `reject` may be used only for runtimes that do not support slash pass-through or for malformed command lines.\n\n## Runtime Preparation Pipeline\n\nRuntime command rendering must happen after MoonMind has prepared the context, but before the command is passed to the runtime.\n\nDesired order:\n\n```text\nraw task input\n  -> parse runtime command\n  -> build task input snapshot\n  -> workflow creates AgentExecutionRequest\n  -> runtime strategy prepares workspace\n  -> RAG/context injection mutates instruction body\n  -> skill activation summary is resolved\n  -> managed runtime notes are prepared\n  -> runtime command renderer produces final runtime input\n  -> runtime strategy launches process or sends turn\n```\n\nThis avoids losing command recognition when MoonMind adds context.\n\nImplementation note: the current managed runtime path mutates `request.instruction_ref` during retrieval injection, skill activation summary projection, and managed runtime note preparation. Slash-command support therefore requires an explicit final render boundary after those mutations. Parser-only changes are insufficient because they would still allow prepared context to move the slash command away from the first runtime-visible position.\n\n## Runtime Strategy Integration\n\n### Interface\n\n```python\nclass RuntimeCommandRenderer:\n    runtime_id: str\n\n    def supports_slash_passthrough(\n        self,\n    ) -> bool:\n        ...\n\n    async def materialize_command(\n        self,\n        *,\n        workspace_path: Path | None,\n        command: RuntimeCommandInvocation,\n        environment: Mapping[str, str] | None,\n    ) -> list[str]:\n        ...\n\n    def render_instruction(\n        self,\n        *,\n        command: RuntimeCommandInvocation | None,\n        instruction_body: str,\n        prepared_context: str,\n        raw_instructions: str,\n    ) -> RuntimeCommandRenderResult:\n        ...\n```\n\n### Codex CLI rendering\n\nCodex CLI currently builds a command from the runtime profile and appends `request.instruction_ref` as the positional prompt.\n\nFor `prompt_prefix` mode, the renderer produces:\n\n```text\n/review\n\n<instruction body>\n\n<MoonMind prepared context and managed runtime notes>\n```\n\nThe slash command remains the first runtime-visible characters.\n\nThis applies to opaque unknown commands as well as commands with MoonMind hint metadata.\n\n### Claude Code rendering\n\nClaude Code currently builds a command with `-p --dangerously-skip-permissions` and appends `request.instruction_ref`.\n\nFor `prompt_prefix` mode, the renderer produces:\n\n```text\n/review\n\n<instruction body>\n\n<MoonMind prepared context>\n```\n\nFor `materialized_command` mode, the renderer may produce:\n\n```text\n/project:review\n\n<instruction body>\n\n<MoonMind prepared context>\n```\n\nand materialize any runtime-specific command files before launch.\n\nThe Create page does not know which mode Claude uses.\n\n## Audit and Observability\n\nEvery run with a runtime command should record:\n\n```json\n{\n  \"event\": \"runtime_command.detected\",\n  \"runtimeId\": \"claude_code\",\n  \"command\": \"review\",\n  \"sourcePath\": \"objective.instructions\",\n  \"hintStatus\": \"hinted\",\n  \"recognitionMode\": \"hinted_runtime_passthrough\",\n  \"runtimeCapabilityVersion\": \"2026-05-13\",\n  \"hintCatalogVersion\": \"2026-05-13\"\n}\n```\n\nAt render time:\n\n```json\n{\n  \"event\": \"runtime_command.rendered\",\n  \"runtimeId\": \"claude_code\",\n  \"command\": \"review\",\n  \"renderMode\": \"prompt_prefix\"\n}\n```\n\nFor opaque unknown commands, observability should record pass-through rather than fallback:\n\n```json\n{\n  \"event\": \"runtime_command.passthrough\",\n  \"runtimeId\": \"claude_code\",\n  \"command\": \"foo\",\n  \"hintStatus\": \"opaque\",\n  \"renderMode\": \"prompt_prefix\"\n}\n```\n\nTask details should show both:\n\n1. Original authored instructions.\n2. Runtime command interpretation.\n\nExample:\n\n```text\nOriginal instructions\n\n/review\nFocus on correctness, regressions, and missing tests.\n\nRuntime command\n\nCommand: /review\nRuntime: Claude Code\nRender mode: prompt prefix\nStatus: passed through\n```\n\n## Security Requirements\n\n1. Runtime capability and known-command hint data are declarative and trusted by MoonMind.\n2. User-authored command names are never used to construct shell commands directly.\n3. Materialized command files are written only through allowlisted renderers.\n4. Unknown commands do not trigger materialization.\n5. Runtime command rendering must not expose secrets.\n6. Authored instructions remain auditable.\n7. Backend validation is authoritative.\n8. Runtime renderers must treat user command args and body as untrusted text.\n9. Slash-command pass-through may be disabled by policy per runtime, workspace, tenant, or provider profile.\n10. Known-command hints must never become a blocking allowlist for pass-through runtimes.\n\n## Failure Modes\n\n### Unknown command\n\nInput:\n\n```text\n/foo\nDo something.\n```\n\nDefault behavior:\n\n```text\nNo warning is required merely because MoonMind lacks a hint.\nStored as authored instructions and command metadata.\nruntimeCommand.hintStatus = \"opaque\".\nruntimeCommand.recognitionMode = \"runtime_passthrough\".\nRendered with the command in the runtime-required recognition position.\n```\n\n### Runtime without slash pass-through\n\nInput:\n\n```text\n/review\nCheck this.\n```\n\nSelected runtime:\n\n```text\nsome_runtime_without_slash_commands\n```\n\nDefault behavior:\n\n```text\nWarning shown.\nStored as authored instructions and command metadata.\nRendered as literal text unless strict policy rejects.\n```\n\n### Renderer failure\n\nIf runtime-specific materialization fails, the task should fail before launching the agent with:\n\n```json\n{\n  \"failureClass\": \"user_error\",\n  \"reason\": \"runtime_command_render_failed\"\n}\n```\n\nor, if policy permits fallback:\n\n```json\n{\n  \"event\": \"runtime_command.fallback\",\n  \"reason\": \"renderer_failed\",\n  \"fallbackMode\": \"literal_prompt\"\n}\n```\n\n### Context preparation moves the slash\n\nThis must not happen. The renderer is responsible for producing final runtime input with the command in the correct runtime-required position.\n\n## Testing Strategy\n\n### Parser tests\n\n```text\n/review\n  -> command=review\n\n/review focus on tests\n  -> command=review\n  -> args=\"focus on tests\"\n\n/simplify\n  -> command=simplify\n\n /review\n  -> no command\n\n\\/review\n  -> escaped literal\n\n/src/foo.ts\n  -> malformed command, literal text\n\n/future-command\n  -> opaque command=future-command\n```\n\n### Create page tests\n\n1. Leading `/review` shows a runtime command chip.\n2. Changing runtime recomputes recognition mode.\n3. Escaped `\\/review` does not show command chip.\n4. Unknown valid `/foo` shows pass-through status, not a blocking warning.\n5. Authored instructions remain unchanged after detection.\n\n### Backend tests\n\n1. Backend detects command even if frontend metadata is missing.\n2. Backend rejects malformed frontend command metadata.\n3. Backend preserves authored instructions according to the task input snapshot contract.\n4. Backend stores command metadata in the authoritative task input snapshot.\n5. Unknown valid commands pass through for slash-capable runtimes.\n6. Runtimes without slash pass-through follow configured policy.\n\n### Runtime rendering tests\n\n1. Codex prompt-prefix render starts with `/review`.\n2. Claude prompt-prefix render starts with `/review`.\n3. Unknown valid `/future-command` prompt-prefix render starts with `/future-command`.\n4. Skill activation summaries do not appear before the command.\n5. RAG context does not appear before the command.\n6. Managed runtime notes do not appear before the command.\n7. Materialized command mode writes only allowlisted files for known commands.\n8. Renderer failure produces a typed failure or policy-approved fallback.\n\n### Edit and rerun tests\n\n1. Edit mode restores authored instructions from the task input snapshot.\n2. Edit mode restores command metadata from the task input snapshot.\n3. Rerun preserves original command metadata.\n4. Edit-for-rerun can recompute recognition warnings without altering the source run.\n5. Task details show authored instructions and rendered command metadata.\n\n## Acceptance Criteria\n\nThe system is correct when all of the following are true:\n\n1. A user can enter `/review` as the first characters of Create Task instructions.\n2. MoonMind detects `/review` as a structured runtime command.\n3. MoonMind preserves authored instructions through the authoritative task input snapshot.\n4. MoonMind stores command metadata in the authoritative task input snapshot.\n5. The Create page displays whether the selected runtime supports slash-command pass-through.\n6. Unknown valid commands pass through for runtimes with slash-command pass-through.\n7. Users can escape slash-leading text with `\\/`.\n8. Runtime-specific renderers decide how to make the command recognized by Codex CLI or Claude Code.\n9. MoonMind-added context never accidentally moves the command out of the runtime-required recognition position.\n10. Edit, rerun, task details, and audit surfaces can show both the original instructions and the interpreted runtime command.\n11. No Codex-specific or Claude-specific command markup is hard-coded into the Create page.\n12. Future runtimes can add slash-command support by registering runtime capabilities and implementing a renderer.\n13. Future suggestion features can add known-command hints without blocking commands absent from the hint catalog.\n"
+  },
+  "extractedAt": "2026-05-15T03:33:23Z",
+  "designSummary": "The design defines desired-state support for passing leading slash commands from Create Task instructions through MoonMind into managed runtimes. MoonMind preserves raw authored instructions, derives structured RuntimeCommandInvocation metadata at submission, lets runtimes declare slash-command capabilities and hints, and renders commands at the final adapter boundary after context preparation. It explicitly keeps provider command semantics outside Create page logic, supports unknown opaque commands for capable runtimes, preserves edit/rerun/audit fidelity, and requires security and regression coverage across parser, UI, backend, and runtime rendering paths.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Pass runtime slash commands from Create Task instructions",
+      "type": "requirement",
+      "source_section": "Purpose; Goals; Acceptance Criteria",
+      "explanation": "Users can start task or step instructions with runtime-native slash commands such as /review or /simplify and have MoonMind preserve their runtime-command behavior."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Preserve authored instructions exactly through snapshots",
+      "type": "state-model",
+      "source_section": "Design Principles; Task Input Shape",
+      "explanation": "Slash command parsing derives metadata without rewriting the raw authored instruction text stored in the authoritative task input snapshot."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Represent leading slash commands as structured metadata",
+      "type": "state-model",
+      "source_section": "Terminology; Domain Model; Task Input Shape",
+      "explanation": "MoonMind stores RuntimeCommandInvocation metadata including command, args, body, source path, target runtime or step, detection status, hint status, recognition mode, version metadata, and detection phase."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Detect task-level and step-level leading slash commands conservatively",
+      "type": "requirement",
+      "source_section": "Task Input Shape; Detection Rules",
+      "explanation": "A command is detected only when the instruction is non-empty and begins with /, with source paths for objective or step instruction fields and parser behavior for known, opaque, escaped, malformed, and non-leading examples."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Unknown valid commands pass through on capable runtimes",
+      "type": "integration",
+      "source_section": "Unknown Command Contract; Failure Modes",
+      "explanation": "Unknown slash commands are first-class opaque runtime invocations, are not rejected for missing hints, remain slash-leading, and are not materialized into command files."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Escaped slash-leading text remains literal",
+      "type": "requirement",
+      "source_section": "Escape Behavior; Runtime Render Modes",
+      "explanation": "Users can write escaped commands such as \\/review to force literal text, and rendering must avoid leaving the unescaped slash command first in runtime-visible input."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Runtime capability and policy determine recognition mode",
+      "type": "constraint",
+      "source_section": "Runtime Capabilities and Command Hints; Validation policy",
+      "explanation": "Slash-command support is declared at runtime level through capability and policy catalogs rather than per-command frontend logic or allowlists."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Known-command hints enrich UX without becoming validation gates",
+      "type": "constraint",
+      "source_section": "Design Principles; Runtime Capabilities and Command Hints; Create Page Behavior",
+      "explanation": "Hint catalog entries can provide labels, descriptions, examples, aliases, and future materialization metadata, but absence of a hint must not block pass-through runtimes."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Create Page previews command interpretation without provider-specific rendering",
+      "type": "ui",
+      "source_section": "Create Page Behavior; Non-goals",
+      "explanation": "The Create page shows pass-through, hint, unsupported-runtime, runtime-change, and escape statuses while keeping runtime-specific command markup out of React conditionals."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Backend normalization is authoritative",
+      "type": "integration",
+      "source_section": "Backend Behavior",
+      "explanation": "Submit-time backend logic detects, validates, canonicalizes, and stores runtime command metadata even when frontend metadata is absent or malformed."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Render commands at the last responsible runtime boundary",
+      "type": "integration",
+      "source_section": "Runtime Preparation Pipeline",
+      "explanation": "Runtime command rendering occurs after RAG injection, skill activation, runtime notes, and other instruction preparation so MoonMind-added context cannot move the command away from the recognition position."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Runtime adapters own render modes and materialization",
+      "type": "integration",
+      "source_section": "Runtime Render Modes; Runtime Strategy Integration",
+      "explanation": "Adapters expose renderer behavior for plain prompt, prompt prefix, native command, materialized command, and unsupported modes; opaque commands can use only pass-through transports."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Codex CLI and Claude Code preserve prompt-prefix recognition",
+      "type": "integration",
+      "source_section": "Runtime Strategy Integration",
+      "explanation": "Codex CLI and Claude Code prompt-prefix rendering must place slash commands as the first runtime-visible characters, with Claude materialized mode reserved for explicit known-command metadata."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Edit and rerun preserve historical command fidelity",
+      "type": "state-model",
+      "source_section": "Create Page Behavior; Edit mode; Rerun mode",
+      "explanation": "Edit mode restores authored instructions and metadata from snapshots, rerun preserves original command metadata and versions, and edit-for-rerun may recompute warnings without altering the source run."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Audit, observability, and task details expose both authored text and interpretation",
+      "type": "observability",
+      "source_section": "Audit and Observability",
+      "explanation": "Runtime command detection, rendering, pass-through, versions, and task details should be visible without obscuring the original authored instructions."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Security rules prevent command injection and unsafe materialization",
+      "type": "security",
+      "source_section": "Security Requirements",
+      "explanation": "User command names and args are untrusted text, must not directly construct shell commands, must not expose secrets, and materialized files must be allowlisted by renderers."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Failure modes are typed and policy controlled",
+      "type": "resiliency",
+      "source_section": "Failure Modes",
+      "explanation": "Unknown commands, unsupported runtimes, renderer failures, and context-preparation ordering issues have explicit default behaviors, typed failures, or policy-approved fallback semantics."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Testing spans parser, Create page, backend, rendering, edit, and rerun paths",
+      "type": "verification",
+      "source_section": "Testing Strategy; Acceptance Criteria",
+      "explanation": "The design requires parser, Create page, backend, runtime rendering, edit/rerun, security, and acceptance coverage aligned with the final behavior."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Non-goals keep MoonMind out of provider command semantics",
+      "type": "non-goal",
+      "source_section": "Non-goals",
+      "explanation": "The system does not require MoonMind to know every command, replace runtime-native command systems, make commands workflow actions by default, infer command semantics after context injection, or block unknown commands due to missing hints."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "shortName": "runtime-command-snapshot",
+      "summary": "Normalize slash-leading instructions into authoritative runtime command snapshots",
+      "description": "As a MoonMind operator submitting a task, I want slash-leading task and step instructions to be preserved as authored text while the backend records structured runtime command metadata, so managed runtimes can later recognize the command without losing audit fidelity.",
+      "why": "This establishes the durable contract that every later UI, rerun, and runtime-rendering surface depends on.",
+      "sourceReference": {
+        "path": "docs/Steps/SlashCommands.md",
+        "title": "Runtime Slash Commands on Create Task",
+        "sections": [
+          "Purpose",
+          "Problem",
+          "Design Principles",
+          "Goals",
+          "Terminology",
+          "Domain Model",
+          "Task Input Shape",
+          "Detection Rules",
+          "Unknown Command Contract",
+          "Escape Behavior",
+          "Backend Behavior",
+          "Validation policy",
+          "Non-goals"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-019"
+        ]
+      },
+      "scope": [
+        "Server-side parser for objective and step instruction fields",
+        "RuntimeCommandInvocation snapshot metadata",
+        "Runtime capability and policy lookup during submit normalization",
+        "Unknown, escaped, malformed, unsupported-runtime, hinted, and opaque command classifications"
+      ],
+      "outOfScope": [
+        "Create page visual design beyond consuming returned metadata",
+        "Runtime-specific final prompt rendering",
+        "Creating provider command files"
+      ],
+      "independentTest": "Submit task drafts with objective-level and step-level examples from the design, then assert the authoritative task input snapshot preserves instructions and stores the expected RuntimeCommandInvocation fields without relying on frontend metadata.",
+      "acceptanceCriteria": [
+        "Submitting instructions beginning with /review stores the raw instructions unchanged and a slash_command RuntimeCommandInvocation with command=review, detectionStatus=detected, and a sourcePath matching the instruction field.",
+        "Submitting step instructions beginning with /simplify stores targetStepId and a step sourcePath such as steps[0].instructions.",
+        "Unknown valid commands such as /future-command are accepted as opaque runtime invocations for slash-pass-through runtimes and are never rejected solely because no hint exists.",
+        "Escaped input such as \\/review is stored as escaped_literal metadata and cannot be rendered later as an executable leading slash command by default.",
+        "Malformed ordinary path-like inputs and runtimes without slash pass-through follow configured warning/reject policy without rewriting authored instructions.",
+        "Backend normalization rejects inconsistent or malformed frontend-supplied command metadata and remains authoritative when frontend metadata is missing."
+      ],
+      "requirements": [
+        "Implement a conservative parser matching the documented grammar and example table while preserving opaque first-line command forms for pass-through runtimes.",
+        "Add RuntimeCommandInvocation and related capability/hint/policy fields to the authoritative task input snapshot shape.",
+        "Compute detectionStatus, hintStatus, recognitionMode, requiresRuntimeRecognition, runtimeCapabilityVersion, hintCatalogVersion, sourcePath, command, args, and instructionBody deterministically.",
+        "Preserve exact user-authored instruction text according to existing task input snapshot rules.",
+        "Treat command hints as enrichment metadata and not as a blocking command allowlist."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "title": "Pass runtime slash commands from Create Task instructions",
+          "ownership": "Defines the user-facing submission contract for slash-leading task and step instructions."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "title": "Preserve authored instructions exactly through snapshots",
+          "ownership": "Owns backend snapshot preservation of raw authored instructions during submit normalization."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "title": "Represent leading slash commands as structured metadata",
+          "ownership": "Owns the RuntimeCommandInvocation fields and authoritative snapshot shape."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "title": "Detect task-level and step-level leading slash commands conservatively",
+          "ownership": "Owns parser grammar, source paths, task and step detection, and escaped/malformed classification at submit time."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "title": "Unknown valid commands pass through on capable runtimes",
+          "ownership": "Owns pass-through treatment for unknown valid commands during detection and snapshot normalization."
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "title": "Escaped slash-leading text remains literal",
+          "ownership": "Owns literal escaped command metadata at submission and renderer-safe literal output."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "title": "Runtime capability and policy determine recognition mode",
+          "ownership": "Owns runtime capability and policy inputs used to compute recognition modes."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "title": "Known-command hints enrich UX without becoming validation gates",
+          "ownership": "Owns optional hint catalog behavior and prevents hints from becoming validation allowlists."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "title": "Backend normalization is authoritative",
+          "ownership": "Owns authoritative server-side parser and validation behavior."
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "title": "Non-goals keep MoonMind out of provider command semantics",
+          "ownership": "Owns non-goal enforcement through acceptance criteria and explicit out-of-scope boundaries."
+        }
+      ],
+      "dependencies": [],
+      "risks": [
+        "The existing task input snapshot may have multiple creation paths; all submit paths need to use the same backend normalization boundary."
+      ],
+      "assumptions": [
+        "Runtime capability and hint catalog data can be introduced without new persistent storage."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "shortName": "create-command-preview",
+      "summary": "Show provider-neutral slash command previews on the Create page",
+      "description": "As a user composing a task, I want the Create page to preview whether my leading slash text will be treated as a runtime command, literal text, or unsupported runtime case, so I can submit the task intentionally without MoonMind hard-coding provider command markup.",
+      "why": "This gives immediate user feedback while keeping Create as a schema and capability-driven composition surface.",
+      "sourceReference": {
+        "path": "docs/Steps/SlashCommands.md",
+        "title": "Runtime Slash Commands on Create Task",
+        "sections": [
+          "Design Principles",
+          "Runtime Capabilities and Command Hints",
+          "Create Page Behavior",
+          "Edit mode",
+          "Non-goals",
+          "Testing Strategy"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-019"
+        ]
+      },
+      "scope": [
+        "Create page command chip/status preview",
+        "Known-command hint display",
+        "Unknown valid command pass-through display",
+        "Unsupported-runtime warning display",
+        "Runtime-change recomputation",
+        "Escaped command preview behavior"
+      ],
+      "outOfScope": [
+        "Authoritative backend validation",
+        "Runtime adapter prompt rendering",
+        "Provider-specific command materialization"
+      ],
+      "independentTest": "Render the Create page with slash-capable, non-capable, hinted, unknown, escaped, and runtime-change cases and assert the displayed status changes while the instruction textarea value remains unchanged.",
+      "acceptanceCriteria": [
+        "Leading /review shows a runtime command status for a slash-capable runtime and may include hint text when available.",
+        "Unknown valid /foo shows pass-through status rather than a warning or error when the selected runtime supports slash commands.",
+        "Selecting a runtime without slash-command pass-through recomputes recognition mode and shows an actionable warning without mutating authored instructions.",
+        "Escaped \\/review does not show an executable command chip and is represented as literal text intent.",
+        "Create page code consumes declarative capability and hint metadata and does not embed Codex-specific or Claude-specific command markup."
+      ],
+      "requirements": [
+        "Surface runtimeCommand preview state for objective and step instructions when the first character is /.",
+        "Use runtime capability catalog data and hint catalog data for preview labels and descriptions.",
+        "Recompute preview when selected runtime changes without altering the underlying instruction value.",
+        "Keep provider-specific rendering decisions out of the Create page."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "title": "Pass runtime slash commands from Create Task instructions",
+          "ownership": "Defines the user-facing submission contract for slash-leading task and step instructions."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "title": "Runtime capability and policy determine recognition mode",
+          "ownership": "Owns runtime capability and policy inputs used to compute recognition modes."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "title": "Known-command hints enrich UX without becoming validation gates",
+          "ownership": "Owns optional hint catalog behavior and prevents hints from becoming validation allowlists."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "title": "Create Page previews command interpretation without provider-specific rendering",
+          "ownership": "Owns Create page preview, runtime change recomputation, unsupported warnings, and provider-neutral UI boundaries."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "title": "Testing spans parser, Create page, backend, rendering, edit, and rerun paths",
+          "ownership": "Owns the test suite coverage matrix for every parser, UI, backend, renderer, edit, and rerun scenario."
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "title": "Non-goals keep MoonMind out of provider command semantics",
+          "ownership": "Owns non-goal enforcement through acceptance criteria and explicit out-of-scope boundaries."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "risks": [
+        "Frontend preview may drift from backend normalization unless tests cover both sides against the same examples."
+      ],
+      "assumptions": [
+        "The Create page can obtain runtime capability and hint metadata through existing boot payload or settings data paths."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "shortName": "runtime-command-rendering",
+      "summary": "Render runtime commands after context preparation in managed runtime adapters",
+      "description": "As a managed runtime operator, I want Codex CLI, Claude Code, and future adapters to render slash commands only after MoonMind has prepared context, so runtime command recognition is preserved even when retrieval, skills, and runtime notes are added.",
+      "why": "Parser metadata alone is insufficient; the command must remain first in the final runtime-visible input for prompt-prefix runtimes.",
+      "sourceReference": {
+        "path": "docs/Steps/SlashCommands.md",
+        "title": "Runtime Slash Commands on Create Task",
+        "sections": [
+          "Runtime Render Modes",
+          "Runtime Preparation Pipeline",
+          "Runtime Strategy Integration",
+          "Codex CLI rendering",
+          "Claude Code rendering",
+          "Failure Modes",
+          "Security Requirements",
+          "Testing Strategy"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-019"
+        ]
+      },
+      "scope": [
+        "RuntimeCommandRenderer interface or equivalent adapter boundary",
+        "Final render point after RAG, skill activation summaries, and managed runtime notes",
+        "Codex CLI prompt_prefix rendering",
+        "Claude Code prompt_prefix and allowlisted materialized rendering",
+        "Renderer failure behavior",
+        "Security constraints for user command text"
+      ],
+      "outOfScope": [
+        "Create page previews",
+        "Backend parser implementation except consuming stored metadata",
+        "Adding MoonMind-owned slash command semantics beyond explicit known-command materialization metadata"
+      ],
+      "independentTest": "Build AgentExecutionRequest inputs with command metadata plus prepared context, skill summaries, and runtime notes, then assert Codex and Claude rendered instruction refs start with the command and that unknown commands are passed through without materialized files.",
+      "acceptanceCriteria": [
+        "Rendering occurs after retrieval context, skill activation summaries, and managed runtime notes are prepared.",
+        "Codex CLI prompt-prefix output starts with /review followed by the instruction body and prepared context.",
+        "Claude Code prompt-prefix output starts with /review and does not require the Create page to know its render mode.",
+        "Unknown valid commands remain slash-leading in prompt-prefix or generic native-command transports and are never materialized.",
+        "Materialized command mode writes only allowlisted files for commands with explicit known-command metadata.",
+        "Escaped literal commands render with a non-command prefix, quote block, or runtime-specific literal wrapper so the runtime does not execute the slash command.",
+        "Renderer failures produce typed user_error runtime_command_render_failed results or a policy-approved fallback event before launch."
+      ],
+      "requirements": [
+        "Introduce an adapter-owned renderer contract that can produce RuntimeCommandRenderResult values.",
+        "Support plain_prompt, prompt_prefix, native_command, materialized_command, and unsupported outcomes as documented.",
+        "Ensure MoonMind-added context never precedes a command that requires first-character recognition.",
+        "Treat command names, args, and bodies as untrusted text and avoid direct shell command construction."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-006",
+          "title": "Escaped slash-leading text remains literal",
+          "ownership": "Owns literal escaped command metadata at submission and renderer-safe literal output."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "title": "Render commands at the last responsible runtime boundary",
+          "ownership": "Owns the final render boundary after context, skills, and runtime notes are prepared."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "title": "Runtime adapters own render modes and materialization",
+          "ownership": "Owns adapter renderer modes, generic native command constraints, materialization rules, and unsupported mode outputs."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "title": "Codex CLI and Claude Code preserve prompt-prefix recognition",
+          "ownership": "Owns concrete Codex CLI and Claude Code rendering behavior and runtime-specific tests."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "title": "Security rules prevent command injection and unsafe materialization",
+          "ownership": "Owns security assertions across backend normalization and renderer behavior."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "title": "Failure modes are typed and policy controlled",
+          "ownership": "Owns typed or policy-controlled failure outcomes for unsupported, malformed, unknown, renderer, and context-order cases."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "title": "Testing spans parser, Create page, backend, rendering, edit, and rerun paths",
+          "ownership": "Owns the test suite coverage matrix for every parser, UI, backend, renderer, edit, and rerun scenario."
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "title": "Non-goals keep MoonMind out of provider command semantics",
+          "ownership": "Owns non-goal enforcement through acceptance criteria and explicit out-of-scope boundaries."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "risks": [
+        "Managed runtime launch paths may mutate instruction_ref in several places; the final render boundary must be placed after all existing mutations."
+      ],
+      "assumptions": [
+        "Codex CLI and Claude Code can both accept prompt text arranged by MoonMind without a new provider protocol."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "shortName": "command-fidelity-audit",
+      "summary": "Preserve slash command fidelity across edit, rerun, task details, and audit surfaces",
+      "description": "As an operator reviewing or rerunning previous work, I want MoonMind to show the original authored instructions and the runtime command interpretation used at submission, so historical tasks remain auditable even as runtime capabilities or hints evolve.",
+      "why": "Slash commands affect runtime behavior, so edit/rerun and audit surfaces need exact historical reconstruction rather than best-effort re-detection.",
+      "sourceReference": {
+        "path": "docs/Steps/SlashCommands.md",
+        "title": "Runtime Slash Commands on Create Task",
+        "sections": [
+          "Create Page Behavior",
+          "Edit mode",
+          "Rerun mode",
+          "Audit and Observability",
+          "Testing Strategy",
+          "Acceptance Criteria"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "scope": [
+        "Edit mode restoration from task input snapshot",
+        "Rerun preservation of original command metadata and catalog versions",
+        "Edit-for-rerun warning recomputation without source-run mutation",
+        "Task details display of authored instructions plus command interpretation",
+        "Detection, render, and pass-through audit events"
+      ],
+      "outOfScope": [
+        "Initial submit parser behavior",
+        "Runtime renderer implementation details",
+        "Changing provider command semantics during rerun"
+      ],
+      "independentTest": "Create a stored task input snapshot with runtimeCommand metadata and changed current hint/capability versions, then verify edit, rerun, task details, and audit outputs use historical metadata unless the user explicitly edits for rerun.",
+      "acceptanceCriteria": [
+        "Edit mode restores authored instructions and runtimeCommand metadata from the task input snapshot when present.",
+        "If historical metadata is absent, edit mode may re-detect only for preview and must not alter the historical raw instruction value silently.",
+        "Exact rerun preserves original authored instructions, runtimeCommand metadata, runtimeCapabilityVersion, and hintCatalogVersion.",
+        "Edit-for-rerun may display recomputed warnings without mutating the original source run.",
+        "Task details show both original instructions and runtime command interpretation including command, runtime, render mode, and status when available.",
+        "Audit events record runtime_command.detected, runtime_command.rendered, and runtime_command.passthrough details without secrets."
+      ],
+      "requirements": [
+        "Store enough command metadata to explain historical recognition mode and catalog versions.",
+        "Use snapshot metadata as the source of truth for edit, rerun, task details, and audit views.",
+        "Emit observability events for detected, rendered, and opaque pass-through command cases.",
+        "Display original authored instructions alongside interpretation instead of replacing one with the other."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-002",
+          "title": "Preserve authored instructions exactly through snapshots",
+          "ownership": "Owns backend snapshot preservation of raw authored instructions during submit normalization."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "title": "Represent leading slash commands as structured metadata",
+          "ownership": "Owns the RuntimeCommandInvocation fields and authoritative snapshot shape."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "title": "Edit and rerun preserve historical command fidelity",
+          "ownership": "Owns historical restoration and rerun fidelity for authored text, command metadata, and catalog versions."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "title": "Audit, observability, and task details expose both authored text and interpretation",
+          "ownership": "Owns emitted command events and task detail presentation of original instructions plus interpretation."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "title": "Testing spans parser, Create page, backend, rendering, edit, and rerun paths",
+          "ownership": "Owns the test suite coverage matrix for every parser, UI, backend, renderer, edit, and rerun scenario."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "risks": [
+        "Rerun reconstruction may have multiple code paths that need a shared snapshot reader to avoid divergent behavior."
+      ],
+      "assumptions": [
+        "Existing task details and audit surfaces can display additional runtime command metadata without new persistent storage."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "shortName": "slash-command-guardrails",
+      "summary": "Enforce slash command security, non-goals, and cross-surface test coverage",
+      "description": "As a MoonMind maintainer, I want guardrail tests and policy assertions around slash-command behavior, so unknown commands, unsupported runtimes, materialization, security, and non-goals stay stable as providers add new command forms.",
+      "why": "The design intentionally allows opaque provider commands; broad boundary tests are needed to prevent later allowlists, unsafe shell construction, or misplaced context from regressing the contract.",
+      "sourceReference": {
+        "path": "docs/Steps/SlashCommands.md",
+        "title": "Runtime Slash Commands on Create Task",
+        "sections": [
+          "Unknown Command Contract",
+          "Security Requirements",
+          "Failure Modes",
+          "Testing Strategy",
+          "Acceptance Criteria",
+          "Non-goals"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-019"
+        ]
+      },
+      "scope": [
+        "Regression coverage tying parser, Create page, backend, renderer, edit, and rerun examples together",
+        "Security assertions for untrusted command args and bodies",
+        "Policy coverage for unsupported runtimes and malformed inputs",
+        "Non-goal enforcement that unknown provider commands are not blocked or converted into MoonMind workflow actions"
+      ],
+      "outOfScope": [
+        "Adding new runtime commands as MoonMind workflow actions",
+        "Implementing provider-specific semantics for /review or /simplify",
+        "Replacing provider-native command systems"
+      ],
+      "independentTest": "Run a focused slash-command regression suite containing every documented parser example and acceptance criterion, including security checks that command names are never used to form shell commands and unknown commands are not materialized.",
+      "acceptanceCriteria": [
+        "Parser tests cover /review, /review with args, /simplify, leading-space non-detection, escaped slash, path-like malformed input, unknown valid command, provider-style opaque command line, and non-leading slash text.",
+        "Create page tests cover command chips, runtime changes, escaped input, unknown pass-through status, and instruction immutability.",
+        "Backend tests cover missing frontend metadata, rejected malformed metadata, snapshot preservation, unknown pass-through, and unsupported-runtime policy.",
+        "Runtime tests prove Codex and Claude prompt-prefix render outputs start with the command and that RAG, skill summaries, and runtime notes never precede it.",
+        "Security tests prove user-authored command names, args, and bodies are treated as untrusted text and materialized command files are allowlisted only for known commands.",
+        "Non-goal tests or assertions prevent hints from becoming a blocking allowlist and prevent slash commands from becoming MoonMind workflow actions unless explicitly registered that way."
+      ],
+      "requirements": [
+        "Collect design examples into reusable parser, UI, backend, renderer, edit, rerun, and security tests.",
+        "Assert policy-controlled failure behavior for renderer failures and unsupported/malformed commands.",
+        "Keep test evidence aligned with the final acceptance criteria from the source design."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-005",
+          "title": "Unknown valid commands pass through on capable runtimes",
+          "ownership": "Owns pass-through treatment for unknown valid commands during detection and snapshot normalization."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "title": "Security rules prevent command injection and unsafe materialization",
+          "ownership": "Owns security assertions across backend normalization and renderer behavior."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "title": "Failure modes are typed and policy controlled",
+          "ownership": "Owns typed or policy-controlled failure outcomes for unsupported, malformed, unknown, renderer, and context-order cases."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "title": "Testing spans parser, Create page, backend, rendering, edit, and rerun paths",
+          "ownership": "Owns the test suite coverage matrix for every parser, UI, backend, renderer, edit, and rerun scenario."
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "title": "Non-goals keep MoonMind out of provider command semantics",
+          "ownership": "Owns non-goal enforcement through acceptance criteria and explicit out-of-scope boundaries."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-003",
+        "STORY-004"
+      ],
+      "risks": [
+        "If treated as a late technical chore, this story could lose vertical value; it should be run as the hardening and acceptance-lock story before implementation is considered complete."
+      ],
+      "assumptions": [
+        "Downstream implementation will follow repository test taxonomy and use focused unit plus frontend tests, with integration coverage where runtime adapter boundaries are exercised."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-001",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-005"
+    ]
+  },
+  "recommendedFirstStory": "STORY-001",
+  "outOfScope": [
+    "Creating spec.md files or specs/ directories during breakdown.",
+    "Implementing slash-command behavior during this breakdown step.",
+    "Creating Jira issues during this breakdown step.",
+    "Replacing provider-native command systems or requiring MoonMind to know every provider command.",
+    "Treating slash commands as MoonMind workflow actions unless explicitly registered that way in a future design."
+  ]
+}
