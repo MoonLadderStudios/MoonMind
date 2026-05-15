@@ -241,6 +241,7 @@ interface DashboardConfig {
       totalBytes?: number;
       allowedContentTypes?: string[];
     };
+    runtimeCommandPreview?: RuntimeCommandPreviewConfig;
     jiraIntegration?: {
       enabled?: boolean;
       defaultProjectKey?: string;
@@ -248,6 +249,48 @@ interface DashboardConfig {
       rememberLastBoardInSession?: boolean;
     };
   };
+}
+
+interface RuntimeCommandCapability {
+  slashCommandPassthrough?: boolean;
+  renderMode?: string;
+  commandHintsRef?: string;
+}
+
+interface RuntimeCommandHint {
+  label?: string;
+  aliases?: string[];
+  description?: string;
+  argumentPolicy?: Record<string, unknown>;
+  bodyPolicy?: Record<string, unknown>;
+}
+
+interface RuntimeCommandPreviewConfig {
+  capabilityVersion?: string;
+  hintCatalogVersion?: string;
+  runtimes?: Record<string, RuntimeCommandCapability>;
+  knownRuntimeCommandHints?: Record<string, RuntimeCommandHint>;
+}
+
+interface RuntimeCommandPreviewState {
+  sourcePath: string;
+  rawInstructions: string;
+  rawCommand: string;
+  command: string;
+  args: string;
+  instructionBody: string;
+  detectionStatus: "detected" | "escaped" | "malformed";
+  hintStatus: "hinted" | "opaque";
+  recognitionMode:
+    | "hinted_runtime_passthrough"
+    | "runtime_passthrough"
+    | "escaped_literal"
+    | "runtime_does_not_support_slash_commands";
+  requiresRuntimeRecognition: boolean;
+  messageSeverity: "info" | "warning" | "neutral";
+  label: string;
+  description: string;
+  source: "derived" | "snapshot";
 }
 
 interface JiraIntegrationConfig {
@@ -641,6 +684,7 @@ interface StepState {
   source?: Record<string, unknown>;
   storyOutput?: Record<string, unknown>;
   jiraOrchestration?: Record<string, unknown>;
+  runtimeCommand?: Record<string, unknown>;
 }
 
 interface PresetSubmitExpansionState {
@@ -1272,6 +1316,200 @@ function createStepStateEntry(
   };
 }
 
+const RUNTIME_COMMAND_TOKEN_PATTERN =
+  /^\/([A-Za-z][A-Za-z0-9_-]*(?:(?::|\.)[A-Za-z0-9_-]+)?)(?:\s+(.*))?$/;
+
+function firstLineAndBody(value: string): { firstLine: string; body: string } {
+  const lineEnd = value.indexOf("\n");
+  if (lineEnd === -1) {
+    return { firstLine: value, body: "" };
+  }
+  return {
+    firstLine: value.slice(0, lineEnd),
+    body: value.slice(lineEnd + 1),
+  };
+}
+
+function looksLikeOrdinarySlashPath(firstLine: string): boolean {
+  const token = firstLine.split(/\s+/, 1)[0] || "";
+  if (!token.startsWith("/")) {
+    return false;
+  }
+  const withoutSlash = token.slice(1);
+  return withoutSlash.includes("/") || withoutSlash.startsWith(".");
+}
+
+function runtimeCommandMatchesInstructions(
+  stored: Record<string, unknown> | undefined,
+  rawInstructions: string,
+  runtime: string,
+): boolean {
+  if (!stored) {
+    return false;
+  }
+  const { firstLine } = firstLineAndBody(rawInstructions);
+  const rawCommand = String(stored.rawCommand || "");
+  const targetRuntime = String(stored.targetRuntime || runtime || "");
+  return Boolean(rawCommand) && rawCommand === firstLine && targetRuntime === runtime;
+}
+
+function deriveRuntimeCommandPreview({
+  instructions,
+  runtime,
+  sourcePath,
+  config,
+  storedRuntimeCommand,
+}: {
+  instructions: string;
+  runtime: string;
+  sourcePath: string;
+  config: RuntimeCommandPreviewConfig | undefined;
+  storedRuntimeCommand: Record<string, unknown> | undefined;
+}): RuntimeCommandPreviewState | null {
+  if (!instructions || !config) {
+    return null;
+  }
+  if (instructions.startsWith("\\/")) {
+    const { firstLine } = firstLineAndBody(instructions);
+    return {
+      sourcePath,
+      rawInstructions: instructions,
+      rawCommand: firstLine,
+      command: "",
+      args: "",
+      instructionBody: instructions.slice(1),
+      detectionStatus: "escaped",
+      hintStatus: "opaque",
+      recognitionMode: "escaped_literal",
+      requiresRuntimeRecognition: false,
+      messageSeverity: "neutral",
+      label: `Literal text: ${firstLine.slice(1)}`,
+      description: "Escaped leading slash will be submitted as text.",
+      source: runtimeCommandMatchesInstructions(
+        storedRuntimeCommand,
+        instructions,
+        runtime,
+      )
+        ? "snapshot"
+        : "derived",
+    };
+  }
+  if (!instructions.startsWith("/")) {
+    return null;
+  }
+  const { firstLine, body } = firstLineAndBody(instructions);
+  if (looksLikeOrdinarySlashPath(firstLine)) {
+    return {
+      sourcePath,
+      rawInstructions: instructions,
+      rawCommand: firstLine,
+      command: "",
+      args: "",
+      instructionBody: instructions,
+      detectionStatus: "malformed",
+      hintStatus: "opaque",
+      recognitionMode: "escaped_literal",
+      requiresRuntimeRecognition: false,
+      messageSeverity: "neutral",
+      label: "Literal slash text",
+      description: "Path-like slash text will be submitted as written.",
+      source: "derived",
+    };
+  }
+  const match = RUNTIME_COMMAND_TOKEN_PATTERN.exec(firstLine);
+  if (!match) {
+    return {
+      sourcePath,
+      rawInstructions: instructions,
+      rawCommand: firstLine,
+      command: "",
+      args: "",
+      instructionBody: instructions,
+      detectionStatus: "malformed",
+      hintStatus: "opaque",
+      recognitionMode: "escaped_literal",
+      requiresRuntimeRecognition: false,
+      messageSeverity: "neutral",
+      label: "Literal slash text",
+      description: "Slash text does not match runtime command syntax.",
+      source: "derived",
+    };
+  }
+  const command = match[1] || "";
+  const args = command.includes(".") ? "" : match[2] || "";
+  const hint = config.knownRuntimeCommandHints?.[command];
+  const supportsPassthrough = Boolean(
+    config.runtimes?.[runtime]?.slashCommandPassthrough,
+  );
+  const source = runtimeCommandMatchesInstructions(
+    storedRuntimeCommand,
+    instructions,
+    runtime,
+  )
+    ? "snapshot"
+    : "derived";
+  if (!supportsPassthrough) {
+    return {
+      sourcePath,
+      rawInstructions: instructions,
+      rawCommand: firstLine,
+      command,
+      args,
+      instructionBody: body,
+      detectionStatus: "detected",
+      hintStatus: hint ? "hinted" : "opaque",
+      recognitionMode: "runtime_does_not_support_slash_commands",
+      requiresRuntimeRecognition: false,
+      messageSeverity: "warning",
+      label: `Unsupported runtime command: /${command}`,
+      description:
+        "This runtime does not pass through slash commands. Choose a slash-command capable runtime or escape the slash for literal text.",
+      source,
+    };
+  }
+  return {
+    sourcePath,
+    rawInstructions: instructions,
+    rawCommand: firstLine,
+    command,
+    args,
+    instructionBody: body,
+    detectionStatus: "detected",
+    hintStatus: hint ? "hinted" : "opaque",
+    recognitionMode: hint ? "hinted_runtime_passthrough" : "runtime_passthrough",
+    requiresRuntimeRecognition: true,
+    messageSeverity: "info",
+    label: `Runtime command: /${command}`,
+    description:
+      hint?.description ||
+      "Pass-through runtime command. No local hint is available; provider behavior will decide it.",
+    source,
+  };
+}
+
+function RuntimeCommandPreviewMessage({
+  preview,
+}: {
+  preview: RuntimeCommandPreviewState | null;
+}): ReactElement | null {
+  if (!preview) {
+    return null;
+  }
+  return (
+    <p
+      className={`runtime-command-preview runtime-command-preview--${preview.messageSeverity}`}
+      data-runtime-command-preview={preview.recognitionMode}
+      role={preview.messageSeverity === "warning" ? "alert" : "status"}
+      aria-live="polite"
+    >
+      <span className="runtime-command-preview-label">{preview.label}</span>
+      <span className="runtime-command-preview-description">
+        {preview.description}
+      </span>
+    </p>
+  );
+}
+
 function presetInputValuesFromPayload(
   inputValues: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
@@ -1380,6 +1618,9 @@ function createStepStateEntriesFromTemporalDraft(
         : {}),
       ...(hasJiraOrchestration
         ? { jiraOrchestration: step.jiraOrchestration }
+        : {}),
+      ...(step.runtimeCommand && Object.keys(step.runtimeCommand).length > 0
+        ? { runtimeCommand: step.runtimeCommand }
         : {}),
     });
   });
@@ -8123,6 +8364,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               const showJiraTransitionOptions =
                 step.stepType === "tool" &&
                 step.toolId.trim() === "jira.transition_issue";
+              const instructionPreview = deriveRuntimeCommandPreview({
+                instructions: step.instructions,
+                runtime,
+                sourcePath: index === 0
+                  ? "objective.instructions"
+                  : `steps[${index - 1}].instructions`,
+                config: dashboardConfig.system?.runtimeCommandPreview,
+                storedRuntimeCommand: step.runtimeCommand,
+              });
               return (
                 <section
                   key={step.localId}
@@ -8523,6 +8773,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         )
                       }
                     />
+                    <RuntimeCommandPreviewMessage preview={instructionPreview} />
                     {attachmentPolicy.enabled ? (
                       <div className="queue-step-attachments">
                         <div className="queue-step-attachment-control">

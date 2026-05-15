@@ -134,6 +134,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert "defaultTaskEffortByRuntime" in config["system"]
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
     assert config["system"]["supportedTaskRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
+    assert "runtimeCommandPreview" in config["system"]
     assert "claude_code" in config["system"]["supportedWorkerRuntimes"]
     assert "taskTemplateCatalog" in config["system"]
     assert "enabled" in config["system"]["taskTemplateCatalog"]
@@ -147,6 +148,32 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert attachment_policy["maxBytes"] >= 1
     assert attachment_policy["totalBytes"] >= attachment_policy["maxBytes"]
     assert "image/png" in attachment_policy["allowedContentTypes"]
+
+
+def test_build_runtime_config_exposes_browser_safe_runtime_command_preview_metadata() -> None:
+    config = dashboard_view_model.build_runtime_config("/tasks/new")
+
+    preview = config["system"]["runtimeCommandPreview"]
+
+    assert preview["capabilityVersion"] == "2026-05-13"
+    assert preview["hintCatalogVersion"] == "2026-05-13"
+    assert preview["runtimes"]["codex_cli"] == {
+        "slashCommandPassthrough": True,
+        "renderMode": "prompt_prefix",
+        "commandHintsRef": "codex_cli",
+    }
+    assert preview["runtimes"]["claude_code"] == {
+        "slashCommandPassthrough": True,
+        "renderMode": "prompt_prefix",
+        "commandHintsRef": "claude_code",
+    }
+    assert preview["runtimes"]["codex_cloud"]["slashCommandPassthrough"] is False
+    assert "review" in preview["knownRuntimeCommandHints"]
+    assert preview["knownRuntimeCommandHints"]["review"]["aliases"] == ["/review"]
+    serialized = repr(preview).lower()
+    assert "token" not in serialized
+    assert "password" not in serialized
+    assert "secret" not in serialized
 
 def test_build_runtime_config_omits_jira_ui_when_disabled(monkeypatch) -> None:
     monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)

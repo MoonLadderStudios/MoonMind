@@ -24,6 +24,7 @@ from moonmind.workflows.tasks.runtime_defaults import (
     resolve_default_task_runtime,
     resolve_runtime_defaults,
 )
+from moonmind.workflows.tasks.task_contract import build_runtime_command_preview_config
 
 logger = logging.getLogger(__name__)
 
@@ -688,6 +689,7 @@ def build_runtime_config(
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
             "supportedTaskRuntimes": supported_task_runtimes,
             "supportedWorkerRuntimes": list(_SUPPORTED_WORKER_RUNTIMES),
+            "runtimeCommandPreview": build_runtime_command_preview_config(),
             "taskTemplateCatalog": {
                 "enabled": bool(settings.feature_flags.task_template_catalog_enabled),
                 "templateSaveEnabled": bool(
