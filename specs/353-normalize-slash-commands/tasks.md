@@ -13,7 +13,7 @@
 
 - Unit tests: `pytest tests/unit/workflows/tasks/test_task_contract.py -q`
 - Integration tests: `pytest tests/unit/workflows/tasks/test_task_contract.py -q` for the canonical payload plus authoritative snapshot boundary; run `./tools/test_integration.sh` only if implementation expands into API/workflow submission code.
-- Final verification: `/speckit.verify specs/353-normalize-slash-commands`
+- Final verification: `/moonspec-verify specs/353-normalize-slash-commands`
 
 ## Format: `[ID] [P?] Description`
 
@@ -81,7 +81,7 @@
 - [X] T017 Implement runtime command metadata construction for step instructions in `moonmind/workflows/tasks/task_contract.py` covering FR-004, SC-002, DESIGN-REQ-005.
 - [X] T018 Implement backend validation for supplied objective and step `runtimeCommand` metadata in `moonmind/workflows/tasks/task_contract.py` covering FR-008, SC-006, DESIGN-REQ-010.
 - [X] T019 Wire objective and step `runtimeCommand` output into `build_authoritative_task_input_snapshot()` in `moonmind/workflows/tasks/task_contract.py` without rewriting existing `instructions`, `inputAttachments`, dependency, provenance, or traceability fields for FR-001 through FR-010.
-- [X] T020 Run `pytest tests/unit/workflows/tasks/test_task_contract.py -q`, fix failures, and verify all MM-684 task contract tests pass.
+- [X] T020 Run story validation with `pytest tests/unit/workflows/tasks/test_task_contract.py -q`, fix failures, and verify all MM-684 task contract tests pass.
 - [X] T021 Run `./tools/test_unit.sh` for final required unit verification and record the result in `specs/353-normalize-slash-commands/verification.md` or final response.
 
 **Checkpoint**: The story is fully functional, covered by unit and integration-shaped task contract tests, and testable independently.
@@ -95,7 +95,7 @@
 - [X] T022 Review `moonmind/workflows/tasks/task_contract.py` for dead helper names, compatibility aliases, or stale comments introduced during implementation and remove them for Constitution XIII.
 - [X] T023 Review `specs/353-normalize-slash-commands/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/runtime-command-snapshot.md`, and `quickstart.md` for MM-684 traceability and update only if implementation reality changed.
 - [X] T024 Run quickstart validation from `specs/353-normalize-slash-commands/quickstart.md`.
-- [X] T025 Run `/speckit.verify specs/353-normalize-slash-commands` after implementation and tests pass.
+- [X] T025 Run `/moonspec-verify specs/353-normalize-slash-commands` after implementation and tests pass.
 
 ---
 
@@ -135,7 +135,7 @@
 4. Implement parser, metadata construction, supplied metadata validation, and snapshot wiring in `moonmind/workflows/tasks/task_contract.py`.
 5. Run targeted tests until green.
 6. Run `./tools/test_unit.sh`.
-7. Run final `/speckit.verify` and preserve MM-684 traceability in verification evidence.
+7. Run final `/moonspec-verify` and preserve MM-684 traceability in verification evidence.
 
 ## Notes
 
