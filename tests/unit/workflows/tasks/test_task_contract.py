@@ -238,7 +238,30 @@ def test_runtime_command_leading_whitespace_is_not_detected() -> None:
         }
     )
 
+    assert snapshot["objective"]["instructions"] == (
+        " /review\nLeading whitespace keeps this literal."
+    )
     assert "runtimeCommand" not in snapshot["objective"]
+
+
+def test_runtime_command_step_leading_whitespace_preserves_literal_text() -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": "Run task.",
+            "runtime": {"mode": "codex"},
+            "steps": [
+                {
+                    "id": "step-1",
+                    "instructions": " /simplify\nLeading whitespace keeps this literal.",
+                }
+            ],
+        }
+    )
+
+    assert snapshot["steps"][0]["instructions"] == (
+        " /simplify\nLeading whitespace keeps this literal."
+    )
+    assert "runtimeCommand" not in snapshot["steps"][0]
 
 
 def test_runtime_command_rejects_conflicting_objective_metadata() -> None:

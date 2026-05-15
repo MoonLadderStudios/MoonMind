@@ -2445,7 +2445,7 @@ def build_authoritative_task_input_snapshot(
         authored_step = {
             "id": step_id,
             "title": _clean_optional_str(step.get("title")),
-            "instructions": _clean_optional_str(step.get("instructions")) or "",
+            "instructions": _raw_instruction_string(step.get("instructions")),
             "inputAttachments": _safe_list(step.get("inputAttachments")),
             "dependencies": _first_present_snapshot_list(
                 step,
@@ -2488,7 +2488,7 @@ def build_authoritative_task_input_snapshot(
         field_name="task.runtimeCommand",
     )
     objective = {
-        "instructions": _clean_optional_str(task.get("instructions")) or "",
+        "instructions": _raw_instruction_string(task.get("instructions")),
         "inputAttachments": _safe_list(task.get("inputAttachments")),
     }
     if objective_runtime_command is not None:

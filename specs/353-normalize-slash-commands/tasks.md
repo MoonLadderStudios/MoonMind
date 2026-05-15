@@ -99,6 +99,15 @@
 
 ---
 
+## Phase 5: Post-Verify Remediation
+
+**Purpose**: Address the bounded `ADDITIONAL_WORK_NEEDED` verification gap for leading-whitespace slash instructions.
+
+- [X] T026 Add red-first regression coverage in `tests/unit/workflows/tasks/test_task_contract.py` proving objective and step instructions that begin with whitespace before `/review` or `/simplify` preserve the leading whitespace and do not produce `runtimeCommand` metadata.
+- [X] T027 Preserve raw objective and step instruction text in `build_authoritative_task_input_snapshot()` while leaving runtime command detection authoritative and rerun `pytest tests/unit/workflows/tasks/test_task_contract.py -q`.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
