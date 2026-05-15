@@ -7,6 +7,7 @@ import pytest
 
 from moonmind.rag.context_pack import ContextItem, ContextPack
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, ManagedRuntimeProfile
+from moonmind.schemas.agent_runtime_models import RuntimeCommandInvocation
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
@@ -109,6 +110,304 @@ async def test_claude_launcher_uses_shared_context_injection_for_prompt(
     # is never written by the launcher.
     assert any(arg == "Injected retrieval context" for arg in captured_args)
     assert not (workspace / "CLAUDE.md").exists()
+
+
+@patch("moonmind.rag.context_injection.ContextInjectionService")
+async def test_codex_runtime_command_rendering_keeps_command_before_context(
+    mock_service_class,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    mock_service = mock_service_class.return_value
+
+    async def _inject_context(*, request, workspace_path):
+        assert workspace_path == workspace
+        request.instruction_ref = "Check this branch.\n\nRetrieved context."
+
+    mock_service.inject_context = AsyncMock(side_effect=_inject_context)
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 892) -> None:
+            self.pid = pid
+            self.returncode = 0
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_args: tuple[object, ...] = ()
+
+    async def _fake_create_subprocess_exec(*args, **_kwargs):
+        nonlocal captured_args
+        captured_args = args
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        command_template=["codex", "exec"],
+        default_model="gpt-5.4",
+    )
+    request = _make_request(
+        instruction_ref="/review\nCheck this branch.",
+        runtimeCommand=RuntimeCommandInvocation(
+            kind="slash_command",
+            source="leading_slash",
+            sourcePath="objective.instructions",
+            command="review",
+            rawCommand="/review",
+            args="",
+            instructionBody="Check this branch.",
+            targetRuntime="codex_cli",
+            detectionStatus="detected",
+            hintStatus="hinted",
+            recognitionMode="hinted_runtime_passthrough",
+            requiresRuntimeRecognition=True,
+            runtimeCapabilityVersion="2026-05-13",
+            hintCatalogVersion="2026-05-13",
+            detectionPhase="submit",
+        ),
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-codex-runtime-command-render",
+        request=request,
+        profile=profile,
+        workspace_path=workspace,
+    )
+    await process.wait()
+
+    prompts = [arg for arg in captured_args if isinstance(arg, str)]
+    rendered = next(arg for arg in prompts if arg.startswith("/review"))
+    assert rendered.index("/review") < rendered.index("Check this branch.")
+    assert rendered.index("Check this branch.") < rendered.index("Retrieved context.")
+
+
+@patch("moonmind.rag.context_injection.ContextInjectionService")
+async def test_claude_runtime_command_rendering_keeps_command_before_context(
+    mock_service_class,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setattr("os.geteuid", lambda: 1000)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    mock_service = mock_service_class.return_value
+
+    async def _inject_context(*, request, workspace_path):
+        assert workspace_path == workspace
+        request.instruction_ref = "Check this branch.\n\nRetrieved context."
+
+    mock_service.inject_context = AsyncMock(side_effect=_inject_context)
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 893) -> None:
+            self.pid = pid
+            self.returncode = 0
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_args: tuple[object, ...] = ()
+
+    async def _fake_create_subprocess_exec(*args, **_kwargs):
+        nonlocal captured_args
+        captured_args = args
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude"],
+        default_model="claude-sonnet-4-6",
+    )
+    request = _make_request(
+        instruction_ref="/review\nCheck this branch.",
+        runtimeCommand=RuntimeCommandInvocation(
+            kind="slash_command",
+            source="leading_slash",
+            sourcePath="objective.instructions",
+            command="review",
+            rawCommand="/review",
+            args="",
+            instructionBody="Check this branch.",
+            targetRuntime="claude_code",
+            detectionStatus="detected",
+            hintStatus="hinted",
+            recognitionMode="hinted_runtime_passthrough",
+            requiresRuntimeRecognition=True,
+            runtimeCapabilityVersion="2026-05-13",
+            hintCatalogVersion="2026-05-13",
+            detectionPhase="submit",
+        ),
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-claude-runtime-command-render",
+        request=request,
+        profile=profile,
+        workspace_path=workspace,
+    )
+    await process.wait()
+
+    prompts = [arg for arg in captured_args if isinstance(arg, str)]
+    rendered = next(arg for arg in prompts if arg.startswith("/review"))
+    assert rendered.index("/review") < rendered.index("Check this branch.")
+    assert rendered.index("Check this branch.") < rendered.index("Retrieved context.")
+
+
+async def test_unknown_runtime_command_remains_prompt_prefix_and_unmaterialized(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 894) -> None:
+            self.pid = pid
+            self.returncode = 0
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_args: tuple[object, ...] = ()
+
+    async def _fake_create_subprocess_exec(*args, **_kwargs):
+        nonlocal captured_args
+        captured_args = args
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        command_template=["codex", "exec"],
+        default_model="gpt-5.4",
+    )
+    request = _make_request(
+        instruction_ref="/future-command now\nUse provider command.",
+        runtimeCommand=RuntimeCommandInvocation(
+            kind="slash_command",
+            source="leading_slash",
+            sourcePath="objective.instructions",
+            command="future-command",
+            rawCommand="/future-command now",
+            args="now",
+            instructionBody="Use provider command.",
+            targetRuntime="codex_cli",
+            detectionStatus="detected",
+            hintStatus="opaque",
+            recognitionMode="runtime_passthrough",
+            requiresRuntimeRecognition=True,
+            runtimeCapabilityVersion="2026-05-13",
+            hintCatalogVersion="2026-05-13",
+            detectionPhase="submit",
+        ),
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-codex-unknown-runtime-command",
+        request=request,
+        profile=profile,
+        workspace_path=workspace,
+    )
+    await process.wait()
+
+    prompts = [arg for arg in captured_args if isinstance(arg, str)]
+    rendered = next(arg for arg in prompts if arg.startswith("/future-command now"))
+    render_metadata = request.parameters["metadata"]["moonmind"]["runtimeCommandRender"]
+    assert rendered.startswith("/future-command now")
+    assert render_metadata["materializedTargets"] == []
+
+
+async def test_runtime_command_render_failure_prevents_launch(tmp_path) -> None:
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    request = _make_request(instruction_ref="/review\nCheck this.")
+
+    class FailingStrategy:
+        runtime_id = "codex_cli"
+
+        def render_runtime_command(self, request):
+            from moonmind.schemas.agent_runtime_models import RuntimeCommandRenderResult
+
+            return RuntimeCommandRenderResult(
+                status="failed",
+                failureReason="runtime_command_render_failed",
+                diagnostics={"message": "redacted"},
+            )
+
+    with pytest.raises(RuntimeError, match="runtime_command_render_failed"):
+        launcher._apply_runtime_command_rendering(
+            request=request,
+            strategy=FailingStrategy(),
+        )
 
 
 @pytest.mark.parametrize("transport", ["direct", "gateway"])

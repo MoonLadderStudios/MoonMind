@@ -14,9 +14,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+from pydantic import ValidationError
+
 from moonmind.schemas.agent_runtime_models import (
     AgentRunState,
     FailureClass as RuntimeFailureClass,
+    RuntimeCommandInvocation,
+    RuntimeCommandRenderResult,
 )
 from moonmind.workflows.temporal.runtime.output_parser import (
     ParsedOutput,
@@ -77,6 +81,114 @@ class ManagedRuntimeStrategy(ABC):
         in the interface definition.  Concrete implementations import
         the specific types they need.
         """
+
+    def supports_slash_passthrough(self) -> bool:
+        """Whether this runtime supports slash-leading command pass-through."""
+
+        return False
+
+    def render_runtime_command(self, request: Any) -> RuntimeCommandRenderResult:
+        """Render final instruction text after MoonMind context preparation."""
+
+        command = getattr(request, "runtime_command", None)
+        instruction = getattr(request, "instruction_ref", None) or ""
+        if command is None:
+            return RuntimeCommandRenderResult(
+                status="ok",
+                renderMode="plain_prompt",
+                renderedInstruction=instruction,
+            )
+        if isinstance(command, dict):
+            try:
+                command = RuntimeCommandInvocation.model_validate(command)
+            except ValidationError:
+                return RuntimeCommandRenderResult(
+                    status="failed",
+                    failureReason="runtime_command_render_failed",
+                    diagnostics={"message": "Invalid runtime command metadata."},
+                )
+        if not isinstance(command, RuntimeCommandInvocation):
+            return RuntimeCommandRenderResult(
+                status="failed",
+                failureReason="runtime_command_render_failed",
+                diagnostics={"message": "Invalid runtime command metadata."},
+            )
+        if command.recognition_mode == "escaped_literal" or not command.requires_runtime_recognition:
+            literal = command.instruction_body or instruction
+            prepared = self._prepared_context_after_runtime_command(
+                instruction,
+                command,
+            )
+            rendered = self._render_literal_runtime_command(
+                literal=literal,
+                prepared_context=prepared,
+            )
+            return RuntimeCommandRenderResult(
+                status="ok",
+                renderMode="plain_prompt",
+                renderedInstruction=rendered,
+                invocation=command,
+            )
+        if not self.supports_slash_passthrough():
+            return RuntimeCommandRenderResult(
+                status="fallback",
+                renderMode="plain_prompt",
+                renderedInstruction=instruction,
+                fallbackEvent={
+                    "reason": "unsupported_runtime",
+                    "fallbackMode": "literal_prompt",
+                },
+                invocation=command,
+            )
+        raw_command = command.raw_command or (
+            f"/{command.command}{(' ' + command.args) if command.args else ''}"
+        )
+        prepared = self._prepared_context_after_runtime_command(instruction, command)
+        rendered = self._join_instruction_parts(
+            raw_command,
+            command.instruction_body,
+            prepared,
+        )
+        return RuntimeCommandRenderResult(
+            status="ok",
+            renderMode="prompt_prefix",
+            renderedInstruction=rendered,
+            invocation=command,
+        )
+
+    @staticmethod
+    def _join_instruction_parts(*parts: str | None) -> str:
+        return "\n\n".join(
+            str(part).strip() for part in parts if str(part or "").strip()
+        )
+
+    def _render_literal_runtime_command(
+        self,
+        *,
+        literal: str,
+        prepared_context: str,
+    ) -> str:
+        return self._join_instruction_parts(
+            "Literal runtime command text:",
+            literal,
+            prepared_context,
+        )
+
+    def _prepared_context_after_runtime_command(
+        self,
+        instruction: str,
+        command: RuntimeCommandInvocation,
+    ) -> str:
+        prepared = instruction or ""
+        raw_parts = [command.raw_command]
+        if command.instruction_body:
+            raw_parts.append(command.instruction_body)
+        raw_instruction = "\n".join(part for part in raw_parts if part)
+        for candidate in (raw_instruction, command.instruction_body):
+            if candidate and candidate in prepared:
+                prepared = prepared.replace(candidate, "", 1)
+                break
+        return prepared.strip()
 
     def get_model(self, profile: Any, request: Any) -> str | None:
         """Extract model from request parameters or profile default with overrides.

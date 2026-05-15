@@ -693,6 +693,39 @@ class ManagedRuntimeLauncher:
 
         return cmd
 
+    def _apply_runtime_command_rendering(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        strategy: Any,
+    ) -> None:
+        if strategy is None or not hasattr(strategy, "render_runtime_command"):
+            return
+        result = strategy.render_runtime_command(request)
+        if result.diagnostics:
+            redactor = SecretRedactor.from_environ()
+            result.diagnostics = {
+                str(key): redactor.scrub(str(value))
+                for key, value in result.diagnostics.items()
+            }
+        metadata = request.parameters.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+            request.parameters["metadata"] = metadata
+        moonmind_metadata = metadata.setdefault("moonmind", {})
+        if not isinstance(moonmind_metadata, dict):
+            moonmind_metadata = {}
+            metadata["moonmind"] = moonmind_metadata
+        moonmind_metadata["runtimeCommandRender"] = result.model_dump(
+            by_alias=True,
+            exclude_none=True,
+        )
+        if result.status == "failed":
+            reason = result.failure_reason or "runtime_command_render_failed"
+            raise RuntimeError(reason)
+        if result.rendered_instruction is not None:
+            request.instruction_ref = result.rendered_instruction
+
     async def _project_run_skill_snapshot(
         self,
         *,
@@ -916,6 +949,12 @@ class ManagedRuntimeLauncher:
                     ).lower(),
                     "reason": "skill_projection",
                 },
+            )
+
+        if strategy is not None:
+            self._apply_runtime_command_rendering(
+                request=request,
+                strategy=strategy,
             )
 
         cmd = self.build_command(profile, request, strategy=strategy)

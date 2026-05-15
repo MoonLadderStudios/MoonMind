@@ -8,6 +8,7 @@ import pytest
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
+from moonmind.schemas.agent_runtime_models import RuntimeCommandRenderResult
 from moonmind.workflows.temporal.runtime.launcher import (
     ManagedRuntimeLauncher,
 )
@@ -116,6 +117,53 @@ def test_build_command_gemini_cli():
     # Gemini CLI does not support --effort
     assert "--effort" not in cmd
     assert "Fix the bug" in cmd
+
+def test_apply_runtime_command_rendering_raises_before_launch_on_failure():
+    store = ManagedRunStore("/tmp/test-store")
+    launcher = ManagedRuntimeLauncher(store)
+    request = _make_request(instruction_ref="/review\nCheck this.")
+
+    class FailingStrategy:
+        runtime_id = "codex_cli"
+
+        def render_runtime_command(self, request):
+            return RuntimeCommandRenderResult(
+                status="failed",
+                failureReason="runtime_command_render_failed",
+                diagnostics={"message": "token=REDACTED"},
+            )
+
+    with pytest.raises(RuntimeError, match="runtime_command_render_failed"):
+        launcher._apply_runtime_command_rendering(
+            request=request,
+            strategy=FailingStrategy(),
+        )
+
+def test_apply_runtime_command_rendering_redacts_diagnostics(monkeypatch):
+    monkeypatch.setenv("MOONMIND_RUNTIME_RENDER_TOKEN", "render-secret-value")
+    store = ManagedRunStore("/tmp/test-store")
+    launcher = ManagedRuntimeLauncher(store)
+    request = _make_request(instruction_ref="/review\nCheck this.")
+
+    class DiagnosticStrategy:
+        runtime_id = "codex_cli"
+
+        def render_runtime_command(self, request):
+            return RuntimeCommandRenderResult(
+                status="ok",
+                renderMode="prompt_prefix",
+                renderedInstruction="/review\nCheck this.",
+                diagnostics={"message": "saw render-secret-value"},
+            )
+
+    launcher._apply_runtime_command_rendering(
+        request=request,
+        strategy=DiagnosticStrategy(),
+    )
+
+    render_metadata = request.parameters["metadata"]["moonmind"]["runtimeCommandRender"]
+    assert render_metadata["diagnostics"]["message"] == "saw ***"
+    assert "render-secret-value" not in str(render_metadata)
 
 def test_build_command_per_runtime():
     store = ManagedRunStore("/tmp/test-store")

@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from moonmind.schemas.agent_runtime_models import RuntimeCommandInvocation
 from moonmind.workflows.temporal.runtime.strategies import (
     RUNTIME_STRATEGIES,
 )
@@ -17,6 +19,9 @@ from moonmind.workflows.temporal.runtime.strategies.claude_code import (
 )
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     CodexCliStrategy,
+)
+from moonmind.workflows.temporal.runtime.strategies.gemini_cli import (
+    GeminiCliStrategy,
 )
 
 # ---------------------------------------------------------------------------
@@ -43,10 +48,40 @@ def _make_request(
     *,
     instruction_ref: str | None = None,
     parameters: dict | None = None,
+    runtime_command: Any = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         instruction_ref=instruction_ref,
         parameters=parameters or {},
+        runtime_command=runtime_command,
+    )
+
+
+def _runtime_command(
+    *,
+    raw_command: str = "/review",
+    instruction_body: str = "Check this branch.",
+    command: str = "review",
+    hint_status: str = "hinted",
+    recognition_mode: str = "hinted_runtime_passthrough",
+    requires_runtime_recognition: bool = True,
+) -> RuntimeCommandInvocation:
+    return RuntimeCommandInvocation(
+        kind="slash_command",
+        source="leading_slash",
+        sourcePath="objective.instructions",
+        command=command,
+        rawCommand=raw_command,
+        args="",
+        instructionBody=instruction_body,
+        targetRuntime="codex_cli",
+        detectionStatus="detected",
+        hintStatus=hint_status,
+        recognitionMode=recognition_mode,
+        requiresRuntimeRecognition=requires_runtime_recognition,
+        runtimeCapabilityVersion="2026-05-13",
+        hintCatalogVersion="2026-05-13",
+        detectionPhase="submit",
     )
 
 # ---------------------------------------------------------------------------
@@ -167,6 +202,129 @@ class TestClaudeCodeBuildCommand:
         cmd = s.build_command(profile, request)
         assert "--model" in cmd
         assert "claude-sonnet-4-6" in cmd
+
+class TestRuntimeCommandRendering:
+    def test_codex_prompt_prefix_keeps_command_before_prepared_context(self) -> None:
+        strategy = CodexCliStrategy()
+        request = _make_request(
+            instruction_ref=(
+                "Check this branch.\n\n"
+                "MoonMind retrieval capability:\n- Retrieved context follows."
+            ),
+            runtime_command=_runtime_command(instruction_body="Check this branch."),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "ok"
+        assert result.render_mode == "prompt_prefix"
+        assert result.rendered_instruction is not None
+        assert result.rendered_instruction.startswith("/review")
+        assert result.rendered_instruction.index("/review") < result.rendered_instruction.index("Check this branch.")
+        assert result.rendered_instruction.index("Check this branch.") < result.rendered_instruction.index("MoonMind retrieval capability")
+
+    def test_claude_prompt_prefix_keeps_command_before_prepared_context(self) -> None:
+        strategy = ClaudeCodeStrategy()
+        request = _make_request(
+            instruction_ref="Check this branch.\n\nRetrieved context.",
+            runtime_command=_runtime_command(instruction_body="Check this branch."),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "ok"
+        assert result.render_mode == "prompt_prefix"
+        assert result.rendered_instruction is not None
+        assert result.rendered_instruction.startswith("/review")
+        assert "Retrieved context." in result.rendered_instruction
+
+    def test_unknown_opaque_command_passes_through_without_materialization(self) -> None:
+        strategy = CodexCliStrategy()
+        request = _make_request(
+            instruction_ref="Use provider feature.\n\nPrepared context.",
+            runtime_command=_runtime_command(
+                raw_command="/future-command now",
+                command="future-command",
+                instruction_body="Use provider feature.",
+                hint_status="opaque",
+                recognition_mode="runtime_passthrough",
+            ),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "ok"
+        assert result.render_mode == "prompt_prefix"
+        assert result.rendered_instruction is not None
+        assert result.rendered_instruction.startswith("/future-command now")
+        assert result.materialized_targets == []
+
+    def test_escaped_literal_does_not_start_with_executable_command(self) -> None:
+        strategy = ClaudeCodeStrategy()
+        request = _make_request(
+            instruction_ref="\\/review\nTreat this as ordinary text.\n\nPrepared context.",
+            runtime_command=_runtime_command(
+                raw_command="\\/review",
+                command="",
+                instruction_body="/review\nTreat this as ordinary text.",
+                hint_status="opaque",
+                recognition_mode="escaped_literal",
+                requires_runtime_recognition=False,
+            ),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "ok"
+        assert result.render_mode == "plain_prompt"
+        assert result.rendered_instruction is not None
+        assert not result.rendered_instruction.startswith("/review")
+        assert "/review\nTreat this as ordinary text." in result.rendered_instruction
+
+    def test_empty_prepared_context_keeps_prompt_prefix_compact(self) -> None:
+        strategy = CodexCliStrategy()
+        request = _make_request(
+            instruction_ref="/review\nCheck this branch.",
+            runtime_command=_runtime_command(),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "ok"
+        assert result.rendered_instruction == "/review\n\nCheck this branch."
+
+    def test_unsupported_runtime_falls_back_without_materializing_command(self) -> None:
+        strategy = GeminiCliStrategy()
+        request = _make_request(
+            instruction_ref="/review\nCheck this branch.\n\nPrepared context.",
+            runtime_command=_runtime_command(),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "fallback"
+        assert result.render_mode == "plain_prompt"
+        assert result.rendered_instruction == request.instruction_ref
+        assert result.fallback_event == {
+            "reason": "unsupported_runtime",
+            "fallbackMode": "literal_prompt",
+        }
+        assert result.materialized_targets == []
+
+    def test_malformed_runtime_command_metadata_fails_typed(self) -> None:
+        strategy = CodexCliStrategy()
+        request = _make_request(
+            instruction_ref="/review\nCheck this branch.",
+            runtime_command={"kind": "slash_command"},
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "failed"
+        assert result.failure_reason == "runtime_command_render_failed"
+        assert result.diagnostics == {
+            "message": "Invalid runtime command metadata.",
+        }
 
 # ---------------------------------------------------------------------------
 # ClaudeCodeStrategy.prepare_workspace

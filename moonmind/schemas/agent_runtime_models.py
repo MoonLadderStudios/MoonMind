@@ -37,6 +37,60 @@ FailureClass = Literal[
     "execution_error",
     "system_error",
 ]
+RuntimeCommandRenderStatus = Literal["ok", "unsupported", "failed", "fallback"]
+RuntimeCommandRenderMode = Literal[
+    "plain_prompt",
+    "prompt_prefix",
+    "native_command",
+    "materialized_command",
+    "unsupported",
+]
+
+class RuntimeCommandInvocation(BaseModel):
+    """Compact backend-normalized runtime command metadata for launch rendering."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: str = Field(..., min_length=1)
+    source: str = Field(..., min_length=1)
+    source_path: str = Field(..., alias="sourcePath", min_length=1)
+    command: str = ""
+    raw_command: str = Field("", alias="rawCommand")
+    args: str = ""
+    instruction_body: str = Field("", alias="instructionBody")
+    target_runtime: str | None = Field(None, alias="targetRuntime")
+    target_step_id: str | None = Field(None, alias="targetStepId")
+    detection_status: str = Field(..., alias="detectionStatus", min_length=1)
+    hint_status: str = Field(..., alias="hintStatus", min_length=1)
+    recognition_mode: str = Field(..., alias="recognitionMode", min_length=1)
+    requires_runtime_recognition: bool = Field(
+        False, alias="requiresRuntimeRecognition"
+    )
+    runtime_capability_version: str | None = Field(
+        None, alias="runtimeCapabilityVersion"
+    )
+    hint_catalog_version: str | None = Field(None, alias="hintCatalogVersion")
+    detection_phase: str | None = Field(None, alias="detectionPhase")
+
+
+class RuntimeCommandRenderResult(BaseModel):
+    """Result of adapter-owned runtime command rendering before launch."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    status: RuntimeCommandRenderStatus
+    render_mode: RuntimeCommandRenderMode | None = Field(None, alias="renderMode")
+    rendered_instruction: str | None = Field(None, alias="renderedInstruction")
+    native_command_payload: dict[str, Any] | None = Field(
+        None, alias="nativeCommandPayload"
+    )
+    materialized_targets: list[dict[str, Any]] = Field(
+        default_factory=list, alias="materializedTargets"
+    )
+    failure_reason: str | None = Field(None, alias="failureReason")
+    fallback_event: dict[str, Any] | None = Field(None, alias="fallbackEvent")
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    invocation: RuntimeCommandInvocation | None = None
 
 class UnsupportedStatusError(ValueError):
     """Raised when an unknown or unsupported provider status is encountered."""
@@ -217,6 +271,9 @@ class AgentExecutionRequest(BaseModel):
     correlation_id: str = Field(..., alias="correlationId", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     instruction_ref: str | None = Field(None, alias="instructionRef")
+    runtime_command: RuntimeCommandInvocation | None = Field(
+        None, alias="runtimeCommand"
+    )
     resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
     managed_session: CodexManagedSessionBinding | None = Field(
         None, alias="managedSession"
@@ -921,6 +978,10 @@ __all__ = [
     "AgentRunState",
     "AgentRunStatus",
     "FailureClass",
+    "RuntimeCommandInvocation",
+    "RuntimeCommandRenderMode",
+    "RuntimeCommandRenderResult",
+    "RuntimeCommandRenderStatus",
     "ManagedAgentProviderProfile",
     "ManagedRunRecord",
     "ManagedRuntimeProfile",

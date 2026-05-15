@@ -26,6 +26,9 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
     def default_command_template(self) -> list[str]:
         return ["claude"]
 
+    def supports_slash_passthrough(self) -> bool:
+        return True
+
     def build_command(
         self,
         profile: Any,
