@@ -13,7 +13,7 @@
 
 - Unit tests: Target THOR command for C++ automation/unit-style frontend proof tests
 - Integration tests: Target THOR command for TacticsEditor compile, frontend automation, and map or entry smoke
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -100,7 +100,7 @@
 - [ ] T033 Implement evidence summary rendering with commands, exit codes, key `LogTactics` lines, fallback status, and PR-ready output for FR-011 and FR-013 in `Source/ThorTactics/Frontend/TacticsFrontendEvidence.cpp`
 - [ ] T034 Implement Docker fallback attempt and CI-only classification rules for FR-012 in `Source/ThorTactics/Tools/FrontendRuntimeProof/RunFrontendRuntimeProof.cpp`
 - [ ] T035 Update `specs/357-full-frontend-runtime-proof-coverage/quickstart.md` with actual target THOR commands, exit codes, and validation results covering FR-013 and SC-006
-- [ ] T036 Run target THOR unit and integration validation commands, fix failures, and verify all three tiers pass or produce accepted blocked evidence
+- [ ] T036 Run target THOR unit and integration validation commands, fix failures, and record all three tier results in `specs/357-full-frontend-runtime-proof-coverage/quickstart.md`
 
 **Checkpoint**: The story is fully functional, covered by unit and integration tests, and testable independently.
 
@@ -112,8 +112,8 @@
 
 - [ ] T037 [P] Review evidence output for secret-safe and reviewable log summaries in `Source/ThorTactics/Frontend/TacticsFrontendEvidence.cpp`
 - [ ] T038 [P] Ensure quickstart evidence and PR-ready summary use the same tier labels as `contracts/runtime-proof-evidence-contract.md`
-- [ ] T039 Confirm no production frontend menu feature behavior was added beyond validation/evidence seams for FR-014
-- [ ] T040 Run `/speckit.verify` to validate the final implementation against the original THOR-406 Jira brief
+- [ ] T039 Confirm no production frontend menu feature behavior was added beyond validation/evidence seams for FR-014 in `Source/ThorTactics/Frontend/TacticsFrontendRuntimeProof.cpp`
+- [ ] T040 Run `/moonspec-verify` against `specs/357-full-frontend-runtime-proof-coverage/spec.md` to validate the final implementation against the original THOR-406 Jira brief
 
 ---
 
@@ -160,7 +160,7 @@ Task: "Add failing unit test for PR-ready summary completeness in Source/ThorTac
 5. Implement the proof harness, flow hooks, fallback wrapper, and evidence rendering.
 6. Run Tier 1 compile, Tier 2 automation, and Tier 3 smoke.
 7. Update quickstart and PR-ready evidence with exact commands, exit codes, and key `LogTactics` lines.
-8. Run `/speckit.verify` against the original THOR-406 Jira brief.
+8. Run `/moonspec-verify` against the original THOR-406 Jira brief.
 
 ## Notes
 
