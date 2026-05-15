@@ -41,6 +41,12 @@ Deliver THOR-404 by establishing a shared frontend menu input and focus contract
 **Constraints**: Native fallback widgets must remain navigable without authored presentation assets; confirm activation paths must converge; Back/Cancel must not leave players in an invalid focus state; focus restoration must return to the originating Home action when valid.  
 **Scale/Scope**: One shared input/focus contract across menu screens, generated action buttons, Home-to-Play, Home-to-Options, and native fallback widget automation.
 
+## Test Strategy
+
+**Unit**: Add target THOR unit/automation coverage for shared input defaults, generated button focusability, initial focus selection, mouse/keyboard/controller activation convergence, Back/Cancel state handling, Play and Options focus return target selection, and fallback focus selection when the preferred target is unavailable.
+
+**Integration**: Add target THOR game automation coverage for native fallback Home, Play, and Options menu flows. The integration suite must prove initial focus, confirm activation parity, Back/Cancel behavior, Play-to-Home focus restoration, Options-to-Home focus restoration, and authored-assets-absent fallback widget navigation.
+
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
