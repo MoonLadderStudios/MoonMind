@@ -693,6 +693,39 @@ class ManagedRuntimeLauncher:
 
         return cmd
 
+    def _apply_runtime_command_rendering(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        strategy: Any,
+    ) -> None:
+        if strategy is None or not hasattr(strategy, "render_runtime_command"):
+            return
+        result = strategy.render_runtime_command(request)
+        if result.diagnostics:
+            redactor = SecretRedactor.from_environ()
+            result.diagnostics = {
+                str(key): redactor.scrub(str(value))
+                for key, value in result.diagnostics.items()
+            }
+        metadata = request.parameters.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+            request.parameters["metadata"] = metadata
+        moonmind_metadata = metadata.setdefault("moonmind", {})
+        if not isinstance(moonmind_metadata, dict):
+            moonmind_metadata = {}
+            metadata["moonmind"] = moonmind_metadata
+        moonmind_metadata["runtimeCommandRender"] = result.model_dump(
+            by_alias=True,
+            exclude_none=True,
+        )
+        if result.status in {"failed", "unsupported"}:
+            reason = result.failure_reason or "runtime_command_render_failed"
+            raise RuntimeError(reason)
+        if result.rendered_instruction is not None:
+            request.instruction_ref = result.rendered_instruction
+
     async def _project_run_skill_snapshot(
         self,
         *,
@@ -918,46 +951,52 @@ class ManagedRuntimeLauncher:
                 },
             )
 
-        cmd = self.build_command(profile, request, strategy=strategy)
-        self._reset_live_log_spool(resolved_workspace_path)
-
         run_root: Path | None = (
             Path(resolved_workspace_path).resolve().parent
             if resolved_workspace_path is not None
             else None
         )
-
-        for key in profile.passthrough_env_keys:
-            value = os.environ.get(key)
-            if value is None or not str(value).strip():
-                continue
-            env_overrides[key] = value
-
-        from moonmind.config.settings import settings as _mm_settings
-        _git_name = str(_mm_settings.workflow.git_user_name or "").strip() or None
-        _git_email = str(_mm_settings.workflow.git_user_email or "").strip() or None
-        if _git_name:
-            env_overrides.setdefault("GIT_AUTHOR_NAME", _git_name)
-            env_overrides.setdefault("GIT_COMMITTER_NAME", _git_name)
-        if _git_email:
-            env_overrides.setdefault("GIT_AUTHOR_EMAIL", _git_email)
-            env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
-
-        github_token = await resolve_github_token_for_launch(env_overrides)
-        if not github_token:
-            github_token = launch_github_token
         cleanup_paths: list[str] = list(materializer.generated_files)
         cleanup_paths.extend(reversed(materializer.generated_dirs))
         deferred_cleanup_paths: list[str] = []
         github_socket_path: str | None = None
         real_gh_path = shutil.which("gh")
-        # The claude CLI refuses --dangerously-skip-permissions when running as root
-        # (security restriction). For claude_code runtime, drop to the app user.
-        _run_as_root = os.geteuid() == 0
-        _is_claude_code = profile.runtime_id == "claude_code"
-        _needs_priv_drop = _run_as_root and _is_claude_code
-        process: asyncio.subprocess.Process
+
         try:
+            if strategy is not None:
+                self._apply_runtime_command_rendering(
+                    request=request,
+                    strategy=strategy,
+                )
+
+            cmd = self.build_command(profile, request, strategy=strategy)
+            self._reset_live_log_spool(resolved_workspace_path)
+
+            for key in profile.passthrough_env_keys:
+                value = os.environ.get(key)
+                if value is None or not str(value).strip():
+                    continue
+                env_overrides[key] = value
+
+            from moonmind.config.settings import settings as _mm_settings
+            _git_name = str(_mm_settings.workflow.git_user_name or "").strip() or None
+            _git_email = str(_mm_settings.workflow.git_user_email or "").strip() or None
+            if _git_name:
+                env_overrides.setdefault("GIT_AUTHOR_NAME", _git_name)
+                env_overrides.setdefault("GIT_COMMITTER_NAME", _git_name)
+            if _git_email:
+                env_overrides.setdefault("GIT_AUTHOR_EMAIL", _git_email)
+                env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
+
+            github_token = await resolve_github_token_for_launch(env_overrides)
+            if not github_token:
+                github_token = launch_github_token
+            # The claude CLI refuses --dangerously-skip-permissions when running as root
+            # (security restriction). For claude_code runtime, drop to the app user.
+            _run_as_root = os.geteuid() == 0
+            _is_claude_code = profile.runtime_id == "claude_code"
+            _needs_priv_drop = _run_as_root and _is_claude_code
+            process: asyncio.subprocess.Process
             if github_token and run_root is not None:
                 github_socket_path = self._build_github_socket_path(
                     run_id=run_id,
@@ -1069,7 +1108,8 @@ class ManagedRuntimeLauncher:
                     cwd=resolved_workspace_path,
                 )
         except Exception:
-            self._log_streamer.consume_annotations(run_id)
+            if self._log_streamer is not None:
+                self._log_streamer.consume_annotations(run_id)
             await self.cleanup_run_support(run_id)
             for path in [*cleanup_paths, *deferred_cleanup_paths]:
                 try:
