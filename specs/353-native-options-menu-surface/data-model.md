@@ -6,7 +6,7 @@ Represents the Home-menu action that opens the Options surface.
 
 Fields:
 - `id`: Stable action identifier; required value for this story is `frontend.nav.options`.
-- `label`: Player-facing action label.
+- `label`: Localizable player-facing action label.
 - `target`: The menu surface opened when the action is activated.
 - `focusable`: Whether the action can receive restored focus.
 
@@ -44,7 +44,7 @@ Represents one settings category action.
 
 Fields:
 - `tag`: Stable category identifier.
-- `label`: Player-facing category label.
+- `label`: Localizable player-facing category label.
 - `source`: Authored or fallback.
 - `enabled`: Whether the category can be selected.
 
