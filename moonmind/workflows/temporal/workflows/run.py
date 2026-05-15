@@ -5701,6 +5701,8 @@ class MoonMindRunWorkflow:
             idempotency_key=idempotency_key,
             instruction_ref=node_inputs.get("instructions")
             or node_inputs.get("instructionRef"),
+            runtime_command=node_inputs.get("runtimeCommand")
+            or node_inputs.get("runtime_command"),
             resolved_skillset_ref=resolved_skillset_ref,
             input_refs=input_refs,
             workspace_spec=workspace_spec,

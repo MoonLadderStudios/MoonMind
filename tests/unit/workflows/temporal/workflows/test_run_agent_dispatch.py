@@ -698,6 +698,52 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             {"id": "step-2", "instructions": "Do part B"}
         ])
 
+    def test_build_agent_execution_request_propagates_runtime_command_metadata(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        runtime_command = {
+            "kind": "slash_command",
+            "source": "leading_slash",
+            "sourcePath": "objective.instructions",
+            "command": "review",
+            "rawCommand": "/review",
+            "args": "",
+            "instructionBody": "Check this branch.",
+            "targetRuntime": "codex_cli",
+            "detectionStatus": "detected",
+            "hintStatus": "hinted",
+            "recognitionMode": "hinted_runtime_passthrough",
+            "requiresRuntimeRecognition": True,
+            "runtimeCapabilityVersion": "2026-05-13",
+            "hintCatalogVersion": "2026-05-13",
+            "detectionPhase": "submit",
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "instructions": "/review\nCheck this branch.",
+                    "runtime": {"mode": "codex_cli"},
+                    "runtimeCommand": runtime_command,
+                },
+                node_id="node-runtime-command",
+                tool_name="codex_cli",
+            )
+
+        self.assertEqual(request.instruction_ref, "/review\nCheck this branch.")
+        self.assertIsNotNone(request.runtime_command)
+        self.assertEqual(request.runtime_command.command, "review")
+        self.assertEqual(request.runtime_command.raw_command, "/review")
+
     def test_build_agent_execution_request_propagates_story_output_handoff(self) -> None:
         from unittest.mock import patch
 
