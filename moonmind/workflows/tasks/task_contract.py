@@ -41,11 +41,29 @@ _JIRA_ORCHESTRATE_PRESET_SLUGS = frozenset({"jira-orchestrate"})
 _RUNTIME_COMMAND_CAPABILITY_VERSION = "2026-05-13"
 _RUNTIME_COMMAND_HINT_CATALOG_VERSION = "2026-05-13"
 _SLASH_COMMAND_PASSTHROUGH_RUNTIMES = frozenset(
-    {"codex", "codex_cli", "claude", "gemini_cli", "universal"}
+    {"codex", "codex_cli", "claude", "claude_code", "gemini_cli", "universal"}
 )
 _KNOWN_RUNTIME_COMMAND_HINTS = frozenset({"review", "simplify"})
+_RUNTIME_COMMAND_HINT_DETAILS: dict[str, dict[str, Any]] = {
+    "review": {
+        "label": "Review",
+        "aliases": ["/review"],
+        "description": (
+            "Ask the selected runtime to review the current task or code state."
+        ),
+        "argumentPolicy": {"allowed": True, "required": False},
+        "bodyPolicy": {"allowed": True, "required": False},
+    },
+    "simplify": {
+        "label": "Simplify",
+        "aliases": ["/simplify"],
+        "description": "Ask the selected runtime to simplify the implementation.",
+        "argumentPolicy": {"allowed": True, "required": False},
+        "bodyPolicy": {"allowed": True, "required": False},
+    },
+}
 _RUNTIME_COMMAND_TOKEN_PATTERN = re.compile(
-    r"^/([A-Za-z][A-Za-z0-9_-]*(?::[A-Za-z0-9_-]+)?)(?:\s+(.*))?$"
+    r"^/([A-Za-z][A-Za-z0-9_-]*(?:(?::|\.)[A-Za-z0-9_-]+)?)(?:\s+(.*))?$"
 )
 _RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
     r"\bresolve(?:d|s|ing)?\s+(?:an?\s+|the\s+)?(?:pr|pull\s+request)\b",
@@ -283,6 +301,33 @@ def _runtime_supports_slash_passthrough(runtime_mode: str | None) -> bool:
     return (runtime_mode or DEFAULT_TASK_RUNTIME) in _SLASH_COMMAND_PASSTHROUGH_RUNTIMES
 
 
+def build_runtime_command_preview_config() -> dict[str, Any]:
+    """Return browser-safe slash-command preview capabilities and hints."""
+
+    runtime_ids = sorted(_SLASH_COMMAND_PASSTHROUGH_RUNTIMES | {"codex_cloud"})
+    runtimes: dict[str, dict[str, Any]] = {}
+    for runtime_id in runtime_ids:
+        supports_passthrough = _runtime_supports_slash_passthrough(runtime_id)
+        runtimes[runtime_id] = {
+            "slashCommandPassthrough": supports_passthrough,
+            "renderMode": "prompt_prefix" if supports_passthrough else "plain_prompt",
+            **(
+                {"commandHintsRef": runtime_id}
+                if supports_passthrough
+                else {}
+            ),
+        }
+    return {
+        "capabilityVersion": _RUNTIME_COMMAND_CAPABILITY_VERSION,
+        "hintCatalogVersion": _RUNTIME_COMMAND_HINT_CATALOG_VERSION,
+        "runtimes": runtimes,
+        "knownRuntimeCommandHints": {
+            command: dict(_RUNTIME_COMMAND_HINT_DETAILS[command])
+            for command in sorted(_KNOWN_RUNTIME_COMMAND_HINTS)
+        },
+    }
+
+
 def _runtime_command_hint_status(command: str) -> str:
     return "hinted" if command in _KNOWN_RUNTIME_COMMAND_HINTS else "opaque"
 
@@ -372,26 +417,22 @@ def _build_runtime_command_metadata(
     match = _RUNTIME_COMMAND_TOKEN_PATTERN.fullmatch(first_line)
     if match:
         command = match.group(1)
-        args = match.group(2) or ""
+        args = "" if "." in command else match.group(2) or ""
     else:
-        command_parts = first_line[1:].split(maxsplit=1)
-        if not command_parts:
-            payload.update(
-                {
-                    "command": "",
-                    "rawCommand": first_line,
-                    "args": "",
-                    "instructionBody": raw_instructions,
-                    "detectionStatus": "malformed",
-                    "hintStatus": "opaque",
-                    "recognitionMode": "escaped_literal",
-                    "requiresRuntimeRecognition": False,
-                    "detectionPhase": "submit",
-                }
-            )
-            return payload
-        command = command_parts[0]
-        args = ""
+        payload.update(
+            {
+                "command": "",
+                "rawCommand": first_line,
+                "args": "",
+                "instructionBody": raw_instructions,
+                "detectionStatus": "malformed",
+                "hintStatus": "opaque",
+                "recognitionMode": "escaped_literal",
+                "requiresRuntimeRecognition": False,
+                "detectionPhase": "submit",
+            }
+        )
+        return payload
     hint_status = _runtime_command_hint_status(command)
     passthrough = _runtime_supports_slash_passthrough(target_runtime)
     if passthrough:
@@ -2570,6 +2611,7 @@ __all__ = [
     "ResumeFromFailedStepRef",
     "TaskStepSource",
     "build_authoritative_task_input_snapshot",
+    "build_runtime_command_preview_config",
     "build_task_stage_plan",
     "build_canonical_task_view",
     "allows_repository_publish_for_skill_context",

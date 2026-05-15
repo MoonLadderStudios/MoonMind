@@ -105,6 +105,7 @@ export type TemporalSubmissionDraft = {
   mergeAutomationEnabled: boolean;
   reportOutputEnabled: boolean;
   taskInstructions: string;
+  runtimeCommand?: Record<string, unknown>;
   primarySkill: string | null;
   inputAttachments: TemporalTaskInputAttachmentRef[];
   steps: Array<{
@@ -129,6 +130,7 @@ export type TemporalSubmissionDraft = {
     }>;
     storyOutput?: Record<string, unknown>;
     jiraOrchestration?: Record<string, unknown>;
+    runtimeCommand?: Record<string, unknown>;
   }>;
   appliedTemplates: Array<{
     slug: string;
@@ -456,6 +458,10 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     step.jiraOrchestration,
     step.jira_orchestration,
   );
+  const runtimeCommand = firstObjectValue(
+    step.runtimeCommand,
+    step.runtime_command,
+  );
   const inputAttachments = normalizeAttachmentRefs(step.inputAttachments);
   const templateAttachments = attachmentRefsValue(
     step.templateAttachments,
@@ -488,6 +494,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     ...(templateAttachments.length > 0 ? { templateAttachments } : {}),
     ...(Object.keys(storyOutput).length > 0 ? { storyOutput } : {}),
     ...(Object.keys(jiraOrchestration).length > 0 ? { jiraOrchestration } : {}),
+    ...(Object.keys(runtimeCommand).length > 0 ? { runtimeCommand } : {}),
   };
 
   const hasContent =
@@ -503,7 +510,8 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     inputAttachments.length > 0 ||
     templateAttachments.length > 0 ||
     Object.keys(storyOutput).length > 0 ||
-    Object.keys(jiraOrchestration).length > 0;
+    Object.keys(jiraOrchestration).length > 0 ||
+    Object.keys(runtimeCommand).length > 0;
   return hasContent ? result : null;
 }
 
@@ -775,6 +783,12 @@ export function buildTemporalSubmissionDraftFromExecution(
   const artifactSkill = objectValue(artifactTask.skill);
   const taskSteps = draftStepsFromTask(task);
   const artifactTaskSteps = draftStepsFromTask(artifactTask);
+  const runtimeCommand = firstObjectValue(
+    task.runtimeCommand,
+    task.runtime_command,
+    artifactTask.runtimeCommand,
+    artifactTask.runtime_command,
+  );
   assertSnapshotAttachmentBindings(
     artifactParams,
     artifactTask,
@@ -886,6 +900,7 @@ export function buildTemporalSubmissionDraftFromExecution(
       Object.keys(snapshotDraft).length > 0
         ? taskInstructionsFrom(artifactTask, task)
         : taskInstructionsFrom(task, artifactTask),
+    ...(Object.keys(runtimeCommand).length > 0 ? { runtimeCommand } : {}),
     primarySkill: nullableStringValue(
       execution.targetSkill,
       tool.name,
