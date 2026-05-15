@@ -7954,7 +7954,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       : pageMode.mode === "rerun"
         ? "Rerun Task"
         : "Create";
-  const showPrimaryCtaArrow = pageMode.mode === "create";
+  const showPrimaryCtaArrow = true;
   const primaryCtaTooltip =
     pageMode.intent === "edit"
       ? "Save changes to this task draft"
