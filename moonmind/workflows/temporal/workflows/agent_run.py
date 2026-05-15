@@ -346,6 +346,8 @@ class MoonMindAgentRun:
         self._profile_snapshots: dict[str, dict[str, Any]] = {}
         self._awaiting_slot_reason_override: str | None = None
         self._slot_wait_timeout_override_seconds: int | None = None
+        self.runtime_selection_updated_event = asyncio.Event()
+        self._pending_runtime_selection_update: dict[str, Any] | None = None
 
     # --- Deterministic catalog-based routing (new path) ---
 
@@ -1061,6 +1063,40 @@ class MoonMindAgentRun:
         self.slot_assigned_event.set()
 
     @workflow.signal
+    def update_runtime_selection(self, payload: dict[str, Any] | None = None) -> None:
+        payload = payload or {}
+        update_payload: dict[str, Any] = {}
+        for source_key, target_key in (
+            ("executionProfileRef", "executionProfileRef"),
+            ("execution_profile_ref", "executionProfileRef"),
+            ("profileId", "executionProfileRef"),
+            ("profile_id", "executionProfileRef"),
+            ("providerProfile", "executionProfileRef"),
+            ("model", "model"),
+            ("requestedModel", "model"),
+            ("requested_model", "model"),
+            ("effort", "effort"),
+            ("targetRuntime", "targetRuntime"),
+            ("target_runtime", "targetRuntime"),
+        ):
+            value = payload.get(source_key)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    continue
+            update_payload[target_key] = value
+        parameters_patch = payload.get("parametersPatch") or payload.get(
+            "parameters_patch"
+        )
+        if isinstance(parameters_patch, Mapping):
+            update_payload["parametersPatch"] = dict(parameters_patch)
+        if update_payload:
+            self._pending_runtime_selection_update = update_payload
+            self.runtime_selection_updated_event.set()
+
+    @workflow.signal
     def operator_message(self, payload: dict[str, Any] | None = None) -> None:
         payload = payload or {}
         message = str(
@@ -1071,6 +1107,106 @@ class MoonMindAgentRun:
         ).strip()
         if message:
             self._pending_operator_messages.append(message)
+
+    @staticmethod
+    def _mapping_copy(value: Any) -> dict[str, Any]:
+        return dict(value) if isinstance(value, Mapping) else {}
+
+    def _apply_runtime_selection_update(
+        self,
+        request: AgentExecutionRequest,
+        payload: Mapping[str, Any],
+    ) -> None:
+        params = dict(request.parameters or {})
+        parameters_patch = payload.get("parametersPatch")
+        if isinstance(parameters_patch, Mapping):
+            for key, value in parameters_patch.items():
+                if key in {"task", "authoredTaskInput"} and isinstance(value, Mapping):
+                    existing_payload = self._mapping_copy(params.get(key))
+                    runtime_patch = value.get("runtime")
+                    if isinstance(runtime_patch, Mapping):
+                        existing_runtime = self._mapping_copy(
+                            existing_payload.get("runtime")
+                        )
+                        existing_runtime.update(dict(runtime_patch))
+                        existing_payload.update(dict(value))
+                        existing_payload["runtime"] = existing_runtime
+                    else:
+                        existing_payload.update(dict(value))
+                    params[key] = existing_payload
+                else:
+                    params[key] = value
+
+        task_payload = self._mapping_copy(params.get("task"))
+        task_runtime = self._mapping_copy(task_payload.get("runtime"))
+        authored_payload = self._mapping_copy(params.get("authoredTaskInput"))
+        authored_runtime = self._mapping_copy(authored_payload.get("runtime"))
+
+        profile_id = str(payload.get("executionProfileRef") or "").strip()
+        if profile_id:
+            request.execution_profile_ref = profile_id
+            params["profileId"] = profile_id
+            task_runtime["profileId"] = profile_id
+            authored_runtime["profileId"] = profile_id
+
+        model = str(payload.get("model") or "").strip()
+        if model:
+            params["model"] = model
+            params["requestedModel"] = model
+            task_runtime["model"] = model
+            authored_runtime["model"] = model
+
+        effort = str(payload.get("effort") or "").strip()
+        if effort:
+            params["effort"] = effort
+            task_runtime["effort"] = effort
+            authored_runtime["effort"] = effort
+
+        target_runtime = str(payload.get("targetRuntime") or "").strip()
+        if target_runtime:
+            params["targetRuntime"] = target_runtime
+            task_runtime["mode"] = target_runtime
+            authored_runtime["mode"] = target_runtime
+
+        if task_runtime:
+            task_payload["runtime"] = task_runtime
+            params["task"] = task_payload
+        if authored_runtime:
+            authored_payload["runtime"] = authored_runtime
+            params["authoredTaskInput"] = authored_payload
+        request.parameters = params
+
+    async def _consume_runtime_selection_update_for_slot_wait(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        manager_id: str,
+        runtime_id: str,
+    ) -> workflow.ExternalWorkflowHandle:
+        payload = self._pending_runtime_selection_update
+        self._pending_runtime_selection_update = None
+        self.runtime_selection_updated_event.clear()
+        if payload:
+            self._apply_runtime_selection_update(request, payload)
+        selector_payload = request.profile_selector.model_dump(
+            by_alias=True,
+            exclude_none=True,
+        )
+        manager_handle = await self._ensure_manager_and_signal(
+            manager_id,
+            runtime_id,
+            request_slot=True,
+            execution_profile_ref=request.execution_profile_ref,
+            profile_selector=selector_payload,
+        )
+        await self._sync_manager_profiles(
+            manager_id=manager_id,
+            manager_handle=manager_handle,
+            runtime_id=runtime_id,
+        )
+        self._awaiting_slot_reason_override = None
+        self._slot_wait_timeout_override_seconds = None
+        return manager_handle
 
     @staticmethod
     def _normalize_external_status(
@@ -1402,9 +1538,20 @@ class MoonMindAgentRun:
                                     or _SLOT_WAIT_TIMEOUT_SECONDS
                                 )
                                 await workflow.wait_condition(
-                                    lambda: self.slot_assigned_event.is_set(),
+                                    lambda: self.slot_assigned_event.is_set()
+                                    or self.runtime_selection_updated_event.is_set(),
                                     timeout=timedelta(seconds=slot_wait_timeout_seconds),
                                 )
+                                if (
+                                    self.runtime_selection_updated_event.is_set()
+                                    and not self.slot_assigned_event.is_set()
+                                ):
+                                    manager_handle = await self._consume_runtime_selection_update_for_slot_wait(
+                                        request=request,
+                                        manager_id=manager_id,
+                                        runtime_id=runtime_id,
+                                    )
+                                    continue
                             except TimeoutError:
                                 if slot_resets >= _SLOT_WAIT_MAX_RESETS:
                                     raise ApplicationError(
@@ -1480,9 +1627,20 @@ class MoonMindAgentRun:
                                 )
                                 slot_resets += 1
                     else:
-                        await workflow.wait_condition(
-                            lambda: self.slot_assigned_event.is_set(),
-                        )
+                        while not self.slot_assigned_event.is_set():
+                            await workflow.wait_condition(
+                                lambda: self.slot_assigned_event.is_set()
+                                or self.runtime_selection_updated_event.is_set(),
+                            )
+                            if (
+                                self.runtime_selection_updated_event.is_set()
+                                and not self.slot_assigned_event.is_set()
+                            ):
+                                manager_handle = await self._consume_runtime_selection_update_for_slot_wait(
+                                    request=request,
+                                    manager_id=manager_id,
+                                    runtime_id=runtime_id,
+                                )
 
                     # Reset the execution clock so the timeout budget starts
                     # from slot acquisition, not from workflow start.
