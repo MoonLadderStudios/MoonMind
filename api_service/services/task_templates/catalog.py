@@ -731,7 +731,7 @@ def _apply_contextual_input_overrides(
     context: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     adjusted = dict(submitted)
-    if slug == "jira-orchestrate":
+    if slug in ("jira-orchestrate", "jira-implement"):
         jira_issue = adjusted.get("jira_issue")
         if isinstance(jira_issue, Mapping):
             issue_key = str(jira_issue.get("key") or "").strip()

@@ -42,7 +42,7 @@ const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
     "sourcedesignpath",
     "constraints",
   ]),
-  [JIRA_IMPLEMENT_PRESET_SLUG]: new Set(["constraints"]),
+  [JIRA_IMPLEMENT_PRESET_SLUG]: new Set(["constraints", "jira_issue_key"]),
   [MOONSPEC_ORCHESTRATE_PRESET_SLUG]: new Set(["orchestrationmode"]),
 };
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
