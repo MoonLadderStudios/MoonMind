@@ -6,6 +6,11 @@
 - Confirm the workspace contains the THOR `.uproject`, `Source/ThorTactics`, and the TacticsEditor target.
 - Use `/Game/Maps/MainMenu` for Tier 3 when present; otherwise record the active frontend entry route used by the project.
 
+## Intended Test Commands
+
+- Unit tests: run the target THOR C++ automation/unit-style command for `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofUnitTests.cpp`.
+- Integration tests: run the target THOR editor automation command for `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`, plus the Tier 1 TacticsEditor compile command and Tier 3 map or entry smoke command recorded below.
+
 ## Tier 1: Compile Evidence
 
 1. Run the target project's TacticsEditor compile command.
