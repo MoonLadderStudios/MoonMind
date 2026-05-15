@@ -2349,6 +2349,40 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 for step in expanded["steps"]
             )
 
+async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            expanded = await service.expand_template(
+                slug="jira-implement",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={"jira_issue": {"key": "MM-742"}},
+                context={},
+            )
+
+            assert "MM-742" in expanded["steps"][0]["instructions"]
+            assert expanded["steps"][1]["tool"]["id"] == "jira.check_blockers"
+            assert expanded["steps"][1]["tool"]["inputs"] == {
+                "targetIssueKey": "MM-742",
+                "blockerPreflight": {
+                    "targetIssueKey": "MM-742",
+                    "linkType": "Blocks",
+                },
+            }
+            assert expanded["steps"][2]["tool"]["inputs"] == {"issueKey": "MM-742"}
+            assert expanded["appliedTemplate"]["inputs"]["jira_issue_key"] == "MM-742"
+
 async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path):
     seed_dir = (
         Path(__file__).resolve().parents[3]

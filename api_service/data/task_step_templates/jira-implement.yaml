@@ -1,0 +1,176 @@
+slug: jira-implement
+title: Jira Implement
+description: Move a Jira issue through implementation by using its preset brief as the implementation input, creating a PR, and advancing the issue to Code Review. When PR merge automation is enabled the issue advances to Done automatically after merge.
+scope: global
+version: 1.0.0
+tags:
+  - jira
+  - implementation
+  - pull-request
+requiredCapabilities:
+  - git
+annotations:
+  sourceSkill: jira-implement
+  jiraWorkflow: implementation-to-code-review
+  output: pull-request
+  postMergeJiraCompletion: done_category
+  inputSchema:
+    type: object
+    required:
+      - jira_issue
+    properties:
+      jira_issue:
+        type: object
+        title: Jira issue
+        description: Issue that will seed the task instructions and implementation context.
+        required:
+          - key
+        properties:
+          key:
+            type: string
+            title: Issue key
+          summary:
+            type: string
+            title: Summary
+          description:
+            type: string
+            title: Description
+          url:
+            type: string
+            format: uri
+            title: URL
+          status:
+            type: string
+            title: Status
+          assignee:
+            type: string
+            title: Assignee
+  uiSchema:
+    jira_issue:
+      widget: jira.issue-picker
+      dataSource: jira.issues
+      searchPlaceholder: Search Jira issues
+      allowManualKeyEntry: true
+  defaults: {}
+inputs:
+  - name: jira_issue_key
+    label: Jira Issue Key
+    type: text
+    required: true
+  - name: constraints
+    label: Constraints
+    type: textarea
+    required: false
+    default: ""
+steps:
+  - title: Move Jira issue to In Progress
+    instructions: |-
+      Change Jira issue {{ inputs.jira_issue_key }} to status In Progress before implementation starts.
+
+      Use the trusted Jira issue updater workflow and Jira transition tools. Match In Progress against the issue's available transitions or target statuses; do not guess transition IDs. Re-fetch the issue when possible and report the confirmed status.
+    skill:
+      id: jira-issue-updater
+      args: {}
+  - title: Check Jira blockers before implementation
+    type: tool
+    instructions: |-
+      Check Jira issue {{ inputs.jira_issue_key }} through the deterministic trusted Jira blocker preflight before any implementation work starts.
+
+      Jira Blocks direction is strict for Jira GET issue responses: when the target issue response exposes the other issue as outwardIssue and the link type says the outward relationship is "blocks", that other issue blocks {{ inputs.jira_issue_key }}. When the target issue response exposes the other issue as inwardIssue and the link type says the inward relationship is "is blocked by", {{ inputs.jira_issue_key }} blocks a later issue and that link MUST NOT block this implementation.
+
+      Ignore non-blocker issue links for the blocker decision.
+
+      Continue only when no blocker links exist or every detected blocking issue is status Done.
+
+      If any blocking issue is not Done, or if a blocker relationship exists but blocker status cannot be determined from trusted Jira data, stop the implementation immediately. Report a blocked outcome in the required JSON format (targetIssueKey, decision, blockingIssues, summary) and do not proceed to any subsequent steps, including brief loading or implementation. Include {{ inputs.jira_issue_key }} as the targetIssueKey.
+
+      Do not use raw Jira credentials, web scraping, hardcoded transition IDs, or prompt text alone to decide blocker state.
+    targetIssueKey: "{{ inputs.jira_issue_key }}"
+    blockerPreflight:
+      targetIssueKey: "{{ inputs.jira_issue_key }}"
+      linkType: Blocks
+    tool:
+      id: jira.check_blockers
+      args:
+        targetIssueKey: "{{ inputs.jira_issue_key }}"
+        blockerPreflight:
+          targetIssueKey: "{{ inputs.jira_issue_key }}"
+          linkType: Blocks
+  - title: Load Jira preset brief
+    type: tool
+    instructions: |-
+      Fetch Jira issue {{ inputs.jira_issue_key }} through the deterministic trusted Jira tool surface.
+
+      Build the canonical implementation input from the issue's Jira preset brief. Prefer a normalized preset brief or recommended preset instructions when the Jira issue response exposes one. If that field is unavailable, synthesize the brief from the issue key, summary, description, acceptance criteria, and relevant implementation notes.
+
+      Preserve the issue key in the brief so downstream implementation artifacts and the pull request can reference {{ inputs.jira_issue_key }}.
+    tool:
+      id: jira.load_preset_brief
+      args: {}
+      inputs:
+        issueKey: "{{ inputs.jira_issue_key }}"
+  - title: Implement the Jira issue
+    instructions: |-
+      Implement the work described by Jira issue {{ inputs.jira_issue_key }} using the loaded Jira preset brief as the authoritative implementation input.
+
+      Additional constraints:
+      {{ inputs.constraints }}
+
+      Scope the implementation strictly to what the brief and acceptance criteria describe. Do not broaden scope, refactor unrelated code, or introduce backwards-compatibility shims unless the brief explicitly requires them.
+
+      Follow the project's testing standards: add or update tests that cover the behavior changes required by the brief, and confirm the relevant unit and integration tests pass locally before continuing.
+
+      Preserve Jira issue {{ inputs.jira_issue_key }} in commit messages and in any implementation artifacts so downstream verification and the pull request can reference it.
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - git
+  - title: Verify implementation
+    instructions: |-
+      Verify that the implementation for Jira issue {{ inputs.jira_issue_key }} satisfies the loaded preset brief and acceptance criteria.
+
+      Re-read the Jira preset brief and confirm every required behavior change is implemented and covered by tests. Run the focused unit and integration checks named by the brief or implied by the changed code paths.
+
+      If gaps remain, fix them now before proceeding to pull request creation. Do not create a pull request until the implementation matches the brief and the relevant tests pass.
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - git
+  - title: Create pull request
+    annotations:
+      jiraImplementRole: pull-request-handoff
+    instructions: |-
+      Create a pull request for the completed work for Jira issue {{ inputs.jira_issue_key }}.
+
+      This Jira Implement handoff step is the explicit PR-publication step for this preset. It intentionally owns pull request creation before the Jira Code Review transition so the confirmed pull request URL is available to both Jira and MoonMind publish handling. If generic managed-runtime guidance says not to push or create a pull request, treat this step-specific handoff instruction as the controlling instruction for this step only. If the task is submitted with PR merge automation enabled, the parent workflow must use the pull request URL produced by this step as the published PR and then run merge automation against that PR; on a successful merge the parent workflow will transition Jira issue {{ inputs.jira_issue_key }} to Done automatically. If the runtime instructions, task parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Code Review and report the exact blocker.
+
+      First confirm the working tree contains only intentional changes for this issue and no raw credentials. Commit the work with a concise message that includes {{ inputs.jira_issue_key }}. Push the current non-protected work branch and create a non-draft pull request with the available authenticated GitHub tooling.
+
+      The pull request must be ready for review, not a draft. Do not pass draft flags when creating it. If the available tool or repository default creates a draft pull request, immediately mark it ready for review (for example, with the authenticated GitHub tooling's ready-for-review command) and verify the final pull request isDraft value is false before continuing.
+
+      The pull request title must include {{ inputs.jira_issue_key }}. The pull request body must include:
+      - the Jira issue key
+      - a summary of the implementation
+      - tests run
+      - remaining risks
+
+      After creation and non-draft verification, record the confirmed pull request URL in the step result and in a local handoff artifact at artifacts/jira-implement-pr.json with keys jira_issue_key and pull_request_url. Do not continue unless the pull_request_url is a GitHub pull request URL for the current work branch and the pull request is confirmed non-draft.
+    skill:
+      id: auto
+      args: {}
+      requiredCapabilities:
+        - git
+  - title: Move Jira issue to Code Review
+    instructions: |-
+      Change Jira issue {{ inputs.jira_issue_key }} to status Code Review only after the pull request exists.
+
+      Before using any Jira transition tool, read the previous pull request creation result or artifacts/jira-implement-pr.json and verify it contains a non-empty pull_request_url for {{ inputs.jira_issue_key }}. If no confirmed pull request URL is available, stop without changing Jira and report that Code Review is blocked until PR creation succeeds.
+
+      Use the trusted Jira issue updater workflow and Jira transition tools. Match Code Review against the issue's available transitions or target statuses; do not guess transition IDs. Add or preserve a Jira-visible reference to the pull request when supported by the trusted tools. Re-fetch the issue when possible and report the confirmed status.
+
+      Note: when this task was submitted with PR merge automation enabled, the parent workflow will transition Jira issue {{ inputs.jira_issue_key }} to Done automatically after the pull request merges. This in-task step only owns the Code Review transition.
+    skill:
+      id: jira-issue-updater
+      args: {}
