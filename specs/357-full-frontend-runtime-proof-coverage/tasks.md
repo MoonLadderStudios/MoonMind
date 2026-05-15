@@ -70,20 +70,20 @@
 
 ### Unit Tests (write first)
 
-- [ ] T012 [P] Add failing unit test for Tier 1 evidence command and exit-code preservation covering FR-001, FR-002, SCN-001, and SC-001 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofUnitTests.cpp`
-- [ ] T013 [P] Add failing unit test for PR-ready summary completeness covering FR-011, FR-013, SCN-004, SCN-006, and SC-006 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofUnitTests.cpp`
-- [ ] T014 [P] Add failing unit test that rejects frontend feature implementation tasks inside proof-only evidence output covering FR-014 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofUnitTests.cpp`
+- [ ] T012 Add failing unit test for Tier 1 evidence command and exit-code preservation covering FR-001, FR-002, SCN-001, and SC-001 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofUnitTests.cpp`
+- [ ] T013 Add failing unit test for PR-ready summary completeness covering FR-011, FR-013, SCN-004, SCN-006, and SC-006 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofUnitTests.cpp`
+- [ ] T014 Add failing unit test that rejects frontend feature implementation tasks inside proof-only evidence output covering FR-014 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofUnitTests.cpp`
 - [ ] T015 Run the target THOR unit test command for `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofUnitTests.cpp` and confirm T012-T014 fail for the expected missing behavior
 
 ### Integration Tests (write first)
 
-- [ ] T016 [P] Add failing integration automation for Home startup coverage covering FR-003 and SCN-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
-- [ ] T017 [P] Add failing integration automation for generated Home navigation coverage covering FR-004 and SCN-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
-- [ ] T018 [P] Add failing integration automation for Play panel coverage covering FR-005 and SCN-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
-- [ ] T019 [P] Add failing integration automation for Options panel coverage covering FR-006 and SCN-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
-- [ ] T020 [P] Add failing integration automation for modal behavior coverage covering FR-007 and SCN-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
-- [ ] T021 [P] Add failing integration automation for blocked Online Co-op coverage covering FR-008 and SCN-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
-- [ ] T022 [P] Add failing integration automation for generated selection telemetry coverage covering FR-009, SCN-002, and SC-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
+- [ ] T016 Add failing integration automation for Home startup coverage covering FR-003 and SCN-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
+- [ ] T017 Add failing integration automation for generated Home navigation coverage covering FR-004 and SCN-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
+- [ ] T018 Add failing integration automation for Play panel coverage covering FR-005 and SCN-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
+- [ ] T019 Add failing integration automation for Options panel coverage covering FR-006 and SCN-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
+- [ ] T020 Add failing integration automation for modal behavior coverage covering FR-007 and SCN-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
+- [ ] T021 Add failing integration automation for blocked Online Co-op coverage covering FR-008 and SCN-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
+- [ ] T022 Add failing integration automation for generated selection telemetry coverage covering FR-009, SCN-002, and SC-002 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
 - [ ] T023 Add failing integration smoke for `/Game/Maps/MainMenu` or active frontend entry route covering FR-010, SCN-003, and SC-003 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
 - [ ] T024 Add failing integration validation that Docker fallback is attempted before CI-only classification covering FR-012, SCN-005, and SC-005 in `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`
 - [ ] T025 Run the target THOR integration automation command for `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp` and confirm T016-T024 fail for expected missing proof coverage
@@ -137,9 +137,9 @@
 ### Parallel Opportunities
 
 - T003-T004 can run in parallel after T001.
-- T012-T014 can run in parallel after foundational helpers are planned.
-- T016-T022 can run in parallel because they cover distinct flow assertions in the same automation file only if coordinated by one implementer; otherwise sequence them to avoid conflicts.
-- T028-T031 can run in parallel after T027 defines the shared aggregation surface.
+- T012-T014 must be sequenced because they all edit `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofUnitTests.cpp`.
+- T016-T022 must be sequenced because they all edit `Source/ThorTactics/Tests/Frontend/FrontendRuntimeProofAutomationTest.cpp`.
+- T031 can run independently after T027 defines the shared aggregation surface; T028-T030 should be sequenced because they edit `Source/ThorTactics/Frontend/TacticsFrontendRuntimeProof.cpp`.
 - T037-T038 can run in parallel after T033 and T035.
 
 ## Parallel Example: Story Phase
