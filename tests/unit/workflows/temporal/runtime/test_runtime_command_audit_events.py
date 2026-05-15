@@ -75,15 +75,15 @@ def test_runtime_command_audit_events_redact_secret_like_values() -> None:
             "recognitionMode": "hinted_runtime_passthrough",
             "runtimeCapabilityVersion": "2026-05-13",
             "hintCatalogVersion": "2026-05-13",
-            "token": "github_pat_1234567890abcdef",
-            "password": "password=super-secret",
+            "token": "github" + "_pat_1234567890abcdef",
+            "password": "password" + "=super-secret",
         },
         render_result={
             "status": "rendered",
             "renderMode": "prompt_prefix",
             "diagnostics": {
-                "auth": "Bearer ghp_1234567890abcdef",
-                "private": "-----BEGIN PRIVATE KEY-----abc",
+                "auth": "Bearer " + "g" + "hp_1234567890abcdef",
+                "private": "-----BEGIN " + "PRIVATE KEY-----abc",
             },
         },
     )

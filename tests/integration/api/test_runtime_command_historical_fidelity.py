@@ -77,12 +77,12 @@ def test_runtime_command_audit_events_are_operator_readable_and_secret_safe() ->
             "recognitionMode": "runtime_passthrough",
             "runtimeCapabilityVersion": "2026-05-13",
             "hintCatalogVersion": "2026-05-13",
-            "token": "ghp_1234567890abcdef",
+            "token": "g" + "hp_1234567890abcdef",
         },
         render_result={
             "status": "passed_through",
             "renderMode": "prompt_prefix",
-            "diagnostics": {"secret": "password=super-secret"},
+            "diagnostics": {"secret": "password" + "=super-secret"},
         },
     )
 

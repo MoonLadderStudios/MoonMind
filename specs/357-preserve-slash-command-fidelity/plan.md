@@ -45,15 +45,15 @@ MM-687 requires MoonMind to preserve and present historical slash-command meanin
 
 ## Technical Context
 
-**Language/Version**: Python 3.12; TypeScript/React for Mission Control UI  
-**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, existing Temporal artifact and task editing helpers  
-**Storage**: Existing Temporal execution records, artifact-backed task input snapshots, Temporal metadata/search/memo fields, existing observability/control-event artifact surfaces; no new persistent tables planned  
-**Unit Testing**: `./tools/test_unit.sh` for final unit verification; focused Python pytest and Vitest during iteration  
-**Integration Testing**: `./tools/test_integration.sh` for hermetic integration_ci coverage; focused integration tests under `tests/integration` for Temporal/artifact/API boundaries  
-**Target Platform**: MoonMind local/operator deployment with Mission Control web UI and Temporal-backed workflow execution  
-**Project Type**: Web application plus orchestration service and managed-runtime workflow system  
-**Performance Goals**: Historical task detail, edit, and rerun views remain normal interactive UI operations; added metadata should be compact and bounded  
-**Constraints**: Preserve secret hygiene; do not mutate historical source-run evidence; keep workflow/activity payload changes compatible for in-flight runs or explicitly version/cut over; do not introduce internal compatibility aliases  
+**Language/Version**: Python 3.12; TypeScript/React for Mission Control UI
+**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, React, TanStack Query, existing Temporal artifact and task editing helpers
+**Storage**: Existing Temporal execution records, artifact-backed task input snapshots, Temporal metadata/search/memo fields, existing observability/control-event artifact surfaces; no new persistent tables planned
+**Unit Testing**: `./tools/test_unit.sh` for final unit verification; focused Python pytest and Vitest during iteration
+**Integration Testing**: `./tools/test_integration.sh` for hermetic integration_ci coverage; focused integration tests under `tests/integration` for Temporal/artifact/API boundaries
+**Target Platform**: MoonMind local/operator deployment with Mission Control web UI and Temporal-backed workflow execution
+**Project Type**: Web application plus orchestration service and managed-runtime workflow system
+**Performance Goals**: Historical task detail, edit, and rerun views remain normal interactive UI operations; added metadata should be compact and bounded
+**Constraints**: Preserve secret hygiene; do not mutate historical source-run evidence; keep workflow/activity payload changes compatible for in-flight runs or explicitly version/cut over; do not introduce internal compatibility aliases
 **Scale/Scope**: One runtime story covering slash-command metadata fidelity across edit, rerun, task details, and audit surfaces for task-level and step-level instructions
 
 ## Constitution Check
