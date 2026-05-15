@@ -91,6 +91,245 @@ def test_authoritative_snapshot_detects_jira_key_without_serializing_metadata() 
 
     assert snapshot["traceability"]["jiraIssueKey"] == "MM-639"
 
+
+def test_authoritative_snapshot_records_task_runtime_command_metadata() -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": "/review\nCheck this branch for regressions.",
+            "runtime": {"mode": "codex"},
+        }
+    )
+
+    assert snapshot["objective"]["instructions"] == (
+        "/review\nCheck this branch for regressions."
+    )
+    assert snapshot["objective"]["runtimeCommand"] == {
+        "kind": "slash_command",
+        "source": "leading_slash",
+        "sourcePath": "objective.instructions",
+        "command": "review",
+        "rawCommand": "/review",
+        "args": "",
+        "instructionBody": "Check this branch for regressions.",
+        "targetRuntime": "codex",
+        "detectionStatus": "detected",
+        "hintStatus": "hinted",
+        "recognitionMode": "hinted_runtime_passthrough",
+        "requiresRuntimeRecognition": True,
+        "runtimeCapabilityVersion": "2026-05-13",
+        "hintCatalogVersion": "2026-05-13",
+        "detectionPhase": "submit",
+    }
+
+
+def test_authoritative_snapshot_records_step_runtime_command_metadata() -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": "Run task.",
+            "runtime": {"mode": "claude"},
+            "steps": [
+                {
+                    "id": "simplify-step",
+                    "instructions": "/simplify\nReduce duplication.",
+                }
+            ],
+        }
+    )
+
+    assert snapshot["steps"][0]["instructions"] == "/simplify\nReduce duplication."
+    assert snapshot["steps"][0]["runtimeCommand"]["command"] == "simplify"
+    assert snapshot["steps"][0]["runtimeCommand"]["sourcePath"] == (
+        "steps[0].instructions"
+    )
+    assert snapshot["steps"][0]["runtimeCommand"]["targetStepId"] == "simplify-step"
+    assert snapshot["steps"][0]["runtimeCommand"]["targetRuntime"] == "claude"
+    assert snapshot["steps"][0]["runtimeCommand"]["recognitionMode"] == (
+        "hinted_runtime_passthrough"
+    )
+
+
+def test_runtime_command_unknown_valid_commands_are_opaque_not_rejected() -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": "/future-command now\nUse the provider command.",
+            "runtime": {"mode": "codex"},
+        }
+    )
+
+    command = snapshot["objective"]["runtimeCommand"]
+    assert command["command"] == "future-command"
+    assert command["args"] == "now"
+    assert command["instructionBody"] == "Use the provider command."
+    assert command["hintStatus"] == "opaque"
+    assert command["recognitionMode"] == "runtime_passthrough"
+    assert command["requiresRuntimeRecognition"] is True
+
+
+def test_runtime_command_preserves_opaque_provider_command_lines() -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": "/provider.command now\nOpaque provider body.",
+            "runtime": {"mode": "codex"},
+        }
+    )
+
+    command = snapshot["objective"]["runtimeCommand"]
+    assert command["command"] == "provider.command"
+    assert command["rawCommand"] == "/provider.command now"
+    assert command["args"] == ""
+    assert command["instructionBody"] == "Opaque provider body."
+    assert command["hintStatus"] == "opaque"
+
+
+def test_runtime_command_escaped_slash_records_literal_metadata() -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": "\\/review\nTreat this as ordinary text.",
+            "runtime": {"mode": "codex"},
+        }
+    )
+
+    assert snapshot["objective"]["instructions"] == (
+        "\\/review\nTreat this as ordinary text."
+    )
+    command = snapshot["objective"]["runtimeCommand"]
+    assert command["detectionStatus"] == "escaped"
+    assert command["recognitionMode"] == "escaped_literal"
+    assert command["requiresRuntimeRecognition"] is False
+    assert command["rawCommand"] == "\\/review"
+    assert command["instructionBody"] == "/review\nTreat this as ordinary text."
+
+
+def test_runtime_command_path_like_input_is_malformed_literal() -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": "/src/app.ts is broken",
+            "runtime": {"mode": "codex"},
+        }
+    )
+
+    command = snapshot["objective"]["runtimeCommand"]
+    assert command["detectionStatus"] == "malformed"
+    assert command["recognitionMode"] == "escaped_literal"
+    assert command["requiresRuntimeRecognition"] is False
+    assert command["command"] == ""
+
+
+@pytest.mark.parametrize(
+    ("instructions", "raw_command", "instruction_body"),
+    [
+        ("/", "/", "/"),
+        ("/   ", "/", "/   "),
+        ("/\nContinue as literal text.", "/", "/\nContinue as literal text."),
+    ],
+)
+def test_runtime_command_slash_only_input_is_malformed_literal(
+    instructions: str, raw_command: str, instruction_body: str
+) -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": instructions,
+            "runtime": {"mode": "codex"},
+        }
+    )
+
+    assert snapshot["objective"]["instructions"] == instructions
+    command = snapshot["objective"]["runtimeCommand"]
+    assert command["detectionStatus"] == "malformed"
+    assert command["recognitionMode"] == "escaped_literal"
+    assert command["requiresRuntimeRecognition"] is False
+    assert command["command"] == ""
+    assert command["rawCommand"] == raw_command
+    assert command["instructionBody"] == instruction_body
+
+
+def test_runtime_command_unsupported_runtime_does_not_require_recognition() -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": "/review\nCheck external runtime behavior.",
+            "runtime": {"mode": "jules"},
+        }
+    )
+
+    command = snapshot["objective"]["runtimeCommand"]
+    assert command["command"] == "review"
+    assert command["detectionStatus"] == "detected"
+    assert command["recognitionMode"] == "runtime_does_not_support_slash_commands"
+    assert command["requiresRuntimeRecognition"] is False
+
+
+def test_runtime_command_leading_whitespace_is_not_detected() -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": " /review\nLeading whitespace keeps this literal.",
+            "runtime": {"mode": "codex"},
+        }
+    )
+
+    assert snapshot["objective"]["instructions"] == (
+        " /review\nLeading whitespace keeps this literal."
+    )
+    assert "runtimeCommand" not in snapshot["objective"]
+
+
+def test_runtime_command_step_leading_whitespace_preserves_literal_text() -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": "Run task.",
+            "runtime": {"mode": "codex"},
+            "steps": [
+                {
+                    "id": "step-1",
+                    "instructions": " /simplify\nLeading whitespace keeps this literal.",
+                }
+            ],
+        }
+    )
+
+    assert snapshot["steps"][0]["instructions"] == (
+        " /simplify\nLeading whitespace keeps this literal."
+    )
+    assert "runtimeCommand" not in snapshot["steps"][0]
+
+
+def test_runtime_command_rejects_conflicting_objective_metadata() -> None:
+    with pytest.raises(TaskContractError, match="task.runtimeCommand conflicts"):
+        build_authoritative_task_input_snapshot(
+            task_payload={
+                "instructions": "/review\nCheck this branch.",
+                "runtime": {"mode": "codex"},
+                "runtimeCommand": {
+                    "kind": "slash_command",
+                    "sourcePath": "objective.instructions",
+                    "command": "simplify",
+                    "detectionStatus": "detected",
+                },
+            }
+        )
+
+
+def test_runtime_command_rejects_conflicting_step_metadata() -> None:
+    with pytest.raises(TaskContractError, match="task.steps\\[0\\].runtimeCommand conflicts"):
+        build_authoritative_task_input_snapshot(
+            task_payload={
+                "instructions": "Run task.",
+                "runtime": {"mode": "codex"},
+                "steps": [
+                    {
+                        "id": "step-1",
+                        "instructions": "/simplify\nReduce duplication.",
+                        "runtimeCommand": {
+                            "kind": "slash_command",
+                            "sourcePath": "steps[0].instructions",
+                            "targetStepId": "different",
+                            "command": "simplify",
+                            "detectionStatus": "detected",
+                        },
+                    }
+                ],
+            }
+        )
+
 def test_task_skills_rejects_invalid_values() -> None:
     """T001: Assert structure validation handles edge cases for skills."""
     from pydantic import ValidationError
