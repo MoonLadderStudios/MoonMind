@@ -90,6 +90,7 @@ specs/357-preserve-slash-command-fidelity/
 ├── research.md
 ├── data-model.md
 ├── quickstart.md
+├── tasks.md
 ├── contracts/
 │   └── slash-command-fidelity.md
 └── checklists/

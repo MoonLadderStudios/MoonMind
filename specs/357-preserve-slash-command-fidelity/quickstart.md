@@ -4,14 +4,15 @@
 
 - Use the current repository checkout for MM-687.
 - Keep the canonical source at `specs/357-preserve-slash-command-fidelity/spec.md`.
-- Do not generate tasks or implementation from this planning step.
+- Follow `specs/357-preserve-slash-command-fidelity/tasks.md` for the test-first implementation order.
 
 ## Test-First Workflow
 
 1. Add failing unit tests for snapshot and draft reconstruction:
 
    ```bash
-   ./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py frontend/src/lib/temporalTaskEditing.test.ts
+   ./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py
+   ./tools/test_unit.sh --ui-args frontend/src/lib/temporalTaskEditing.test.ts
    ```
 
    Expected red state before implementation: slash-specific historical metadata preservation or absent-metadata preview-only cases fail if not already covered.
@@ -35,12 +36,12 @@
 4. Add backend/unit tests for audit event construction and sanitization:
 
    ```bash
-   ./tools/test_unit.sh tests/unit
+   ./tools/test_unit.sh tests/unit/workflows/temporal/runtime/test_runtime_command_audit_events.py
    ```
 
    Keep the focused test path narrowed during iteration, then run the full unit suite before completion.
 
-5. Add a hermetic integration test for artifact-backed execution retrieval, rerun, and observability event exposure:
+5. Add a hermetic `integration_ci` integration test for artifact-backed execution retrieval, rerun, and observability event exposure:
 
    ```bash
    ./tools/test_integration.sh

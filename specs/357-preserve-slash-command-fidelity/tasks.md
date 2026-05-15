@@ -83,10 +83,10 @@
 
 ### Integration Tests (write first)
 
-- [ ] T018 Add failing hermetic integration test in `tests/integration/api/test_runtime_command_historical_fidelity.py` for artifact-backed edit/detail reconstruction of original instructions and runtime command metadata FR-001 FR-002 FR-003 FR-008 FR-009 SCN-001 SCN-005 DESIGN-REQ-002 DESIGN-REQ-015
-- [ ] T019 Add failing hermetic integration test in `tests/integration/api/test_runtime_command_historical_fidelity.py` for exact rerun and edit-for-rerun preserving source-run metadata while surfacing current warnings FR-005 FR-006 FR-007 SCN-003 SCN-004 DESIGN-REQ-014
-- [ ] T020 Add failing hermetic integration test in `tests/integration/api/test_runtime_command_historical_fidelity.py` for detected/rendered/pass-through audit events excluding secrets and exposing operator-readable command evidence FR-010 FR-011 FR-012 SCN-006 SC-006 DESIGN-REQ-018
-- [ ] T021 Run focused integration coverage for `tests/integration/api/test_runtime_command_historical_fidelity.py` with `./tools/test_integration.sh` or the documented integration_ci equivalent to confirm T018-T020 fail for the expected missing behavior
+- [ ] T018 Add failing hermetic `integration_ci` integration test in `tests/integration/api/test_runtime_command_historical_fidelity.py` for artifact-backed edit/detail reconstruction of original instructions and runtime command metadata FR-001 FR-002 FR-003 FR-008 FR-009 SCN-001 SCN-005 DESIGN-REQ-002 DESIGN-REQ-015
+- [ ] T019 Add failing hermetic `integration_ci` integration test in `tests/integration/api/test_runtime_command_historical_fidelity.py` for exact rerun and edit-for-rerun preserving source-run metadata while surfacing current warnings FR-005 FR-006 FR-007 SCN-003 SCN-004 DESIGN-REQ-014
+- [ ] T020 Add failing hermetic `integration_ci` integration test in `tests/integration/api/test_runtime_command_historical_fidelity.py` for detected/rendered/pass-through audit events excluding secrets and exposing operator-readable command evidence FR-010 FR-011 FR-012 SCN-006 SC-006 DESIGN-REQ-018
+- [ ] T021 Run focused integration coverage for `tests/integration/api/test_runtime_command_historical_fidelity.py` with `./tools/test_integration.sh` or the documented `integration_ci` equivalent to confirm T018-T020 fail for the expected missing behavior
 
 ### Conditional Verification Fallbacks
 
