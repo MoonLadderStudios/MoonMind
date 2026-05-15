@@ -7,7 +7,7 @@
 
 **Organization**: Tasks cover exactly one story: Frontend Input and Focus Contract for THOR-404.
 
-**Source Traceability**: Original Jira issue THOR-404 and preset brief are preserved in `spec.md` `**Input**`. All plan `## Requirement Status` rows are `missing`, so each FR requires test-and-code coverage. The THOR paths below are concrete proposed target paths and must be confirmed against the actual THOR repository during setup.
+**Source Traceability**: Original Jira issue THOR-404 and preset brief are preserved in `spec.md` `**Input**`. All plan `## Requirement Status` rows are `missing`, so each FR requires test-and-code coverage. The task phases reflect the explicit unit and integration coverage in `plan.md` `## Test Strategy`. The THOR paths below are concrete proposed target paths and must be confirmed against the actual THOR repository during setup.
 
 **Test Commands**:
 
