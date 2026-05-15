@@ -235,6 +235,57 @@ async def test_send_message_forwards_operator_message_without_resuming(monkeypat
     assert workflow_instance._resume_requested is False
 
 @pytest.mark.asyncio
+async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "claude_code"
+
+    mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+
+    result = await workflow_instance.update_inputs(
+        {
+            "parametersPatch": {
+                "model": "claude-opus-4-7",
+                "profileId": "claude_anthropic",
+                "task": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "model": "claude-opus-4-7",
+                        "profileId": "claude_anthropic",
+                    }
+                },
+            }
+        }
+    )
+
+    mock_handle.signal.assert_awaited_once_with(
+        "update_runtime_selection",
+        {
+            "model": "claude-opus-4-7",
+            "executionProfileRef": "claude_anthropic",
+            "targetRuntime": "claude_code",
+            "parametersPatch": {
+                "model": "claude-opus-4-7",
+                "profileId": "claude_anthropic",
+                "task": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "model": "claude-opus-4-7",
+                        "profileId": "claude_anthropic",
+                    }
+                },
+            },
+        },
+    )
+    assert result["forwardedRuntimeSelectionUpdate"] is True
+
+@pytest.mark.asyncio
 async def test_run_workflow_send_message_update_uses_temporal_boundary(
     mock_run_environment, monkeypatch
 ):
