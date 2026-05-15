@@ -249,6 +249,7 @@ Key diagnostics:
 - Existing workflow history and artifact refs only; no new persistent storage planned (348-target-aware-step-scope)
 - Python 3.12; TypeScript/React for Mission Control task detail UI + FastAPI, Pydantic v2, SQLAlchemy async ORM, Temporal Python SDK, React, TanStack Query, Zod, generated OpenAPI types (350-operator-observability-diagnostics)
 - Existing Temporal execution records, execution parameters/memo/search attributes, task input snapshot artifacts, and Temporal artifact refs; no new persistent storage planned (350-operator-observability-diagnostics)
+- Python 3.12 (existing MoonMind runtime); no new module files are added for this one-shot run. + Existing trusted Jira tool registry (`moonmind/mcp/jira_tool_registry.py`), `JiraToolService` (`moonmind/integrations/jira/tool.py`), `redact_sensitive_text` / `SecretRedactor` redaction helpers. (353-transition-mm658-in-progress)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
