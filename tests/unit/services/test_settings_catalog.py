@@ -2279,7 +2279,7 @@ async def test_audit_entries_expose_apply_mode_and_affected_systems(
             permissions={"settings.audit.read"},
         )
 
-    assert entries[0].event_type == "setting_changed"
+    assert entries[0].event_type == "settings.override.updated"
     assert entries[0].key == "workflow.default_publish_mode"
     assert entries[0].scope == "workspace"
     assert entries[0].source == "workspace_override"
@@ -2287,6 +2287,39 @@ async def test_audit_entries_expose_apply_mode_and_affected_systems(
     assert entries[0].affected_systems == ["task_creation", "publishing"]
     assert entries[0].validation_outcome == "accepted"
     assert entries[0].created_at is not None
+
+
+@pytest.mark.asyncio
+async def test_audit_source_preserves_intentional_null_override(settings_session_maker):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.apply_overrides(
+            scope="user",
+            changes={"integrations.github.token_ref": None},
+            expected_versions={"integrations.github.token_ref": 1},
+        )
+
+        updated_entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+        await service.reset_override(
+            "integrations.github.token_ref",
+            scope="user",
+        )
+        reset_entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+    assert updated_entries[0].event_type == "settings.override.updated"
+    assert updated_entries[0].source == "user_override"
+    assert updated_entries[0].new_value is None
+    reset_entry = next(
+        entry
+        for entry in reset_entries
+        if entry.event_type == "settings.override.reset"
+    )
+    assert reset_entry.source == "inherited"
 
 
 @pytest.mark.asyncio

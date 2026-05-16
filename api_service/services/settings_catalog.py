@@ -1668,7 +1668,7 @@ class SettingsCatalogService:
             self._session.add(
                 self._audit_event(
                     entry,
-                    event_type="setting_changed",
+                    event_type="settings.override.updated",
                     scope=scope,
                     old_value=old_value,
                     new_value=value,
@@ -1766,7 +1766,7 @@ class SettingsCatalogService:
             self._session.add(
                 self._audit_event(
                     entry,
-                    event_type="setting_changed",
+                    event_type="settings.override.reset",
                     scope=scope,
                     old_value=old_value,
                     new_value=None,
@@ -3974,7 +3974,11 @@ class SettingsCatalogService:
             event_type=row.event_type,
             key=row.key,
             scope=row.scope,
-            source=f"{row.scope}_override" if row.new_value_json is not None else "inherited",
+            source=(
+                f"{row.scope}_override"
+                if row.event_type != "settings.override.reset"
+                else "inherited"
+            ),
             actor_user_id=row.actor_user_id,
             old_value=old_value,
             new_value=new_value,
