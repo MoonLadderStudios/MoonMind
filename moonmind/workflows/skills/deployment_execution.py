@@ -26,7 +26,9 @@ DEPLOYMENT_RUNNER_MODES = frozenset(
 DEPLOYMENT_UPDATE_MODES = frozenset({"changed_services", "force_recreate"})
 DEPLOYMENT_UPDATE_STACKS = frozenset({"moonmind"})
 DEPLOYMENT_FINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "PARTIALLY_VERIFIED"})
+FILE_LOCK_STALE_AFTER_SECONDS = 6 * 60 * 60
 _REDACTED = "[REDACTED]"
+_STACK_PATH_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _SENSITIVE_KEY_PATTERN = re.compile(
     r"("
     r"token|secret|password|passwd|credential|authorization|"
@@ -156,11 +158,23 @@ class FileDeploymentUpdateLockManager:
     lock_dir: str
 
     async def acquire(self, stack: str) -> "FileDeploymentUpdateLockLease":
-        normalized = _required_string(stack, "stack")
+        normalized = _validate_stack_path_component(stack)
         lock_path = Path(self.lock_dir).expanduser() / f"{normalized}.lock"
         try:
             await asyncio.to_thread(_create_lock_file, lock_path, normalized)
         except FileExistsError as exc:
+            recovered = await asyncio.to_thread(
+                _recover_stale_lock_file,
+                lock_path,
+                normalized,
+            )
+            if recovered:
+                try:
+                    await asyncio.to_thread(_create_lock_file, lock_path, normalized)
+                except FileExistsError:
+                    pass
+                else:
+                    return FileDeploymentUpdateLockLease(lock_path)
             raise ToolFailure(
                 error_code="DEPLOYMENT_LOCKED",
                 message=(
@@ -1258,6 +1272,18 @@ def _required_string(value: Any, field_name: str) -> str:
     return normalized
 
 
+def _validate_stack_path_component(value: Any) -> str:
+    normalized = _required_string(value, "stack")
+    if not _STACK_PATH_COMPONENT_PATTERN.fullmatch(normalized):
+        raise ToolFailure(
+            error_code="INVALID_STACK_NAME",
+            message=f"Invalid stack name '{normalized}'.",
+            retryable=False,
+            details={"stack": normalized, "failureClass": "invalid_input"},
+        )
+    return normalized
+
+
 def _optional_string(value: Any) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
@@ -1443,6 +1469,10 @@ def _env_value(value: Any) -> str:
     return text.replace("\r", "").replace("\n", " ")
 
 
+def _compose_env_value(value: Any) -> str:
+    return _env_value(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
@@ -1457,15 +1487,88 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
+        _fsync_parent_directory(path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temp_path.unlink()
+
+
+def _recover_stale_lock_file(lock_path: Path, stack: str) -> bool:
+    if not lock_path.exists():
+        return False
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _unlink_lock_file_if_older_than_lease(lock_path)
+    if not isinstance(payload, Mapping):
+        return _unlink_lock_file_if_older_than_lease(lock_path)
+
+    lock_stack = str(payload.get("stack") or "").strip()
+    if lock_stack and lock_stack != stack:
+        return False
+
+    pid = _lock_file_pid(payload)
+    if pid is not None and not _pid_is_live(pid):
+        _unlink_lock_file(lock_path)
+        return True
+    if _lock_file_is_older_than_lease(payload):
+        _unlink_lock_file(lock_path)
+        return True
+    return False
+
+
+def _unlink_lock_file_if_older_than_lease(lock_path: Path) -> bool:
+    try:
+        age_seconds = datetime.now(UTC).timestamp() - lock_path.stat().st_mtime
+    except OSError:
+        return False
+    if age_seconds <= FILE_LOCK_STALE_AFTER_SECONDS:
+        return False
+    _unlink_lock_file(lock_path)
+    return True
+
+
+def _lock_file_pid(payload: Mapping[str, Any]) -> int | None:
+    try:
+        pid = int(str(payload.get("pid") or "").strip())
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _pid_is_live(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def _lock_file_is_older_than_lease(payload: Mapping[str, Any]) -> bool:
+    created_at = str(payload.get("createdAt") or "").strip()
+    if not created_at:
+        return False
+    with contextlib.suppress(ValueError):
+        parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        age_seconds = (datetime.now(UTC) - parsed.astimezone(UTC)).total_seconds()
+        return age_seconds > FILE_LOCK_STALE_AFTER_SECONDS
+    return False
+
+
+def _fsync_parent_directory(path: Path) -> None:
+    if hasattr(os, "O_DIRECTORY"):
         with contextlib.suppress(OSError):
-            dir_fd = os.open(path.parent, os.O_DIRECTORY)
+            dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
             try:
                 os.fsync(dir_fd)
             finally:
                 os.close(dir_fd)
-    finally:
-        with contextlib.suppress(FileNotFoundError):
-            temp_path.unlink()
 
 
 def _create_lock_file(lock_path: Path, stack: str) -> None:
@@ -1482,6 +1585,7 @@ def _create_lock_file(lock_path: Path, stack: str) -> None:
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
+        _fsync_parent_directory(lock_path)
     except Exception:
         with contextlib.suppress(FileNotFoundError):
             lock_path.unlink()
@@ -1491,6 +1595,7 @@ def _create_lock_file(lock_path: Path, stack: str) -> None:
 def _unlink_lock_file(lock_path: Path) -> None:
     with contextlib.suppress(FileNotFoundError):
         lock_path.unlink()
+    _fsync_parent_directory(lock_path)
 
 
 def _write_desired_state_files(
@@ -1500,7 +1605,7 @@ def _write_desired_state_files(
     record: Mapping[str, Any],
 ) -> None:
     env_text = "".join(
-        f"{key}={_env_value(value)}\n"
+        f'{key}="{_compose_env_value(value)}"\n'
         for key, value in env_payload.items()
         if _env_value(value)
     )

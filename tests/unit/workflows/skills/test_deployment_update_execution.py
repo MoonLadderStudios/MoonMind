@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 
 import pytest
@@ -316,6 +318,47 @@ async def test_file_stack_lock_rejects_second_process_boundary_acquire(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_file_stack_lock_rejects_path_traversal_stack_name(tmp_path) -> None:
+    manager = FileDeploymentUpdateLockManager(lock_dir=str(tmp_path / "locks"))
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await manager.acquire("../moonmind")
+
+    assert exc_info.value.error_code == "INVALID_STACK_NAME"
+    assert not (tmp_path / "locks").exists()
+
+
+@pytest.mark.asyncio
+async def test_file_stack_lock_recovers_stale_lock_before_acquire(tmp_path) -> None:
+    lock_dir = tmp_path / "locks"
+    lock_dir.mkdir()
+    lock_path = lock_dir / "moonmind.lock"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "stack": "moonmind",
+                "pid": 999999999,
+                "createdAt": (
+                    datetime.now(UTC) - timedelta(hours=7)
+                ).isoformat().replace("+00:00", "Z"),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manager = FileDeploymentUpdateLockManager(lock_dir=str(lock_dir))
+
+    lease = await manager.acquire("moonmind")
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert payload["pid"] == os.getpid()
+        assert payload["stack"] == "moonmind"
+    finally:
+        await lease.release()
+
+
+@pytest.mark.asyncio
 async def test_lifecycle_order_persists_desired_state_before_compose_up() -> None:
     executor, store, _evidence, _runner, events = _executor()
 
@@ -359,18 +402,45 @@ async def test_file_desired_state_store_writes_compose_env_and_audit_json(
     assert ref == f"file:{env_file}"
     env_text = env_file.read_text(encoding="utf-8")
     assert (
-        "MOONMIND_IMAGE=ghcr.io/moonladderstudios/moonmind@sha256:"
+        'MOONMIND_IMAGE="ghcr.io/moonladderstudios/moonmind@sha256:'
         + "b" * 64
+        + '"'
     ) in env_text
     assert (
-        "MOONMIND_IMAGE_REQUESTED=ghcr.io/moonladderstudios/moonmind:stable"
+        'MOONMIND_IMAGE_REQUESTED="ghcr.io/moonladderstudios/moonmind:stable"'
         in env_text
     )
-    assert "MOONMIND_DEPLOYMENT_RUN_ID=depupd_123" in env_text
+    assert 'MOONMIND_DEPLOYMENT_RUN_ID="depupd_123"' in env_text
     audit = json.loads(json_file.read_text(encoding="utf-8"))
     assert audit["stack"] == "moonmind"
     assert audit["operator"] == "admin@example.com"
     assert audit["reason"] == "Operator requested stable"
+
+
+@pytest.mark.asyncio
+async def test_file_desired_state_store_quotes_compose_env_values(tmp_path) -> None:
+    env_file = tmp_path / "state" / ".env.deploy"
+    json_file = tmp_path / "state" / "desired-state.json"
+    store = FileDesiredStateStore(
+        env_file_path=str(env_file),
+        json_file_path=str(json_file),
+    )
+
+    await store.persist(
+        {
+            "stack": "moonmind",
+            "imageRepository": "ghcr.io/moonladderstudios/moonmind",
+            "requestedReference": 'stable"quoted',
+            "sourceRunId": "depupd_$123#tag",
+        }
+    )
+
+    env_text = env_file.read_text(encoding="utf-8")
+    assert (
+        'MOONMIND_IMAGE="ghcr.io/moonladderstudios/moonmind:stable\\"quoted"'
+        in env_text
+    )
+    assert 'MOONMIND_DEPLOYMENT_RUN_ID="depupd_$123#tag"' in env_text
 
 
 def test_changed_services_command_omits_force_recreate() -> None:
