@@ -2828,6 +2828,18 @@ class TemporalProposalActivities:
             payload_node["task"] = {"runtime": {"mode": default_runtime}}
         return stamped_request
 
+    @staticmethod
+    def _task_runtime_mode_from_payload(payload_node: Any) -> str:
+        if not isinstance(payload_node, Mapping):
+            return ""
+        task_node = payload_node.get("task") or {}
+        if not isinstance(task_node, Mapping):
+            return ""
+        runtime_node = task_node.get("runtime") or {}
+        if isinstance(runtime_node, Mapping):
+            runtime_node = runtime_node.get("mode")
+        return str(runtime_node or "").strip()
+
     @classmethod
     def _validate_candidate_task_create_request(
         cls, request: Mapping[str, Any], *, default_runtime: str | None
@@ -3128,6 +3140,22 @@ class TemporalProposalActivities:
             ctx = _wrap()
 
         async with ctx as service:
+            if origin and not workflow_id:
+                error = "origin.workflow_id is required for workflow proposal submission"
+                return {
+                    "generated_count": generated_count,
+                    "submitted_count": 0,
+                    "deliveredCount": 0,
+                    "validationErrors": [
+                        {"code": "proposal_validation_error", "message": error}
+                    ],
+                    "deliveryFailures": [],
+                    "externalLinks": [],
+                    "dedupUpdates": [],
+                    "errors": [error],
+                    "delivery_decisions": [],
+                }
+
             for candidate in candidates:
                 if not isinstance(candidate, Mapping):
                     errors.append("skipped non-object candidate")
@@ -3162,6 +3190,21 @@ class TemporalProposalActivities:
                 if isinstance(payload_node, Mapping):
                     target_repo = str(payload_node.get("repository") or "").strip()
 
+                original_runtime_mode = self._task_runtime_mode_from_payload(
+                    task_create_request.get("payload")
+                )
+                stamped_runtime_mode = self._task_runtime_mode_from_payload(
+                    payload_node
+                )
+                default_runtime_value = (
+                    default_runtime if isinstance(default_runtime, str) else None
+                )
+                default_runtime_applied = bool(
+                    default_runtime_value
+                    and stamped_runtime_mode == default_runtime_value
+                    and not original_runtime_mode
+                )
+
                 tags = [
                     str(tag or "").strip().lower()
                     for tag in (candidate.get("tags") or [])
@@ -3169,6 +3212,10 @@ class TemporalProposalActivities:
                 tags = [tag for tag in tags if tag]
                 category = str(candidate.get("category") or "").strip().lower()
                 severity = str(candidate.get("severity") or "medium").strip().lower()
+                moonmind_tag_matches = sorted(set(tags) & approved_moonmind_tags)
+                moonmind_severity_qualified = effective_policy.severity_meets_floor(
+                    severity
+                )
                 wants_moonmind = (
                     bool(moonmind_repo)
                     and effective_policy.allow_moonmind
@@ -3178,8 +3225,8 @@ class TemporalProposalActivities:
                         or category in {"run_quality", "moonmind_ci"}
                     )
                     and category in {"run_quality", "moonmind_ci"}
-                    and bool(set(tags) & approved_moonmind_tags)
-                    and effective_policy.severity_meets_floor(severity)
+                    and bool(moonmind_tag_matches)
+                    and moonmind_severity_qualified
                 )
 
                 target = "project"
@@ -3227,6 +3274,8 @@ class TemporalProposalActivities:
 
                         origin_source = TaskProposalOriginSource.WORKFLOW
                         origin_metadata = {
+                            "source": "workflow",
+                            "id": workflow_id,
                             "workflow_id": workflow_id,
                             "temporal_run_id": run_id,
                             "trigger_repo": trigger_repo,
@@ -3252,6 +3301,49 @@ class TemporalProposalActivities:
                                 "target": target,
                                 "repository": target_repo,
                                 "workflow_id": workflow_id,
+                                "default_runtime": default_runtime_value,
+                                "default_runtime_applied": default_runtime_applied,
+                                "capacity": {
+                                    "project": {
+                                        "allowed": effective_policy.allow_project,
+                                        "limit": effective_policy.max_items_project,
+                                        "remaining": (
+                                            effective_policy.remaining_project_slots
+                                        ),
+                                        "accepted": (
+                                            effective_policy.max_items_project
+                                            - effective_policy.remaining_project_slots
+                                        ),
+                                    },
+                                    "moonmind": {
+                                        "allowed": effective_policy.allow_moonmind,
+                                        "limit": effective_policy.max_items_moonmind,
+                                        "remaining": (
+                                            effective_policy.remaining_moonmind_slots
+                                        ),
+                                        "accepted": (
+                                            effective_policy.max_items_moonmind
+                                            - effective_policy.remaining_moonmind_slots
+                                        ),
+                                    },
+                                },
+                                "gates": {
+                                    "moonmind": {
+                                        "severity": severity,
+                                        "severity_floor": (
+                                            effective_policy.min_severity_for_moonmind
+                                        ),
+                                        "severity_qualified": (
+                                            moonmind_severity_qualified
+                                        ),
+                                        "approved_tags": moonmind_tag_matches,
+                                        "qualified": wants_moonmind,
+                                    }
+                                },
+                                "delivery": {
+                                    "provider": delivery_provider,
+                                    "metadata": provider_payload,
+                                },
                             },
                         )
                         external_key = getattr(proposal, "external_key", None)
