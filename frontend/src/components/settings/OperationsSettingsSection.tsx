@@ -28,13 +28,33 @@ const WorkerSnapshotSchema = z.object({
         .array(
           z.object({
             action: z.string().optional(),
+            target: z.string().optional(),
             mode: z.string().nullable().optional(),
             reason: z.string().optional(),
+            actorUserId: z.string().nullable().optional(),
+            resultStatus: z.string().nullable().optional(),
+            signalStatus: z.string().nullable().optional(),
+            idempotencyKey: z.string().nullable().optional(),
             createdAt: z.string().optional(),
           }),
         )
         .optional(),
     })
+    .optional(),
+  commands: z
+    .array(
+      z.object({
+        id: z.string(),
+        label: z.string(),
+        target: z.string(),
+        impact: z.string(),
+        requiresConfirmation: z.boolean(),
+        requiredPermission: z.string(),
+        available: z.boolean(),
+        unavailableReason: z.string().nullable().optional(),
+        rollbackAction: z.string().nullable().optional(),
+      }),
+    )
     .optional(),
 });
 
@@ -204,6 +224,10 @@ function deploymentActionKey(action: DeploymentAction): string {
   );
 }
 
+function operationIdempotencyKey(action: string): string {
+  return `worker-${action}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function OperationsSettingsSection({
   workerPauseConfig,
 }: {
@@ -263,11 +287,13 @@ export function OperationsSettingsSection({
             action: 'pause';
             mode: string;
             reason: string;
+            idempotencyKey: string;
             confirmation?: string;
           }
         | {
             action: 'resume';
             reason: string;
+            idempotencyKey: string;
             forceResume?: boolean;
             confirmation?: string;
           },
@@ -585,6 +611,7 @@ export function OperationsSettingsSection({
       action: 'pause',
       mode: pauseMode,
       reason: pauseReason,
+      idempotencyKey: operationIdempotencyKey('pause'),
       confirmation: `Pause workers confirmed: ${pauseMode}`,
     });
   };
@@ -610,6 +637,7 @@ export function OperationsSettingsSection({
     actionMutation.mutate({
       action: 'resume',
       reason: resumeReason,
+      idempotencyKey: operationIdempotencyKey('resume'),
       forceResume,
       ...(forceResume ? { confirmation: 'Resume workers confirmed before drain complete' } : {}),
     });
@@ -617,6 +645,7 @@ export function OperationsSettingsSection({
 
   const system = snapshot?.system ?? {};
   const metrics = snapshot?.metrics ?? {};
+  const commands = snapshot?.commands ?? [];
   const isPaused = Boolean(system.workersPaused);
   const stateLabel = isPaused
     ? system.mode === 'quiesce'
@@ -1119,6 +1148,65 @@ export function OperationsSettingsSection({
               </section>
 
               <section className="rounded-3xl border border-slate-200 dark:border-slate-800 p-5">
+                <h4 className="text-base font-semibold text-slate-900 dark:text-white">
+                  Command catalog
+                </h4>
+                <div className="mt-4 space-y-3">
+                  {commands.length > 0 ? (
+                    commands.map((command) => (
+                      <div
+                        key={command.id}
+                        className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                              {command.label}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                              Target: {command.target}
+                            </div>
+                          </div>
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                              command.available
+                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+                            }`}
+                          >
+                            {command.available ? 'Available' : 'Unavailable'}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+                          {command.impact}
+                        </p>
+                        <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                          {command.requiresConfirmation
+                            ? 'Requires confirmation'
+                            : 'No confirmation required'}{' '}
+                          | Permission: {command.requiredPermission}
+                        </div>
+                        {command.unavailableReason ? (
+                          <div className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                            {command.unavailableReason}
+                          </div>
+                        ) : null}
+                        {command.rollbackAction ? (
+                          <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                            Rollback/resume: {command.rollbackAction}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                      No operation commands are advertised by this deployment.
+                    </p>
+                  )}
+                </div>
+              </section>
+
+              <section className="rounded-3xl border border-slate-200 dark:border-slate-800 p-5">
                 <h4 className="text-base font-semibold text-slate-900 dark:text-white">Recent actions</h4>
                 <div className="mt-4 space-y-3">
                   {snapshot?.audit?.latest && snapshot.audit.latest.length > 0 ? (
@@ -1131,9 +1219,24 @@ export function OperationsSettingsSection({
                           {(event.action || '-').toUpperCase()}
                           {event.mode ? ` | ${event.mode.toUpperCase()}` : ''}
                         </div>
+                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          Target: {event.target || 'workers'}
+                          {event.resultStatus ? ` | Result: ${event.resultStatus}` : ''}
+                          {event.signalStatus ? ` | Signal: ${event.signalStatus}` : ''}
+                        </div>
                         <div className="mt-1 text-sm text-slate-600 dark:text-slate-400">
                           {event.reason || '(no reason)'}
                         </div>
+                        {event.actorUserId ? (
+                          <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Actor: {event.actorUserId}
+                          </div>
+                        ) : null}
+                        {event.idempotencyKey ? (
+                          <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Idempotency: {event.idempotencyKey}
+                          </div>
+                        ) : null}
                         <time
                           dateTime={event.createdAt}
                           className="mt-2 block text-xs text-slate-500 dark:text-slate-400"

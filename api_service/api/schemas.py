@@ -310,6 +310,23 @@ class WorkerPauseMetricsModel(BaseModel):
     is_drained: bool = Field(..., alias="isDrained")
     metrics_source: str = Field("legacy", alias="metricsSource")
 
+
+class OperationCommandDescriptorModel(BaseModel):
+    """Discoverable Settings -> Operations command metadata."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    label: str
+    target: str
+    impact: str
+    requires_confirmation: bool = Field(..., alias="requiresConfirmation")
+    required_permission: str = Field(..., alias="requiredPermission")
+    available: bool
+    unavailable_reason: Optional[str] = Field(None, alias="unavailableReason")
+    rollback_action: Optional[str] = Field(None, alias="rollbackAction")
+
+
 class WorkerPauseAuditEventModel(BaseModel):
     """Append-only audit entry surfaced by the worker pause API."""
 
@@ -317,9 +334,13 @@ class WorkerPauseAuditEventModel(BaseModel):
 
     id: uuid.UUID = Field(..., alias="id")
     action: Literal["pause", "resume"] = Field(..., alias="action")
+    target: str = Field("workers", alias="target")
     mode: Optional[Literal["drain", "quiesce"]] = Field(None, alias="mode")
     reason: Optional[str] = Field(None, alias="reason")
     actor_user_id: Optional[uuid.UUID] = Field(None, alias="actorUserId")
+    result_status: Optional[str] = Field(None, alias="resultStatus")
+    signal_status: Optional[str] = Field(None, alias="signalStatus")
+    idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
     created_at: datetime = Field(..., alias="createdAt")
 
 class WorkerPauseAuditListModel(BaseModel):
@@ -338,6 +359,9 @@ class WorkerPauseSnapshotResponse(BaseModel):
 
     system: QueueSystemMetadataModel = Field(..., alias="system")
     metrics: WorkerPauseMetricsModel = Field(..., alias="metrics")
+    commands: list[OperationCommandDescriptorModel] = Field(
+        default_factory=list, alias="commands"
+    )
     audit: WorkerPauseAuditListModel = Field(
         default_factory=WorkerPauseAuditListModel, alias="audit"
     )

@@ -11,6 +11,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.schemas import (
+    OperationCommandDescriptorModel,
     QueueSystemMetadataModel,
     WorkerPauseAuditEventModel,
     WorkerPauseAuditListModel,
@@ -52,6 +53,7 @@ class WorkerOperationCommand(BaseModel):
     mode: str | None = None
     reason: str | None = None
     confirmation: str | None = None
+    idempotency_key: str = Field(..., alias="idempotencyKey")
     force_resume: bool = Field(False, alias="forceResume")
 
 
@@ -107,6 +109,7 @@ class SystemOperationsService:
                 isDrained=True,
                 metricsSource="temporal",
             ),
+            commands=self._command_descriptors(state),
             audit=WorkerPauseAuditListModel(latest=audit),
             signalStatus=failure_reason or signal_status,
         )
@@ -119,7 +122,7 @@ class SystemOperationsService:
     ) -> WorkerPauseSnapshotResponse:
         normalized = self._validate_command(command)
         actor_uuid = self._uuid_or_none(actor_user_id)
-        idempotency_key = self._idempotency_key(normalized, actor_uuid)
+        idempotency_key = self._idempotency_key(normalized)
         existing_audit = await self._audit_event_by_idempotency_key(idempotency_key)
         if existing_audit is not None:
             payload = (
@@ -127,6 +130,13 @@ class SystemOperationsService:
                 if isinstance(existing_audit.new_value_json, dict)
                 else {}
             )
+            existing_fingerprint = payload.get("commandFingerprint")
+            if existing_fingerprint != self._command_fingerprint(normalized):
+                raise SystemOperationValidationError(
+                    "worker_operation_idempotency_conflict",
+                    "Worker operation idempotency key was already used for a "
+                    "different command.",
+                )
             return await self.snapshot(
                 signal_status=str(payload.get("signalStatus") or "succeeded")
             )
@@ -144,15 +154,23 @@ class SystemOperationsService:
         await self._session.commit()
         return await self.snapshot(signal_status=signal_status)
 
-    def _validate_command(self, command: WorkerOperationCommand) -> WorkerOperationCommand:
+    def _validate_command(
+        self, command: WorkerOperationCommand
+    ) -> WorkerOperationCommand:
         action = str(command.action or "").strip().lower()
         reason = str(command.reason or "").strip()
         mode = str(command.mode or "").strip().lower() or None
         confirmation = str(command.confirmation or "").strip()
+        idempotency_key = str(command.idempotency_key or "").strip()
         if action not in {"pause", "resume"}:
             raise SystemOperationValidationError(
                 "worker_operation_invalid",
                 "Worker operation action is invalid.",
+            )
+        if not idempotency_key:
+            raise SystemOperationValidationError(
+                "worker_operation_idempotency_required",
+                "Worker operation idempotency key is required.",
             )
         if not reason:
             raise SystemOperationValidationError(
@@ -186,6 +204,7 @@ class SystemOperationsService:
             mode=mode,
             reason=reason,
             confirmation=confirmation or None,
+            idempotencyKey=idempotency_key,
             force_resume=bool(command.force_resume),
         )
 
@@ -194,7 +213,9 @@ class SystemOperationsService:
             if command.action == "pause":
                 if command.mode == "drain":
                     return "succeeded"
-                sender = getattr(self._temporal_service, "send_quiesce_pause_signal", None)
+                sender = getattr(
+                    self._temporal_service, "send_quiesce_pause_signal", None
+                )
                 if not callable(sender):
                     raise SystemOperationUnavailableError(
                         "worker_operation_unavailable",
@@ -298,9 +319,11 @@ class SystemOperationsService:
                     "target": "workers",
                     "mode": command.mode,
                     "status": status,
+                    "resultStatus": status,
                     "signalStatus": signal_status,
                     "requestedState": "paused" if state.workers_paused else "running",
                     "idempotencyKey": idempotency_key,
+                    "commandFingerprint": self._command_fingerprint(command),
                 },
                 redacted=False,
                 reason=command.reason,
@@ -367,13 +390,126 @@ class SystemOperationsService:
                 WorkerPauseAuditEventModel(
                     id=row.id,
                     action=action,
+                    target=str(payload.get("target") or "workers"),
                     mode=mode,
                     reason=row.reason,
                     actorUserId=row.actor_user_id,
+                    resultStatus=str(
+                        payload.get("resultStatus") or payload.get("status") or ""
+                    )
+                    or None,
+                    signalStatus=str(payload.get("signalStatus") or "") or None,
+                    idempotencyKey=str(payload.get("idempotencyKey") or "") or None,
                     createdAt=row.created_at,
                 )
             )
         return events
+
+    def _command_descriptors(
+        self, state: _QueueSystemMetadata
+    ) -> list[OperationCommandDescriptorModel]:
+        return [
+            OperationCommandDescriptorModel(
+                id="pause-workers",
+                label="Pause Workers",
+                target="workers",
+                impact="Blocks new worker claims or quiesces active workers.",
+                requiresConfirmation=True,
+                requiredPermission="operations.invoke",
+                available=not state.workers_paused,
+                unavailableReason=(
+                    "Workers are already paused." if state.workers_paused else None
+                ),
+                rollbackAction="resume-workers",
+            ),
+            OperationCommandDescriptorModel(
+                id="resume-workers",
+                label="Resume Workers",
+                target="workers",
+                impact="Allows workers to claim queued work again.",
+                requiresConfirmation=False,
+                requiredPermission="operations.invoke",
+                available=state.workers_paused,
+                unavailableReason=(
+                    None if state.workers_paused else "Workers are already running."
+                ),
+                rollbackAction=None,
+            ),
+            OperationCommandDescriptorModel(
+                id="drain-queue",
+                label="Drain Queue",
+                target="queue",
+                impact="Blocks new worker claims while running work finishes.",
+                requiresConfirmation=True,
+                requiredPermission="operations.invoke",
+                available=not state.workers_paused,
+                unavailableReason=(
+                    "Workers are already paused." if state.workers_paused else None
+                ),
+                rollbackAction="resume-workers",
+            ),
+            OperationCommandDescriptorModel(
+                id="quiesce-runtime-family",
+                label="Quiesce Runtime Family",
+                target="runtime-family",
+                impact="Stops new claims and signals active workers to pause.",
+                requiresConfirmation=True,
+                requiredPermission="operations.invoke",
+                available=not state.workers_paused,
+                unavailableReason=(
+                    "Workers are already paused." if state.workers_paused else None
+                ),
+                rollbackAction="resume-workers",
+            ),
+            OperationCommandDescriptorModel(
+                id="enable-maintenance-mode",
+                label="Enable Maintenance Mode",
+                target="scheduler",
+                impact="Prevents normal launch scheduling while maintenance is active.",
+                requiresConfirmation=True,
+                requiredPermission="operations.invoke",
+                available=False,
+                unavailableReason="Maintenance mode subsystem is not connected.",
+                rollbackAction=None,
+            ),
+            OperationCommandDescriptorModel(
+                id="disable-launch-scheduling",
+                label="Disable Launch Scheduling",
+                target="scheduler",
+                impact="Prevents new scheduled launches.",
+                requiresConfirmation=True,
+                requiredPermission="operations.invoke",
+                available=False,
+                unavailableReason=(
+                    "Launch scheduler command subsystem is not connected."
+                ),
+                rollbackAction=None,
+            ),
+            OperationCommandDescriptorModel(
+                id="update-operational-reason",
+                label="Update Operational Reason",
+                target="operations",
+                impact="Updates operator-visible reason text for the current state.",
+                requiresConfirmation=False,
+                requiredPermission="operations.invoke",
+                available=False,
+                unavailableReason=(
+                    "Operational reason command subsystem is not connected."
+                ),
+                rollbackAction=None,
+            ),
+            OperationCommandDescriptorModel(
+                id="set-operational-banner",
+                label="Set Operational Banner",
+                target="operations",
+                impact="Shows a temporary operator banner in Mission Control.",
+                requiresConfirmation=False,
+                requiredPermission="operations.invoke",
+                available=False,
+                unavailableReason="Operational banner subsystem is not connected.",
+                rollbackAction=None,
+            ),
+        ]
 
     def _metadata_from_payload(self, payload: dict[str, Any]) -> _QueueSystemMetadata:
         return _QueueSystemMetadata(
@@ -383,7 +519,9 @@ class SystemOperationsService:
             version=max(1, int(payload.get("version") or 1)),
             requested_by_user_id=self._uuid_or_none(payload.get("requestedByUserId")),
             requested_at=self._datetime_or_none(payload.get("requestedAt")),
-            updated_at=self._datetime_or_none(payload.get("updatedAt")) or self._timestamp(),
+            updated_at=(
+                self._datetime_or_none(payload.get("updatedAt")) or self._timestamp()
+            ),
         )
 
     def _timestamp(self) -> datetime:
@@ -417,13 +555,9 @@ class SystemOperationsService:
             return None
 
     @staticmethod
-    def _idempotency_key(command: WorkerOperationCommand, actor_user_id: UUID | None) -> str:
-        return "|".join(
-            [
-                "worker-operation",
-                command.action,
-                command.mode or "none",
-                str(actor_user_id or "anonymous"),
-                command.reason or "",
-            ]
-        )[:128]
+    def _idempotency_key(command: WorkerOperationCommand) -> str:
+        return command.idempotency_key[:128]
+
+    @staticmethod
+    def _command_fingerprint(command: WorkerOperationCommand) -> str:
+        return "|".join(["workers", command.action, command.mode or "none"])
