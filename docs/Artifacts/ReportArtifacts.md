@@ -665,7 +665,7 @@ The canonical server-side report surface is the bounded `reportProjection` block
 - `findingCounts` — bounded map (only present when the primary report metadata carries it)
 - `severityCounts` — bounded map (only present when the primary report metadata carries it)
 
-The projection is built server-side from canonical report semantics by `build_report_projection_summary` in `moonmind/workflows/temporal/report_artifacts.py` and hydrated in `api_service/api/routers/executions.py` via `_hydrate_execution_report_projection`. The model lives at `ExecutionReportProjectionModel` in `moonmind/schemas/temporal_models.py`. Mission Control's report-first UI consumes the latest `report.primary` directly via `GET /executions/{...}/artifacts?link_type=report.primary&latest_only=true` and degrades to the generic artifact list when none is present.
+The projection is built server-side from canonical report semantics by `build_report_projection_summary` in `moonmind/workflows/temporal/report_artifacts.py` and hydrated in `api_service/api/routers/executions.py` via `_hydrate_execution_report_projection`. The model lives at `ExecutionReportProjectionModel` in `moonmind/schemas/temporal_models.py`. Mission Control's report-first UI currently consumes the latest `report.primary` directly via `GET /executions/{...}/artifacts?link_type=report.primary&latest_only=true` (with `report.summary` fetched the same way) and degrades to the generic artifact list when none is present. Migrating Mission Control to read the bounded `reportProjection` refs from the execution detail payload — instead of issuing separate artifact queries — is **deferred future work** tracked alongside the dedicated `/report` endpoint in §18.2; the current direct-artifact path is the supported behavior until that migration lands.
 
 Rules:
 
@@ -675,7 +675,7 @@ Rules:
 
 ## 18.2 Dedicated `/report` endpoint (Deferred)
 
-A dedicated `GET /api/executions/{namespace}/{workflow_id}/{run_id}/report` projection is **deferred future work**, not an implementation gap. The MM-496 decision was that the bounded `reportProjection` on execution detail is sufficient for current Mission Control needs and that a dedicated endpoint would duplicate read-derived behavior already available through the standard artifact APIs (`GET /artifacts?link_type=report.*&latest_only=true`).
+A dedicated `GET /api/executions/{namespace}/{workflow_id}/{run_id}/report` projection is **deferred future work**, not an implementation gap. The MM-496 decision was that the bounded `reportProjection` on execution detail is sufficient for current Mission Control needs and that a dedicated endpoint would duplicate read-derived behavior already available through the standard artifact APIs. The execution-artifacts API treats `link_type` as an exact match, so clients that want the canonical report artifacts query per-link-type (for example `GET /artifacts?link_type=report.primary&latest_only=true` and `GET /artifacts?link_type=report.summary&latest_only=true`) or fall back to an unfiltered list plus client-side selection.
 
 If a dedicated endpoint is later added, it should:
 
