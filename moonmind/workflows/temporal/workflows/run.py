@@ -3135,6 +3135,14 @@ class MoonMindRunWorkflow:
                         failure_message = self._activity_result_failure_message(
                             execution_result
                         )
+                        provider_failure_summary = (
+                            self._activity_result_provider_failure_summary(
+                                execution_result
+                            )
+                        )
+                        operator_failure_summary = (
+                            provider_failure_summary or failure_message
+                        )
 
                         retryable = failure_message == "system_error" or (
                             failure_message == "execution_error"
@@ -3167,10 +3175,13 @@ class MoonMindRunWorkflow:
                             node_id,
                             status="failed",
                             updated_at=workflow.now(),
-                            summary=f"{tool_name} failed",
+                            summary=operator_failure_summary
+                            or f"{tool_name} failed",
                             last_error=failure_message,
                         )
                         if failure_mode == "FAIL_FAST":
+                            if provider_failure_summary:
+                                raise ValueError(provider_failure_summary)
                             detail = (
                                 f" with error '{failure_message}'"
                                 if failure_message
@@ -3686,6 +3697,69 @@ class MoonMindRunWorkflow:
                 return details.strip()
         return ""
 
+    def _activity_result_provider_failure_summary(self, result: Any) -> str | None:
+        outputs = self._get_from_result(result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return None
+
+        provider_failure = outputs.get("providerFailure")
+        if not isinstance(provider_failure, Mapping):
+            provider_failure = {}
+
+        def _first_text(*values: Any) -> str | None:
+            for value in values:
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return None
+
+        provider_error_code = _first_text(
+            outputs.get("providerErrorCode"),
+            provider_failure.get("providerErrorCode"),
+            outputs.get("provider_error_code"),
+            provider_failure.get("provider_error_code"),
+        )
+        retry_recommendation = _first_text(
+            outputs.get("retryRecommendation"),
+            provider_failure.get("retryRecommendation"),
+            outputs.get("retry_recommendation"),
+            provider_failure.get("retry_recommendation"),
+        )
+        if not provider_error_code and not retry_recommendation:
+            return None
+
+        reason = _first_text(
+            provider_failure.get("reason"),
+            outputs.get("summary"),
+            outputs.get("error"),
+            self._get_from_result(result, "summary"),
+        )
+        profile_id = _first_text(
+            outputs.get("profileId"),
+            outputs.get("profile_id"),
+            provider_failure.get("profileId"),
+            provider_failure.get("profile_id"),
+        )
+
+        normalized_code = (provider_error_code or "").strip().lower()
+        normalized_retry = (retry_recommendation or "").strip().lower()
+        if normalized_code == "401" or normalized_retry == "reauthenticate":
+            summary = "Provider authentication failed"
+        else:
+            summary = "Provider request failed"
+
+        if provider_error_code:
+            if provider_error_code.isdigit():
+                summary = f"{summary} with HTTP {provider_error_code}"
+            else:
+                summary = f"{summary} with provider error {provider_error_code}"
+        if profile_id:
+            summary = f"{summary} for profile {profile_id}"
+        if reason:
+            summary = f"{summary}: {reason}"
+        if retry_recommendation:
+            summary = f"{summary} (retryRecommendation: {retry_recommendation})"
+        return summary
+
     @staticmethod
     def _is_blocked_outcome_value(value: Any) -> bool:
         if not isinstance(value, str):
@@ -3961,6 +4035,11 @@ class MoonMindRunWorkflow:
                 break
 
         self._clear_jira_blocker_wait()
+        if skipped:
+            self._set_state(
+                STATE_EXECUTING,
+                summary="Jira blocker wait skipped by operator.",
+            )
         self._update_search_attributes()
         self._update_memo()
         return current_result, skipped
@@ -6155,12 +6234,20 @@ class MoonMindRunWorkflow:
             diagnostics_ref = result.get("diagnostics_ref") or result.get(
                 "diagnosticsRef"
             )
+            provider_error_code = result.get("provider_error_code") or result.get(
+                "providerErrorCode"
+            )
+            retry_recommendation = result.get("retry_recommendation") or result.get(
+                "retryRecommendation"
+            )
             metadata = result.get("metadata") or {}
         else:
             failure = getattr(result, "failure_class", None)
             summary = getattr(result, "summary", "") or ""
             output_refs = getattr(result, "output_refs", []) or []
             diagnostics_ref = getattr(result, "diagnostics_ref", None)
+            provider_error_code = getattr(result, "provider_error_code", None)
+            retry_recommendation = getattr(result, "retry_recommendation", None)
             metadata = getattr(result, "metadata", {}) or {}
 
         status = "FAILED" if failure else "COMPLETED"
@@ -6170,7 +6257,11 @@ class MoonMindRunWorkflow:
             "error": failure or "",
         }
         if diagnostics_ref:
-            outputs["diagnostics_ref"] = diagnostics_ref
+            outputs["diagnosticsRef"] = diagnostics_ref
+        if provider_error_code:
+            outputs["providerErrorCode"] = provider_error_code
+        if retry_recommendation:
+            outputs["retryRecommendation"] = retry_recommendation
         outputs.update(metadata)
 
         return {

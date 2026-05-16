@@ -1,7 +1,7 @@
 # Report Artifacts
 
-Status: Adopted (implemented)  
-Owners: MoonMind Platform + Mission Control  
+Status: Adopted (implemented)
+Owners: MoonMind Platform + Mission Control
 Last updated: 2026-05-15
 
 The core contract in this document — `report.*` link types, the compact `report_bundle_v = 1` workflow result, the `reportProjection` execution-detail summary, retention defaults, the Mission Control report-first surface, and the report/observability separation — is implemented across the specs called out in section 22. Sections that are still future work (a dedicated `/report` endpoint, stronger evidence grouping semantics, multi-step task-level projections) are marked **Deferred** inline.
@@ -95,22 +95,22 @@ Instead:
 
 ## 4. Goals
 
-1. **First-class final deliverables**  
+1. **First-class final deliverables**
    MoonMind should be able to represent “this workflow produced a report” as a clear, queryable end state.
 
-2. **Bundle-friendly structure**  
+2. **Bundle-friendly structure**
    Report workflows should be able to publish a human-readable report, structured findings, and evidence without collapsing everything into one opaque blob.
 
-3. **Artifact-first durability**  
+3. **Artifact-first durability**
    Reports must survive refreshes, reruns, worker restarts, and ended runs without depending on in-memory process state or workflow payload bloat.
 
-4. **Safe presentation**  
+4. **Safe presentation**
    Sensitive reports should support preview-only or restricted raw access using the existing artifact presentation model.
 
-5. **Workflow compatibility**  
+5. **Workflow compatibility**
    Unit-test, benchmark, pentest, compliance, and similar workflows should all fit one report contract without forcing one report schema onto all producers.
 
-6. **Clear separation of concerns**  
+6. **Clear separation of concerns**
    Reports, evidence, and observability should remain related but distinct surfaces.
 
 ---
@@ -691,16 +691,16 @@ MoonMind does not need a flag-day migration.
 
 Recommended rollout:
 
-1. **Phase 1**  
+1. **Phase 1**
    Recognize report intent through metadata conventions and existing artifact APIs.
 
-2. **Phase 2**  
+2. **Phase 2**
    Add explicit `report.*` link types and UI report surfacing.
 
-3. **Phase 3**  
+3. **Phase 3**
    Standardize a compact report bundle result contract for report-producing workflows.
 
-4. **Phase 4**  
+4. **Phase 4**
    Add report-aware projections, filters, retention defaults, and pinning affordances where useful.
 
 During migration:
@@ -715,22 +715,22 @@ During migration:
 
 The questions that were open in the Draft revision are resolved as follows. Items kept open are explicitly marked **Deferred** with the reason.
 
-1. **`report_type` is producer-defined with conventions, not an enum.**  
+1. **`report_type` is producer-defined with conventions, not an enum.**
    Producers set `report_type` to a stable identifier (e.g. `unit_test_report`, `coverage_report`, `security_pentest_report`, `benchmark_report`). The runtime validates it as a bounded string only — it does not enforce membership in a closed enum. Workflow rollouts under `REPORT_WORKFLOW_MAPPINGS` in `moonmind/workflows/temporal/report_artifacts.py` codify the conventions for the families we ship and can be extended without changing the contract.
 
-2. **Auto-pinning of final reports is opt-in, not default.**  
+2. **Auto-pinning of final reports is opt-in, not default.**
    The artifact retention defaults in section 15.1 already give `report.primary` and `report.summary` `long` retention, which is the durability guarantee operators need. Auto-pin remains a per-workflow product policy decision; the platform exposes pin/unpin through the existing artifact API and does not auto-pin from the report contract itself.
 
-3. **No dedicated `/report` endpoint is shipped; `reportProjection` is the canonical surface.**  
+3. **No dedicated `/report` endpoint is shipped; `reportProjection` is the canonical surface.**
    See section 18.2. This is **Deferred** future work.
 
-4. **`report.export` is the rendered/alternate-export class; the source report stays as `report.primary`.**  
+4. **`report.export` is the rendered/alternate-export class; the source report stays as `report.primary`.**
    `report.primary` is the canonical human-facing report (typically Markdown or text). `report.export` is reserved for alternate rendered exports such as PDF or HTML. Producers should not collapse a PDF export into `report.primary` when an editable or source-format report is also available.
 
-5. **Evidence grouping uses existing bounded metadata; richer grouping (`finding_id`, `section_id`) is Deferred.**  
+5. **Evidence grouping uses existing bounded metadata; richer grouping (`finding_id`, `section_id`) is Deferred.**
    Today, `report.evidence` artifacts may carry `step_id`, `attempt`, and `scope` to group evidence by execution step. Stronger evidence-to-finding linkage (`finding_id`, `section_id`) is deferred until a concrete producer (typically a pentest workflow) needs it; when added, those keys must remain bounded metadata and must not embed raw finding content.
 
-6. **Multi-step tasks: per-step reports live as step-scoped artifacts; one task-level final report projection is Deferred.**  
+6. **Multi-step tasks: per-step reports live as step-scoped artifacts; one task-level final report projection is Deferred.**
    The current `reportProjection` is per-execution. Per-step reports are already addressable through `step_id`/`attempt` metadata and the standard artifact APIs. A separate task-level (multi-execution) report projection is **Deferred** and would be added alongside, not in place of, the per-execution projection.
 
 ---
