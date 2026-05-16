@@ -1803,7 +1803,7 @@ class CodexManagedSessionRuntime:
             try:
                 response = client.request("thread/turns/items/list", params)
             except RuntimeError:
-                return ""
+                return assistant_text
 
             text = self._assistant_text_from_items(response.get("data"))
             if text:
