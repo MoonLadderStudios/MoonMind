@@ -4615,7 +4615,11 @@ class MoonMindRunWorkflow:
 
     @staticmethod
     def _is_successful_jira_story_output(*, mode: str, status: str) -> bool:
-        return mode == "jira" and status in {"jira_created", "jira_partial"}
+        return mode == "jira" and status in {
+            "jira_created",
+            "jira_partial",
+            "jira_noop",
+        }
 
     def _record_execution_context(self, *, node_id: str, execution_result: Any) -> None:
         outputs = self._get_from_result(execution_result, "outputs")
