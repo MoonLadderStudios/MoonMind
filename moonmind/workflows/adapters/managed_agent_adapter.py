@@ -40,6 +40,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
+    ManagedAgentRuntimeProfile,
     ManagedRunRecord,
     ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
@@ -205,6 +206,14 @@ def build_managed_profile_launch_context(
     """Build deterministic launch metadata safe to compute in workflow code."""
 
     del workflow_id  # Reserved for activity-side shaping.
+    runtime_profile = profile.get("runtime_profile") or profile.get("runtimeProfile")
+    if runtime_profile is not None:
+        if not isinstance(runtime_profile, Mapping):
+            raise ValueError(
+                "runtime_profile must be a mapping of profile fields; "
+                "non-object runtime profiles cannot satisfy launch invariants"
+            )
+        ManagedAgentRuntimeProfile.model_validate(runtime_profile)
     credential_source = str(
         profile.get("credential_source") or default_credential_source
     ).strip() or default_credential_source
