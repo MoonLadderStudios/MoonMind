@@ -5914,6 +5914,11 @@ def test_describe_execution_skips_live_progress_query_for_terminal_runs() -> Non
             new_callable=AsyncMock,
         ) as load_progress,
         patch(
+            "api_service.api.routers.executions._enrich_execution_merge_automation",
+            new_callable=AsyncMock,
+            side_effect=lambda execution, **_kwargs: execution,
+        ) as enrich_merge_automation,
+        patch(
             "api_service.api.routers.executions._hydrate_execution_report_projection",
             side_effect=passthrough_report_projection,
         ),
@@ -5927,6 +5932,7 @@ def test_describe_execution_skips_live_progress_query_for_terminal_runs() -> Non
     assert payload["closeStatus"] == "failed"
     assert payload["progress"] is None
     load_progress.assert_not_awaited()
+    enrich_merge_automation.assert_awaited_once()
 
 def test_describe_execution_steps_href_uses_configured_detail_endpoint(monkeypatch) -> None:
     monkeypatch.setattr(

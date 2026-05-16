@@ -6604,16 +6604,17 @@ async def describe_execution(
     execution = _serialize_execution(record, user=user)
     execution = await _enrich_execution_dependencies(execution, service=service)
     execution = await _hydrate_provider_profile_metadata(execution, session)
-    if _execution_uses_live_workflow_queries(execution):
-        progress, queried_run_id = await _load_execution_progress(
-            temporal_client=temporal_client,
-            workflow_id=canonical_workflow_id,
-        )
-        update: dict[str, object] = {"progress": progress}
-        if queried_run_id:
-            update["run_id"] = queried_run_id
-            update["temporal_run_id"] = queried_run_id
-        execution = execution.model_copy(update=update)
+    if execution.workflow_type == "MoonMind.Run":
+        if _execution_uses_live_workflow_queries(execution):
+            progress, queried_run_id = await _load_execution_progress(
+                temporal_client=temporal_client,
+                workflow_id=canonical_workflow_id,
+            )
+            update: dict[str, object] = {"progress": progress}
+            if queried_run_id:
+                update["run_id"] = queried_run_id
+                update["temporal_run_id"] = queried_run_id
+            execution = execution.model_copy(update=update)
         execution = await _enrich_execution_merge_automation(
             execution,
             temporal_client=temporal_client,
