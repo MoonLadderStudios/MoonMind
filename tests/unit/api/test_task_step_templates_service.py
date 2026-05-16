@@ -2371,16 +2371,21 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
                 context={},
             )
 
-            assert "MM-742" in expanded["steps"][0]["instructions"]
-            assert expanded["steps"][1]["tool"]["id"] == "jira.check_blockers"
-            assert expanded["steps"][1]["tool"]["inputs"] == {
+            assert expanded["steps"][0]["tool"]["id"] == "jira.load_preset_brief"
+            assert expanded["steps"][0]["tool"]["inputs"] == {"issueKey": "MM-742"}
+            assert expanded["steps"][1]["skill"]["id"] == "auto"
+            assert (
+                expanded["steps"][1]["title"] == "Assess existing implementation state"
+            )
+            assert "MM-742" in expanded["steps"][2]["instructions"]
+            assert expanded["steps"][2]["tool"]["id"] == "jira.check_blockers"
+            assert expanded["steps"][2]["tool"]["inputs"] == {
                 "targetIssueKey": "MM-742",
                 "blockerPreflight": {
                     "targetIssueKey": "MM-742",
                     "linkType": "Blocks",
                 },
             }
-            assert expanded["steps"][2]["tool"]["inputs"] == {"issueKey": "MM-742"}
             assert expanded["appliedTemplate"]["inputs"]["jira_issue_key"] == "MM-742"
 
 async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path):
