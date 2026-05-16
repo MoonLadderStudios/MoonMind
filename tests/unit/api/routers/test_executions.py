@@ -5886,6 +5886,54 @@ def test_describe_execution_leaves_progress_null_when_query_fails() -> None:
     assert payload["stepsHref"] == "/api/executions/mm:wf-1/steps"
     assert payload["progress"] is None
 
+def test_describe_execution_skips_live_progress_query_for_terminal_runs() -> None:
+    from api_service.db.models import TemporalExecutionCloseStatus
+
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.close_status = TemporalExecutionCloseStatus.FAILED
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        progress={
+            "total": 99,
+            "failed": 99,
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+
+    async def passthrough_report_projection(execution, **_kwargs):
+        return execution
+
+    with (
+        patch(
+            "api_service.api.routers.executions._load_execution_progress",
+            new_callable=AsyncMock,
+        ) as load_progress,
+        patch(
+            "api_service.api.routers.executions._enrich_execution_merge_automation",
+            new_callable=AsyncMock,
+            side_effect=lambda execution, **_kwargs: execution,
+        ) as enrich_merge_automation,
+        patch(
+            "api_service.api.routers.executions._hydrate_execution_report_projection",
+            side_effect=passthrough_report_projection,
+        ),
+        TestClient(app) as test_client,
+    ):
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["temporalStatus"] == "failed"
+    assert payload["closeStatus"] == "failed"
+    assert payload["progress"] is None
+    load_progress.assert_not_awaited()
+    enrich_merge_automation.assert_awaited_once()
+
 def test_describe_execution_steps_href_uses_configured_detail_endpoint(monkeypatch) -> None:
     monkeypatch.setattr(
         settings.temporal_dashboard,

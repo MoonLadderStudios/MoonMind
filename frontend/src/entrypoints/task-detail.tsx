@@ -1543,6 +1543,22 @@ const TERMINAL_RUN_STATUSES = new Set([
   'timed_out',
 ]);
 
+function isExecutionTerminal(
+  execution: z.infer<typeof ExecutionDetailSchema> | null | undefined,
+): boolean {
+  if (!execution) {
+    return false;
+  }
+  const lifecycleState = (execution.rawState || execution.state || execution.status || '').toLowerCase();
+  const temporalStatus = (execution.temporalStatus || execution.closeStatus || '').toLowerCase();
+  return Boolean(
+    execution.closedAt ||
+      TERMINAL_STATES.has(lifecycleState) ||
+      TERMINAL_RUN_STATUSES.has(lifecycleState) ||
+      TERMINAL_RUN_STATUSES.has(temporalStatus),
+  );
+}
+
 function usePageVisibility() {
   const [isVisible, setIsVisible] = useState(!document.hidden);
 
@@ -3927,10 +3943,15 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       return ExecutionDetailSchema.parse(await response.json());
     },
     enabled: Boolean(encodedTaskId),
-    refetchInterval: liveUpdates ? detailPoll : false,
+    refetchInterval: (query) => (
+      liveUpdates && !isExecutionTerminal(query.state.data)
+        ? detailPoll
+        : false
+    ),
   });
 
   const execution = detailQuery.data;
+  const isTerminalExecution = isExecutionTerminal(execution);
   const workflowId = execution?.workflowId || execution?.taskId || taskId || '';
   const runId = execution?.temporalRunId || execution?.runId || '';
   const namespace = execution?.namespace || '';
@@ -3973,7 +3994,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     queryKey: ['task-detail-steps', workflowId, execution?.stepsHref],
     queryFn: () => fetchStepLedger(String(execution?.stepsHref || '')),
     enabled: Boolean(execution?.stepsHref),
-    refetchInterval: liveUpdates && execution?.stepsHref ? detailPoll : false,
+    refetchInterval: liveUpdates && execution?.stepsHref && !isTerminalExecution ? detailPoll : false,
   });
   const latestRunId = stepsQuery.data?.runId || runId;
 
@@ -3990,7 +4011,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     enabled:
       Boolean(namespace && workflowId && latestRunId)
       && (!execution?.stepsHref || stepsQuery.isSuccess || stepsQuery.isError),
-    refetchInterval: liveUpdates && namespace && workflowId && latestRunId ? detailPoll : false,
+    refetchInterval: liveUpdates && namespace && workflowId && latestRunId && !isTerminalExecution
+      ? detailPoll
+      : false,
   });
 
   const latestReportQuery = useQuery({
@@ -4006,14 +4029,16 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     enabled:
       Boolean(namespace && workflowId && latestRunId)
       && (!execution?.stepsHref || stepsQuery.isSuccess || stepsQuery.isError),
-    refetchInterval: liveUpdates && namespace && workflowId && latestRunId ? detailPoll : false,
+    refetchInterval: liveUpdates && namespace && workflowId && latestRunId && !isTerminalExecution
+      ? detailPoll
+      : false,
   });
 
   const runSummaryQuery = useQuery({
     queryKey: ['task-detail-run-summary', summaryArtifactRef],
     queryFn: () => fetchRunSummaryArtifact(payload.apiBase, summaryArtifactRef),
     enabled: Boolean(summaryArtifactRef),
-    refetchInterval: liveUpdates && summaryArtifactRef ? detailPoll : false,
+    refetchInterval: liveUpdates && summaryArtifactRef && !isTerminalExecution ? detailPoll : false,
   });
   const inboundRemediationsQuery = useQuery({
     queryKey: ['task-detail-remediations', workflowId, 'inbound'],
@@ -4374,7 +4399,6 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       },
     );
   };
-  const isTerminalExecution = TERMINAL_STATES.has(execution?.rawState || execution?.state || '');
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
   const canShowEditTask = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
   const canFailedStepResume = Boolean(actions?.canResumeFromFailedStep);
