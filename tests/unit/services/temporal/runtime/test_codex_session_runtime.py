@@ -439,6 +439,16 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
         response.metadata["reason"]
         == "codex app-server turn/completed produced no assistant output"
     )
+    assert response.metadata["failureCause"] == "app_server_protocol_empty_turn"
+    assert response.metadata["retryRecommendedAction"] == "clear_session"
+    evidence = response.metadata["turnFailureEvidence"]
+    assert evidence["failureCause"] == "app_server_protocol_empty_turn"
+    assert evidence["session"]["vendorTurnId"] == response.turn_id
+    assert evidence["threadPayloadSummary"]["activeTurn"]["found"] is True
+    assert any(
+        entry["direction"] == "request" and entry["method"] == "turn/start"
+        for entry in evidence["appServerRpcTrace"]
+    )
 
     handle = runtime.session_status(
         CodexManagedSessionLocator(
@@ -766,10 +776,15 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
     )
 
     assert response.status == "failed"
-    assert response.metadata == {
-        "failureClass": "transient",
-        "reason": "codex app-server task_complete produced no assistant output",
-    }
+    assert response.metadata["failureClass"] == "transient"
+    assert (
+        response.metadata["reason"]
+        == "codex app-server task_complete produced no assistant output"
+    )
+    assert response.metadata["failureCause"] == "app_server_protocol_empty_turn"
+    evidence = response.metadata["turnFailureEvidence"]
+    assert evidence["rolloutScan"]["sawTaskComplete"] is True
+    assert evidence["rolloutScan"]["entriesReferencingTurn"] >= 1
     handle = runtime.session_status(
         CodexManagedSessionLocator(
             sessionId="sess-1",

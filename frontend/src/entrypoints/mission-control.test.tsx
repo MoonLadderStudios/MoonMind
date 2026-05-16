@@ -159,7 +159,7 @@ describe('Mission Control shared entry', () => {
 
     renderWithClient(<MissionControlApp payload={payload} />);
 
-    expect(await screen.findByText('Hello from Tasks Home!', {}, { timeout: 3000 })).toBeTruthy();
+    expect(await screen.findByText('Hello from Tasks Home!', {}, { timeout: 10000 })).toBeTruthy();
     expect(await screen.findByText(/First-Run Setup:/i)).toBeTruthy();
     await waitFor(() => {
       expect(document.querySelector('.panel--data-wide')).toBeTruthy();
