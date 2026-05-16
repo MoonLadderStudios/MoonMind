@@ -245,6 +245,27 @@ class TestPushWorkspaceBranch:
         # Path must be relative so that ':' in run ids does not break parsing.
         assert contents == ["../../../git-objects"]
 
+    def test_recover_orphan_object_stores_accepts_sha256_loose_objects(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "mm:run-1" / "repo"
+        (workspace / ".git" / "objects" / "info").mkdir(parents=True)
+        sibling = tmp_path / "mm:run-1" / "git-objects-sha256"
+        (sibling / "6d").mkdir(parents=True)
+        (sibling / "6d" / ("9" * 62)).write_bytes(b"x")
+
+        TemporalAgentRuntimeActivities._recover_orphan_workspace_object_stores(
+            str(workspace)
+        )
+
+        alternates_path = workspace / ".git" / "objects" / "info" / "alternates"
+        assert alternates_path.is_file()
+        assert (
+            alternates_path.read_text(encoding="utf-8").splitlines()
+            == ["../../../git-objects-sha256"]
+        )
+
     def test_recover_orphan_object_stores_appends_without_duplicating(
         self,
         tmp_path: Path,

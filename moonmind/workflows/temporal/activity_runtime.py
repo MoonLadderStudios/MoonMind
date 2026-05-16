@@ -6244,7 +6244,7 @@ class TemporalAgentRuntimeActivities:
         """Return True when ``directory`` contains git-style loose objects.
 
         A git loose-objects directory has two-character hex subdirectories
-        (e.g. ``6d/``) whose children are 38-character hex blob filenames.
+        (e.g. ``6d/``) whose children are SHA-1 or SHA-256 hex blob filenames.
         Also accepted as a positive signal: a ``pack/`` subdirectory with at
         least one ``.pack`` file. Both signals are evaluated cheaply without
         walking the full tree.
@@ -6257,6 +6257,7 @@ class TemporalAgentRuntimeActivities:
             return False
 
         hex_chars = set("0123456789abcdef")
+        loose_object_name_lengths = {38, 62}
         for entry in entries:
             name = entry.name
             if entry.is_dir() and name == "pack":
@@ -6277,7 +6278,7 @@ class TemporalAgentRuntimeActivities:
                         cname = child.name
                         if (
                             child.is_file()
-                            and len(cname) == 38
+                            and len(cname) in loose_object_name_lengths
                             and all(c in hex_chars for c in cname.lower())
                         ):
                             return True
@@ -6345,34 +6346,36 @@ class TemporalAgentRuntimeActivities:
             except OSError:
                 continue
 
+        additions: list[str] = []
         try:
-            siblings = list(workspace_parent.iterdir())
+            siblings = workspace_parent.iterdir()
+            for sibling in siblings:
+                try:
+                    sibling_resolved = sibling.resolve()
+                except OSError:
+                    continue
+                if sibling_resolved == workspace_resolved:
+                    continue
+                if sibling_resolved == objects_dir_resolved:
+                    continue
+                if sibling_resolved in registered:
+                    continue
+                if (
+                    not TemporalAgentRuntimeActivities
+                    ._looks_like_git_loose_objects_dir(sibling)
+                ):
+                    continue
+                try:
+                    relative = os.path.relpath(
+                        sibling_resolved,
+                        objects_dir_resolved,
+                    )
+                except ValueError:
+                    relative = str(sibling_resolved)
+                additions.append(relative)
+                registered.add(sibling_resolved)
         except OSError:
             return
-
-        additions: list[str] = []
-        for sibling in siblings:
-            try:
-                sibling_resolved = sibling.resolve()
-            except OSError:
-                continue
-            if sibling_resolved == workspace_resolved:
-                continue
-            if sibling_resolved == objects_dir_resolved:
-                continue
-            if sibling_resolved in registered:
-                continue
-            if (
-                not TemporalAgentRuntimeActivities
-                ._looks_like_git_loose_objects_dir(sibling)
-            ):
-                continue
-            try:
-                relative = os.path.relpath(sibling_resolved, objects_dir_resolved)
-            except ValueError:
-                relative = str(sibling_resolved)
-            additions.append(relative)
-            registered.add(sibling_resolved)
 
         if not additions:
             return
