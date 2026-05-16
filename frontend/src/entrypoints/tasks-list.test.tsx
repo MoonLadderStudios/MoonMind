@@ -769,7 +769,14 @@ describe('Tasks List Entrypoint', () => {
         '/api/executions?source=temporal&pageSize=50&scope=tasks&stateIn=completed%2Cfailed',
       );
     });
-    expect(screen.getByRole('button', { name: 'Status filter: completed +1' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Status filter: completed, failed' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Status filter: completed \+1/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Status filter: completed, failed' }));
+    const selectedStatuses = screen.getByLabelText('Selected status filters');
+    expect(selectedStatuses.textContent).toContain('completed');
+    expect(selectedStatuses.textContent).toContain('failed');
+    expect(selectedStatuses.textContent).not.toContain('canceled');
   });
 
   it('clears stale cursor state when the page size changes', async () => {

@@ -519,16 +519,24 @@ function FilterPillMultiSelect({
 }
 
 function filterSummary(field: FilterField, filters: ColumnFilters): string {
-  const summarizeValues = (filter: ValueFilter, formatter = (value: string) => value) => {
+  const summarizeValues = (
+    filter: ValueFilter,
+    formatter = (value: string) => value,
+    options: { exactValues?: boolean } = {},
+  ) => {
     if (filter.blank === 'include' && filter.values.length === 0) return 'blank';
     if (filter.blank === 'exclude' && filter.values.length === 0) return 'not blank';
     if (filter.values.length === 0) return '';
+    if (options.exactValues) {
+      const labels = filter.values.map((value) => formatter(value)).join(', ');
+      return `${filter.mode === 'exclude' ? 'not ' : ''}${labels}`;
+    }
     const first = formatter(filter.values[0]!);
     const suffix = filter.values.length > 1 ? ` +${filter.values.length - 1}` : '';
     return `${filter.mode === 'exclude' ? 'not ' : ''}${first}${suffix}`;
   };
   if (field === 'taskId') return filters.taskId.contains?.trim() || '';
-  if (field === 'status') return summarizeValues(filters.status, formatStatusLabel);
+  if (field === 'status') return summarizeValues(filters.status, formatStatusLabel, { exactValues: true });
   if (field === 'targetRuntime') return summarizeValues(filters.targetRuntime, formatRuntimeLabel);
   if (field === 'targetSkill') return summarizeValues(filters.targetSkill);
   if (field === 'repository') {
