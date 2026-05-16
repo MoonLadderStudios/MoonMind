@@ -11,6 +11,7 @@
 - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 - [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)
+- [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
 - [`docs/ManagedAgents/OAuthTerminal.md`](./OAuthTerminal.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
@@ -244,18 +245,24 @@ MoonMind should treat these as different container roles:
 
 These container classes should stay separate in both docs and code.
 
-### 5.5 No direct Docker control from the managed session by default
+### 5.5 Managed session Docker capability
 
-A managed session may discover that it needs a specialized toolchain, but the session container should not receive unrestricted Docker daemon access by default.
+A managed session may need containerized work — repository tests, build toolchains, short-lived application containers — and the default way to provide it is the **per-session Docker sidecar** defined in [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md).
 
-Instead:
+In the sidecar topology:
 
-- the session requests a MoonMind-owned capability,
-- MoonMind launches an approved workload container through its controlled Docker boundary,
-- workload results return as normal tool outputs and artifacts,
-- workload identity remains separate from session identity.
+- the session container holds the Docker CLI only,
+- a sibling sidecar container holds a private Docker daemon scoped to that session,
+- the workspace is mounted at the same absolute path in both containers,
+- the host Docker socket is never exposed,
+- MoonMind deployment credentials never reach the session or its sidecar,
+- the daemon, its graph storage, and any containers it ran are destroyed at session end.
 
-This preserves the security boundary between session continuity and generalized container launching.
+This means a session may run ordinary `docker run`, `docker build`, and `docker compose` commands against its own private daemon. The session still cannot see other sessions' containers, cannot touch MoonMind application containers, and cannot reach the host daemon.
+
+Control-plane-launched workloads through the Docker-out-of-Docker (DooD) path defined in [`DockerOutOfDocker.md`](./DockerOutOfDocker.md) remain available, but are now reserved for the narrow set of operations that must originate from the control plane itself — MoonMind admin and update flows, and deliberately deployment-gated unrestricted execution classes. Ordinary repository test workloads use the sidecar, not the DooD tool surface.
+
+The security boundary between session continuity and generalized container launching is preserved by the sidecar topology rules, not by withholding the Docker CLI from the session.
 
 ### 5.6 Managed sessions are continuity caches, not durable truth
 
