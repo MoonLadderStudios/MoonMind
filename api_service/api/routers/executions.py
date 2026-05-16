@@ -3187,6 +3187,14 @@ async def _load_execution_progress(
         )
         return None, None
 
+
+def _execution_uses_live_workflow_queries(execution: ExecutionModel) -> bool:
+    if execution.workflow_type != "MoonMind.Run":
+        return False
+    if execution.close_status:
+        return False
+    return execution.temporal_status == "running"
+
 async def _load_execution_step_ledger(
     *,
     temporal_client: Client,
@@ -6597,15 +6605,16 @@ async def describe_execution(
     execution = await _enrich_execution_dependencies(execution, service=service)
     execution = await _hydrate_provider_profile_metadata(execution, session)
     if execution.workflow_type == "MoonMind.Run":
-        progress, queried_run_id = await _load_execution_progress(
-            temporal_client=temporal_client,
-            workflow_id=canonical_workflow_id,
-        )
-        update: dict[str, object] = {"progress": progress}
-        if queried_run_id:
-            update["run_id"] = queried_run_id
-            update["temporal_run_id"] = queried_run_id
-        execution = execution.model_copy(update=update)
+        if _execution_uses_live_workflow_queries(execution):
+            progress, queried_run_id = await _load_execution_progress(
+                temporal_client=temporal_client,
+                workflow_id=canonical_workflow_id,
+            )
+            update: dict[str, object] = {"progress": progress}
+            if queried_run_id:
+                update["run_id"] = queried_run_id
+                update["temporal_run_id"] = queried_run_id
+            execution = execution.model_copy(update=update)
         execution = await _enrich_execution_merge_automation(
             execution,
             temporal_client=temporal_client,

@@ -409,6 +409,68 @@ describe('Task Detail Entrypoint', () => {
     });
   });
 
+  it('does not poll terminal task detail surfaces after the initial load', async () => {
+    const terminalExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Terminal task',
+      summary: 'Execution finished',
+      status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      closeStatus: 'COMPLETED',
+      closedAt: '2026-04-09T00:00:05Z',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:05Z',
+      actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => terminalExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    const detailSurfaceCalls = () => fetchSpy.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => (
+        url.includes('/api/executions/test-123?source=temporal') ||
+        url.includes('/api/executions/test-123/steps') ||
+        url.includes('/artifacts')
+      ));
+
+    await waitFor(() => {
+      const urls = detailSurfaceCalls();
+      expect(urls.some((url) => url.includes('/api/executions/test-123?source=temporal'))).toBe(true);
+      expect(urls.some((url) => url.includes('/api/executions/test-123/steps'))).toBe(true);
+      expect(urls.filter((url) => url.includes('/artifacts')).length).toBeGreaterThanOrEqual(2);
+    });
+
+    const callsAfterInitialLoad = detailSurfaceCalls();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(detailSurfaceCalls()).toEqual(callsAfterInitialLoad);
+  });
+
   it('displays original slash instructions and missing runtime command metadata state', async () => {
     const mockExecution = {
       taskId: 'test-123',
