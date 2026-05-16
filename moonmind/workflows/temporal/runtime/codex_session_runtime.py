@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import shutil
 import signal
 import sqlite3
@@ -59,6 +60,25 @@ _LOG_RECOVERY_MAX_ROWS = 200
 _LOG_RECOVERY_PROVIDER_MAX_ROWS = 200
 _LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS = 1.0
 _LOG_RECOVERY_PROVIDER_MARKERS: tuple[str, ...] = provider_failure_search_markers()
+EMPTY_ASSISTANT_FAILURE_CAUSE = "app_server_protocol_empty_turn"
+_EMPTY_ASSISTANT_FAILURE_REASONS: tuple[str, ...] = (
+    "codex app-server task_complete produced no assistant output",
+    "codex app-server turn/completed produced no assistant output",
+)
+_DIAGNOSTIC_TEXT_MAX_CHARS = 1000
+_RPC_TRACE_MAX_ENTRIES = 80
+_ROLLUP_EVENT_TYPES_MAX = 24
+_LOG_EXCERPT_MAX_ROWS = 20
+_SECRET_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"ghp_[A-Za-z0-9_]{20,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"ATATT[0-9A-Za-z_-]{20,}"),
+    re.compile(
+        r"(?i)(authorization|token|password|api[_-]?key|secret)(\s*[=:]\s*)([^\s,;]+)"
+    ),
+)
 
 @dataclass(frozen=True)
 class _RolloutTurnScan:
@@ -66,6 +86,10 @@ class _RolloutTurnScan:
     assistant_text: str = ""
     saw_task_complete: bool = False
     error_text: str | None = None
+    rollout_path: str | None = None
+    entries_scanned: int = 0
+    entries_referencing_turn: int = 0
+    event_types: tuple[str, ...] = ()
 
 @dataclass(frozen=True)
 class _CompletedTurnInspection:
@@ -151,7 +175,35 @@ class CodexAppServerRpcClient:
         self._next_id = 1
         self._notifications: list[dict[str, Any]] = []
         self._responses: dict[int, dict[str, Any]] = {}
+        self._trace: list[dict[str, Any]] = []
         self._initialize_result: dict[str, Any] | None = None
+
+    def _record_trace(self, entry: Mapping[str, Any]) -> None:
+        self._trace.append(dict(entry))
+        if len(self._trace) > _RPC_TRACE_MAX_ENTRIES:
+            del self._trace[: len(self._trace) - _RPC_TRACE_MAX_ENTRIES]
+
+    def trace_summary(self) -> list[dict[str, Any]]:
+        return list(self._trace)
+
+    @staticmethod
+    def _message_summary(message: Mapping[str, Any]) -> dict[str, Any]:
+        summary: dict[str, Any] = {}
+        method = str(message.get("method") or "").strip()
+        if method:
+            summary["method"] = method
+        raw_id = message.get("id")
+        if isinstance(raw_id, int):
+            summary["id"] = raw_id
+        if "error" in message:
+            summary["hasError"] = True
+        result = message.get("result")
+        if isinstance(result, Mapping):
+            summary["resultKeys"] = sorted(str(key) for key in result.keys())[:12]
+        params = message.get("params")
+        if isinstance(params, Mapping):
+            summary["paramKeys"] = sorted(str(key) for key in params.keys())[:12]
+        return summary
 
     def _ensure_started(self) -> None:
         if self._process is not None:
@@ -233,10 +285,14 @@ class CodexAppServerRpcClient:
 
     def _stash_message(self, message: Mapping[str, Any]) -> None:
         if "method" in message:
+            self._record_trace(
+                {"direction": "notification", **self._message_summary(message)}
+            )
             self._notifications.append(dict(message))
             return
         raw_id = message.get("id")
         if isinstance(raw_id, int):
+            self._record_trace({"direction": "response", **self._message_summary(message)})
             self._responses[raw_id] = dict(message)
 
     def request(
@@ -249,6 +305,14 @@ class CodexAppServerRpcClient:
 
         message_id = self._next_id
         self._next_id += 1
+        self._record_trace(
+            {
+                "direction": "request",
+                "method": method,
+                "id": message_id,
+                "paramKeys": sorted(str(key) for key in dict(params or {}).keys())[:12],
+            }
+        )
         self._write_message(
             {
                 "jsonrpc": "2.0",
@@ -266,6 +330,9 @@ class CodexAppServerRpcClient:
                 message = self._read_message()
 
             if "method" in message:
+                self._record_trace(
+                    {"direction": "notification", **self._message_summary(message)}
+                )
                 self._notifications.append(message)
                 continue
 
@@ -275,10 +342,14 @@ class CodexAppServerRpcClient:
                 continue
 
             if "error" in message:
+                self._record_trace(
+                    {"direction": "response", **self._message_summary(message)}
+                )
                 raise RuntimeError(
                     f"codex app-server request {method} failed: {message['error']}"
                 )
             result = message.get("result")
+            self._record_trace({"direction": "response", **self._message_summary(message)})
             return result if isinstance(result, dict) else {}
 
     def initialize(self) -> dict[str, Any]:
@@ -640,6 +711,38 @@ class CodexManagedSessionRuntime:
                 parts.append(text.strip())
         return "\n".join(parts).strip()
 
+    @staticmethod
+    def _redact_diagnostic_text(value: Any, *, max_chars: int = _DIAGNOSTIC_TEXT_MAX_CHARS) -> str:
+        text = str(value or "")
+        for pattern in _SECRET_REDACTION_PATTERNS:
+            text = pattern.sub(
+                lambda match: (
+                    f"{match.group(1)}{match.group(2)}[REDACTED]"
+                    if match.lastindex and match.lastindex >= 2
+                    else "[REDACTED]"
+                ),
+                text,
+            )
+        if len(text) > max_chars:
+            return text[:max_chars] + "...[truncated]"
+        return text
+
+    @classmethod
+    def _diagnostic_value(cls, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                str(key): cls._diagnostic_value(nested)
+                for key, nested in value.items()
+                if str(key).lower() not in {"input", "instructions", "text"}
+            }
+        if isinstance(value, list):
+            return [cls._diagnostic_value(item) for item in value[:20]]
+        if isinstance(value, tuple):
+            return tuple(cls._diagnostic_value(item) for item in value[:20])
+        if isinstance(value, str):
+            return cls._redact_diagnostic_text(value)
+        return value
+
     @classmethod
     def _error_text_from_value(cls, value: Any) -> str | None:
         if isinstance(value, str):
@@ -744,6 +847,9 @@ class CodexManagedSessionRuntime:
         terminal_text = ""
         terminal_cutoff = None
         references_active_turn = False
+        entries_scanned = 0
+        entries_referencing_turn = 0
+        event_types: list[str] = []
         saw_task_complete = False
         error_text: str | None = None
         if turn_started_at is not None:
@@ -761,9 +867,11 @@ class CodexManagedSessionRuntime:
                     continue
                 if not isinstance(payload, Mapping):
                     continue
+                entries_scanned += 1
                 references_turn = self._payload_references_turn(payload, vendor_turn_id)
                 if references_turn:
                     references_active_turn = True
+                    entries_referencing_turn += 1
                     text = self._assistant_text_from_rollout_entry(payload)
                     if text:
                         last_text = text
@@ -784,6 +892,8 @@ class CodexManagedSessionRuntime:
                 if not isinstance(event_payload, Mapping):
                     continue
                 event_type = str(event_payload.get("type") or "").strip().lower()
+                if event_type and event_type not in event_types:
+                    event_types.append(event_type)
                 if event_type != "task_complete":
                     continue
                 saw_task_complete = True
@@ -801,6 +911,10 @@ class CodexManagedSessionRuntime:
             assistant_text=last_text or terminal_text,
             saw_task_complete=saw_task_complete,
             error_text=error_text,
+            rollout_path=rollout_path,
+            entries_scanned=entries_scanned,
+            entries_referencing_turn=entries_referencing_turn,
+            event_types=tuple(event_types[:_ROLLUP_EVENT_TYPES_MAX]),
         )
 
     @staticmethod
@@ -1261,6 +1375,180 @@ class CodexManagedSessionRuntime:
             if provider_rows_remaining <= 0:
                 break
         return None
+
+    def _recent_runtime_log_excerpts(
+        self,
+        *,
+        vendor_turn_id: str,
+        turn_started_at: float | None = None,
+    ) -> list[dict[str, Any]]:
+        if not vendor_turn_id:
+            return []
+        provider_timestamp_cutoff = self._sqlite_provider_timestamp_cutoff(
+            turn_started_at
+        )
+        excerpts: list[dict[str, Any]] = []
+        for log_path in sorted(
+            self._codex_home_path.glob("logs_*.sqlite"),
+            key=self._log_shard_sort_key,
+            reverse=True,
+        ):
+            if not log_path.is_file():
+                continue
+            try:
+                with sqlite3.connect(
+                    f"file:{log_path}?mode=ro",
+                    uri=True,
+                    timeout=_LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS,
+                ) as connection:
+                    column_rows = connection.execute("PRAGMA table_info(logs)").fetchall()
+                    if not column_rows:
+                        continue
+                    available_columns = {str(row[1]) for row in column_rows if len(row) > 1}
+                    text_column = next(
+                        (
+                            candidate
+                            for candidate in ("feedback_log_body", "message")
+                            if candidate in available_columns
+                        ),
+                        None,
+                    )
+                    if text_column is None:
+                        continue
+                    quoted_text_column = self._quoted_sqlite_identifier(text_column)
+                    where_clauses = [f"{quoted_text_column} LIKE ?"]
+                    params: list[Any] = []
+                    if provider_timestamp_cutoff is not None and "ts" in available_columns:
+                        quoted_ts_column = self._quoted_sqlite_identifier("ts")
+                        where_clauses.insert(0, f"{quoted_ts_column} >= ?")
+                        params.append(provider_timestamp_cutoff)
+                    params.append(f"%{vendor_turn_id}%")
+                    where = "WHERE " + " AND ".join(where_clauses)
+                    rows = connection.execute(
+                        (
+                            f"SELECT {quoted_text_column} FROM \"logs\" "
+                            f"{where} ORDER BY \"id\" DESC LIMIT ?"
+                        ),
+                        (*params, _LOG_RECOVERY_MAX_ROWS),
+                    ).fetchall()
+            except (ValueError, sqlite3.Error):
+                continue
+            for (raw_text,) in rows:
+                text = str(raw_text or "").strip()
+                excerpts.append(
+                    {
+                        "source": log_path.name,
+                        "text": self._redact_diagnostic_text(text, max_chars=500),
+                    }
+                )
+                if len(excerpts) >= _LOG_EXCERPT_MAX_ROWS:
+                    return excerpts
+        return excerpts
+
+    @classmethod
+    def _thread_payload_summary(
+        cls,
+        thread_payload: Mapping[str, Any],
+        *,
+        vendor_turn_id: str,
+    ) -> dict[str, Any]:
+        thread = thread_payload.get("thread")
+        if not isinstance(thread, Mapping):
+            return {"hasThread": False}
+        turns = thread.get("turns")
+        turn_count = len(turns) if isinstance(turns, list) else None
+        turn_payload = cls._find_turn_payload(
+            thread_payload,
+            vendor_turn_id=vendor_turn_id,
+        )
+        turn_summary: dict[str, Any] = {"found": isinstance(turn_payload, Mapping)}
+        if isinstance(turn_payload, Mapping):
+            items = turn_payload.get("items")
+            item_types: list[str] = []
+            assistant_items = 0
+            error_items = 0
+            if isinstance(items, list):
+                for item in items[:40]:
+                    if not isinstance(item, Mapping):
+                        continue
+                    item_type = str(item.get("type") or "").strip()
+                    if item_type:
+                        item_types.append(item_type)
+                    if item_type == "agentMessage":
+                        assistant_items += 1
+                    if "error" in item:
+                        error_items += 1
+            turn_summary.update(
+                {
+                    "status": cls._diagnostic_value(turn_payload.get("status")),
+                    "itemCount": len(items) if isinstance(items, list) else None,
+                    "itemTypes": item_types,
+                    "assistantItemCount": assistant_items,
+                    "errorItemCount": error_items,
+                    "errorText": cls._diagnostic_value(
+                        cls._error_text_from_value(turn_payload.get("error"))
+                    ),
+                }
+            )
+        return {
+            "hasThread": True,
+            "threadId": cls._diagnostic_value(thread.get("id")),
+            "threadStatusType": cls._thread_status_type(thread_payload),
+            "threadStatusReason": cls._diagnostic_value(
+                cls._thread_status_reason(thread_payload)
+            ),
+            "turnCount": turn_count,
+            "activeTurn": turn_summary,
+        }
+
+    @classmethod
+    def _rollout_scan_summary(cls, scan: _RolloutTurnScan | None) -> dict[str, Any] | None:
+        if scan is None:
+            return None
+        return {
+            "rolloutPath": cls._diagnostic_value(scan.rollout_path),
+            "entriesScanned": scan.entries_scanned,
+            "entriesReferencingTurn": scan.entries_referencing_turn,
+            "referencesTurn": scan.references_turn,
+            "sawTaskComplete": scan.saw_task_complete,
+            "eventTypes": list(scan.event_types),
+            "errorText": cls._diagnostic_value(scan.error_text),
+        }
+
+    def _turn_failure_evidence(
+        self,
+        *,
+        reason: str,
+        state: CodexSessionRuntimeState,
+        client: CodexAppServerRpcClient,
+        thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+        rollout_scan: _RolloutTurnScan | None,
+    ) -> dict[str, Any]:
+        return {
+            "schemaVersion": "v1",
+            "failureCause": EMPTY_ASSISTANT_FAILURE_CAUSE,
+            "reason": self._redact_diagnostic_text(reason),
+            "capturedAt": datetime.now(UTC).isoformat(),
+            "session": {
+                "sessionId": state.session_id,
+                "sessionEpoch": state.session_epoch,
+                "containerId": state.container_id,
+                "logicalThreadId": state.logical_thread_id,
+                "vendorThreadId": state.vendor_thread_id,
+                "vendorTurnId": vendor_turn_id,
+            },
+            "appServerRpcTrace": self._diagnostic_value(client.trace_summary()),
+            "threadPayloadSummary": self._thread_payload_summary(
+                thread_payload,
+                vendor_turn_id=vendor_turn_id,
+            ),
+            "rolloutScan": self._rollout_scan_summary(rollout_scan),
+            "runtimeLogExcerpts": self._recent_runtime_log_excerpts(
+                vendor_turn_id=vendor_turn_id,
+                turn_started_at=state.last_control_at,
+            ),
+        }
 
     def _reset_skill_outcome(self) -> None:
         """Remove any stale skill-outcome marker before a new turn begins.
@@ -1998,6 +2286,31 @@ class CodexManagedSessionRuntime:
             metadata["reason"] = error_text
         if status == "failed" and failure_class:
             metadata["failureClass"] = failure_class
+            if error_text in _EMPTY_ASSISTANT_FAILURE_REASONS:
+                evidence_rollout_scan = (
+                    completed_turn_inspection.rollout_scan
+                    if completed_turn_inspection is not None
+                    else None
+                )
+                if evidence_rollout_scan is None:
+                    evidence_rollout_scan = self._scan_rollout_for_turn(
+                        self._resolved_rollout_path(
+                            state=state,
+                            thread_payload=thread_payload,
+                        ),
+                        vendor_turn_id=vendor_turn_id,
+                        turn_started_at=state.last_control_at,
+                    )
+                metadata["failureCause"] = EMPTY_ASSISTANT_FAILURE_CAUSE
+                metadata["retryRecommendedAction"] = "clear_session"
+                metadata["turnFailureEvidence"] = self._turn_failure_evidence(
+                    reason=error_text,
+                    state=state,
+                    client=client,
+                    thread_payload=thread_payload,
+                    vendor_turn_id=vendor_turn_id,
+                    rollout_scan=evidence_rollout_scan,
+                )
         if disposition:
             metadata["disposition"] = disposition
         self._finalize_turn(

@@ -62,6 +62,9 @@ from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
 )
+from moonmind.workflows.temporal.runtime.codex_session_runtime import (
+    EMPTY_ASSISTANT_FAILURE_CAUSE,
+)
 from moonmind.workflow_docker_mode import (
     DEFAULT_WORKFLOW_DOCKER_MODE,
     normalize_workflow_docker_mode,
@@ -226,6 +229,36 @@ def _jira_skill_blocker_summary(
             default=default_summary,
         )
     return None
+
+def _application_error_metadata(error: ApplicationError) -> dict[str, Any]:
+    for detail in error.details:
+        if isinstance(detail, Mapping):
+            return dict(detail)
+    return {}
+
+def _turn_failure_metadata_from_activity_error(error: ApplicationError) -> dict[str, Any]:
+    metadata = _application_error_metadata(error)
+    raw_reason = str(error.message or "").strip() or None
+    metadata.setdefault("reason", raw_reason)
+    metadata.setdefault(
+        "failureClass",
+        "permanent" if error.type == "CodexPermanentTurnError" else "transient",
+    )
+    return metadata
+
+def _is_empty_assistant_turn_failure(metadata: Mapping[str, Any] | None) -> bool:
+    if not isinstance(metadata, Mapping):
+        return False
+    if metadata.get("failureCause") == EMPTY_ASSISTANT_FAILURE_CAUSE:
+        return True
+    reason = str(metadata.get("reason") or "").strip()
+    return reason in {
+        "codex app-server task_complete produced no assistant output",
+        "codex app-server turn/completed produced no assistant output",
+    }
+
+def _reset_thread_id_for_empty_turn(locator: CodexManagedSessionLocator) -> str:
+    return f"{locator.thread_id}:empty-output-reset"
 
 class CodexSessionRunFailedError(RuntimeError):
     """Raised when a Codex session run persisted a structured failed result."""
@@ -408,8 +441,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     workspace_path=workspace_path,
                 )
             )
-            try:
-                turn_response = await self._coerce_turn_response(
+            session_interventions: list[dict[str, Any]] = []
+
+            async def _send_current_turn() -> CodexManagedSessionTurnResponse:
+                return await self._coerce_turn_response(
                     self._send_turn(
                         SendCodexManagedSessionTurnRequest(
                             sessionId=current_locator.session_id,
@@ -420,22 +455,16 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         )
                     )
                 )
-            except ActivityError as exc:
-                turn_error = exc.cause if isinstance(exc.cause, ApplicationError) else None
-                if turn_error is None or turn_error.type not in (
-                    "CodexTransientTurnError",
-                    "CodexPermanentTurnError",
-                ):
-                    raise
-                raw_reason = str(turn_error.message or "").strip() or None
+
+            def _publish_activity_error_result(
+                turn_error: ApplicationError,
+                metadata: Mapping[str, Any],
+                publication: CodexManagedSessionArtifactsPublication | None,
+            ) -> CodexSessionRunFailedError:
+                raw_reason = str(metadata.get("reason") or turn_error.message or "").strip() or None
                 reason = _clamp_agent_run_result_summary(
                     raw_reason,
                     default="Codex managed-session turn failed",
-                )
-                publication = await self._publish_failure_artifacts(
-                    locator=current_locator,
-                    managed_run_id=binding.task_run_id,
-                    run_id=run_id,
                 )
                 failure_result = self._persist_failed_run_state(
                     run_id=run_id,
@@ -464,17 +493,98 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         else None
                     ),
                     turn_status="failed",
-                    turn_metadata={
-                        "reason": raw_reason,
-                        "failureClass": (
-                            "permanent"
-                            if turn_error.type == "CodexPermanentTurnError"
-                            else "transient"
-                        ),
-                    },
+                    turn_metadata=metadata,
                 )
-                failed_state_persisted = True
-                raise CodexSessionRunFailedError(reason, result=failure_result) from exc
+                return CodexSessionRunFailedError(reason, result=failure_result)
+
+            try:
+                turn_response = await _send_current_turn()
+            except ActivityError as exc:
+                turn_error = exc.cause if isinstance(exc.cause, ApplicationError) else None
+                if turn_error is None or turn_error.type not in (
+                    "CodexTransientTurnError",
+                    "CodexPermanentTurnError",
+                ):
+                    raise
+                turn_metadata = _turn_failure_metadata_from_activity_error(turn_error)
+                if (
+                    turn_error.type == "CodexTransientTurnError"
+                    and _is_empty_assistant_turn_failure(turn_metadata)
+                ):
+                    previous_locator = current_locator
+                    reset_thread_id = _reset_thread_id_for_empty_turn(previous_locator)
+                    reset_handle = await self.clear_session(
+                        binding=binding,
+                        new_thread_id=reset_thread_id,
+                        reason="retry_after_empty_assistant_output",
+                    )
+                    current_locator = self._locator_from_state(
+                        session_state=reset_handle.session_state,
+                        runtime_epoch=reset_handle.session_state.session_epoch,
+                    )
+                    current_active_turn_id = reset_handle.session_state.active_turn_id
+                    session_interventions.append(
+                        {
+                            "action": "clear_session",
+                            "reason": "retry_after_empty_assistant_output",
+                            "fromThreadId": previous_locator.thread_id,
+                            "toThreadId": current_locator.thread_id,
+                            "fromSessionEpoch": previous_locator.session_epoch,
+                            "toSessionEpoch": current_locator.session_epoch,
+                        }
+                    )
+                    try:
+                        turn_response = await _send_current_turn()
+                    except ActivityError as retry_exc:
+                        retry_error = (
+                            retry_exc.cause
+                            if isinstance(retry_exc.cause, ApplicationError)
+                            else None
+                        )
+                        if retry_error is None or retry_error.type not in (
+                            "CodexTransientTurnError",
+                            "CodexPermanentTurnError",
+                        ):
+                            raise
+                        retry_metadata = _turn_failure_metadata_from_activity_error(
+                            retry_error
+                        )
+                        retry_metadata["sessionInterventions"] = session_interventions
+                        retry_metadata["priorTurnFailure"] = turn_metadata
+                        publication = await self._publish_failure_artifacts(
+                            locator=current_locator,
+                            managed_run_id=binding.task_run_id,
+                            run_id=run_id,
+                        )
+                        failure_error = _publish_activity_error_result(
+                            retry_error,
+                            retry_metadata,
+                            publication,
+                        )
+                        failed_state_persisted = True
+                        raise failure_error from retry_exc
+                else:
+                    publication = await self._publish_failure_artifacts(
+                        locator=current_locator,
+                        managed_run_id=binding.task_run_id,
+                        run_id=run_id,
+                    )
+                    failure_error = _publish_activity_error_result(
+                        turn_error,
+                        turn_metadata,
+                        publication,
+                    )
+                    failed_state_persisted = True
+                    raise failure_error from exc
+            if session_interventions:
+                turn_response = turn_response.model_copy(
+                    update={
+                        "metadata": {
+                            **dict(turn_response.metadata or {}),
+                            "sessionInterventions": session_interventions,
+                        }
+                    }
+                )
             turn_id = turn_response.turn_id
             current_locator = self._locator_from_state(
                 session_state=turn_response.session_state,
@@ -587,6 +697,13 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     result_metadata["outcomeDisposition"] = disposition
                     if disposition_reason:
                         result_metadata["outcomeReason"] = disposition_reason
+                success_turn_metadata = {
+                    key: value
+                    for key, value in dict(turn_response.metadata or {}).items()
+                    if key in {"sessionInterventions"}
+                }
+                if success_turn_metadata:
+                    result_metadata["turnMetadata"] = success_turn_metadata
                 result = AgentRunResult(
                     outputRefs=output_refs,
                     summary=assistant_text,

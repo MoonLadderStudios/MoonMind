@@ -439,6 +439,16 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
         response.metadata["reason"]
         == "codex app-server turn/completed produced no assistant output"
     )
+    assert response.metadata["failureCause"] == "app_server_protocol_empty_turn"
+    assert response.metadata["retryRecommendedAction"] == "clear_session"
+    evidence = response.metadata["turnFailureEvidence"]
+    assert evidence["failureCause"] == "app_server_protocol_empty_turn"
+    assert evidence["session"]["vendorTurnId"] == response.turn_id
+    assert evidence["threadPayloadSummary"]["activeTurn"]["found"] is True
+    assert any(
+        entry["direction"] == "request" and entry["method"] == "turn/start"
+        for entry in evidence["appServerRpcTrace"]
+    )
 
     handle = runtime.session_status(
         CodexManagedSessionLocator(
@@ -766,10 +776,15 @@ def test_runtime_send_turn_fails_empty_task_complete_event(
     )
 
     assert response.status == "failed"
-    assert response.metadata == {
-        "failureClass": "transient",
-        "reason": "codex app-server task_complete produced no assistant output",
-    }
+    assert response.metadata["failureClass"] == "transient"
+    assert (
+        response.metadata["reason"]
+        == "codex app-server task_complete produced no assistant output"
+    )
+    assert response.metadata["failureCause"] == "app_server_protocol_empty_turn"
+    evidence = response.metadata["turnFailureEvidence"]
+    assert evidence["rolloutScan"]["sawTaskComplete"] is True
+    assert evidence["rolloutScan"]["entriesReferencingTurn"] >= 1
     handle = runtime.session_status(
         CodexManagedSessionLocator(
             sessionId="sess-1",
@@ -2101,6 +2116,41 @@ def test_runtime_extract_turn_error_from_logs_prefers_highest_numeric_shard(
     )
 
     assert runtime._extract_turn_error_from_logs("vendor-turn-1") == "latest shard"
+
+def test_runtime_recent_log_excerpts_only_include_active_turn(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", "-c", "raise SystemExit(0)"),
+    )
+    _write_fake_codex_logs(
+        request.codex_home_path,
+        entries=[
+            (
+                "session_loop{thread_id=vendor-thread-1}:turn{turn.id=other-turn}: "
+                "Turn error: unrelated prior failure"
+            ),
+            (
+                "session_loop{thread_id=vendor-thread-1}:turn{turn.id=vendor-turn-1}: "
+                "Turn error: active failure"
+            ),
+        ],
+    )
+
+    excerpts = runtime._recent_runtime_log_excerpts(vendor_turn_id="vendor-turn-1")
+
+    assert [entry["text"] for entry in excerpts] == [
+        "session_loop{thread_id=vendor-thread-1}:turn{turn.id=vendor-turn-1}: "
+        "Turn error: active failure"
+    ]
 
 def test_runtime_extract_turn_error_from_logs_recovers_provider_error_message(
     tmp_path: Path,
