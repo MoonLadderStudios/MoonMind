@@ -47,6 +47,8 @@ from moonmind.config.settings import settings
 from moonmind.workflows.skills.deployment_execution import (
     DeploymentUpdateExecutor,
     DeploymentUpdateLockManager,
+    FileDeploymentUpdateLockManager,
+    FileDesiredStateStore,
     HostDockerComposeRunner,
     InMemoryDesiredStateStore,
     InMemoryEvidenceWriter,
@@ -633,6 +635,18 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
     compose_file = (
         str(os.environ.get("MOONMIND_DEPLOYMENT_COMPOSE_FILE") or "").strip() or None
     )
+    desired_state_env_file = (
+        str(os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE") or "").strip()
+        or None
+    )
+    desired_state_json_file = (
+        str(os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE") or "").strip()
+        or None
+    )
+    lock_dir = (
+        str(os.environ.get("MOONMIND_DEPLOYMENT_LOCK_DIR") or "").strip()
+        or None
+    )
     project_name = (
         str(os.environ.get("MOONMIND_DEPLOYMENT_PROJECT_NAME") or "").strip()
         or "moonmind"
@@ -647,9 +661,22 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
     runner_local = (
         local_project_dir if local_project_dir != project_dir else None
     )
+    desired_state_store = (
+        FileDesiredStateStore(
+            env_file_path=desired_state_env_file,
+            json_file_path=desired_state_json_file,
+        )
+        if desired_state_env_file
+        else InMemoryDesiredStateStore()
+    )
+    lock_manager = (
+        FileDeploymentUpdateLockManager(lock_dir=lock_dir)
+        if lock_dir
+        else DeploymentUpdateLockManager()
+    )
     return DeploymentUpdateExecutor(
-        lock_manager=DeploymentUpdateLockManager(),
-        desired_state_store=InMemoryDesiredStateStore(),
+        lock_manager=lock_manager,
+        desired_state_store=desired_state_store,
         evidence_writer=InMemoryEvidenceWriter(),
         runner=HostDockerComposeRunner(
             project_dir=project_dir,
@@ -657,6 +684,7 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
             project_name=project_name,
             command_timeout_seconds=timeout_seconds,
             local_project_dir=runner_local,
+            env_file=desired_state_env_file,
         ),
     )
 

@@ -38,6 +38,33 @@ _NON_REPOSITORY_SIDE_EFFECT_SKILLS = frozenset(
     {"jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"}
 )
 _JIRA_ORCHESTRATE_PRESET_SLUGS = frozenset({"jira-orchestrate"})
+_RUNTIME_COMMAND_CAPABILITY_VERSION = "2026-05-13"
+_RUNTIME_COMMAND_HINT_CATALOG_VERSION = "2026-05-13"
+_SLASH_COMMAND_PASSTHROUGH_RUNTIMES = frozenset(
+    {"codex", "codex_cli", "claude", "claude_code", "gemini_cli", "universal"}
+)
+_KNOWN_RUNTIME_COMMAND_HINTS = frozenset({"review", "simplify"})
+_RUNTIME_COMMAND_HINT_DETAILS: dict[str, dict[str, Any]] = {
+    "review": {
+        "label": "Review",
+        "aliases": ["/review"],
+        "description": (
+            "Ask the selected runtime to review the current task or code state."
+        ),
+        "argumentPolicy": {"allowed": True, "required": False},
+        "bodyPolicy": {"allowed": True, "required": False},
+    },
+    "simplify": {
+        "label": "Simplify",
+        "aliases": ["/simplify"],
+        "description": "Ask the selected runtime to simplify the implementation.",
+        "argumentPolicy": {"allowed": True, "required": False},
+        "bodyPolicy": {"allowed": True, "required": False},
+    },
+}
+_RUNTIME_COMMAND_TOKEN_PATTERN = re.compile(
+    r"^/([A-Za-z][A-Za-z0-9_-]*(?:(?::|\.)[A-Za-z0-9_-]+)?)(?:\s+(.*))?$"
+)
 _RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
     r"\bresolve(?:d|s|ing)?\s+(?:an?\s+|the\s+)?(?:pr|pull\s+request)\b",
     re.IGNORECASE,
@@ -242,6 +269,228 @@ def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
         raise TaskContractError(f"{field_name} must be one of: {supported}")
     return lowered
 
+
+def _raw_instruction_string(value: object) -> str:
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
+def _first_line_and_body(raw_instructions: str) -> tuple[str, str]:
+    lines = raw_instructions.splitlines()
+    if not lines:
+        return "", ""
+    return lines[0].rstrip(), "\n".join(lines[1:])
+
+
+def _runtime_mode_from_task(
+    task: Mapping[str, Any], *, target_runtime: object = None
+) -> str | None:
+    runtime = _safe_mapping(task.get("runtime"))
+    candidate = (
+        runtime.get("mode")
+        or task.get("targetRuntime")
+        or task.get("target_runtime")
+        or target_runtime
+    )
+    candidate_str = _clean_optional_str(candidate)
+    return candidate_str.lower() if candidate_str else None
+
+
+def _runtime_supports_slash_passthrough(runtime_mode: str | None) -> bool:
+    return (runtime_mode or DEFAULT_TASK_RUNTIME) in _SLASH_COMMAND_PASSTHROUGH_RUNTIMES
+
+
+def build_runtime_command_preview_config() -> dict[str, Any]:
+    """Return browser-safe slash-command preview capabilities and hints."""
+
+    runtime_ids = sorted(_SLASH_COMMAND_PASSTHROUGH_RUNTIMES | {"codex_cloud"})
+    runtimes: dict[str, dict[str, Any]] = {}
+    for runtime_id in runtime_ids:
+        supports_passthrough = _runtime_supports_slash_passthrough(runtime_id)
+        runtimes[runtime_id] = {
+            "slashCommandPassthrough": supports_passthrough,
+            "renderMode": "prompt_prefix" if supports_passthrough else "plain_prompt",
+            **(
+                {"commandHintsRef": runtime_id}
+                if supports_passthrough
+                else {}
+            ),
+        }
+    return {
+        "capabilityVersion": _RUNTIME_COMMAND_CAPABILITY_VERSION,
+        "hintCatalogVersion": _RUNTIME_COMMAND_HINT_CATALOG_VERSION,
+        "runtimes": runtimes,
+        "knownRuntimeCommandHints": {
+            command: dict(_RUNTIME_COMMAND_HINT_DETAILS[command])
+            for command in sorted(_KNOWN_RUNTIME_COMMAND_HINTS)
+        },
+    }
+
+
+def _runtime_command_hint_status(command: str) -> str:
+    return "hinted" if command in _KNOWN_RUNTIME_COMMAND_HINTS else "opaque"
+
+
+def _looks_like_ordinary_path(first_line: str) -> bool:
+    token = first_line.split(maxsplit=1)[0]
+    if not token.startswith("/"):
+        return False
+    without_slash = token[1:]
+    return "/" in without_slash or without_slash.startswith(".")
+
+
+def _base_runtime_command_payload(
+    *,
+    source_path: str,
+    target_runtime: str | None,
+    target_step_id: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "kind": "slash_command",
+        "source": "leading_slash",
+        "sourcePath": source_path,
+    }
+    if target_runtime:
+        payload["targetRuntime"] = target_runtime
+    if target_step_id:
+        payload["targetStepId"] = target_step_id
+    return payload
+
+
+def _build_runtime_command_metadata(
+    *,
+    raw_instructions_value: object,
+    source_path: str,
+    target_runtime: str | None,
+    target_step_id: str | None = None,
+) -> dict[str, Any] | None:
+    raw_instructions = _raw_instruction_string(raw_instructions_value)
+    if not raw_instructions:
+        return None
+    if raw_instructions.startswith("\\/"):
+        first_line, _body = _first_line_and_body(raw_instructions)
+        payload = _base_runtime_command_payload(
+            source_path=source_path,
+            target_runtime=target_runtime,
+            target_step_id=target_step_id,
+        )
+        payload.update(
+            {
+                "command": "",
+                "rawCommand": first_line,
+                "args": "",
+                "instructionBody": raw_instructions[1:],
+                "detectionStatus": "escaped",
+                "hintStatus": "opaque",
+                "recognitionMode": "escaped_literal",
+                "requiresRuntimeRecognition": False,
+                "detectionPhase": "submit",
+            }
+        )
+        return payload
+    if not raw_instructions.startswith("/"):
+        return None
+
+    first_line, instruction_body = _first_line_and_body(raw_instructions)
+    payload = _base_runtime_command_payload(
+        source_path=source_path,
+        target_runtime=target_runtime,
+        target_step_id=target_step_id,
+    )
+    if _looks_like_ordinary_path(first_line):
+        payload.update(
+            {
+                "command": "",
+                "rawCommand": first_line,
+                "args": "",
+                "instructionBody": raw_instructions,
+                "detectionStatus": "malformed",
+                "hintStatus": "opaque",
+                "recognitionMode": "escaped_literal",
+                "requiresRuntimeRecognition": False,
+                "detectionPhase": "submit",
+            }
+        )
+        return payload
+
+    match = _RUNTIME_COMMAND_TOKEN_PATTERN.fullmatch(first_line)
+    if match:
+        command = match.group(1)
+        args = "" if "." in command else match.group(2) or ""
+    else:
+        payload.update(
+            {
+                "command": "",
+                "rawCommand": first_line,
+                "args": "",
+                "instructionBody": raw_instructions,
+                "detectionStatus": "malformed",
+                "hintStatus": "opaque",
+                "recognitionMode": "escaped_literal",
+                "requiresRuntimeRecognition": False,
+                "detectionPhase": "submit",
+            }
+        )
+        return payload
+    hint_status = _runtime_command_hint_status(command)
+    passthrough = _runtime_supports_slash_passthrough(target_runtime)
+    if passthrough:
+        recognition_mode = (
+            "hinted_runtime_passthrough"
+            if hint_status == "hinted"
+            else "runtime_passthrough"
+        )
+    else:
+        recognition_mode = "runtime_does_not_support_slash_commands"
+    payload.update(
+        {
+            "command": command,
+            "rawCommand": first_line,
+            "args": args,
+            "instructionBody": instruction_body,
+            "detectionStatus": "detected",
+            "hintStatus": hint_status,
+            "recognitionMode": recognition_mode,
+            "requiresRuntimeRecognition": passthrough,
+            "runtimeCapabilityVersion": _RUNTIME_COMMAND_CAPABILITY_VERSION,
+            "hintCatalogVersion": _RUNTIME_COMMAND_HINT_CATALOG_VERSION,
+            "detectionPhase": "submit",
+        }
+    )
+    return payload
+
+
+def _validate_supplied_runtime_command(
+    supplied: object,
+    expected: Mapping[str, Any] | None,
+    *,
+    field_name: str,
+) -> None:
+    if supplied is None:
+        return
+    if not isinstance(supplied, Mapping):
+        raise TaskContractError(f"{field_name} must be an object")
+    if expected is None:
+        raise TaskContractError(
+            f"{field_name} conflicts with backend runtime command normalization"
+        )
+    for key in (
+        "kind",
+        "sourcePath",
+        "targetStepId",
+        "command",
+        "rawCommand",
+        "detectionStatus",
+        "recognitionMode",
+    ):
+        if key not in supplied:
+            continue
+        if supplied.get(key) != expected.get(key):
+            raise TaskContractError(
+                f"{field_name} conflicts with backend runtime command normalization"
+            )
+
 def _normalize_publish_mode(value: object) -> str:
     candidate = (_clean_optional_str(value) or _default_publish_mode()).lower()
     if candidate not in SUPPORTED_PUBLISH_MODES:
@@ -256,6 +505,11 @@ def is_self_managed_publish_skill(skill_id: object) -> bool:
     """Return True when the selected skill handles commit/push/merge directly."""
 
     return _normalize_skill_id(skill_id) in _SELF_MANAGED_PUBLISH_SKILLS
+
+def is_non_repository_side_effect_skill(skill_id: object) -> bool:
+    """Return True when the selected skill performs side effects outside git publish."""
+
+    return _normalize_skill_id(skill_id) in _NON_REPOSITORY_SIDE_EFFECT_SKILLS
 
 def _iter_applied_step_templates(value: object) -> list[object]:
     if isinstance(value, Mapping):
@@ -288,17 +542,24 @@ def resolve_publish_mode_for_skill(
     *,
     allow_repository_publish: bool = False,
 ) -> str:
-    """Resolve publish mode for a skill while enforcing self-managed constraints."""
+    """Resolve publish mode for a skill while enforcing skill publish constraints."""
 
-    publish_mode = _normalize_publish_mode(requested_mode)
     normalized_skill_id = _normalize_skill_id(skill_id)
-    if is_self_managed_publish_skill(normalized_skill_id):
+    is_self_managed = is_self_managed_publish_skill(normalized_skill_id)
+    is_non_repository = is_non_repository_side_effect_skill(normalized_skill_id)
+    if is_self_managed:
+        if requested_mode is None:
+            return "none"
+        publish_mode = _normalize_publish_mode(requested_mode)
         if publish_mode != "none":
             raise TaskContractError(
                 f"task.publish.mode must be 'none' when using skill '{normalized_skill_id}'"
             )
         return "none"
-    if normalized_skill_id in _NON_REPOSITORY_SIDE_EFFECT_SKILLS:
+    if is_non_repository:
+        if requested_mode is None:
+            return "none"
+        publish_mode = _normalize_publish_mode(requested_mode)
         if allow_repository_publish:
             return publish_mode
         if publish_mode != "none":
@@ -306,6 +567,7 @@ def resolve_publish_mode_for_skill(
                 f"task.publish.mode must be 'none' when using non-repository skill '{normalized_skill_id}'"
             )
         return "none"
+    publish_mode = _normalize_publish_mode(requested_mode)
     return publish_mode
 
 def _is_resolve_pr_objective(value: object) -> bool:
@@ -1455,10 +1717,13 @@ class TaskExecutionSpec(BaseModel):
                 continue
             skill_ids.add(_normalize_skill_id(step.skill.id))
 
+        requested_publish_mode = self.publish.mode if (
+            allow_repository_publish or "mode" in self.publish.model_fields_set
+        ) else None
         for skill_id in skill_ids:
             resolve_publish_mode_for_skill(
                 skill_id,
-                self.publish.mode,
+                requested_publish_mode,
                 allow_repository_publish=allow_repository_publish,
             )
         return self
@@ -2204,6 +2469,7 @@ def build_authoritative_task_input_snapshot(
     steps = [
         step for step in _safe_list(task.get("steps")) if isinstance(step, Mapping)
     ]
+    runtime_mode = _runtime_mode_from_task(task, target_runtime=target_runtime)
     repository_value = (
         _clean_optional_str(git.get("repository"))
         or _clean_optional_str(repository)
@@ -2221,23 +2487,35 @@ def build_authoritative_task_input_snapshot(
     detachment: list[dict[str, Any]] = []
     for ordinal, step in enumerate(steps):
         step_id = _step_identifier(step, ordinal)
-        final_order.append({"stepId": step_id, "ordinal": ordinal})
-        authored_steps.append(
-            {
-                "id": step_id,
-                "title": _clean_optional_str(step.get("title")),
-                "instructions": _clean_optional_str(step.get("instructions")) or "",
-                "inputAttachments": _safe_list(step.get("inputAttachments")),
-                "dependencies": _first_present_snapshot_list(
-                    step,
-                    "dependsOn",
-                    "dependencies",
-                ),
-                "templateStepId": _clean_optional_str(step.get("templateStepId")),
-                "stepType": _clean_optional_str(step.get("type")),
-                "presetProvenance": _safe_mapping(step.get("presetProvenance")),
-            }
+        step_runtime_command = _build_runtime_command_metadata(
+            raw_instructions_value=step.get("instructions"),
+            source_path=f"steps[{ordinal}].instructions",
+            target_runtime=runtime_mode,
+            target_step_id=step_id,
         )
+        _validate_supplied_runtime_command(
+            step.get("runtimeCommand"),
+            step_runtime_command,
+            field_name=f"task.steps[{ordinal}].runtimeCommand",
+        )
+        final_order.append({"stepId": step_id, "ordinal": ordinal})
+        authored_step = {
+            "id": step_id,
+            "title": _clean_optional_str(step.get("title")),
+            "instructions": _raw_instruction_string(step.get("instructions")),
+            "inputAttachments": _safe_list(step.get("inputAttachments")),
+            "dependencies": _first_present_snapshot_list(
+                step,
+                "dependsOn",
+                "dependencies",
+            ),
+            "templateStepId": _clean_optional_str(step.get("templateStepId")),
+            "stepType": _clean_optional_str(step.get("type")),
+            "presetProvenance": _safe_mapping(step.get("presetProvenance")),
+        }
+        if step_runtime_command is not None:
+            authored_step["runtimeCommand"] = step_runtime_command
+        authored_steps.append(authored_step)
         if isinstance(step.get("presetProvenance"), Mapping):
             provenance.append(
                 {
@@ -2256,19 +2534,32 @@ def build_authoritative_task_input_snapshot(
                 {"stepId": step_id, "ordinal": ordinal, "detached": True}
             )
     issue_key = _detect_jira_issue_key(task)
+    objective_runtime_command = _build_runtime_command_metadata(
+        raw_instructions_value=task.get("instructions"),
+        source_path="objective.instructions",
+        target_runtime=runtime_mode,
+    )
+    _validate_supplied_runtime_command(
+        task.get("runtimeCommand"),
+        objective_runtime_command,
+        field_name="task.runtimeCommand",
+    )
+    objective = {
+        "instructions": _raw_instruction_string(task.get("instructions")),
+        "inputAttachments": _safe_list(task.get("inputAttachments")),
+    }
+    if objective_runtime_command is not None:
+        objective["runtimeCommand"] = objective_runtime_command
     return {
         "traceability": {
             **({"jiraIssueKey": issue_key} if issue_key else {}),
         },
-        "objective": {
-            "instructions": _clean_optional_str(task.get("instructions")) or "",
-            "inputAttachments": _safe_list(task.get("inputAttachments")),
-        },
+        "objective": objective,
         "steps": authored_steps,
         "runtime": _safe_mapping(task.get("runtime"))
         or (
-            {"mode": _clean_optional_str(target_runtime)}
-            if _clean_optional_str(target_runtime)
+            {"mode": runtime_mode}
+            if runtime_mode
             else {}
         ),
         "publish": _safe_mapping(task.get("publish")),
@@ -2320,10 +2611,12 @@ __all__ = [
     "ResumeFromFailedStepRef",
     "TaskStepSource",
     "build_authoritative_task_input_snapshot",
+    "build_runtime_command_preview_config",
     "build_task_stage_plan",
     "build_canonical_task_view",
     "allows_repository_publish_for_skill_context",
     "has_attachment_mutation_fields",
+    "is_non_repository_side_effect_skill",
     "is_self_managed_publish_skill",
     "normalize_queue_job_payload",
     "resolve_publish_mode_for_skill",

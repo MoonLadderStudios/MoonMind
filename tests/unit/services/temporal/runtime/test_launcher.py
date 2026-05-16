@@ -8,6 +8,7 @@ import pytest
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
+from moonmind.schemas.agent_runtime_models import RuntimeCommandRenderResult
 from moonmind.workflows.temporal.runtime.launcher import (
     ManagedRuntimeLauncher,
 )
@@ -116,6 +117,53 @@ def test_build_command_gemini_cli():
     # Gemini CLI does not support --effort
     assert "--effort" not in cmd
     assert "Fix the bug" in cmd
+
+def test_apply_runtime_command_rendering_raises_before_launch_on_failure():
+    store = ManagedRunStore("/tmp/test-store")
+    launcher = ManagedRuntimeLauncher(store)
+    request = _make_request(instruction_ref="/review\nCheck this.")
+
+    class FailingStrategy:
+        runtime_id = "codex_cli"
+
+        def render_runtime_command(self, request):
+            return RuntimeCommandRenderResult(
+                status="failed",
+                failureReason="runtime_command_render_failed",
+                diagnostics={"message": "token=REDACTED"},
+            )
+
+    with pytest.raises(RuntimeError, match="runtime_command_render_failed"):
+        launcher._apply_runtime_command_rendering(
+            request=request,
+            strategy=FailingStrategy(),
+        )
+
+def test_apply_runtime_command_rendering_redacts_diagnostics(monkeypatch):
+    monkeypatch.setenv("MOONMIND_RUNTIME_RENDER_TOKEN", "render-secret-value")
+    store = ManagedRunStore("/tmp/test-store")
+    launcher = ManagedRuntimeLauncher(store)
+    request = _make_request(instruction_ref="/review\nCheck this.")
+
+    class DiagnosticStrategy:
+        runtime_id = "codex_cli"
+
+        def render_runtime_command(self, request):
+            return RuntimeCommandRenderResult(
+                status="ok",
+                renderMode="prompt_prefix",
+                renderedInstruction="/review\nCheck this.",
+                diagnostics={"message": "saw render-secret-value"},
+            )
+
+    launcher._apply_runtime_command_rendering(
+        request=request,
+        strategy=DiagnosticStrategy(),
+    )
+
+    render_metadata = request.parameters["metadata"]["moonmind"]["runtimeCommandRender"]
+    assert render_metadata["diagnostics"]["message"] == "saw ***"
+    assert "render-secret-value" not in str(render_metadata)
 
 def test_build_command_per_runtime():
     store = ManagedRunStore("/tmp/test-store")
@@ -394,6 +442,74 @@ async def test_launch_registers_generated_support_dir_for_cleanup(tmp_path, monk
     support_dir = support_dirs[0]
     assert support_dir.exists()
     assert str(support_dir / "codex-home" / "config.toml") in cleanup_path_set
+
+@pytest.mark.asyncio
+async def test_launch_cleans_materialized_support_files_on_render_failure(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        command_template=["codex", "exec"],
+        secret_refs={"provider_api_key": "env://OPENROUTER_API_KEY"},
+        env_template={"OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}},
+        file_templates=[
+            {
+                "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                "format": "toml",
+                "mergeStrategy": "replace",
+                "contentTemplate": {"model_provider": "openrouter"},
+            }
+        ],
+        home_path_overrides={"CODEX_HOME": "{{runtime_support_dir}}/codex-home"},
+    )
+    request = _make_request(
+        instruction_ref="/future-command\nMalformed command.",
+        runtime_command={
+            "kind": "slash_command",
+            "source": "leading_slash",
+            "sourcePath": "objective.instructions",
+            "command": "future-command",
+            "rawCommand": "/future-command",
+            "args": "",
+            "instructionBody": "Malformed command.",
+            "detectionStatus": "detected",
+            "hintStatus": "opaque",
+            "recognitionMode": "runtime_passthrough",
+            "renderMode": "materialized_command",
+            "requiresRuntimeRecognition": True,
+            "materializedCommand": {
+                "path": ".claude/commands/future-command.md",
+                "invocation": "/project:future-command",
+            },
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="runtime_command_render_failed"):
+        await launcher.launch(
+            run_id="run-render-failure-cleanup",
+            request=request,
+            profile=profile,
+            workspace_path=workspace,
+        )
+
+    support_root = tmp_path / ".moonmind"
+    assert not any(support_root.glob("mm_profile_support_*"))
 
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService")

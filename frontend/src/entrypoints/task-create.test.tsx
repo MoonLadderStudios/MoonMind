@@ -14,6 +14,7 @@ import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
 import {
   buildTemporalArtifactEditUpdatePayload,
+  buildRuntimeCommandVersionWarnings,
   buildTemporalSubmissionDraftFromExecution,
   resolveTaskSubmitPageMode,
 } from "../lib/temporalTaskEditing";
@@ -82,6 +83,22 @@ const mockPayload: BootPayload = {
       },
     },
   },
+};
+
+const historicalRuntimeCommand = {
+  kind: "slash_command",
+  sourcePath: "objective.instructions",
+  command: "review",
+  rawCommand: "/review",
+  args: "",
+  instructionBody: "Check the branch.",
+  detectionStatus: "detected",
+  hintStatus: "hinted",
+  recognitionMode: "hinted_runtime_passthrough",
+  targetRuntime: "codex_cli",
+  runtimeCapabilityVersion: "2026-05-12",
+  hintCatalogVersion: "2026-05-12",
+  detectionPhase: "submit",
 };
 
 function withJiraIntegration(payload: BootPayload = mockPayload): BootPayload {
@@ -160,6 +177,71 @@ function withAttachmentPolicy(payload: BootPayload = mockPayload): BootPayload {
             maxBytes: 1024 * 1024,
             totalBytes: 2 * 1024 * 1024,
             allowedContentTypes: ["image/png", "application/pdf"],
+          },
+        },
+      },
+    },
+  };
+}
+
+function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      system?: Record<string, unknown>;
+    };
+  };
+  const system = initialData.dashboardConfig.system || {};
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        system: {
+          ...system,
+          supportedTaskRuntimes: [
+            "codex_cli",
+            "gemini_cli",
+            "claude_code",
+            "codex_cloud",
+          ],
+          runtimeCommandPreview: {
+            capabilityVersion: "2026-05-13",
+            hintCatalogVersion: "2026-05-13",
+            runtimes: {
+              codex_cli: {
+                slashCommandPassthrough: true,
+                renderMode: "prompt_prefix",
+                commandHintsRef: "codex_cli",
+              },
+              claude_code: {
+                slashCommandPassthrough: true,
+                renderMode: "prompt_prefix",
+                commandHintsRef: "claude_code",
+              },
+              gemini_cli: {
+                slashCommandPassthrough: true,
+                renderMode: "prompt_prefix",
+                commandHintsRef: "gemini_cli",
+              },
+              codex_cloud: {
+                slashCommandPassthrough: false,
+                renderMode: "plain_prompt",
+              },
+            },
+            knownRuntimeCommandHints: {
+              review: {
+                label: "Review",
+                aliases: ["/review"],
+                description:
+                  "Ask the selected runtime to review the current task or code state.",
+              },
+              simplify: {
+                label: "Simplify",
+                aliases: ["/simplify"],
+                description: "Ask the selected runtime to simplify the implementation.",
+              },
+            },
           },
         },
       },
@@ -1955,6 +2037,7 @@ describe.skip("Task Create Entrypoint", () => {
                   task: {
                     title: "Break down the Grid UI overlay plan.",
                     instructions: "Break down the Grid UI overlay plan.",
+                    runtimeCommand: historicalRuntimeCommand,
                     runtime: {
                       mode: "codex_cli",
                       model: "gpt-5.5",
@@ -3753,6 +3836,38 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
+  it("preserves historical runtime command metadata and catalog versions for exact rerun drafts", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:slash-rerun",
+        workflowType: "MoonMind.Run",
+        runId: "run-source",
+        targetRuntime: "codex_cli",
+        inputParameters: {
+          task: {
+            instructions: "Inline fallback should not replace the snapshot.",
+          },
+        },
+      },
+      {
+        snapshotVersion: 1,
+        draft: {
+          taskShape: "skill_only",
+          instructions: "/review\nCheck the branch.",
+          runtime: "codex_cli",
+          runtimeCommand: historicalRuntimeCommand,
+        },
+      },
+    );
+
+    expect(draft.taskInstructions).toBe("/review\nCheck the branch.");
+    expect(draft.runtimeCommand).toMatchObject({
+      command: "review",
+      runtimeCapabilityVersion: "2026-05-12",
+      hintCatalogVersion: "2026-05-12",
+    });
+  });
+
   it("submits edit-for-rerun with edited_full_retry provenance pinned to the source run", async () => {
     window.history.pushState(
       {},
@@ -3797,6 +3912,22 @@ describe.skip("Task Create Entrypoint", () => {
           },
         },
       },
+    });
+  });
+
+  it("reports current preview version drift without mutating source-run command metadata", () => {
+    const warnings = buildRuntimeCommandVersionWarnings(historicalRuntimeCommand, {
+      capabilityVersion: "2026-05-13",
+      hintCatalogVersion: "2026-05-13",
+    });
+
+    expect(warnings).toEqual([
+      "Runtime command capability version changed from 2026-05-12 to 2026-05-13.",
+      "Runtime command hint catalog version changed from 2026-05-12 to 2026-05-13.",
+    ]);
+    expect(historicalRuntimeCommand).toMatchObject({
+      runtimeCapabilityVersion: "2026-05-12",
+      hintCatalogVersion: "2026-05-12",
     });
   });
 
@@ -6085,6 +6216,73 @@ describe.skip("Task Create Entrypoint", () => {
       within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
       {
         target: { value: "batch-pr-resolver" },
+      },
+    );
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+      ).toBe("none");
+    });
+  });
+
+  it("defaults publish mode to none when selecting jira-verify or jira-pr-verify skills", async () => {
+    type MockInitialData = {
+      dashboardConfig: {
+        system: {
+          defaultPublishMode: string;
+        };
+      };
+    };
+
+    const payload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        ...(mockPayload.initialData as MockInitialData),
+        dashboardConfig: {
+          ...(mockPayload.initialData as MockInitialData).dashboardConfig,
+          system: {
+            ...(mockPayload.initialData as MockInitialData).dashboardConfig
+              .system,
+            defaultPublishMode: "pr",
+          },
+        },
+      },
+    };
+
+    renderWithClient(<TaskCreatePage payload={payload} />);
+
+    const primaryStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+
+    const publishSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    expect(publishSelect.value).toBe(
+      (payload.initialData as MockInitialData).dashboardConfig.system
+        .defaultPublishMode,
+    );
+
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "jira-verify" },
+      },
+    );
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+      ).toBe("none");
+    });
+
+    fireEvent.change(publishSelect, { target: { value: "pr" } });
+    expect(publishSelect.value).toBe("pr");
+
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "jira-pr-verify" },
       },
     );
     await waitFor(() => {
@@ -15403,6 +15601,202 @@ describe("Task Create governed Tool authoring", () => {
     });
     expect((within(step).getByLabelText("Tool ID") as HTMLInputElement).value)
       .toBe("jira.get_issue");
+  });
+});
+
+describe("Task Create runtime command previews", () => {
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    window.history.pushState({}, "Task Create", "/tasks/new");
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    vi.mocked(navigateTo).mockReset();
+    fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/tasks/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: { worker: ["speckit-orchestrate"] },
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/task-step-templates")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        if (url.startsWith("/api/v1/provider-profiles")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [],
+          } as Response);
+        }
+        if (url === "/api/executions") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:workflow-123",
+              runId: "run-123",
+              namespace: "moonmind",
+              redirectPath: "/tasks/mm:workflow-123?source=temporal",
+            }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({}),
+        } as Response);
+      });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+  });
+
+  it("previews known runtime commands for objective and step instructions", async () => {
+    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+
+    const primaryStep = await screen.findByText("Step 1");
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "/review\nCheck this branch." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const secondStep = await screen.findByText("Step 2");
+    fireEvent.change(
+      within(secondStep.closest("section") as HTMLElement).getByLabelText(
+        "Instructions",
+      ),
+      {
+        target: { value: "/review\nCheck step scope." },
+      },
+    );
+
+    expect(primaryStep).toBeTruthy();
+    expect(screen.getAllByText("Runtime command: /review")).toHaveLength(2);
+    expect(
+      screen.getAllByText(
+        "Ask the selected runtime to review the current task or code state.",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("previews unknown valid slash commands as opaque pass-through", async () => {
+    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "/foo\nUse provider behavior." },
+    });
+
+    expect(await screen.findByText("Runtime command: /foo")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Pass-through runtime command. No local hint is available; provider behavior will decide it.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/does not pass through slash commands/i)).toBeNull();
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "/provider.command now\nUse provider behavior." },
+    });
+
+    expect(await screen.findByText("Runtime command: /provider.command")).toBeTruthy();
+  });
+
+  it("recomputes unsupported runtime warnings without mutating instructions", async () => {
+    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+
+    const instructions = await screen.findByLabelText("Instructions");
+    fireEvent.change(instructions, {
+      target: { value: "/review\nKeep this exact text." },
+    });
+    fireEvent.change(screen.getByLabelText("Runtime"), {
+      target: { value: "codex_cloud" },
+    });
+
+    expect((instructions as HTMLTextAreaElement).value).toBe(
+      "/review\nKeep this exact text.",
+    );
+    expect(await screen.findByText("Unsupported runtime command: /review")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This runtime does not pass through slash commands. Choose a slash-command capable runtime or escape the slash for literal text.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("previews escaped and malformed slash text as literal without command markup", async () => {
+    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+
+    const instructions = await screen.findByLabelText("Instructions");
+    fireEvent.change(instructions, {
+      target: { value: "\\/review\nTreat as text." },
+    });
+    expect(await screen.findByText("Literal text: /review")).toBeTruthy();
+    expect(screen.queryByText("Runtime command: /review")).toBeNull();
+
+    fireEvent.change(instructions, {
+      target: { value: " /review\nWhitespace means plain text." },
+    });
+    expect(screen.queryByText(/Runtime command:/)).toBeNull();
+    expect(screen.queryByText(/Literal text:/)).toBeNull();
+
+    fireEvent.change(instructions, {
+      target: { value: "Please run /review inside the sentence." },
+    });
+    expect(screen.queryByText(/Runtime command:/)).toBeNull();
+
+    fireEvent.change(instructions, {
+      target: { value: "/src/app.ts is broken" },
+    });
+    expect(await screen.findByText("Literal slash text")).toBeTruthy();
+
+    fireEvent.change(instructions, {
+      target: { value: "/review!\nTreat as text." },
+    });
+    expect(await screen.findByText("Literal slash text")).toBeTruthy();
+    expect(screen.queryByText("Runtime command: /review!")).toBeNull();
+
+    fireEvent.change(instructions, {
+      target: { value: "/ review\nTreat as text." },
+    });
+    expect(await screen.findByText("Literal slash text")).toBeTruthy();
+    expect(screen.queryByText(/Runtime command:/)).toBeNull();
+  });
+
+  it("submits authored slash instructions without preview-only runtime command metadata", async () => {
+    renderWithClient(<TaskCreatePage payload={withRuntimeCommandPreview()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "/review\nCheck this branch." },
+    });
+    fireEvent.change(screen.getByLabelText("GitHub Repo"), {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+
+    expect(request.payload.task.instructions).toBe(
+      "/review\nCheck this branch.",
+    );
+    expect(request.payload.task.runtimeCommand).toBeUndefined();
+    expect(request.payload.task.steps?.[0]?.runtimeCommand).toBeUndefined();
   });
 });
 

@@ -105,6 +105,7 @@ export type TemporalSubmissionDraft = {
   mergeAutomationEnabled: boolean;
   reportOutputEnabled: boolean;
   taskInstructions: string;
+  runtimeCommand?: Record<string, unknown>;
   primarySkill: string | null;
   inputAttachments: TemporalTaskInputAttachmentRef[];
   steps: Array<{
@@ -129,6 +130,7 @@ export type TemporalSubmissionDraft = {
     }>;
     storyOutput?: Record<string, unknown>;
     jiraOrchestration?: Record<string, unknown>;
+    runtimeCommand?: Record<string, unknown>;
   }>;
   appliedTemplates: Array<{
     slug: string;
@@ -167,6 +169,49 @@ export type TemporalArtifactEditUpdatePayload = {
   inputArtifactRef?: string;
   parametersPatch?: Record<string, unknown>;
 };
+
+export type RuntimeCommandVersionConfig = {
+  capabilityVersion?: unknown;
+  hintCatalogVersion?: unknown;
+};
+
+export function buildRuntimeCommandVersionWarnings(
+  runtimeCommand: Record<string, unknown> | null | undefined,
+  currentConfig: RuntimeCommandVersionConfig | null | undefined,
+): string[] {
+  const command = objectValue(runtimeCommand);
+  const config = objectValue(currentConfig);
+  if (Object.keys(command).length === 0 || Object.keys(config).length === 0) {
+    return [];
+  }
+
+  const warnings: string[] = [];
+  const storedCapabilityVersion = stringValue(command.runtimeCapabilityVersion);
+  const currentCapabilityVersion = stringValue(config.capabilityVersion);
+  if (
+    storedCapabilityVersion &&
+    currentCapabilityVersion &&
+    storedCapabilityVersion !== currentCapabilityVersion
+  ) {
+    warnings.push(
+      `Runtime command capability version changed from ${storedCapabilityVersion} to ${currentCapabilityVersion}.`,
+    );
+  }
+
+  const storedHintCatalogVersion = stringValue(command.hintCatalogVersion);
+  const currentHintCatalogVersion = stringValue(config.hintCatalogVersion);
+  if (
+    storedHintCatalogVersion &&
+    currentHintCatalogVersion &&
+    storedHintCatalogVersion !== currentHintCatalogVersion
+  ) {
+    warnings.push(
+      `Runtime command hint catalog version changed from ${storedHintCatalogVersion} to ${currentHintCatalogVersion}.`,
+    );
+  }
+
+  return warnings;
+}
 
 export function buildTemporalArtifactEditUpdatePayload({
   updateName,
@@ -456,6 +501,10 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     step.jiraOrchestration,
     step.jira_orchestration,
   );
+  const runtimeCommand = firstObjectValue(
+    step.runtimeCommand,
+    step.runtime_command,
+  );
   const inputAttachments = normalizeAttachmentRefs(step.inputAttachments);
   const templateAttachments = attachmentRefsValue(
     step.templateAttachments,
@@ -488,6 +537,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     ...(templateAttachments.length > 0 ? { templateAttachments } : {}),
     ...(Object.keys(storyOutput).length > 0 ? { storyOutput } : {}),
     ...(Object.keys(jiraOrchestration).length > 0 ? { jiraOrchestration } : {}),
+    ...(Object.keys(runtimeCommand).length > 0 ? { runtimeCommand } : {}),
   };
 
   const hasContent =
@@ -503,7 +553,8 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     inputAttachments.length > 0 ||
     templateAttachments.length > 0 ||
     Object.keys(storyOutput).length > 0 ||
-    Object.keys(jiraOrchestration).length > 0;
+    Object.keys(jiraOrchestration).length > 0 ||
+    Object.keys(runtimeCommand).length > 0;
   return hasContent ? result : null;
 }
 
@@ -660,6 +711,14 @@ function snapshotDraftTask(
     ...(stringValue(snapshotDraft.instructions)
       ? { instructions: stringValue(snapshotDraft.instructions) }
       : {}),
+    ...(Object.keys(firstObjectValue(snapshotDraft.runtimeCommand, snapshotDraft.runtime_command)).length > 0
+      ? {
+          runtimeCommand: firstObjectValue(
+            snapshotDraft.runtimeCommand,
+            snapshotDraft.runtime_command,
+          ),
+        }
+      : {}),
     ...(Object.keys(primarySkill).length > 0
       ? {
           tool: {
@@ -775,6 +834,12 @@ export function buildTemporalSubmissionDraftFromExecution(
   const artifactSkill = objectValue(artifactTask.skill);
   const taskSteps = draftStepsFromTask(task);
   const artifactTaskSteps = draftStepsFromTask(artifactTask);
+  const runtimeCommand = firstObjectValue(
+    task.runtimeCommand,
+    task.runtime_command,
+    artifactTask.runtimeCommand,
+    artifactTask.runtime_command,
+  );
   assertSnapshotAttachmentBindings(
     artifactParams,
     artifactTask,
@@ -886,6 +951,7 @@ export function buildTemporalSubmissionDraftFromExecution(
       Object.keys(snapshotDraft).length > 0
         ? taskInstructionsFrom(artifactTask, task)
         : taskInstructionsFrom(task, artifactTask),
+    ...(Object.keys(runtimeCommand).length > 0 ? { runtimeCommand } : {}),
     primarySkill: nullableStringValue(
       execution.targetSkill,
       tool.name,

@@ -18,11 +18,11 @@ TRACKER_INDEX = REPO_ROOT / "docs" / "tmp" / "remaining-work" / "README.md"
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
-def test_canonical_dood_doc_links_phase0_tracker() -> None:
+def test_canonical_dood_doc_does_not_link_tmp_tracker() -> None:
     dood_text = _read(DOOD_DOC)
 
-    assert "../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md" in dood_text
-    assert TRACKER.exists()
+    assert "../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md" not in dood_text
+    assert not TRACKER.exists()
 
 def test_session_plane_doc_declares_session_assisted_workloads_outside_identity() -> None:
     session_text = _read(SESSION_DOC)
@@ -56,7 +56,5 @@ def test_dood_glossary_and_scope_terms_remain_present() -> None:
     ):
         assert term in lowered
 
-def test_tracker_is_listed_in_remaining_work_index() -> None:
-    tracker_index_text = _read(TRACKER_INDEX)
-
-    assert "ManagedAgents-DockerOutOfDocker.md" in tracker_index_text
+def test_remaining_work_index_is_removed_from_canonical_docs() -> None:
+    assert not TRACKER_INDEX.exists()

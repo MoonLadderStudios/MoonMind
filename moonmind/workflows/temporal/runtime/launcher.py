@@ -44,6 +44,103 @@ logger = logging.getLogger(__name__)
 
 _LIVE_LOG_SPOOL_FILENAME = "live_streams.spool"
 
+_SECRET_LIKE_PATTERN = re.compile(
+    r"(ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|AIza[A-Za-z0-9_-]+|ATATT[A-Za-z0-9_-]+|AKIA[A-Za-z0-9]+|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password)=\S+)",
+    re.IGNORECASE,
+)
+
+
+def _compact_string(value: Any) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    return _SECRET_LIKE_PATTERN.sub("***", normalized)[:200]
+
+
+def _runtime_command_mapping(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(by_alias=True, exclude_none=True)
+        return dict(dumped) if isinstance(dumped, Mapping) else {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
+
+
+def build_runtime_command_audit_events(
+    *,
+    runtime_id: str | None,
+    runtime_command: Mapping[str, Any] | Any | None,
+    render_result: Mapping[str, Any] | Any | None = None,
+) -> list[dict[str, str]]:
+    """Build compact, secret-safe runtime command audit events."""
+
+    command_metadata = _runtime_command_mapping(runtime_command)
+    if not command_metadata:
+        return []
+
+    command = _compact_string(command_metadata.get("command"))
+    raw_command = _compact_string(command_metadata.get("rawCommand"))
+    if not command and raw_command.startswith("/"):
+        parts = raw_command[1:].split(maxsplit=1)
+        command = parts[0] if parts else ""
+    if not command:
+        return []
+
+    runtime = _compact_string(
+        runtime_id
+        or command_metadata.get("targetRuntime")
+        or command_metadata.get("runtimeId")
+    )
+    detected_event = {
+        "event": "runtime_command.detected",
+        "runtimeId": runtime,
+        "command": command,
+        "sourcePath": _compact_string(command_metadata.get("sourcePath")),
+        "hintStatus": _compact_string(command_metadata.get("hintStatus")),
+        "recognitionMode": _compact_string(command_metadata.get("recognitionMode")),
+        "runtimeCapabilityVersion": _compact_string(
+            command_metadata.get("runtimeCapabilityVersion")
+        ),
+        "hintCatalogVersion": _compact_string(
+            command_metadata.get("hintCatalogVersion")
+        ),
+    }
+    events: list[dict[str, str]] = [
+        {key: value for key, value in detected_event.items() if value}
+    ]
+
+    render_metadata = _runtime_command_mapping(render_result)
+    if render_metadata:
+        render_mode = _compact_string(
+            render_metadata.get("renderMode") or command_metadata.get("renderMode")
+        )
+        status = _compact_string(render_metadata.get("status")).lower()
+        hint_status = _compact_string(command_metadata.get("hintStatus")).lower()
+        if status in {"passed_through", "passthrough"} or hint_status == "opaque":
+            event = {
+                "event": "runtime_command.passthrough",
+                "runtimeId": runtime,
+                "command": command,
+                "hintStatus": _compact_string(command_metadata.get("hintStatus")),
+                "renderMode": render_mode,
+            }
+        elif status in {"ok", "rendered", "fallback"}:
+            event = {
+                "event": "runtime_command.rendered",
+                "runtimeId": runtime,
+                "command": command,
+                "renderMode": render_mode,
+            }
+        else:
+            event = {}
+        if event:
+            events.append({key: value for key, value in event.items() if value})
+
+    return events
+
+
 class ManagedRuntimeLauncher:
     """Spawns managed agent subprocesses and records them in the run store."""
 
@@ -693,6 +790,46 @@ class ManagedRuntimeLauncher:
 
         return cmd
 
+    def _apply_runtime_command_rendering(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        strategy: Any,
+    ) -> None:
+        if strategy is None or not hasattr(strategy, "render_runtime_command"):
+            return
+        result = strategy.render_runtime_command(request)
+        if result.diagnostics:
+            redactor = SecretRedactor.from_environ()
+            result.diagnostics = {
+                str(key): redactor.scrub(str(value))
+                for key, value in result.diagnostics.items()
+            }
+        metadata = request.parameters.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+            request.parameters["metadata"] = metadata
+        moonmind_metadata = metadata.setdefault("moonmind", {})
+        if not isinstance(moonmind_metadata, dict):
+            moonmind_metadata = {}
+            metadata["moonmind"] = moonmind_metadata
+        moonmind_metadata["runtimeCommandRender"] = result.model_dump(
+            by_alias=True,
+            exclude_none=True,
+        )
+        runtime_command_events = build_runtime_command_audit_events(
+            runtime_id=str(getattr(strategy, "runtime_id", "") or ""),
+            runtime_command=result.invocation or request.runtime_command,
+            render_result=result,
+        )
+        if runtime_command_events:
+            moonmind_metadata["runtimeCommandAuditEvents"] = runtime_command_events
+        if result.status in {"failed", "unsupported"}:
+            reason = result.failure_reason or "runtime_command_render_failed"
+            raise RuntimeError(reason)
+        if result.rendered_instruction is not None:
+            request.instruction_ref = result.rendered_instruction
+
     async def _project_run_skill_snapshot(
         self,
         *,
@@ -918,46 +1055,52 @@ class ManagedRuntimeLauncher:
                 },
             )
 
-        cmd = self.build_command(profile, request, strategy=strategy)
-        self._reset_live_log_spool(resolved_workspace_path)
-
         run_root: Path | None = (
             Path(resolved_workspace_path).resolve().parent
             if resolved_workspace_path is not None
             else None
         )
-
-        for key in profile.passthrough_env_keys:
-            value = os.environ.get(key)
-            if value is None or not str(value).strip():
-                continue
-            env_overrides[key] = value
-
-        from moonmind.config.settings import settings as _mm_settings
-        _git_name = str(_mm_settings.workflow.git_user_name or "").strip() or None
-        _git_email = str(_mm_settings.workflow.git_user_email or "").strip() or None
-        if _git_name:
-            env_overrides.setdefault("GIT_AUTHOR_NAME", _git_name)
-            env_overrides.setdefault("GIT_COMMITTER_NAME", _git_name)
-        if _git_email:
-            env_overrides.setdefault("GIT_AUTHOR_EMAIL", _git_email)
-            env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
-
-        github_token = await resolve_github_token_for_launch(env_overrides)
-        if not github_token:
-            github_token = launch_github_token
         cleanup_paths: list[str] = list(materializer.generated_files)
         cleanup_paths.extend(reversed(materializer.generated_dirs))
         deferred_cleanup_paths: list[str] = []
         github_socket_path: str | None = None
         real_gh_path = shutil.which("gh")
-        # The claude CLI refuses --dangerously-skip-permissions when running as root
-        # (security restriction). For claude_code runtime, drop to the app user.
-        _run_as_root = os.geteuid() == 0
-        _is_claude_code = profile.runtime_id == "claude_code"
-        _needs_priv_drop = _run_as_root and _is_claude_code
-        process: asyncio.subprocess.Process
+
         try:
+            if strategy is not None:
+                self._apply_runtime_command_rendering(
+                    request=request,
+                    strategy=strategy,
+                )
+
+            cmd = self.build_command(profile, request, strategy=strategy)
+            self._reset_live_log_spool(resolved_workspace_path)
+
+            for key in profile.passthrough_env_keys:
+                value = os.environ.get(key)
+                if value is None or not str(value).strip():
+                    continue
+                env_overrides[key] = value
+
+            from moonmind.config.settings import settings as _mm_settings
+            _git_name = str(_mm_settings.workflow.git_user_name or "").strip() or None
+            _git_email = str(_mm_settings.workflow.git_user_email or "").strip() or None
+            if _git_name:
+                env_overrides.setdefault("GIT_AUTHOR_NAME", _git_name)
+                env_overrides.setdefault("GIT_COMMITTER_NAME", _git_name)
+            if _git_email:
+                env_overrides.setdefault("GIT_AUTHOR_EMAIL", _git_email)
+                env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
+
+            github_token = await resolve_github_token_for_launch(env_overrides)
+            if not github_token:
+                github_token = launch_github_token
+            # The claude CLI refuses --dangerously-skip-permissions when running as root
+            # (security restriction). For claude_code runtime, drop to the app user.
+            _run_as_root = os.geteuid() == 0
+            _is_claude_code = profile.runtime_id == "claude_code"
+            _needs_priv_drop = _run_as_root and _is_claude_code
+            process: asyncio.subprocess.Process
             if github_token and run_root is not None:
                 github_socket_path = self._build_github_socket_path(
                     run_id=run_id,
@@ -1069,7 +1212,8 @@ class ManagedRuntimeLauncher:
                     cwd=resolved_workspace_path,
                 )
         except Exception:
-            self._log_streamer.consume_annotations(run_id)
+            if self._log_streamer is not None:
+                self._log_streamer.consume_annotations(run_id)
             await self.cleanup_run_support(run_id)
             for path in [*cleanup_paths, *deferred_cleanup_paths]:
                 try:
