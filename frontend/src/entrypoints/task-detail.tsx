@@ -90,6 +90,96 @@ function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolea
   return config?.features?.liveLogsStructuredHistoryEnabled !== false;
 }
 
+function detailObjectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function firstDetailObjectValue(...values: unknown[]): Record<string, unknown> {
+  for (const value of values) {
+    const normalized = detailObjectValue(value);
+    if (Object.keys(normalized).length > 0) {
+      return normalized;
+    }
+  }
+  return {};
+}
+
+function detailStringValue(...values: unknown[]): string {
+  for (const value of values) {
+    const normalized = String(value ?? '').trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return '';
+}
+
+function runtimeCommandFromExecution(execution: unknown): Record<string, unknown> {
+  const detail = detailObjectValue(execution);
+  const direct = firstDetailObjectValue(detail.runtimeCommand, detail.runtime_command);
+  if (Object.keys(direct).length > 0) {
+    return direct;
+  }
+  const inputParameters = firstDetailObjectValue(
+    detail.inputParameters,
+    detail.input_parameters,
+  );
+  const task = detailObjectValue(inputParameters.task);
+  const taskCommand = firstDetailObjectValue(task.runtimeCommand, task.runtime_command);
+  if (Object.keys(taskCommand).length > 0) {
+    return taskCommand;
+  }
+  const objective = detailObjectValue(inputParameters.objective);
+  const objectiveCommand = firstDetailObjectValue(
+    objective.runtimeCommand,
+    objective.runtime_command,
+  );
+  if (Object.keys(objectiveCommand).length > 0) {
+    return objectiveCommand;
+  }
+  return {};
+}
+
+function RuntimeCommandDetail({
+  command,
+}: {
+  command: Record<string, unknown>;
+}) {
+  const hasCommand = Object.keys(command).length > 0;
+  const commandName = detailStringValue(command.rawCommand)
+    || (detailStringValue(command.command) ? `/${detailStringValue(command.command)}` : '');
+  const runtime = detailStringValue(command.targetRuntime, command.runtimeId, command.runtime);
+  const renderMode = detailStringValue(command.renderMode, command.render_mode);
+  const status = detailStringValue(
+    command.status,
+    command.detectionStatus,
+    command.hintStatus,
+    command.recognitionMode,
+  );
+  const capabilityVersion = detailStringValue(command.runtimeCapabilityVersion);
+  const hintCatalogVersion = detailStringValue(command.hintCatalogVersion);
+
+  return (
+    <div className="td-summary-block">
+      <h4>Runtime Command</h4>
+      {hasCommand ? (
+        <div className="td-facts-grid">
+          {commandName ? <Fact label="Command"><code>{commandName}</code></Fact> : null}
+          {runtime ? <Fact label="Runtime">{formatRuntimeLabel(runtime)}</Fact> : null}
+          {renderMode ? <Fact label="Render Mode">{formatStatusLabel(renderMode)}</Fact> : null}
+          {status ? <Fact label="Status">{formatStatusLabel(status)}</Fact> : null}
+          {capabilityVersion ? <Fact label="Capability Version">{capabilityVersion}</Fact> : null}
+          {hintCatalogVersion ? <Fact label="Hint Catalog Version">{hintCatalogVersion}</Fact> : null}
+        </div>
+      ) : (
+        <p className="small">Historical runtime command metadata is not available.</p>
+      )}
+    </div>
+  );
+}
+
 export function getSessionProjectionRefetchInterval(
   isTerminal: boolean,
   hasProjection: boolean,
@@ -4304,6 +4394,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const hasTaskActions = Boolean(actions?.canSetTitle || hasTaskEditingActions || canCreateRemediation);
   const taskInstructions = execution?.taskInstructions?.trim() || '';
   const hasTaskInstructions = taskInstructions.length > 0;
+  const runtimeCommand = runtimeCommandFromExecution(execution);
+  const hasRuntimeCommand = Object.keys(runtimeCommand).length > 0;
+  const shouldShowRuntimeCommand =
+    hasRuntimeCommand ||
+    taskInstructions.startsWith('/') ||
+    taskInstructions.startsWith('\\/');
   const hasInterventionSection = Boolean(
     actions &&
       (
@@ -4414,6 +4510,10 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               </div>
             ) : null}
           </div>
+
+          {shouldShowRuntimeCommand ? (
+            <RuntimeCommandDetail command={runtimeCommand} />
+          ) : null}
 
           <div className="td-summary-block">
             <h4>Summary</h4>

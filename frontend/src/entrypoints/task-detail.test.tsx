@@ -409,6 +409,162 @@ describe('Task Detail Entrypoint', () => {
     });
   });
 
+  it('displays original slash instructions and missing runtime command metadata state', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Legacy slash task',
+      summary: 'Execution summary',
+      taskInstructions: '/future-command\nUse provider behavior.',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      temporalStatus: 'completed',
+      targetRuntime: 'codex_cli',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show instructions' }));
+
+    expect(
+      screen.getAllByText((_, element) =>
+        element?.textContent === '/future-command\nUse provider behavior.',
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(await screen.findByText('Runtime Command')).toBeTruthy();
+    expect(screen.getByText('Historical runtime command metadata is not available.')).toBeTruthy();
+  });
+
+  it('displays slash command interpretation metadata from the execution snapshot', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Slash task',
+      summary: 'Execution summary',
+      taskInstructions: '/review\nCheck the branch.',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      temporalStatus: 'completed',
+      targetRuntime: 'codex_cli',
+      inputParameters: {
+        task: {
+          runtimeCommand: {
+            command: 'review',
+            rawCommand: '/review',
+            targetRuntime: 'codex_cli',
+            recognitionMode: 'hinted_runtime_passthrough',
+            renderMode: 'prompt_prefix',
+            detectionStatus: 'detected',
+            hintStatus: 'hinted',
+            runtimeCapabilityVersion: '2026-05-13',
+            hintCatalogVersion: '2026-05-13',
+          },
+        },
+      },
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    expect(await screen.findByText('Runtime Command')).toBeTruthy();
+    expect(screen.getByText('/review')).toBeTruthy();
+    expect(screen.getAllByText('Codex CLI').length).toBeGreaterThan(0);
+    expect(screen.getByText('prompt prefix')).toBeTruthy();
+    expect(screen.getByText('detected')).toBeTruthy();
+    expect(screen.getAllByText('2026-05-13').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('displays legacy snake_case slash command metadata from historical execution snapshots', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Legacy slash task',
+      summary: 'Execution summary',
+      taskInstructions: '/review\nCheck the branch.',
+      status: 'completed',
+      state: 'completed',
+      rawState: 'completed',
+      temporalStatus: 'completed',
+      targetRuntime: 'codex_cli',
+      input_parameters: {
+        task: {
+          runtime_command: {
+            command: 'review',
+            rawCommand: '/review',
+            targetRuntime: 'codex_cli',
+            render_mode: 'prompt_prefix',
+            status: 'rendered',
+          },
+        },
+      },
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    expect(await screen.findByText('Runtime Command')).toBeTruthy();
+    expect(screen.getByText('/review')).toBeTruthy();
+    expect(screen.getByText('prompt prefix')).toBeTruthy();
+    expect(screen.queryByText('Historical runtime command metadata is not available.')).toBeNull();
+  });
+
 
   it('renders planning detail pills with the shared shimmer selector contract and keeps dependency pills inactive when appropriate', async () => {
     const mockExecution = {
