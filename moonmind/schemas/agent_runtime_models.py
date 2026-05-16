@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import posixpath
+import re
 from datetime import UTC, datetime
 from typing import Any, Literal, Mapping, NoReturn, get_args
 
@@ -711,15 +713,23 @@ def _image_is_pinned(image: str | None) -> bool:
     return bool(tag) and tag != "latest"
 
 
+def _normalize_posix_path(value: str) -> str:
+    collapsed = re.sub(r"/+", "/", value)
+    return posixpath.normpath(collapsed)
+
+
 def _mounts_host_docker_socket(mounts: list[RuntimeProfileMount]) -> bool:
+    target = "/var/run/docker.sock"
     for mount in mounts:
-        candidates = {
-            str(mount.mount_path or "").strip(),
-            str(mount.source or "").strip(),
-            str(mount.host_path or "").strip(),
-        }
-        if "/var/run/docker.sock" in candidates:
-            return True
+        for candidate in (mount.mount_path, mount.source, mount.host_path):
+            text = str(candidate or "").strip()
+            if not text:
+                continue
+            try:
+                if _normalize_posix_path(text) == target:
+                    return True
+            except (TypeError, ValueError):
+                continue
     return False
 
 
@@ -770,6 +780,16 @@ class ManagedAgentRuntimeProfile(BaseModel):
             if self.agent.docker_client.enabled:
                 raise ValueError(
                     "agent.dockerClient.enabled must be false for no-docker profiles; "
+                    "task instructions cannot raise Docker capability"
+                )
+            if sidecar is not None and sidecar.enabled:
+                raise ValueError(
+                    "dockerSidecar.enabled must be false for no-docker profiles; "
+                    "task instructions cannot raise Docker capability"
+                )
+            if "DOCKER_HOST" in self.agent.env:
+                raise ValueError(
+                    "agent.env.DOCKER_HOST must not be set for no-docker profiles; "
                     "task instructions cannot raise Docker capability"
                 )
             return self

@@ -207,7 +207,12 @@ def build_managed_profile_launch_context(
 
     del workflow_id  # Reserved for activity-side shaping.
     runtime_profile = profile.get("runtime_profile") or profile.get("runtimeProfile")
-    if isinstance(runtime_profile, Mapping):
+    if runtime_profile is not None:
+        if not isinstance(runtime_profile, Mapping):
+            raise ValueError(
+                "runtime_profile must be a mapping of profile fields; "
+                "non-object runtime profiles cannot satisfy launch invariants"
+            )
         ManagedAgentRuntimeProfile.model_validate(runtime_profile)
     credential_source = str(
         profile.get("credential_source") or default_credential_source
