@@ -6,8 +6,7 @@ Read relevant documents in the following order before implementing tasks:
 
 1. **Constitution:** `.specify/memory/constitution.md` for non-negotiable principles and constraints
 2. **Standards:** Code style and guidance in `README.md`
-3. **Spec:** `specs/<feature-id>/spec.md`, then `plan.md`, then `tasks.md`
-4. **Docs:** `docs/*.md` as needed for system architecture (see **Documentation: canonical vs feature artifacts** below).
+3. **Docs:** `docs/*.md` as needed for system architecture (see **Documentation: canonical vs feature artifacts** below).
    - Start here for Agent Skills: `docs/Tasks/AgentSkillSystem.md`
    - For Executable Tools: `docs/Tasks/SkillAndPlanContracts.md`
    - For Runtime boundaries: `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
@@ -31,15 +30,6 @@ When writing code that interacts with skills:
 - **Canonical docs** (`docs/`): describe **declarative desired state** — architecture, contracts, operator-visible behavior, target semantics. Avoid making phased migration or implementation checklists the main story in these files.
 - **Migration, rollout, and MoonSpec execution notes** belong under **`specs/<feature>/`** (and similar feature-local artifacts) or in **local-only / gitignored paths** (e.g. `artifacts/` for tool handoffs), not as the primary framing of canonical docs.
 - Align with **Constitution principle XII** in `.specify/memory/constitution.md`.
-
-## Spec Numbering
-
-When creating a new spec folder/feature ID:
-
-- ✅ **DO** scan `specs/` and find the highest numeric prefix across all directories matching `<number>-<name>`.
-- ✅ **DO** assign the next number globally (`max + 1`), regardless of short-name/topic.
-- ✅ **DO** keep branch/feature/spec numbering aligned to that global next number.
-- ❌ **DON'T** reset numbering to `001` for a new short-name if higher numbered specs already exist.
 
 ## Testing Instructions
 
