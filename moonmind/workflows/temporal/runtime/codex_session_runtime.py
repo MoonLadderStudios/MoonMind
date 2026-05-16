@@ -1382,11 +1382,12 @@ class CodexManagedSessionRuntime:
         vendor_turn_id: str,
         turn_started_at: float | None = None,
     ) -> list[dict[str, Any]]:
+        if not vendor_turn_id:
+            return []
         provider_timestamp_cutoff = self._sqlite_provider_timestamp_cutoff(
             turn_started_at
         )
         excerpts: list[dict[str, Any]] = []
-        markers = (vendor_turn_id, "turn", "app-server", "error", "failed")
         for log_path in sorted(
             self._codex_home_path.glob("logs_*.sqlite"),
             key=self._log_shard_sort_key,
@@ -1415,12 +1416,14 @@ class CodexManagedSessionRuntime:
                     if text_column is None:
                         continue
                     quoted_text_column = self._quoted_sqlite_identifier(text_column)
-                    where = ""
+                    where_clauses = [f"{quoted_text_column} LIKE ?"]
                     params: list[Any] = []
                     if provider_timestamp_cutoff is not None and "ts" in available_columns:
                         quoted_ts_column = self._quoted_sqlite_identifier("ts")
-                        where = f"WHERE {quoted_ts_column} >= ?"
+                        where_clauses.insert(0, f"{quoted_ts_column} >= ?")
                         params.append(provider_timestamp_cutoff)
+                    params.append(f"%{vendor_turn_id}%")
+                    where = "WHERE " + " AND ".join(where_clauses)
                     rows = connection.execute(
                         (
                             f"SELECT {quoted_text_column} FROM \"logs\" "
@@ -1432,9 +1435,6 @@ class CodexManagedSessionRuntime:
                 continue
             for (raw_text,) in rows:
                 text = str(raw_text or "").strip()
-                lowered = text.lower()
-                if not any(marker and marker.lower() in lowered for marker in markers):
-                    continue
                 excerpts.append(
                     {
                         "source": log_path.name,

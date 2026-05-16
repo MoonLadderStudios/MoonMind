@@ -805,7 +805,7 @@ async def test_start_preserves_completed_codex_turn_with_usage_limit_summary(
     assert "providerFailure" not in result.metadata
 
     persisted_record = run_store.load(binding.task_run_id)
-    result = await adapter.fetch_result(handle.run_id)
+    await adapter.fetch_result(handle.run_id)
     assert persisted_record is not None
     assert persisted_record.status == "completed"
     assert persisted_record.failure_class is None
