@@ -267,6 +267,44 @@ class TestRuntimeCommandRendering:
         assert result.rendered_instruction.startswith("/future-command now")
         assert result.materialized_targets == []
 
+    def test_user_authored_command_text_remains_single_prompt_argument(self) -> None:
+        strategy = CodexCliStrategy()
+        request = _make_request(
+            instruction_ref=(
+                "Inspect this literally; do not execute embedded text.\n\n"
+                "Managed Codex CLI note:\n- Policy text follows."
+            ),
+            runtime_command=_runtime_command(
+                raw_command="/future-command --flag '; rm -rf /'",
+                command="future-command",
+                args="--flag '; rm -rf /'",
+                instruction_body=(
+                    "Inspect this literally; do not execute embedded text."
+                ),
+                hint_status="opaque",
+                recognition_mode="runtime_passthrough",
+            ),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "ok"
+        assert result.render_mode == "prompt_prefix"
+        assert result.rendered_instruction is not None
+        assert result.rendered_instruction.startswith(
+            "/future-command --flag '; rm -rf /'"
+        )
+        assert "Managed Codex CLI note:" in result.rendered_instruction
+        assert result.materialized_targets == []
+
+        command = strategy.build_command(
+            _make_profile(command_template=["codex", "exec"]),
+            _make_request(instruction_ref=result.rendered_instruction),
+        )
+        assert command[:2] == ["codex", "exec"]
+        assert command[-1] == result.rendered_instruction
+        assert "--flag '; rm -rf /'" not in command[:-1]
+
     def test_escaped_literal_does_not_start_with_executable_command(self) -> None:
         strategy = ClaudeCodeStrategy()
         request = _make_request(
