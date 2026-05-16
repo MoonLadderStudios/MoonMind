@@ -3850,7 +3850,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [previewFailureMessages, setPreviewFailureMessages] = useState<
     Record<string, string>
   >({});
-  const [submitMessage, setSubmitMessage] = useState<string | null>(null);
+  const [submitMessageState, setSubmitMessageState] = useState<
+    { text: string; tone: "error" | "pending" } | null
+  >(null);
+  const submitMessage = submitMessageState?.text ?? null;
+  const submitMessageTone = submitMessageState?.tone ?? "error";
+  const setSubmitMessage = (
+    text: string | null,
+    tone: "error" | "pending" = "error",
+  ) => {
+    setSubmitMessageState(text === null ? null : { text, tone });
+  };
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isDeletingPreset, setIsDeletingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -6705,7 +6715,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           message: "Expanding preset...",
         },
       });
-      setSubmitMessage("Expanding preset...");
+      setSubmitMessage("Expanding preset...", "pending");
 
       try {
         const detail =
@@ -6912,9 +6922,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         submissionSteps = expanded.steps;
         submissionAppliedTemplates = expanded.appliedTemplates;
         if (expanded.warnings.length > 0) {
-          setSubmitMessage(expanded.warnings.join(" "));
+          setSubmitMessage(expanded.warnings.join(" "), "pending");
         } else {
-          setSubmitMessage("Creating task...");
+          setSubmitMessage("Creating task...", "pending");
         }
       } catch (error) {
         const failure =
@@ -9561,11 +9571,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         </label>
         <p
           id="queue-submit-message"
-          role={submitMessage ? "alert" : undefined}
-          aria-live={submitMessage ? "assertive" : undefined}
+          role={
+            submitMessage
+              ? submitMessageTone === "error"
+                ? "alert"
+                : "status"
+              : undefined
+          }
+          aria-live={
+            submitMessage
+              ? submitMessageTone === "error"
+                ? "assertive"
+                : "polite"
+              : undefined
+          }
           className={
             submitMessage
-              ? "queue-submit-message notice error"
+              ? submitMessageTone === "pending"
+                ? "queue-submit-message notice pending"
+                : "queue-submit-message notice error"
               : "queue-submit-message small"
           }
         >

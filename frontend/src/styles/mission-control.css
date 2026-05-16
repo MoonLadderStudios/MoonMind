@@ -2218,6 +2218,12 @@ tr[data-proposal-id].proposal-consuming td {
   color: rgb(var(--mm-ok));
 }
 
+.notice.pending {
+  border-color: rgb(var(--mm-warn) / 0.5);
+  background: rgb(var(--mm-warn) / 0.1);
+  color: rgb(var(--mm-warn));
+}
+
 .proposal-action-feedback {
   min-height: 3.2rem;
 }
