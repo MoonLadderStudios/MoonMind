@@ -212,33 +212,37 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             (step.get("skill") or step.get("tool"))["id"]
             for step in jira_implement_template.latest_version.steps
         ]
-        assert jira_implement_steps[0] == "jira.check_blockers"
-        assert jira_implement_steps[1] == "jira.load_preset_brief"
+        assert jira_implement_steps[0] == "jira.load_preset_brief"
+        assert jira_implement_steps[1] == "auto"
+        assert jira_implement_steps[2] == "jira.check_blockers"
         assert jira_implement_steps[-1] == "jira-issue-updater"
         assert len(jira_implement_steps) == 8
         implement_step_titles = [
             step["title"] for step in jira_implement_template.latest_version.steps
         ]
-        assert implement_step_titles[0] == "Check Jira blockers before implementation"
-        assert implement_step_titles[1] == "Load Jira preset brief"
-        assert implement_step_titles[2] == "Assess existing implementation state"
+        assert implement_step_titles[0] == "Load Jira preset brief"
+        assert implement_step_titles[1] == "Assess existing implementation state"
+        assert implement_step_titles[2] == "Check Jira blockers before implementation"
         assert implement_step_titles[3] == "Move Jira issue to In Progress"
         assert "Implement the Jira issue" in implement_step_titles
         assert "Verify implementation" in implement_step_titles
         assert "Create pull request" in implement_step_titles
         assert implement_step_titles[-1] == "Finalize Jira status"
-        implement_blocker_step = jira_implement_template.latest_version.steps[0]
+        implement_brief_step = jira_implement_template.latest_version.steps[0]
+        assert implement_brief_step["type"] == "tool"
+        assert implement_brief_step["tool"]["id"] == "jira.load_preset_brief"
+        implement_assessment_step = jira_implement_template.latest_version.steps[1]
+        assert implement_assessment_step["title"] == "Assess existing implementation state"
+        implement_blocker_step = jira_implement_template.latest_version.steps[2]
         assert implement_blocker_step["type"] == "tool"
         assert implement_blocker_step["tool"]["id"] == "jira.check_blockers"
         assert (
             "deterministic trusted Jira blocker preflight"
             in implement_blocker_step["instructions"]
         )
-        implement_brief_step = jira_implement_template.latest_version.steps[1]
-        assert implement_brief_step["type"] == "tool"
-        assert implement_brief_step["tool"]["id"] == "jira.load_preset_brief"
-        implement_assessment_step = jira_implement_template.latest_version.steps[2]
-        assert implement_assessment_step["title"] == "Assess existing implementation state"
+        assert (
+            "FULLY_IMPLEMENTED" in implement_blocker_step["instructions"]
+        )
         assert implement_assessment_step["skill"]["id"] == "auto"
         assert (
             "FULLY_IMPLEMENTED" in implement_assessment_step["instructions"]
