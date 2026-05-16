@@ -1629,6 +1629,48 @@ async def test_provider_profile_reference_reports_missing_and_disabled_diagnosti
 
 
 @pytest.mark.asyncio
+async def test_provider_profile_reference_rejects_enabled_not_ready_profile_without_plaintext(
+    settings_session_maker,
+) -> None:
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            ManagedSecret(
+                slug="disabled-profile-secret",
+                ciphertext="disabled-secret-plaintext",
+                status=SecretStatus.DISABLED,
+                details={},
+            )
+        )
+        settings_session.add(
+            ManagedAgentProviderProfile(
+                profile_id="enabled-not-ready-profile",
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"provider_api_key": "db://disabled-profile-secret"},
+                enabled=True,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(env={}, session=settings_session)
+        with pytest.raises(SettingsValidationError) as not_ready:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={
+                    "workflow.default_provider_profile_ref": "enabled-not-ready-profile"
+                },
+                expected_versions={"workflow.default_provider_profile_ref": 1},
+            )
+
+    assert not_ready.value.issues[0].code == "provider_profile_not_ready"
+    dumped = str([issue.model_dump() for issue in not_ready.value.issues])
+    assert "disabled-secret-plaintext" not in dumped
+    assert "disabled-profile-secret" in dumped
+
+
+@pytest.mark.asyncio
 async def test_provider_profile_override_preserves_resettable_source(
     settings_session_maker,
 ) -> None:
