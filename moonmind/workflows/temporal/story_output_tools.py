@@ -42,7 +42,6 @@ JIRA_DEPENDENCY_MODES = frozenset(
 )
 STORY_IMPLEMENTATION_STATUS_FULLY_IMPLEMENTED = "fully_implemented"
 STORY_IMPLEMENTATION_STATUS_PARTIALLY_IMPLEMENTED = "partially_implemented"
-STORY_IMPLEMENTATION_STATUS_NOT_IMPLEMENTED = "not_implemented"
 STORY_IMPLEMENTATION_STATUS_UNVERIFIABLE = "unverifiable"
 STORY_JIRA_ACTION_CREATE_ISSUE = "create_issue"
 STORY_JIRA_ACTION_CREATE_REMAINING_WORK_ISSUE = "create_remaining_work_issue"
@@ -613,10 +612,10 @@ def _story_for_remaining_jira_work(
     story: Mapping[str, Any],
     *,
     index: int,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     remaining_work = _story_remaining_work(story)
     if not remaining_work:
-        return dict(story)
+        return None
 
     adjusted = dict(story)
     original_summary = _story_summary(story, index=index)
@@ -650,6 +649,10 @@ def _story_for_remaining_jira_work(
     )
     if acceptance:
         adjusted["acceptanceCriteria"] = acceptance
+        adjusted.pop("acceptance_criteria", None)
+    else:
+        adjusted.pop("acceptanceCriteria", None)
+        adjusted.pop("acceptance_criteria", None)
     requirements = _remaining_work_list(
         remaining_work,
         "requirements",
@@ -658,6 +661,8 @@ def _story_for_remaining_jira_work(
     )
     if requirements:
         adjusted["requirements"] = requirements
+    else:
+        adjusted.pop("requirements", None)
     adjusted["originalStorySummary"] = original_summary
     return adjusted
 
@@ -719,6 +724,19 @@ def _reconcile_stories_for_jira_creation(
             or status == STORY_IMPLEMENTATION_STATUS_PARTIALLY_IMPLEMENTED
         ):
             adjusted = _story_for_remaining_jira_work(story, index=index)
+            if adjusted is None:
+                blocked_record = _story_reconciliation_record(
+                    story,
+                    index=index,
+                    action=STORY_JIRA_ACTION_MANUAL_REVIEW,
+                )
+                blocked_record.setdefault(
+                    "reason",
+                    "Partially implemented stories require remainingWork before "
+                    "Jira creation can safely narrow the issue scope.",
+                )
+                blocked.append(blocked_record)
+                continue
             partial_adjusted.append(
                 _story_reconciliation_record(story, index=index, action=action)
             )

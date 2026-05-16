@@ -236,6 +236,71 @@ async def test_create_jira_issues_narrows_partially_implemented_story_to_remaini
     assert "Bundle download link is visible." in request.description
 
 @pytest.mark.asyncio
+async def test_create_jira_issues_blocks_partial_story_without_remaining_work():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {"projectKey": "MM", "issueTypeId": "10001"},
+            },
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "Partially done without a remainder",
+                    "implementationStatus": "partially_implemented",
+                    "acceptanceCriteria": ["Original completed criterion."],
+                    "requirements": ["Original completed requirement."],
+                }
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["storyOutput"]["status"] == "jira_noop"
+    assert result.outputs["storyOutput"]["blockedStories"][0]["storyId"] == "STORY-001"
+    assert "remainingWork" in result.outputs["storyOutput"]["blockedStories"][0]["reason"]
+    assert result.outputs["storyOutput"]["partialStoriesAdjusted"] == []
+    assert service.requests == []
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_drops_original_criteria_when_partial_remaining_lists_missing():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {"projectKey": "MM", "issueTypeId": "10001"},
+            },
+            "stories": [
+                {
+                    "id": "STORY-001",
+                    "summary": "Partially done",
+                    "description": "Original story description.",
+                    "implementationStatus": "partially_implemented",
+                    "acceptanceCriteria": ["Original completed criterion."],
+                    "requirements": ["Original completed requirement."],
+                    "remainingWork": {
+                        "summary": "Complete the missing behavior",
+                        "description": "Implement only the missing behavior.",
+                    },
+                }
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    request = service.requests[0]
+    assert request.summary == "Complete the missing behavior"
+    assert "Implement only the missing behavior." in request.description
+    assert "Acceptance Criteria\nOriginal completed criterion." not in request.description
+    assert "Requirements\nOriginal completed requirement." not in request.description
+
+@pytest.mark.asyncio
 async def test_load_jira_preset_brief_uses_trusted_jira_issue_payload():
     service = _FakeJiraService()
     service.issue_responses["MM-657"] = {
