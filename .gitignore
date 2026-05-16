@@ -42,8 +42,9 @@ uv.lock
 agent_jobs/
 
 # Runtime / ephemeral data (never commit)
-var/
+/var/
 /artifacts/
+/specs/
 live_streams.spool
 .specify/feature.json
 

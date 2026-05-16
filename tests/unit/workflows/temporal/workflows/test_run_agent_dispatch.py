@@ -630,6 +630,23 @@ class TestMapAgentRunResult(unittest.TestCase):
         self.assertEqual(result["status"], "FAILED")
         self.assertEqual(result["outputs"]["error"], "execution_error")
 
+    def test_failure_result_preserves_provider_failure_fields(self) -> None:
+        wf = MoonMindRunWorkflow()
+        result = wf._map_agent_run_result({
+            "summary": "http 401",
+            "output_refs": [],
+            "failure_class": "user_error",
+            "providerErrorCode": "401",
+            "retryRecommendation": "reauthenticate",
+        })
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(result["outputs"]["error"], "user_error")
+        self.assertEqual(result["outputs"]["providerErrorCode"], "401")
+        self.assertEqual(
+            result["outputs"]["retryRecommendation"],
+            "reauthenticate",
+        )
+
     def test_handles_pydantic_model(self) -> None:
         from moonmind.schemas.agent_runtime_models import AgentRunResult
 
