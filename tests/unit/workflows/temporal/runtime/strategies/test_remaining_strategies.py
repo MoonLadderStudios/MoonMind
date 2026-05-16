@@ -303,7 +303,9 @@ class TestRuntimeCommandRendering:
         )
         assert command[:2] == ["codex", "exec"]
         assert command[-1] == result.rendered_instruction
-        assert "--flag '; rm -rf /'" not in command[:-1]
+        assert len(command) == 5
+        assert "--flag" not in command[:-1]
+        assert "rm" not in command[:-1]
 
     def test_escaped_literal_does_not_start_with_executable_command(self) -> None:
         strategy = ClaudeCodeStrategy()

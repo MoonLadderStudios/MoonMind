@@ -205,6 +205,8 @@ def test_runtime_command_does_not_create_workflow_action_steps() -> None:
     assert command["hintStatus"] == "opaque"
     assert command["recognitionMode"] == "runtime_passthrough"
     assert snapshot["steps"] == []
+    # Runtime passthrough commands must stay provider-owned and must not be
+    # promoted into workflow action fields if similar command names are added.
     assert "workflowAction" not in snapshot["objective"]
     assert "action" not in snapshot["objective"]
 
