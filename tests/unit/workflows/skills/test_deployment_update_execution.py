@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 
 import pytest
@@ -10,8 +12,11 @@ from moonmind.workflows.skills.deployment_execution import (
     ComposeVerification,
     DeploymentUpdateExecutor,
     DeploymentUpdateLockManager,
+    FileDeploymentUpdateLockManager,
+    FileDesiredStateStore,
     HostDockerComposeRunner,
     InMemoryDesiredStateStore,
+    TemporalDeploymentEvidenceWriter,
     _ensure_command_succeeded,
     _is_host_absolute_path,
     _remap_host_compose_path,
@@ -297,6 +302,63 @@ async def test_same_stack_lock_contention_fails_before_side_effects() -> None:
 
 
 @pytest.mark.asyncio
+async def test_file_stack_lock_rejects_second_process_boundary_acquire(tmp_path) -> None:
+    manager = FileDeploymentUpdateLockManager(lock_dir=str(tmp_path / "locks"))
+    lease = await manager.acquire("moonmind")
+
+    try:
+        with pytest.raises(ToolFailure) as exc_info:
+            await manager.acquire("moonmind")
+    finally:
+        await lease.release()
+
+    assert exc_info.value.error_code == "DEPLOYMENT_LOCKED"
+    assert exc_info.value.details["failureClass"] == "deployment_lock_unavailable"
+    assert not (tmp_path / "locks" / "moonmind.lock").exists()
+
+
+@pytest.mark.asyncio
+async def test_file_stack_lock_rejects_path_traversal_stack_name(tmp_path) -> None:
+    manager = FileDeploymentUpdateLockManager(lock_dir=str(tmp_path / "locks"))
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await manager.acquire("../moonmind")
+
+    assert exc_info.value.error_code == "INVALID_STACK_NAME"
+    assert not (tmp_path / "locks").exists()
+
+
+@pytest.mark.asyncio
+async def test_file_stack_lock_recovers_stale_lock_before_acquire(tmp_path) -> None:
+    lock_dir = tmp_path / "locks"
+    lock_dir.mkdir()
+    lock_path = lock_dir / "moonmind.lock"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "stack": "moonmind",
+                "pid": 999999999,
+                "createdAt": (
+                    datetime.now(UTC) - timedelta(hours=7)
+                ).isoformat().replace("+00:00", "Z"),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manager = FileDeploymentUpdateLockManager(lock_dir=str(lock_dir))
+
+    lease = await manager.acquire("moonmind")
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert payload["pid"] == os.getpid()
+        assert payload["stack"] == "moonmind"
+    finally:
+        await lease.release()
+
+
+@pytest.mark.asyncio
 async def test_lifecycle_order_persists_desired_state_before_compose_up() -> None:
     executor, store, _evidence, _runner, events = _executor()
 
@@ -311,6 +373,74 @@ async def test_lifecycle_order_persists_desired_state_before_compose_up() -> Non
     assert store.records[0]["resolvedDigest"] == "sha256:" + "a" * 64
     assert store.records[0]["reason"] == "Update to the latest tested build"
     assert store.records[0]["sourceRunId"] == "run-123"
+
+
+@pytest.mark.asyncio
+async def test_file_desired_state_store_writes_compose_env_and_audit_json(
+    tmp_path,
+) -> None:
+    env_file = tmp_path / "state" / ".env.deploy"
+    json_file = tmp_path / "state" / "desired-state.json"
+    store = FileDesiredStateStore(
+        env_file_path=str(env_file),
+        json_file_path=str(json_file),
+    )
+
+    ref = await store.persist(
+        {
+            "stack": "moonmind",
+            "imageRepository": "ghcr.io/moonladderstudios/moonmind",
+            "requestedReference": "stable",
+            "resolvedDigest": "sha256:" + "b" * 64,
+            "reason": "Operator requested stable",
+            "operator": "admin@example.com",
+            "createdAt": "2026-04-26T00:00:00Z",
+            "sourceRunId": "depupd_123",
+        }
+    )
+
+    assert ref == f"file:{env_file}"
+    env_text = env_file.read_text(encoding="utf-8")
+    assert (
+        'MOONMIND_IMAGE="ghcr.io/moonladderstudios/moonmind@sha256:'
+        + "b" * 64
+        + '"'
+    ) in env_text
+    assert (
+        'MOONMIND_IMAGE_REQUESTED="ghcr.io/moonladderstudios/moonmind:stable"'
+        in env_text
+    )
+    assert 'MOONMIND_DEPLOYMENT_RUN_ID="depupd_123"' in env_text
+    audit = json.loads(json_file.read_text(encoding="utf-8"))
+    assert audit["stack"] == "moonmind"
+    assert audit["operator"] == "admin@example.com"
+    assert audit["reason"] == "Operator requested stable"
+
+
+@pytest.mark.asyncio
+async def test_file_desired_state_store_quotes_compose_env_values(tmp_path) -> None:
+    env_file = tmp_path / "state" / ".env.deploy"
+    json_file = tmp_path / "state" / "desired-state.json"
+    store = FileDesiredStateStore(
+        env_file_path=str(env_file),
+        json_file_path=str(json_file),
+    )
+
+    await store.persist(
+        {
+            "stack": "moonmind",
+            "imageRepository": "ghcr.io/moonladderstudios/moonmind",
+            "requestedReference": 'stable"quoted',
+            "sourceRunId": "depupd_$123#tag",
+        }
+    )
+
+    env_text = env_file.read_text(encoding="utf-8")
+    assert (
+        'MOONMIND_IMAGE="ghcr.io/moonladderstudios/moonmind:stable\\"quoted"'
+        in env_text
+    )
+    assert 'MOONMIND_DEPLOYMENT_RUN_ID="depupd_$123#tag"' in env_text
 
 
 def test_changed_services_command_omits_force_recreate() -> None:
@@ -829,6 +959,22 @@ def test_compose_base_command_accepts_windows_host_paths(tmp_path):
     assert command[-1] == str(compose)
 
 
+def test_compose_base_command_uses_env_file_when_desired_state_exists(tmp_path):
+    compose = tmp_path / "docker-compose.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    env_file = tmp_path / ".env.deploy"
+    env_file.write_text("MOONMIND_IMAGE=example/app:tag\n", encoding="utf-8")
+
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        env_file=str(env_file),
+    )
+
+    command = runner._compose_base_command()
+
+    assert command[-2:] == ["--env-file", str(env_file)]
+
+
 @pytest.mark.asyncio
 async def test_host_compose_runner_returns_bounded_command_output_tails(
     tmp_path, monkeypatch
@@ -873,6 +1019,85 @@ async def test_host_compose_runner_returns_bounded_command_output_tails(
     assert result["stderr"] == "err tail"
     assert result["command"][-1] == "ps"
     assert captured["cwd"] == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_host_compose_runner_prefers_compose_env_file_over_process_override(
+    tmp_path, monkeypatch
+):
+    compose = tmp_path / "docker-compose.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    env_file = tmp_path / ".env.deploy"
+    env_file.write_text("MOONMIND_IMAGE=example/app@sha256:abc\n", encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"ok", b""
+
+    async def fake_create_subprocess_exec(
+        *args: str,
+        cwd: str,
+        env: Mapping[str, str],
+        stdout: Any,
+        stderr: Any,
+    ):
+        captured["args"] = args
+        captured["env"] = env
+        return FakeProcess()
+
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_exec", fake_create_subprocess_exec
+    )
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        env_file=str(env_file),
+    )
+
+    await runner._run_compose_command(
+        ("docker", "compose", "pull"),
+        requested_image="example/app:stable",
+    )
+
+    assert "--env-file" in captured["args"]
+    assert captured["env"].get("MOONMIND_IMAGE") != "example/app:stable"
+
+
+@pytest.mark.asyncio
+async def test_temporal_deployment_evidence_writer_persists_json_artifact() -> None:
+    class FakeArtifact:
+        artifact_id = "artifact-123"
+
+    class FakeArtifactService:
+        def __init__(self) -> None:
+            self.created: dict[str, Any] | None = None
+            self.completed: dict[str, Any] | None = None
+
+        async def create(self, **kwargs: Any):
+            self.created = kwargs
+            return FakeArtifact(), object()
+
+        async def write_complete(self, **kwargs: Any):
+            self.completed = kwargs
+            return FakeArtifact()
+
+    service = FakeArtifactService()
+    writer = TemporalDeploymentEvidenceWriter(
+        artifact_service=service,
+        principal="system:deployment",
+        execution_ref={"workflow_id": "wf", "run_id": "run"},
+    )
+
+    ref = await writer.write("verification", {"status": "SUCCEEDED"})
+
+    assert ref == "artifact-123"
+    assert service.created is not None
+    assert service.created["metadata_json"]["deploymentEvidenceKind"] == "verification"
+    assert service.completed is not None
+    payload = json.loads(service.completed["payload"].decode("utf-8"))
+    assert payload["status"] == "SUCCEEDED"
 
 
 @pytest.mark.asyncio

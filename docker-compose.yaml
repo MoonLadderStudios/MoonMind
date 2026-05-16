@@ -550,12 +550,16 @@ services:
       - MOONMIND_DEPLOYMENT_PROJECT_DIR=${MOONMIND_DEPLOYMENT_PROJECT_DIR:-}
       - MOONMIND_DEPLOYMENT_COMPOSE_FILE=${MOONMIND_DEPLOYMENT_COMPOSE_FILE:-}
       - MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR=/workspace/host_project
+      - MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE:-/workspace/deployment_state/.env.deploy}
+      - MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE:-/workspace/deployment_state/desired-state.json}
+      - MOONMIND_DEPLOYMENT_LOCK_DIR=${MOONMIND_DEPLOYMENT_LOCK_DIR:-/workspace/deployment_state/locks}
       - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - .env
     volumes:
       - .:/workspace/host_project:ro
+      - ./deploy/state:/workspace/deployment_state:rw
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro

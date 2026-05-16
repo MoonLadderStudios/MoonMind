@@ -611,6 +611,9 @@ def test_deployment_update_executor_is_enabled_only_with_project_mount(
 ):
     monkeypatch.delenv("MOONMIND_DEPLOYMENT_PROJECT_DIR", raising=False)
     monkeypatch.delenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", raising=False)
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", raising=False)
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", raising=False)
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_LOCK_DIR", raising=False)
     monkeypatch.delenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", raising=False)
     # Point the local mount at a path that doesn't exist so auto-detection
     # cleanly returns None when no override is set.
@@ -624,6 +627,10 @@ def test_deployment_update_executor_is_enabled_only_with_project_mount(
     compose_file.write_text("services: {}\n", encoding="utf-8")
     monkeypatch.setenv("MOONMIND_DEPLOYMENT_PROJECT_DIR", str(tmp_path))
     monkeypatch.setenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", str(compose_file))
+    env_file = tmp_path / "deploy" / "state" / ".env.deploy"
+    lock_dir = tmp_path / "deploy" / "state" / "locks"
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", str(env_file))
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCK_DIR", str(lock_dir))
     monkeypatch.setenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind-test")
 
     executor = _build_deployment_update_executor()
@@ -634,6 +641,8 @@ def test_deployment_update_executor_is_enabled_only_with_project_mount(
     assert executor.runner.local_project_dir is None
     assert executor.runner.compose_file == str(compose_file)
     assert executor.runner.project_name == "moonmind-test"
+    assert executor.runner.env_file == str(env_file)
+    assert executor.lock_manager.lock_dir == str(lock_dir)
 
 
 def test_deployment_update_executor_auto_detects_host_path(
@@ -648,6 +657,9 @@ def test_deployment_update_executor_auto_detects_host_path(
 
     monkeypatch.delenv("MOONMIND_DEPLOYMENT_PROJECT_DIR", raising=False)
     monkeypatch.delenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", raising=False)
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", raising=False)
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", raising=False)
+    monkeypatch.delenv("MOONMIND_DEPLOYMENT_LOCK_DIR", raising=False)
     monkeypatch.delenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", raising=False)
     monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(local_mount))
 

@@ -44,6 +44,9 @@ agent_jobs/
 # Runtime / ephemeral data (never commit)
 var/
 /artifacts/
+/deploy/state/.env.deploy
+/deploy/state/desired-state.json
+/deploy/state/locks/
 live_streams.spool
 .specify/feature.json
 

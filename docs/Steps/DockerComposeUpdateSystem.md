@@ -504,6 +504,24 @@ Digest-pinned example:
 MOONMIND_IMAGE=ghcr.io/moonladderstudios/moonmind@sha256:...
 ```
 
+The default Compose deployment-control worker uses a read-only checkout mount
+plus a narrow writable deployment-state mount:
+
+```text
+/workspace/host_project        # read-only Compose project
+/workspace/deployment_state    # writable desired-state files
+```
+
+By default, the allowlisted env file is:
+
+```text
+/workspace/deployment_state/.env.deploy
+```
+
+The Compose runner passes that file with `docker compose --env-file` whenever
+it exists. This keeps the active deployment target durable outside the worker
+process while avoiding arbitrary caller-selected file paths.
+
 ## 9.2 Desired-state persistence rule
 
 The requested target image must be persisted before Compose is brought up so that the desired state survives service restarts.
@@ -518,6 +536,10 @@ The persisted desired state should record:
 - reason
 - created timestamp
 - source run ID
+
+The env file is the Compose-consumed desired state. A JSON sidecar stores the
+full audit payload, including fields that should not be projected into process
+environment variables.
 
 ## 9.3 Mutable tag rule
 
@@ -553,6 +575,16 @@ The backend validates:
 The workflow acquires a lock for the stack.
 
 If another update is running, the request fails with `DEPLOYMENT_LOCKED` or remains queued according to policy.
+
+The default deployment-control worker uses an atomic file lock under the
+allowlisted deployment-state mount, for example:
+
+```text
+/workspace/deployment_state/locks/moonmind.lock
+```
+
+This lock is shared by worker processes that mount the same deployment-state
+directory and is released when the update lifecycle exits.
 
 ## 10.3 Capture before state
 
@@ -641,6 +673,15 @@ MoonMind supports two implementation modes.
 A trusted worker with `deployment_control` and `docker_admin` capabilities executes Compose commands directly on the deployment host.
 
 This mode is simple when the worker already runs on the host that owns the Docker daemon.
+
+The production Compose deployment should prefer this mode until the ephemeral
+updater container has an equivalent implementation. The worker is configured
+with:
+
+- `MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR` for the read-only Compose checkout
+- `MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE` for the allowlisted env file
+- `MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE` for the audit sidecar
+- `MOONMIND_DEPLOYMENT_LOCK_DIR` for durable per-stack lock files
 
 ## 11.2 Ephemeral updater container
 

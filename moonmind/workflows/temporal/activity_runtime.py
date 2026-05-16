@@ -1701,6 +1701,12 @@ class TemporalSkillActivities:
         execution_context = dict(context or {})
         if idempotency_key is not None:
             execution_context["idempotency_key"] = idempotency_key
+        if resolved_artifact_service is not None:
+            execution_context["temporal_artifact_service"] = resolved_artifact_service
+            execution_context.setdefault(
+                "deployment_evidence_principal",
+                principal or "system:deployment",
+            )
 
         return await execute_skill_activity(
             invocation_payload=invocation_payload,
