@@ -191,6 +191,26 @@ def test_runtime_command_unknown_valid_commands_are_opaque_not_rejected() -> Non
     assert command["requiresRuntimeRecognition"] is True
 
 
+def test_runtime_command_does_not_create_workflow_action_steps() -> None:
+    snapshot = build_authoritative_task_input_snapshot(
+        task_payload={
+            "instructions": "/future-command --dangerous-looking\nUse provider behavior.",
+            "runtime": {"mode": "codex"},
+        }
+    )
+
+    command = snapshot["objective"]["runtimeCommand"]
+    assert command["command"] == "future-command"
+    assert command["args"] == "--dangerous-looking"
+    assert command["hintStatus"] == "opaque"
+    assert command["recognitionMode"] == "runtime_passthrough"
+    assert snapshot["steps"] == []
+    # Runtime passthrough commands must stay provider-owned and must not be
+    # promoted into workflow action fields if similar command names are added.
+    assert "workflowAction" not in snapshot["objective"]
+    assert "action" not in snapshot["objective"]
+
+
 def test_runtime_command_preserves_opaque_provider_command_lines() -> None:
     snapshot = build_authoritative_task_input_snapshot(
         task_payload={
