@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -1151,13 +1152,14 @@ async def test_failed_settings_write_creates_redacted_audit_event_with_request_i
         permissions={"settings.workspace.write", "settings.audit.read"}
     )
     raw_secret_value = "gh" + "p_raw_plaintext"
+    request_id = "settings-write-req-1" * 20
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         rejected = await client.patch(
             "/api/v1/settings/workspace",
-            headers={"x-request-id": "settings-write-req-1"},
+            headers={"x-request-id": request_id},
             json={
                 "changes": {"integrations.github.token_ref": raw_secret_value},
                 "expected_versions": {"integrations.github.token_ref": 1},
@@ -1180,7 +1182,7 @@ async def test_failed_settings_write_creates_redacted_audit_event_with_request_i
     assert item["key"] == "integrations.github.token_ref"
     assert item["scope"] == "workspace"
     assert item["validation_outcome"] == "rejected"
-    assert item["request_id"] == "settings-write-req-1"
+    assert item["request_id"] == request_id[:255]
     assert item["reason"] == "wire github token"
     assert item["apply_mode"] == "next_launch"
     assert item["redacted"] is True
@@ -1188,6 +1190,34 @@ async def test_failed_settings_write_creates_redacted_audit_event_with_request_i
     assert item["new_value"] is None
     assert "stored_redacted" in item["redaction_reasons"]
     assert raw_secret_value not in audit.text
+
+
+@pytest.mark.asyncio
+async def test_rejected_write_audit_failure_is_logged(
+    settings_api_db,
+    settings_user_override,
+    monkeypatch,
+    caplog,
+):
+    user = settings_user_override(permissions={"settings.workspace.write"})
+
+    class FailingAuditService(SettingsCatalogService):
+        async def record_rejected_write_audit(self, **kwargs):
+            raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr(settings_router, "SettingsCatalogService", FailingAuditService)
+
+    with caplog.at_level(logging.ERROR, logger=settings_router.__name__):
+        await settings_router._record_rejected_write_audit(
+            scope="workspace",
+            changes={"integrations.github.token_ref": "db://github-token"},
+            user=user,
+            reason="test audit visibility",
+            request_id="req-1",
+        )
+
+    assert "Failed to record rejected settings write audit event" in caplog.text
+    assert "audit unavailable" in caplog.text
 
 
 @pytest.mark.asyncio

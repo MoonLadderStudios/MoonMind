@@ -2241,6 +2241,29 @@ async def test_audit_entries_expose_secret_ref_metadata_with_permission(
 
 
 @pytest.mark.asyncio
+async def test_rejected_audit_entries_expose_safe_secret_ref_metadata_with_permission(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.record_rejected_write_audit(
+            scope="workspace",
+            changes={"integrations.github.token_ref": "db://github-token"},
+            reason="version conflict",
+            request_id="settings-rejected-1",
+        )
+
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read", "secrets.metadata.read"},
+        )
+
+    assert entries[0].event_type == "settings.override.rejected"
+    assert entries[0].new_value == "db://github-token"
+    assert entries[0].redacted is False
+    assert entries[0].request_id == "settings-rejected-1"
+
+
+@pytest.mark.asyncio
 async def test_audit_entries_persist_actor_identity(settings_session_maker):
     user_id = uuid4()
     async with settings_session_maker() as settings_session:

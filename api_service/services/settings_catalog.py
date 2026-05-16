@@ -3752,16 +3752,17 @@ class SettingsCatalogService:
         request_id: str | None,
     ) -> SettingsAuditEvent:
         descriptor_redacted = entry.audit.redact if entry is not None else False
+        contains_unsafe_payload = self._contains_unsafe_payload(new_value)
         unsafe_value = self._contains_secret_like_value(
             new_value,
-        ) or self._contains_unsafe_payload(new_value)
+        ) or contains_unsafe_payload
         redacted = descriptor_redacted or unsafe_value or entry is None
         may_store_secret_ref_metadata = (
             entry is not None
             and entry.value_type == "secret_ref"
             and descriptor_redacted
             and isinstance(new_value, str)
-            and not unsafe_value
+            and not contains_unsafe_payload
         )
         return SettingsAuditEvent(
             event_type="settings.override.rejected",

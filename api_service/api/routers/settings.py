@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Any, get_args
 from uuid import UUID
 
@@ -29,9 +30,11 @@ from api_service.services.settings_catalog import (
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 SETTINGS_CURRENT_USER_DEP = get_current_user()
+logger = logging.getLogger(__name__)
 
 VALID_SETTING_SCOPES = set(get_args(SettingScope))
 VALID_SETTING_SECTIONS = set(get_args(SettingSection))
+_MAX_SETTINGS_REQUEST_ID_LENGTH = 255
 
 
 def _should_attempt_settings_db() -> bool:
@@ -145,9 +148,12 @@ def _settings_db_error_response(*, key: str | None = None, scope: str) -> JSONRe
 
 
 def _settings_request_id(request: Request) -> str | None:
-    return request.headers.get("x-request-id") or request.headers.get(
+    request_id = request.headers.get("x-request-id") or request.headers.get(
         "x-correlation-id"
     )
+    if request_id is None:
+        return None
+    return request_id[:_MAX_SETTINGS_REQUEST_ID_LENGTH]
 
 
 async def _record_rejected_write_audit(
@@ -172,6 +178,7 @@ async def _record_rejected_write_audit(
                 request_id=request_id,
             )
     except Exception:
+        logger.exception("Failed to record rejected settings write audit event")
         return
 
 
