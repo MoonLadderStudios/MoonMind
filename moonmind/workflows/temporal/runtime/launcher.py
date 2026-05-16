@@ -44,6 +44,103 @@ logger = logging.getLogger(__name__)
 
 _LIVE_LOG_SPOOL_FILENAME = "live_streams.spool"
 
+_SECRET_LIKE_PATTERN = re.compile(
+    r"(ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|AIza[A-Za-z0-9_-]+|ATATT[A-Za-z0-9_-]+|AKIA[A-Za-z0-9]+|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password)=\S+)",
+    re.IGNORECASE,
+)
+
+
+def _compact_string(value: Any) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    return _SECRET_LIKE_PATTERN.sub("***", normalized)[:200]
+
+
+def _runtime_command_mapping(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(by_alias=True, exclude_none=True)
+        return dict(dumped) if isinstance(dumped, Mapping) else {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
+
+
+def build_runtime_command_audit_events(
+    *,
+    runtime_id: str | None,
+    runtime_command: Mapping[str, Any] | Any | None,
+    render_result: Mapping[str, Any] | Any | None = None,
+) -> list[dict[str, str]]:
+    """Build compact, secret-safe runtime command audit events."""
+
+    command_metadata = _runtime_command_mapping(runtime_command)
+    if not command_metadata:
+        return []
+
+    command = _compact_string(command_metadata.get("command"))
+    raw_command = _compact_string(command_metadata.get("rawCommand"))
+    if not command and raw_command.startswith("/"):
+        parts = raw_command[1:].split(maxsplit=1)
+        command = parts[0] if parts else ""
+    if not command:
+        return []
+
+    runtime = _compact_string(
+        runtime_id
+        or command_metadata.get("targetRuntime")
+        or command_metadata.get("runtimeId")
+    )
+    detected_event = {
+        "event": "runtime_command.detected",
+        "runtimeId": runtime,
+        "command": command,
+        "sourcePath": _compact_string(command_metadata.get("sourcePath")),
+        "hintStatus": _compact_string(command_metadata.get("hintStatus")),
+        "recognitionMode": _compact_string(command_metadata.get("recognitionMode")),
+        "runtimeCapabilityVersion": _compact_string(
+            command_metadata.get("runtimeCapabilityVersion")
+        ),
+        "hintCatalogVersion": _compact_string(
+            command_metadata.get("hintCatalogVersion")
+        ),
+    }
+    events: list[dict[str, str]] = [
+        {key: value for key, value in detected_event.items() if value}
+    ]
+
+    render_metadata = _runtime_command_mapping(render_result)
+    if render_metadata:
+        render_mode = _compact_string(
+            render_metadata.get("renderMode") or command_metadata.get("renderMode")
+        )
+        status = _compact_string(render_metadata.get("status")).lower()
+        hint_status = _compact_string(command_metadata.get("hintStatus")).lower()
+        if status in {"passed_through", "passthrough"} or hint_status == "opaque":
+            event = {
+                "event": "runtime_command.passthrough",
+                "runtimeId": runtime,
+                "command": command,
+                "hintStatus": _compact_string(command_metadata.get("hintStatus")),
+                "renderMode": render_mode,
+            }
+        elif status in {"ok", "rendered", "fallback"}:
+            event = {
+                "event": "runtime_command.rendered",
+                "runtimeId": runtime,
+                "command": command,
+                "renderMode": render_mode,
+            }
+        else:
+            event = {}
+        if event:
+            events.append({key: value for key, value in event.items() if value})
+
+    return events
+
+
 class ManagedRuntimeLauncher:
     """Spawns managed agent subprocesses and records them in the run store."""
 
@@ -720,6 +817,13 @@ class ManagedRuntimeLauncher:
             by_alias=True,
             exclude_none=True,
         )
+        runtime_command_events = build_runtime_command_audit_events(
+            runtime_id=str(getattr(strategy, "runtime_id", "") or ""),
+            runtime_command=result.invocation or request.runtime_command,
+            render_result=result,
+        )
+        if runtime_command_events:
+            moonmind_metadata["runtimeCommandAuditEvents"] = runtime_command_events
         if result.status in {"failed", "unsupported"}:
             reason = result.failure_reason or "runtime_command_render_failed"
             raise RuntimeError(reason)
