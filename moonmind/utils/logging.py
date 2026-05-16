@@ -21,12 +21,15 @@ _SECRET_ASSIGNMENT_PATTERN = re.compile(
 _AUTHORIZATION_PATTERN = re.compile(
     r"(?i)\b(authorization\s*:\s*)?bearer\s+[A-Za-z0-9._~+/=-]+"
 )
-_PRIVATE_KEY_PATTERN = re.compile(
-    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
-    re.DOTALL,
-)
-_AUTH_PATH_PATTERN = re.compile(
-    r"(?i)(?:/[^\s\"']*)?(?:\.codex|\.claude|codex-auth|claude-auth|gemini-auth|auth-volume)[^\s\"']*"
+_PRIVATE_KEY_BEGIN = "-----BEGIN "
+_PRIVATE_KEY_END = "-----END "
+_AUTH_PATH_MARKERS = (
+    ".codex",
+    ".claude",
+    "codex-auth",
+    "claude-auth",
+    "gemini-auth",
+    "auth-volume",
 )
 _NON_SECRET_SENTINEL_VALUES = frozenset(
     {"true", "false", "none", "null", "yes", "no", "on", "off"}
@@ -75,16 +78,61 @@ def scrub_github_tokens(text: str) -> str:
         return ""
     return _GITHUB_TOKEN_PATTERN.sub("[REDACTED]", text)
 
+def _redact_private_key_blocks(text: str) -> str:
+    redacted = text
+    while True:
+        upper = redacted.upper()
+        begin = upper.find(_PRIVATE_KEY_BEGIN)
+        if begin == -1:
+            return redacted
+        key_suffix = upper.find("PRIVATE KEY-----", begin)
+        if key_suffix == -1:
+            return redacted[:begin] + "[REDACTED_PRIVATE_KEY]"
+        end_marker = upper.find(_PRIVATE_KEY_END, key_suffix)
+        if end_marker == -1:
+            return redacted[:begin] + "[REDACTED_PRIVATE_KEY]"
+        end_suffix = upper.find("PRIVATE KEY-----", end_marker)
+        if end_suffix == -1:
+            return redacted[:begin] + "[REDACTED_PRIVATE_KEY]"
+        end = end_suffix + len("PRIVATE KEY-----")
+        redacted = (
+            redacted[:begin]
+            + "[REDACTED_PRIVATE_KEY]"
+            + redacted[end:]
+        )
+
+def _redact_auth_paths(text: str) -> str:
+    output: list[str] = []
+    index = 0
+    length = len(text)
+    delimiters = set(" \t\r\n\"'")
+    while index < length:
+        if text[index] in delimiters:
+            output.append(text[index])
+            index += 1
+            continue
+        end = index
+        while end < length and text[end] not in delimiters:
+            end += 1
+        token = text[index:end]
+        token_lower = token.lower()
+        if any(marker in token_lower for marker in _AUTH_PATH_MARKERS):
+            output.append("[REDACTED_AUTH_PATH]")
+        else:
+            output.append(token)
+        index = end
+    return "".join(output)
+
 def redact_sensitive_text(text: str | None) -> str:
     """Scrub common credential-shaped values from browser/artifact text."""
 
     if not text:
         return ""
     redacted = scrub_github_tokens(str(text))
-    redacted = _PRIVATE_KEY_PATTERN.sub("[REDACTED_PRIVATE_KEY]", redacted)
+    redacted = _redact_private_key_blocks(redacted)
     redacted = _AUTHORIZATION_PATTERN.sub("[REDACTED_AUTHORIZATION]", redacted)
     redacted = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1=[REDACTED]", redacted)
-    redacted = _AUTH_PATH_PATTERN.sub("[REDACTED_AUTH_PATH]", redacted)
+    redacted = _redact_auth_paths(redacted)
     return redacted
 
 def redact_sensitive_payload(payload: Any, *, key: str | None = None) -> Any:
