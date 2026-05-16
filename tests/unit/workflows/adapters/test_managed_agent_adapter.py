@@ -177,6 +177,22 @@ async def test_launch_context_exports_execution_profile_ref() -> None:
         == "codex_cli"
     )
 
+async def test_launch_context_rejects_non_mapping_runtime_profile() -> None:
+    with pytest.raises(
+        ValueError, match="runtime_profile must be a mapping of profile fields"
+    ):
+        build_managed_profile_launch_context(
+            profile={
+                "profile_id": "codex_default",
+                "credential_source": "oauth_volume",
+                "runtime_profile": ["not", "a", "mapping"],
+            },
+            runtime_for_profile="codex_cli",
+            workflow_id="wf-agent-run-1",
+            default_credential_source="oauth_volume",
+        )
+
+
 async def test_launch_context_reserved_execution_profile_keys_cannot_be_overridden() -> None:
     context = build_managed_profile_launch_context(
         profile={

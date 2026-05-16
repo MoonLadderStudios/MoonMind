@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import posixpath
+import re
 from datetime import UTC, datetime
 from typing import Any, Literal, Mapping, NoReturn, get_args
 
@@ -573,6 +575,293 @@ class ManagedAgentProviderProfile(BaseModel):
         return self
 
 WorkspaceMode = Literal["tempdir", "shared", "none"]
+ManagedRuntimeWorkloadMode = Literal[
+    "docker-sidecar",
+    "docker-sidecar-rootless",
+    "no-docker",
+]
+
+
+class RuntimeProfileMount(BaseModel):
+    """Declarative mount entry for managed agent runtime profiles."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    name: str | None = None
+    mount_path: str = Field(..., alias="mountPath", min_length=1)
+    source: str | None = None
+    host_path: str | None = Field(None, alias="hostPath")
+
+
+class RuntimeProfileWorkspace(BaseModel):
+    """Workspace declaration shared by agent and sidecar containers."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    volume: str | None = None
+    mount_path: str = Field(..., alias="mountPath", min_length=1)
+    repo_env: str | None = Field(None, alias="repoEnv")
+    lifecycle: Literal["session"] = "session"
+
+
+class RuntimeProfileAgentDockerClient(BaseModel):
+    """Agent-side Docker CLI settings."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    enabled: bool = False
+    compose_plugin: bool = Field(False, alias="composePlugin")
+    daemon_in_agent: bool = Field(False, alias="daemonInAgent")
+
+
+class RuntimeProfileAgent(BaseModel):
+    """Agent container portion of a managed runtime profile."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    image: str | None = None
+    workspace: RuntimeProfileWorkspace
+    docker_client: RuntimeProfileAgentDockerClient = Field(
+        default_factory=RuntimeProfileAgentDockerClient,
+        alias="dockerClient",
+    )
+    env: dict[str, str] = Field(default_factory=dict)
+    mounts: list[RuntimeProfileMount] = Field(default_factory=list)
+
+
+class RuntimeProfileSidecarSocket(BaseModel):
+    """Docker sidecar Unix socket declaration."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    path: str = Field(..., min_length=1)
+    volume_name: str = Field(..., alias="volumeName", min_length=1)
+
+
+class RuntimeProfileSidecarStorage(BaseModel):
+    """Docker sidecar graph storage declaration."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    volume_name: str = Field(..., alias="volumeName", min_length=1)
+    mount_path: str = Field(..., alias="mountPath", min_length=1)
+    lifecycle: Literal["session"] = "session"
+    daemon_scope: Literal["session", "shared"] = Field("session", alias="daemonScope")
+
+
+class RuntimeProfileSidecarSecurity(BaseModel):
+    """Docker sidecar security policy declaration."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    privileged: bool = False
+    host_docker_socket: Literal["forbidden"] = Field(
+        "forbidden", alias="hostDockerSocket"
+    )
+    moonmind_deployment_secrets: Literal["forbidden"] = Field(
+        "forbidden", alias="moonmindDeploymentSecrets"
+    )
+
+
+class RuntimeProfileDockerSidecar(BaseModel):
+    """Docker sidecar portion of a managed runtime profile."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    enabled: bool = False
+    mode: Literal["dind", "dind-rootless"] = "dind"
+    image: str | None = None
+    socket: RuntimeProfileSidecarSocket | None = None
+    storage: RuntimeProfileSidecarStorage | None = None
+    workspace: RuntimeProfileWorkspace | None = None
+    security: RuntimeProfileSidecarSecurity = Field(
+        default_factory=RuntimeProfileSidecarSecurity
+    )
+    env: dict[str, str] = Field(default_factory=dict)
+    mounts: list[RuntimeProfileMount] = Field(default_factory=list)
+
+
+class RuntimeProfilePolicy(BaseModel):
+    """Policy declaration for managed agent runtime profile validation."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    host_docker_access: Literal["forbidden"] = Field(
+        "forbidden", alias="hostDockerAccess"
+    )
+    app_container_control_from_session: Literal["forbidden"] = Field(
+        "forbidden", alias="appContainerControlFromSession"
+    )
+    deployment_secrets_in_session: Literal["forbidden"] = Field(
+        "forbidden", alias="deploymentSecretsInSession"
+    )
+    api_container_workload_docker_socket_access: bool = Field(
+        False, alias="apiContainerWorkloadDockerSocketAccess"
+    )
+
+
+def _image_is_pinned(image: str | None) -> bool:
+    text = str(image or "").strip()
+    if not text:
+        return False
+    if "@sha256:" in text:
+        return True
+    last_segment = text.rsplit("/", 1)[-1]
+    if ":" not in last_segment:
+        return False
+    tag = last_segment.rsplit(":", 1)[-1].strip().lower()
+    return bool(tag) and tag != "latest"
+
+
+def _normalize_posix_path(value: str) -> str:
+    collapsed = re.sub(r"/+", "/", value)
+    return posixpath.normpath(collapsed)
+
+
+def _mounts_host_docker_socket(mounts: list[RuntimeProfileMount]) -> bool:
+    target = "/var/run/docker.sock"
+    for mount in mounts:
+        for candidate in (mount.mount_path, mount.source, mount.host_path):
+            text = str(candidate or "").strip()
+            if not text:
+                continue
+            try:
+                if _normalize_posix_path(text) == target:
+                    return True
+            except (TypeError, ValueError):
+                continue
+    return False
+
+
+class ManagedAgentRuntimeProfile(BaseModel):
+    """Validated managed-session runtime profile for Docker sidecar capability."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    workload_mode: ManagedRuntimeWorkloadMode = Field(..., alias="workloadMode")
+    workspace: RuntimeProfileWorkspace
+    agent: RuntimeProfileAgent
+    docker_sidecar: RuntimeProfileDockerSidecar | None = Field(
+        None, alias="dockerSidecar"
+    )
+    resources: dict[str, Any] = Field(default_factory=dict)
+    readiness: dict[str, Any] = Field(default_factory=dict)
+    policy: RuntimeProfilePolicy = Field(default_factory=RuntimeProfilePolicy)
+
+    @model_validator(mode="after")
+    def _validate_runtime_profile(self) -> "ManagedAgentRuntimeProfile":
+        if _contains_sensitive_key(self.agent.env):
+            raise ValueError(
+                "agent.env must not receive deployment credentials or unrelated "
+                "session tokens; credential exposure would leak MoonMind or "
+                "cross-session authority into the workload"
+            )
+        sidecar = self.docker_sidecar
+        if sidecar is not None and _contains_sensitive_key(sidecar.env):
+            raise ValueError(
+                "dockerSidecar.env must not receive deployment credentials or "
+                "unrelated session tokens; credential exposure would leak MoonMind "
+                "or cross-session authority into the workload"
+            )
+        if _mounts_host_docker_socket(self.agent.mounts) or (
+            sidecar is not None and _mounts_host_docker_socket(sidecar.mounts)
+        ):
+            raise ValueError(
+                "host Docker socket must not be mounted; exposing "
+                "/var/run/docker.sock would grant host-level Docker control"
+            )
+        if self.policy.api_container_workload_docker_socket_access:
+            raise ValueError(
+                "API container must not have normal workload Docker socket access; "
+                "workload Docker control belongs to the isolated session sidecar"
+            )
+
+        if self.workload_mode == "no-docker":
+            if self.agent.docker_client.enabled:
+                raise ValueError(
+                    "agent.dockerClient.enabled must be false for no-docker profiles; "
+                    "task instructions cannot raise Docker capability"
+                )
+            if sidecar is not None and sidecar.enabled:
+                raise ValueError(
+                    "dockerSidecar.enabled must be false for no-docker profiles; "
+                    "task instructions cannot raise Docker capability"
+                )
+            if "DOCKER_HOST" in self.agent.env:
+                raise ValueError(
+                    "agent.env.DOCKER_HOST must not be set for no-docker profiles; "
+                    "task instructions cannot raise Docker capability"
+                )
+            return self
+
+        if sidecar is None or not sidecar.enabled:
+            raise ValueError(
+                "dockerSidecar.enabled must be true for Docker-capable profiles; "
+                "otherwise agent Docker commands would have no per-session daemon"
+            )
+        if not self.agent.docker_client.enabled:
+            raise ValueError(
+                "agent.dockerClient.enabled must be true when dockerSidecar.enabled "
+                "is true; otherwise Docker commands cannot reach the sidecar daemon"
+            )
+        if self.agent.docker_client.daemon_in_agent:
+            raise ValueError(
+                "agent.dockerClient.daemonInAgent must be false; running the daemon "
+                "inside the agent breaks sidecar isolation"
+            )
+        if sidecar.socket is None:
+            raise ValueError(
+                "dockerSidecar.socket.path is required; DOCKER_HOST cannot be "
+                "validated without the declared sidecar socket"
+            )
+        expected_docker_host = f"unix://{sidecar.socket.path}"
+        actual_docker_host = str(self.agent.env.get("DOCKER_HOST") or "").strip()
+        if actual_docker_host != expected_docker_host:
+            raise ValueError(
+                "agent.env.DOCKER_HOST must point at dockerSidecar.socket.path; "
+                "otherwise Docker commands may reach the wrong daemon or fail"
+            )
+        sidecar_workspace_path = (
+            sidecar.workspace.mount_path if sidecar.workspace else self.workspace.mount_path
+        )
+        if self.agent.workspace.mount_path != sidecar_workspace_path:
+            raise ValueError(
+                "agent and dockerSidecar workspace mount paths must match; "
+                "otherwise docker run bind mounts resolve against a different "
+                "filesystem path"
+            )
+        if not _image_is_pinned(sidecar.image):
+            raise ValueError(
+                "dockerSidecar.image sidecar image must be pinned to a non-latest "
+                "tag or digest; floating images make launches non-reproducible"
+            )
+        if sidecar.storage is None:
+            raise ValueError(
+                "dockerSidecar.storage is required; the Docker graph volume must be "
+                "declared per session"
+            )
+        if sidecar.storage.daemon_scope != "session":
+            raise ValueError(
+                "Docker daemon scope must be per session; shared daemons can expose "
+                "containers, images, and credentials across sessions or users"
+            )
+        return self
+
+
+def resolve_managed_runtime_workload_mode(
+    profile: ManagedAgentRuntimeProfile,
+    *,
+    task_requested_workload_mode: str | None = None,
+) -> ManagedRuntimeWorkloadMode:
+    """Return profile workload mode and reject task-level capability elevation."""
+
+    requested = str(task_requested_workload_mode or "").strip()
+    if requested and requested != profile.workload_mode:
+        raise ValueError(
+            "task instructions cannot raise Docker capability; workloadMode is "
+            "read from deployment/profile configuration"
+        )
+    return profile.workload_mode
 
 class RuntimeFileTemplate(BaseModel):
     """Path-aware file materialization contract for managed runtime launch."""
