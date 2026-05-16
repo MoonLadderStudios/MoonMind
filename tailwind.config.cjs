@@ -31,7 +31,8 @@ module.exports = {
       },
       boxShadow: {
         mm: "var(--mm-shadow)",
-        mmGlow: "0 0 0 1px rgb(var(--mm-accent) / 0.55), 0 10px 40px -20px rgb(var(--mm-accent) / 0.65)",
+        mmGlow:
+          "0 0 0 1px rgb(var(--mm-accent) / 0.55), 0 10px 40px -20px rgb(var(--mm-accent) / 0.65)",
       },
       backdropBlur: {
         mm: "18px",

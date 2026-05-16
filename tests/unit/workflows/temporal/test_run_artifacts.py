@@ -2073,6 +2073,229 @@ def test_activity_result_failure_message_prefers_stderr_tail_over_progress_detai
     )
     assert message == "gemini quota exceeded"
 
+def test_activity_result_provider_failure_summary_includes_auth_action() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    message = workflow._activity_result_provider_failure_summary(
+        {
+            "status": "FAILED",
+            "outputs": {
+                "error": "user_error",
+                "summary": "http 401",
+                "providerErrorCode": "401",
+                "retryRecommendation": "reauthenticate",
+                "profileId": "codex_default",
+            },
+        }
+    )
+
+    assert (
+        message
+        == "Provider authentication failed with HTTP 401 for profile codex_default: "
+        "http 401 (retryRecommendation: reauthenticate)"
+    )
+
+def test_activity_result_provider_failure_summary_reads_profile_from_failure() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    message = workflow._activity_result_provider_failure_summary(
+        {
+            "status": "FAILED",
+            "outputs": {
+                "error": "user_error",
+                "providerFailure": {
+                    "providerErrorCode": "401",
+                    "profileId": "codex_default",
+                    "reason": "http 401",
+                    "retryRecommendation": "reauthenticate",
+                },
+            },
+        }
+    )
+
+    assert (
+        message
+        == "Provider authentication failed with HTTP 401 for profile codex_default: "
+        "http 401 (retryRecommendation: reauthenticate)"
+    )
+
+@pytest.mark.asyncio
+async def test_skipped_jira_blocker_wait_restores_executing_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+
+    async def fake_wait_condition(
+        predicate: Callable[[], bool],
+        **_kwargs: Any,
+    ) -> None:
+        assert predicate() is False
+        workflow._jira_blocker_wait_skipped = True
+        assert predicate() is True
+
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+
+    current_result, skipped = await workflow._wait_for_jira_blocker_resolution(
+        execution_result={
+            "status": "COMPLETED",
+            "outputs": {
+                "decision": "blocked",
+                "summary": "Blocked by upstream Jira work.",
+            },
+        },
+        route=type("Route", (), {"activity_type": "mm.skill.execute"})(),
+        execute_payload={},
+        node_id="check-blockers",
+        tool_name=run_workflow_module.JIRA_CHECK_BLOCKERS_TOOL_NAME,
+        tool_type="skill",
+        failure_mode="FAIL_FAST",
+    )
+
+    assert skipped is True
+    assert current_result["outputs"]["decision"] == "blocked"
+    assert workflow._state == run_workflow_module.STATE_EXECUTING
+    assert workflow._jira_blocker_wait_active is False
+    assert workflow._waiting_reason is None
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        assert activity_type == "artifact.read"
+        return json.dumps(
+            {
+                "plan_version": "1.0",
+                "metadata": {
+                    "title": "Test Plan",
+                    "created_at": "2026-03-12T00:00:00Z",
+                    "registry_snapshot": {
+                        "digest": "reg:sha256:" + ("a" * 64),
+                        "artifact_ref": "artifact://registry/1",
+                    },
+                },
+                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                "nodes": [
+                    {
+                        "id": "node-1",
+                        "tool": {
+                            "type": "agent_runtime",
+                            "name": "codex_cli",
+                            "version": "1.0",
+                        },
+                        "inputs": {
+                            "instructions": "Resolve PR",
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "runtime": {
+                                "mode": "codex_cli",
+                                "executionProfileRef": "codex_default",
+                            },
+                        },
+                        "options": {},
+                    }
+                ],
+                "edges": [],
+            }
+        ).encode("utf-8")
+
+    async def fake_execute_child_workflow(*_args: object, **_kwargs: object) -> AgentRunResult:
+        return AgentRunResult(
+            summary="http 401",
+            failureClass="user_error",
+            providerErrorCode="401",
+            retryRecommendation="reauthenticate",
+            metadata={
+                "profileId": "codex_default",
+                "providerFailure": {
+                    "providerErrorCode": "401",
+                    "retryRecommendation": "reauthenticate",
+                    "reason": "http 401",
+                },
+            },
+        )
+
+    async def fake_resolve_skillset_ref(_self: object, **_kwargs: object) -> str:
+        return "art_skillset_1"
+
+    async def fake_bind_task_scoped_session(_self: object, request: object) -> object:
+        return request
+
+    async def fake_fetch_profile_snapshots(_self: object) -> None:
+        return None
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_resolve_agent_node_skillset_ref",
+        fake_resolve_skillset_ref,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_task_scoped_session",
+        fake_bind_task_scoped_session,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_fetch_profile_snapshots",
+        fake_fetch_profile_snapshots,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Provider authentication failed with HTTP 401 for profile "
+            "codex_default: http 401"
+        ),
+    ):
+        await workflow._run_execution_stage(
+            parameters={"repo": "MoonLadderStudios/MoonMind"},
+            plan_ref="art_plan_1",
+        )
+
 def test_blocked_outcome_message_detects_structured_agent_report() -> None:
     workflow = MoonMindRunWorkflow()
 
