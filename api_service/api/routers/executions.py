@@ -1761,6 +1761,8 @@ def _serialize_execution(
         param_profile_id = (
             _coerce_temporal_scalar(task_runtime_payload.get("profileId"))
             or _coerce_temporal_scalar(task_runtime_payload.get("profile_id"))
+            or _coerce_temporal_scalar(task_runtime_payload.get("executionProfileRef"))
+            or _coerce_temporal_scalar(task_runtime_payload.get("execution_profile_ref"))
         ) or None
 
     dependencies_block = (

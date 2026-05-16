@@ -122,6 +122,38 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
 _FIX_PROPOSAL_SKILL_ID = "fix-proposal"
 _CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
 _PR_RESOLVER_SKILL_ID = "pr-resolver"
+
+# Worker runtime modes accepted by MOONMIND_WORKER_RUNTIME. Intentionally a subset
+# of SUPPORTED_RUNTIME_MODES: `codex_cloud` is excluded because it is not a local
+# worker runtime, and aliases (`codex_cli`, `claude_code`) are accepted but
+# canonicalized for execution dispatch via _RUNTIME_MODE_EXECUTION_ALIASES.
+_ALLOWED_WORKER_RUNTIMES = frozenset(
+    {
+        "codex",
+        "codex_cli",
+        "gemini_cli",
+        "claude",
+        "claude_code",
+        "jules",
+        "universal",
+    }
+)
+_RUNTIME_EXECUTION_GROUPS: Mapping[str, frozenset[str]] = {
+    "codex": frozenset({"codex", "codex_cli"}),
+    "codex_cli": frozenset({"codex", "codex_cli"}),
+    "claude": frozenset({"claude", "claude_code"}),
+    "claude_code": frozenset({"claude", "claude_code"}),
+}
+_RUNTIME_MODE_EXECUTION_ALIASES: Mapping[str, str] = {
+    "codex_cli": "codex",
+    "claude_code": "claude",
+}
+
+
+def _canonical_execution_runtime(runtime_mode: str) -> str:
+    """Map alias runtimes to their canonical executable form for dispatch."""
+
+    return _RUNTIME_MODE_EXECUTION_ALIASES.get(runtime_mode, runtime_mode)
 _PROPOSAL_INSTRUCTIONS_PLACEHOLDER = "<OBJECTIVE>"
 _DEFAULT_PREPARE_GIT_USER_NAME = "MoonMind Worker"
 _DEFAULT_PREPARE_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
@@ -606,9 +638,8 @@ class CodexWorkerConfig:
             str(source.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower()
             or "codex"
         )
-        allowed_worker_runtimes = {"codex", "gemini_cli", "claude", "jules", "universal"}
-        if worker_runtime not in allowed_worker_runtimes:
-            supported = ", ".join(sorted(allowed_worker_runtimes))
+        if worker_runtime not in _ALLOWED_WORKER_RUNTIMES:
+            supported = ", ".join(sorted(_ALLOWED_WORKER_RUNTIMES))
             raise ValueError(f"MOONMIND_WORKER_RUNTIME must be one of: {supported}")
         if worker_runtime == "jules":
             allowed_types = ("task",)
@@ -4257,10 +4288,15 @@ class CodexWorker:
                 str(
                     runtime.get("providerProfile")
                     or runtime.get("profileId")
+                    or runtime.get("executionProfileRef")
                     or canonical_payload.get("profileId")
                     or ""
                 ).strip()
                 or None
+            )
+            runtime_execution_profile_ref = (
+                str(runtime.get("executionProfileRef") or "").strip()
+                or runtime_provider_profile
             )
 
             repository = str(canonical_payload.get("repository") or "").strip()
@@ -4432,6 +4468,7 @@ class CodexWorker:
                     "effort": runtime_effort,
                     "providerProfile": runtime_provider_profile,
                     "profileId": runtime_provider_profile,
+                    "executionProfileRef": runtime_execution_profile_ref,
                 },
                 "skill": {
                     "id": (
@@ -8486,7 +8523,7 @@ class CodexWorker:
                     task_context_path=task_context_path,
                     artifacts_path=artifacts_path,
                 )
-                if runtime_mode == "codex":
+                if _canonical_execution_runtime(runtime_mode) == "codex":
                     proposal_payload = self._build_skill_payload(
                         canonical_payload=canonical_payload,
                         selected_skill=skill_id,
@@ -9604,7 +9641,7 @@ class CodexWorker:
                 payload=event_payload,
             )
             try:
-                if runtime_mode == "codex":
+                if _canonical_execution_runtime(runtime_mode) == "codex":
                     step_result = await self._run_codex_step_with_self_heal(
                         job_id=job_id,
                         canonical_payload=canonical_payload,
@@ -9733,7 +9770,10 @@ class CodexWorker:
             if artifact_callback is not None and non_checkpoint_artifacts:
                 await artifact_callback(non_checkpoint_artifacts)
 
-            if step_result.succeeded and runtime_mode == "codex":
+            if (
+                step_result.succeeded
+                and _canonical_execution_runtime(runtime_mode) == "codex"
+            ):
                 transcript_integrity = self._evaluate_step_transcript_integrity(
                     step=step,
                     step_log_path=step_log_path,
@@ -10647,7 +10687,8 @@ class CodexWorker:
         effort: str | None,
         prepared: PreparedTaskWorkspace,
     ) -> list[str]:
-        if runtime_mode == "gemini_cli":
+        canonical = _canonical_execution_runtime(runtime_mode)
+        if canonical == "gemini_cli":
             command = [self._config.gemini_binary, "--prompt", instruction]
             skills_active_path = prepared.job_root / "skills_active"
             command.extend(["--include-directories", str(skills_active_path)])
@@ -10661,14 +10702,14 @@ class CodexWorker:
                     ]
                 )
             command.extend(["--include-directories", "skills_active"])
-        elif runtime_mode == "claude":
+        elif canonical == "claude":
             command = [self._config.claude_binary, "--print", instruction]
         else:
             raise ValueError(f"runtime adapter not implemented: {runtime_mode}")
 
         if model:
             command.extend(["--model", model])
-        if effort and runtime_mode != "gemini_cli":
+        if effort and canonical != "gemini_cli":
             command.extend(["--effort", effort])
         return command
 
@@ -10677,10 +10718,11 @@ class CodexWorker:
         *,
         runtime_mode: str,
     ) -> Mapping[str, str] | None:
-        if runtime_mode not in {"gemini_cli", "claude"}:
+        canonical = _canonical_execution_runtime(runtime_mode)
+        if canonical not in {"gemini_cli", "claude"}:
             return None
 
-        if runtime_mode == "gemini_cli":
+        if canonical == "gemini_cli":
             if self._config.gemini_cli_auth_mode != "oauth":
                 return None
             gemini_home = str(
@@ -10708,7 +10750,7 @@ class CodexWorker:
             env.pop("GOOGLE_API_KEY", None)
             return env
 
-        if runtime_mode == "claude":
+        if canonical == "claude":
             if self._config.claude_cli_auth_mode != "oauth":
                 return None
             claude_home = str(
@@ -11062,23 +11104,24 @@ class CodexWorker:
         runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
         model_override = str(runtime.get("model") or "").strip() or None
         effort_override = str(runtime.get("effort") or "").strip() or None
+        canonical = _canonical_execution_runtime(runtime_mode)
 
-        if runtime_mode == "codex":
+        if canonical == "codex":
             return (
                 model_override or self._config.default_codex_model,
                 effort_override or self._config.default_codex_effort,
             )
-        if runtime_mode == "gemini_cli":
+        if canonical == "gemini_cli":
             return (
                 model_override or self._config.default_gemini_model,
                 effort_override or self._config.default_gemini_effort,
             )
-        if runtime_mode == "claude":
+        if canonical == "claude":
             return (
                 model_override or self._config.default_claude_model,
                 effort_override or self._config.default_claude_effort,
             )
-        if runtime_mode == "jules":
+        if canonical == "jules":
             return (
                 model_override or self._config.default_jules_model,
                 effort_override or self._config.default_jules_effort,
@@ -11089,6 +11132,8 @@ class CodexWorker:
         worker_runtime = self._config.worker_runtime
         if worker_runtime == "universal":
             return runtime_mode in SUPPORTED_EXECUTION_RUNTIMES
+        if worker_runtime in _RUNTIME_EXECUTION_GROUPS:
+            return runtime_mode in _RUNTIME_EXECUTION_GROUPS[worker_runtime]
         return runtime_mode == worker_runtime
 
     def _validate_required_job_policy(
@@ -11115,6 +11160,10 @@ class CodexWorker:
             for item in self._config.worker_capabilities
             if str(item).strip()
         }
+        if "codex" in available or "codex_cli" in available:
+            available.update({"codex", "codex_cli"})
+        if "claude" in available or "claude_code" in available:
+            available.update({"claude", "claude_code"})
         missing = sorted(required - available)
         if missing:
             return f"worker is missing required capabilities: {', '.join(missing)}"

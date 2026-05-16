@@ -3547,6 +3547,95 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
         "startingBranch": "feature/resolve-pr"
     }
 
+def test_create_task_shaped_execution_inherits_caller_runtime(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    service.create_execution.return_value = _build_execution_record()
+    service.describe_execution.return_value = SimpleNamespace(
+        workflow_id="mm:parent-task",
+        owner_id=str(user.id),
+        parameters={
+            "targetRuntime": "codex",
+            "model": "gpt-5.4",
+            "effort": "high",
+            "task": {
+                "runtime": {
+                    "executionProfileRef": "codex_default",
+                }
+            },
+        },
+        memo={},
+        search_attributes={},
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        headers={
+            "X-MoonMind-Task-Workflow-Id": "mm:parent-task",
+            "X-MoonMind-Task-Run-Identifier": "task-run-1",
+        },
+        json={
+            "type": "task",
+            "payload": {
+                "runtimeInheritance": "caller",
+                "repository": "MoonLadderStudios/MoonMind",
+                "requiredCapabilities": ["gh"],
+                "task": {
+                    "title": "feature/example",
+                    "instructions": "Resolve PR #42 on branch `feature/example`.",
+                    "skill": {"name": "pr-resolver", "version": "1.0"},
+                    "inputs": {"repo": "MoonLadderStudios/MoonMind", "pr": "42"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["targetRuntime"] == "codex_cli"
+    assert initial_parameters["model"] == "gpt-5.4"
+    assert initial_parameters["effort"] == "high"
+    runtime = initial_parameters["task"]["runtime"]
+    assert runtime == {
+        "mode": "codex_cli",
+        "model": "gpt-5.4",
+        "effort": "high",
+        "executionProfileRef": "codex_default",
+    }
+
+
+def test_create_task_shaped_execution_rejects_caller_inheritance_for_user(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "runtimeInheritance": "caller",
+                "task": {
+                    "title": "feature/example",
+                    "instructions": "Resolve PR #42 on branch `feature/example`.",
+                    "skill": {"name": "pr-resolver", "version": "1.0"},
+                    "inputs": {"repo": "MoonLadderStudios/MoonMind", "pr": "42"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "runtime_inheritance_requires_task_principal",
+        "message": 'runtimeInheritance="caller" requires a task-scoped principal.',
+    }
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_forwards_input_attachments(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,

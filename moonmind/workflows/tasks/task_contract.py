@@ -23,8 +23,24 @@ from moonmind.config.settings import settings
 from .job_types import CANONICAL_TASK_JOB_TYPE, LEGACY_TASK_JOB_TYPES
 
 DEFAULT_TASK_RUNTIME = "codex"
-SUPPORTED_RUNTIME_MODES = {"codex", "codex_cloud", "gemini_cli", "claude", "jules", "universal"}
-SUPPORTED_EXECUTION_RUNTIMES = {"codex", "gemini_cli", "claude", "jules"}
+SUPPORTED_RUNTIME_MODES = {
+    "codex",
+    "codex_cli",
+    "codex_cloud",
+    "gemini_cli",
+    "claude",
+    "claude_code",
+    "jules",
+    "universal",
+}
+SUPPORTED_EXECUTION_RUNTIMES = {
+    "codex",
+    "codex_cli",
+    "gemini_cli",
+    "claude",
+    "claude_code",
+    "jules",
+}
 SUPPORTED_PUBLISH_MODES = {"none", "branch", "pr"}
 _SECRET_REF_MOUNT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _SECRET_REF_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
