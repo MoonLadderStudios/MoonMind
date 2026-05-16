@@ -2310,18 +2310,17 @@ class SettingsCatalogService:
             ).where(ManagedAgentProviderProfile.profile_id.in_(missing))
         )
         rows = result.all()
-        enabled_by_id = {
-            profile_id: bool(enabled)
-            for profile_id, enabled, _credential_source, _volume_ref in rows
-        }
         for profile_id, enabled, credential_source, volume_ref in rows:
+            is_enabled = bool(enabled)
+            self._provider_profile_enabled_by_id[profile_id] = is_enabled
             self._provider_profile_metadata_by_id[profile_id] = {
-                "enabled": bool(enabled),
+                "enabled": is_enabled,
                 "credential_source": credential_source,
                 "volume_ref": volume_ref,
             }
         for profile_id in missing:
-            self._provider_profile_enabled_by_id[profile_id] = enabled_by_id.get(profile_id)
+            if profile_id not in self._provider_profile_enabled_by_id:
+                self._provider_profile_enabled_by_id[profile_id] = None
 
     def _resolve_value_from_overrides(
         self,
