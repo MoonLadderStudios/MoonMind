@@ -164,7 +164,13 @@ async def test_proposal_submit_persists_external_delivery_result() -> None:
     repo = AsyncMock()
     record = _record()
     repo.find_open_duplicate.return_value = None
-    repo.create_proposal.return_value = record
+
+    async def create_record(**kwargs):
+        for key, value in kwargs.items():
+            setattr(record, key, value)
+        return record
+
+    repo.create_proposal.side_effect = create_record
     delivery = _Delivery()
     service = TaskProposalService(
         repo,
@@ -209,6 +215,89 @@ async def test_proposal_submit_persists_external_delivery_result() -> None:
     assert record.external_url == "https://tracker.example/issues/42"
     assert record.provider_metadata["delivery"]["storedSnapshotNotice"] is True
     assert delivery.requests[0].origin_metadata["workflow_id"] == "wf-1"
+    assert delivery.requests[0].origin_metadata["source"] == "workflow"
+    assert delivery.requests[0].origin_metadata["id"] == "wf-1"
+    assert record.resolved_policy["target"] == "project"
+    assert record.resolved_policy["provider"] == "github"
+    assert record.resolved_policy["capacity"]["project"]["accepted"] == 1
+    assert record.resolved_policy["delivery"]["provider"] == "github"
+
+
+@pytest.mark.asyncio
+async def test_proposal_submit_reports_partial_success_and_dedup_update() -> None:
+    repo = AsyncMock()
+    record = _record()
+    record.external_key = "42"
+    record.external_url = "https://tracker.example/issues/42"
+    record.provider_metadata = {
+        "delivery": {
+            "status": "updated",
+            "created": False,
+            "duplicateSource": "existing-open-issue",
+        }
+    }
+    repo.find_open_duplicate.return_value = record
+    repo.create_proposal.return_value = record
+    service = TaskProposalService(
+        repo,
+        redactor=SecretRedactor([], "[REDACTED]"),
+    )
+    service._emit_notification = AsyncMock()
+
+    async def factory():
+        return service
+
+    activities = TemporalProposalActivities(proposal_service_factory=factory)
+    result = await activities.proposal_submit(
+        {
+            "candidates": [
+                {
+                    "title": "",
+                    "summary": "Missing title",
+                    "taskCreateRequest": {},
+                },
+                {
+                    "title": "Add tests",
+                    "summary": "Add follow-up",
+                    "tags": ["artifact_gap"],
+                    "taskCreateRequest": {
+                        "type": "task",
+                        "payload": {
+                            "repository": "Moon/Repo",
+                            "task": {"instructions": "Add tests"},
+                        },
+                    },
+                },
+            ],
+            "policy": {"delivery": {"provider": "github"}},
+            "origin": {
+                "workflow_id": "wf-1",
+                "temporal_run_id": "run-1",
+                "trigger_repo": "Moon/Repo",
+                "trigger_job_id": "job-1",
+            },
+        }
+    )
+
+    assert result["generated_count"] == 2
+    assert result["submitted_count"] == 1
+    assert result["deliveredCount"] == 1
+    assert result["validationErrors"]
+    assert result["externalLinks"] == [
+        {
+            "provider": "github",
+            "externalKey": "42",
+            "externalUrl": "https://tracker.example/issues/42",
+        }
+    ]
+    assert result["dedupUpdates"] == [
+        {
+            "created": False,
+            "provider": "github",
+            "externalKey": "42",
+            "duplicateSource": "existing-open-issue",
+        }
+    ]
 
 
 @pytest.mark.asyncio
