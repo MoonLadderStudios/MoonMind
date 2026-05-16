@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.models import (
     ManagedAgentProviderProfile,
     ManagedSecret,
+    ProviderCredentialSource,
     SecretStatus,
     SettingsAuditEvent,
     SettingsOverride,
@@ -852,6 +853,7 @@ class SettingsCatalogService:
         self._user_id = user_id or _DEFAULT_SUBJECT_ID
         self._managed_secret_status_by_slug: dict[str, str | None] = {}
         self._provider_profile_enabled_by_id: dict[str, bool | None] = {}
+        self._provider_profile_metadata_by_id: dict[str, dict[str, Any]] = {}
         self._workspace_policy = (
             workspace_policy
             if isinstance(workspace_policy, SettingsWorkspacePolicy)
@@ -2303,9 +2305,21 @@ class SettingsCatalogService:
             select(
                 ManagedAgentProviderProfile.profile_id,
                 ManagedAgentProviderProfile.enabled,
+                ManagedAgentProviderProfile.credential_source,
+                ManagedAgentProviderProfile.volume_ref,
             ).where(ManagedAgentProviderProfile.profile_id.in_(missing))
         )
-        enabled_by_id = {profile_id: bool(enabled) for profile_id, enabled in result.all()}
+        rows = result.all()
+        enabled_by_id = {
+            profile_id: bool(enabled)
+            for profile_id, enabled, _credential_source, _volume_ref in rows
+        }
+        for profile_id, enabled, credential_source, volume_ref in rows:
+            self._provider_profile_metadata_by_id[profile_id] = {
+                "enabled": bool(enabled),
+                "credential_source": credential_source,
+                "volume_ref": volume_ref,
+            }
         for profile_id in missing:
             self._provider_profile_enabled_by_id[profile_id] = enabled_by_id.get(profile_id)
 
@@ -3791,6 +3805,31 @@ class SettingsCatalogService:
                 severity="error",
                 details={
                     "profile_id": profile_id,
+                    "launch_blocker": True,
+                    "blocks": ["launch", "readiness"],
+                },
+            )
+        metadata = self._provider_profile_metadata_by_id.get(profile_id, {})
+        credential_source = metadata.get("credential_source")
+        credential_source_value = (
+            credential_source.value
+            if isinstance(credential_source, ProviderCredentialSource)
+            else str(credential_source or "")
+        )
+        if (
+            credential_source_value == ProviderCredentialSource.OAUTH_VOLUME.value
+            and not str(metadata.get("volume_ref") or "").strip()
+        ):
+            return SettingDiagnostic(
+                code="provider_profile_oauth_volume_missing",
+                message=(
+                    f"{entry.key} references an OAuth-backed provider profile "
+                    "without an available OAuth volume."
+                ),
+                severity="error",
+                details={
+                    "profile_id": profile_id,
+                    "credential_source": credential_source_value,
                     "launch_blocker": True,
                     "blocks": ["launch", "readiness"],
                 },

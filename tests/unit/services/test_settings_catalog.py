@@ -1434,8 +1434,16 @@ async def test_deprecated_override_diagnostics_do_not_expose_raw_value(
             migration_rules=rules,
             session=settings_session,
         )
+        with pytest.raises(SettingsValidationError) as removed_write:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"test.removed_token": "new-value"},
+                expected_versions={"test.removed_token": 1},
+            )
         diagnostics = await service.diagnostics(scope="workspace")
 
+    assert removed_write.value.issues[0].code == "setting_not_exposed"
+    assert removed_write.value.issues[0].rule == "migration_state"
     deprecated = diagnostics.values["test.removed_token"]
     assert deprecated.source == "deprecated_override"
     assert deprecated.diagnostics[0].code == "setting_deprecated_override"
