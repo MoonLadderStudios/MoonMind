@@ -2,10 +2,11 @@
 
 **Status:** Desired state
 **Owners:** MoonMind Platform
-**Last updated:** 2026-04-23
+**Last updated:** 2026-05-16
 
 **Related:**
 
+* [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)
 * [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 * [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 * [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](../Temporal/ActivityCatalogAndWorkerTopology.md)
@@ -19,34 +20,40 @@
 
 This document defines MoonMind’s **Docker-out-of-Docker (DooD)** architecture for launching **specialized workload containers** through the MoonMind / Temporal control plane.
 
+### 1.1 Scope, after the Docker sidecar runtime
+
+The default path for ordinary containerized work that originates from a managed agent session — repository tests, build toolchains, short-lived application containers — is the **per-session Docker sidecar** defined in [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md). The session container runs ordinary `docker run` and `docker compose` commands against a private daemon in a sibling sidecar container; no host Docker socket is exposed and no MoonMind deployment credentials reach the session.
+
+DooD remains the architecture for workloads that must originate from the **control plane itself**, including:
+
+* MoonMind admin and update flows (deploy, restart, rollback, image refresh)
+* deliberately deployment-gated unrestricted execution that should not run inside a managed session
+* control-plane-originated helper or one-shot workloads that have no managed agent session attached
+
+Heavyweight toolchain workloads (Unreal, Unity, .NET, load test runners) that previously fit DooD's curated runner-profile path can still be modeled here when there is a control-plane reason to keep them out of the session sidecar (for example, dedicated hardware fleets, special registry credentials, or operator-driven runs without an active session). When that justification is absent, the sidecar path is preferred.
+
+### 1.2 DooD modes
+
 The DooD system supports three explicit deployment modes:
 
 * `disabled`
 * `profiles`
 * `unrestricted`
 
-These modes govern whether workflows may use Docker-backed workload tools, and if so, whether they may use only approved runner profiles or may also launch arbitrary runtime containers and Docker CLI workloads.
+These modes govern whether workflows may use Docker-backed workload tools through the control-plane DooD surface, and if so, whether they may use only approved runner profiles or may also launch arbitrary runtime containers and Docker CLI workloads. They do **not** govern the Docker sidecar runtime; the sidecar capability is configured separately at the session-runtime-profile layer.
 
-The DooD architecture exists to support heavyweight, toolchain-specific, or environment-specific work that must not be baked into the generic MoonMind worker image or the Codex managed session container, including:
-
-* Unreal Engine build, cook, package, or test workloads
-* Unity batchmode test or build workloads
-* .NET, SDK, distro, or toolchain specific build/test workloads
-* load test containers and benchmark runners
-* bounded helper containers needed to support a step’s execution
-* deployment-gated arbitrary runtime containers in trusted environments
-
-The goals are:
+### 1.3 Goals (control-plane DooD)
 
 * keep the **Codex managed session plane** focused on managed agent continuity
-* keep the **Temporal control plane** as the owner of launch, policy, cancellation, audit, and observability
+* keep the **Temporal control plane** as the owner of launch, policy, cancellation, audit, and observability for **control-plane-originated** Docker workloads
 * keep worker images generic and maintainable
-* support both curated and unrestricted Docker-backed workloads without giving the normal session container raw Docker authority
+* support both curated and unrestricted Docker-backed workloads where the control plane is the right place to run them, without giving the MoonMind API container the host Docker socket and without re-introducing it as the default path for session-originated work
 
-This document replaces older framing that treated DooD primarily as a profile-only specialized workload system. The desired state includes both:
+This document replaces older framing that treated DooD as the default execution path for all session-originated containerized work. The desired state is:
 
-* a stable **profile-backed** path for normal execution
-* a deployment-gated **unrestricted** path for trusted environments that need arbitrary runtime containers or Docker CLI operations
+* a stable **profile-backed** path for control-plane-originated execution
+* a deployment-gated **unrestricted** path for trusted environments that need arbitrary runtime containers or Docker CLI operations from the control plane
+* the **Docker sidecar runtime** for ordinary session-originated workloads
 
 ---
 
@@ -54,14 +61,14 @@ This document replaces older framing that treated DooD primarily as a profile-on
 
 MoonMind adopts the following governing rules for Docker-backed workloads:
 
-1. **Specialized Docker workloads are control-plane-launched workloads.**
- They are not ad hoc containers started directly by the Codex runtime.
+1. **Control-plane DooD workloads are launched by the control plane.**
+ The tools defined in this document — `container.run_workload`, `container.start_helper`, `container.stop_helper`, `container.run_container`, `container.run_docker` — are owned by the Temporal control plane, not started ad hoc by a Codex runtime. Ordinary session-originated container work uses the per-session sidecar in [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md) instead.
 
-2. **Docker workflow access is governed by an explicit deployment mode.**
- The canonical modes are `disabled`, `profiles`, and `unrestricted`.
+2. **Docker workflow access through the control plane is governed by an explicit deployment mode.**
+ The canonical modes are `disabled`, `profiles`, and `unrestricted`. They apply to the DooD tool surface in this document; they do not gate the per-session Docker sidecar.
 
-3. **A Codex session container is not given unrestricted Docker authority by default.**
- This remains true even when the deployment mode is `unrestricted`.
+3. **A Codex session container never receives the host Docker socket, and never receives raw control-plane Docker authority.**
+ The session may have a private per-session Docker daemon via the sidecar runtime, but it does not gain authority to launch DooD-backed control-plane workloads, see the host daemon, or reach MoonMind application containers. This remains true even when the DooD deployment mode is `unrestricted`.
 
 4. **The profile-backed path remains the normal execution path.**
  `container.run_workload`, `container.start_helper`, and `container.stop_helper` remain profile-validated and deployment-curated.
@@ -457,16 +464,19 @@ A Codex-managed session may:
 * consume the returned artifacts and metadata
 * continue the task-scoped managed session afterward
 
-### 9.2 What a Codex session may not do by default
+### 9.2 What a Codex session may not do
 
-A Codex-managed session must not, by default:
+A Codex-managed session must not:
 
 * mount the raw host Docker socket
-* receive unrestricted `DOCKER_HOST` access
-* create arbitrary containers directly on the daemon
-* bypass Temporal for launches that affect workspace state or task progress
+* receive a `DOCKER_HOST` that points at the host daemon, the MoonMind app daemon, or any daemon shared with another session
+* invoke the DooD control-plane tools (`container.run_workload`, `container.run_container`, `container.run_docker`, `container.start_helper`, `container.stop_helper`) outside the normal MoonMind tool routing path
+* inspect, restart, or otherwise control MoonMind application containers
+* bypass Temporal for launches that affect cross-task workspace state, durable evidence, or task progress
 
-This remains true in `unrestricted` mode. Unrestricted mode expands what the control plane may launch, not what the session container may launch directly.
+A session **may** create containers directly on its **own private per-session daemon** via the sidecar runtime defined in [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md). That daemon is sandboxed to the session: it is destroyed at session end, holds no host or app authority, and cannot see containers belonging to other sessions or to MoonMind itself.
+
+The rules above remain true in DooD `unrestricted` mode. Unrestricted mode expands what the **control plane** may launch on the trusted worker; it does not grant the session container any additional authority beyond what the sidecar topology already provides.
 
 ### 9.3 Session and workload lifecycle relation
 
@@ -1034,9 +1044,9 @@ MoonMind uses a controlled Docker host or proxy.
 
 Rules:
 
-* the normal session container does not receive the raw Docker socket
-* the normal session container does not receive unrestricted `DOCKER_HOST`
-* Docker-backed workloads run on the trusted MoonMind worker plane
+* the normal session container does not receive the raw host Docker socket
+* the normal session container does not receive a `DOCKER_HOST` pointing at the host daemon, the MoonMind app daemon, or any shared daemon (per-session sidecar daemons are permitted; see [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md))
+* control-plane DooD workloads run on the trusted MoonMind worker plane, not inside the session container
 
 ### 15.3 Image policy
 
@@ -1183,13 +1193,16 @@ This is the current Docker-capable execution boundary for DooD-backed workloads.
 
 ### 17.3 Important boundary
 
-The desired state is not “give the session container raw Docker access.”
+DooD's boundary is about **what the control plane itself launches**, and about what the MoonMind API container is allowed to do. It is not a general prohibition on managed sessions running Docker commands.
 
-The desired state is:
+Specifically:
 
-* session containers remain managed-session containers
-* workload launches remain control-plane-launched
-* unrestricted execution expands the control-plane tool surface, not the session-side Docker authority surface
+* control-plane-originated workloads in this document remain control-plane-launched; they do not collapse into the session plane
+* the **MoonMind API container** never receives the host Docker socket as part of normal workload support; admin Docker access is isolated to the MoonMind ops runner (§21 of [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md))
+* unrestricted DooD execution expands the **control-plane** tool surface only; task instructions cannot raise it, and it does not silently expand any session's authority over Docker
+* session-originated Docker work goes through the per-session sidecar in [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md), which is itself constrained: private per-session daemon, no host socket, no deployment credentials, no visibility into other sessions or MoonMind app containers
+
+In short: a managed session having a private DinD sidecar does not weaken DooD's boundary. DooD's boundary is about preserving the control plane and the MoonMind app surface, not about denying the session a Docker CLI.
 
 ### 17.4 Future fleet split
 
@@ -1287,16 +1300,16 @@ A trusted workflow uses the Docker CLI escape hatch for compose-driven behavior.
 
 The following rules remain stable as implementation details evolve:
 
-1. **Codex managed session containers and Docker workload containers are different architectural roles.**
-2. **The control plane launches Docker-backed workloads.**
-3. **Session containers do not receive unrestricted raw Docker authority by default.**
-4. **`disabled`, `profiles`, and `unrestricted` are the only supported Docker workflow modes.**
+1. **Codex managed session containers and DooD workload containers are different architectural roles.** Session-originated Docker work uses the per-session sidecar; DooD workload containers are launched by the control plane.
+2. **The control plane launches control-plane DooD workloads.** Ordinary session-originated container work goes through the per-session sidecar (see [`DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)).
+3. **Session containers never receive the host Docker socket or shared-daemon `DOCKER_HOST`.** They may hold a `DOCKER_HOST` that points at their own private per-session sidecar daemon; that daemon is sandboxed to the session.
+4. **`disabled`, `profiles`, and `unrestricted` are the only supported control-plane DooD modes.**
 5. **`container.run_workload` remains profile-backed.**
 6. **Arbitrary runtime containers are exposed through `container.run_container`, not by widening `container.run_workload`.**
 7. **Raw Docker CLI is exposed through `container.run_docker`, not through an implicit shell contract.**
 8. **Artifacts and bounded metadata remain authoritative.**
-9. **Normal execution uses curated runner profiles; unrestricted execution is explicit and auditable.**
-10. **Unrestricted mode expands the control-plane tool surface, not the session-side Docker authority boundary.**
+9. **Control-plane DooD execution uses curated runner profiles by default; unrestricted DooD execution is explicit and auditable.** Session-originated work has its own defaults defined in the sidecar runtime doc.
+10. **DooD `unrestricted` mode expands the control-plane tool surface, not session-side Docker authority.**
 11. **The DooD core remains domain-agnostic and does not hardcode load test, Unreal, dotnet, or similar workload families.**
 12. **Queue and fleet splitting follow real isolation and operational requirements.**
 
