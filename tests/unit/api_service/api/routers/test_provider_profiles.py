@@ -58,12 +58,22 @@ def _module_db(tmp_path_factory):
 def client_app(_module_db) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
 
-def _override_current_user(*, user_id=None, is_superuser: bool = False):
+def _override_current_user(
+    *,
+    user_id=None,
+    is_superuser: bool = False,
+    settings_permissions: set[str] | None = None,
+):
     user = SimpleNamespace(
         id=user_id if user_id is not None else uuid4(),
         email="provider-profile-test@example.com",
         is_active=True,
         is_superuser=is_superuser,
+        settings_permissions=(
+            {"provider_profiles.read", "provider_profiles.write"}
+            if settings_permissions is None
+            else settings_permissions
+        ),
     )
     dependencies = {
         dep.call
@@ -76,6 +86,82 @@ def _override_current_user(*, user_id=None, is_superuser: bool = False):
     for dependency in dependencies:
         app.dependency_overrides[dependency] = lambda user=user: user
     return user
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_list_requires_read_permission(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user(settings_permissions=set())
+
+    async with client_app as client:
+        response = await client.get("/api/v1/provider-profiles")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Missing required provider profile permission: provider_profiles.read."
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_get_requires_read_permission_before_lookup(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user(settings_permissions=set())
+
+    async with client_app as client:
+        response = await client.get("/api/v1/provider-profiles/missing-profile")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Missing required provider profile permission: provider_profiles.read."
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_write_actions_require_write_permission(
+    client_app: AsyncClient, _module_db
+) -> None:
+    user = _override_current_user(settings_permissions={"provider_profiles.read"})
+    profile_id = "read_only_profile"
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="read_only_runtime",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.NONE,
+                    runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                    owner_user_id=user.id,
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        create_response = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": "read_only_created",
+                "runtime_id": "codex_cli",
+                "provider_id": "openai",
+                "credential_source": "none",
+                "runtime_materialization_mode": "composite",
+            },
+        )
+        update_response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"enabled": False},
+        )
+        delete_response = await client.delete(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert create_response.status_code == 403
+    assert update_response.status_code == 403
+    assert delete_response.status_code == 403
+    assert create_response.json()["detail"] == (
+        "Missing required provider profile permission: provider_profiles.write."
+    )
 
 
 class _TrackedProfile:

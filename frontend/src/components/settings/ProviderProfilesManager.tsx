@@ -54,6 +54,7 @@ interface ProviderProfilesManagerProps {
   queryClient: QueryClient;
   /** Map of canonical runtime_id → default model from the boot config. */
   defaultTaskModelByRuntime?: Record<string, string>;
+  canWriteProviderProfiles?: boolean;
 }
 
 interface ProviderProfileFormState {
@@ -550,6 +551,7 @@ export function ProviderProfilesManager({
   onNotice,
   queryClient,
   defaultTaskModelByRuntime = {},
+  canWriteProviderProfiles = true,
 }: ProviderProfilesManagerProps) {
   const [form, setForm] = useState<ProviderProfileFormState>(() => defaultFormState());
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
@@ -1400,7 +1402,7 @@ export function ProviderProfilesManager({
                     role="cell"
                   >
                     <div className="flex flex-wrap gap-2">
-                      {canStartOAuth ? (
+                      {canWriteProviderProfiles && canStartOAuth ? (
                         <button
                           type="button"
                           className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
@@ -1411,7 +1413,7 @@ export function ProviderProfilesManager({
                           OAuth
                         </button>
                       ) : null}
-                      {authModel.kind === 'claude_credentials'
+                      {canWriteProviderProfiles && authModel.kind === 'claude_credentials'
                         ? authModel.actions.map((action) => (
                             <button
                               key={action.id}
@@ -1440,7 +1442,7 @@ export function ProviderProfilesManager({
                             </button>
                           ))
                         : null}
-                      {oauthSession && isActiveOAuthStatus(oauthSession.status) ? (
+                      {canWriteProviderProfiles && oauthSession && isActiveOAuthStatus(oauthSession.status) ? (
                         <button
                           type="button"
                           className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
@@ -1456,7 +1458,7 @@ export function ProviderProfilesManager({
                           Cancel OAuth
                         </button>
                       ) : null}
-                      {oauthSession && canFinalizeOAuthStatus(oauthSession.status) ? (
+                      {canWriteProviderProfiles && oauthSession && canFinalizeOAuthStatus(oauthSession.status) ? (
                         <button
                           type="button"
                           className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
@@ -1472,7 +1474,7 @@ export function ProviderProfilesManager({
                           Finalize
                         </button>
                       ) : null}
-                      {oauthSession && canRetryOAuthStatus(oauthSession.status) ? (
+                      {canWriteProviderProfiles && oauthSession && canRetryOAuthStatus(oauthSession.status) ? (
                         <button
                           type="button"
                           className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
@@ -1488,44 +1490,48 @@ export function ProviderProfilesManager({
                           Retry
                         </button>
                       ) : null}
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
-                        onClick={() => {
-                          setEditingProfileId(profile.profile_id);
-                          setForm(toFormState(profile));
-                          onNotice(null);
-                        }}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
-                        onClick={() =>
-                          toggleMutation.mutate({
-                            profileId: profile.profile_id,
-                            enabled: !profile.enabled,
-                          })
-                        }
-                      >
-                        {profile.enabled ? 'Disable' : 'Enable'}
-                      </button>
-                      <button
-                        type="button"
-                        className="queue-action queue-action-danger px-3 py-1.5 text-xs font-medium transition"
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              `Delete provider profile "${profile.profile_id}"?`,
-                            )
-                          ) {
-                            deleteMutation.mutate(profile.profile_id);
-                          }
-                        }}
-                      >
-                        Delete
-                      </button>
+                      {canWriteProviderProfiles ? (
+                        <>
+                          <button
+                            type="button"
+                            className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                            onClick={() => {
+                              setEditingProfileId(profile.profile_id);
+                              setForm(toFormState(profile));
+                              onNotice(null);
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                            onClick={() =>
+                              toggleMutation.mutate({
+                                profileId: profile.profile_id,
+                                enabled: !profile.enabled,
+                              })
+                            }
+                          >
+                            {profile.enabled ? 'Disable' : 'Enable'}
+                          </button>
+                          <button
+                            type="button"
+                            className="queue-action queue-action-danger px-3 py-1.5 text-xs font-medium transition"
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  `Delete provider profile "${profile.profile_id}"?`,
+                                )
+                              ) {
+                                deleteMutation.mutate(profile.profile_id);
+                              }
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -1657,6 +1663,7 @@ export function ProviderProfilesManager({
       ) : null}
 
       {/* ── Form Section ── */}
+      {canWriteProviderProfiles ? (
       <div className="mt-8 border-t border-slate-200 dark:border-slate-700 pt-8">
         <div className="flex flex-col gap-1 mb-6 md:flex-row md:items-end md:justify-between">
           <div>
@@ -2072,6 +2079,7 @@ export function ProviderProfilesManager({
           </div>
         </form>
       </div>
+      ) : null}
     </section>
   );
 }

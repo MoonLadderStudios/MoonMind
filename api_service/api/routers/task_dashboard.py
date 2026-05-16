@@ -40,6 +40,7 @@ from api_service.api.routers.task_dashboard_view_model import (
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
+from api_service.services.settings_catalog import settings_permissions_for_user
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
@@ -728,6 +729,7 @@ async def task_settings_route(
             "post": "/api/system/worker-pause",
         },
         "runtimeConfig": runtime_config,
+        "settingsPermissions": sorted(settings_permissions_for_user(_user)),
     }
     return await _render_react_page(
         request,
