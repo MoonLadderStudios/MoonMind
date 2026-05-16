@@ -2026,10 +2026,13 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 },
             )
 
-            assert "Jira Story issue in project GAME" in expanded["steps"][1][
+            jira_step = expanded["steps"][2]
+            downstream_step = expanded["steps"][3]
+
+            assert "Jira Story issue in project GAME" in jira_step[
                 "instructions"
             ]
-            assert expanded["steps"][1]["storyOutput"] == {
+            assert jira_step["storyOutput"] == {
                 "mode": "jira",
                 "fallback": "fail",
                 "jira": {
@@ -2040,13 +2043,13 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                     "dependencyMode": "linear_blocker_chain",
                 },
             }
-            assert expanded["steps"][2]["jiraOrchestration"]["task"]["repository"] == (
+            assert downstream_step["jiraOrchestration"]["task"]["repository"] == (
                 "ExampleOrg/Game"
             )
-            assert expanded["steps"][2]["jiraOrchestration"]["task"]["runtime"] == {
+            assert downstream_step["jiraOrchestration"]["task"]["runtime"] == {
                 "mode": "gemini_cli"
             }
-            assert expanded["steps"][2]["jiraOrchestration"]["task"]["publish"] == {
+            assert downstream_step["jiraOrchestration"]["task"]["publish"] == {
                 "mode": "pr",
                 "mergeAutomation": {"enabled": False},
             }
@@ -2139,11 +2142,11 @@ async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
                 },
             )
 
-            assert expanded["steps"][1]["storyOutput"]["jira"]["projectKey"] == "PLAT"
-            assert expanded["steps"][2]["jiraOrchestration"]["task"]["repository"] == (
+            assert expanded["steps"][2]["storyOutput"]["jira"]["projectKey"] == "PLAT"
+            assert expanded["steps"][3]["jiraOrchestration"]["task"]["repository"] == (
                 "ExampleOrg/Game"
             )
-            assert expanded["steps"][2]["jiraOrchestration"]["task"]["runtime"] == (
+            assert expanded["steps"][3]["jiraOrchestration"]["task"]["runtime"] == (
                 {"mode": "claude_code"}
             )
 
