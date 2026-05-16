@@ -1434,8 +1434,16 @@ async def test_deprecated_override_diagnostics_do_not_expose_raw_value(
             migration_rules=rules,
             session=settings_session,
         )
+        with pytest.raises(SettingsValidationError) as removed_write:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={"test.removed_token": "new-value"},
+                expected_versions={"test.removed_token": 1},
+            )
         diagnostics = await service.diagnostics(scope="workspace")
 
+    assert removed_write.value.issues[0].code == "setting_not_exposed"
+    assert removed_write.value.issues[0].rule == "migration_state"
     deprecated = diagnostics.values["test.removed_token"]
     assert deprecated.source == "deprecated_override"
     assert deprecated.diagnostics[0].code == "setting_deprecated_override"
@@ -1626,6 +1634,71 @@ async def test_provider_profile_reference_reports_missing_and_disabled_diagnosti
                 expected_versions={"workflow.default_provider_profile_ref": 1},
             )
         assert disabled.value.issues[0].code == "provider_profile_disabled"
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_reference_rejects_enabled_not_ready_profile_without_plaintext(
+    settings_session_maker,
+) -> None:
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            ManagedSecret(
+                slug="disabled-profile-secret",
+                ciphertext="disabled-secret-plaintext",
+                status=SecretStatus.DISABLED,
+                details={},
+            )
+        )
+        settings_session.add(
+            ManagedAgentProviderProfile(
+                profile_id="enabled-not-ready-profile",
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"provider_api_key": "db://disabled-profile-secret"},
+                enabled=True,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(env={}, session=settings_session)
+        with pytest.raises(SettingsValidationError) as not_ready:
+            await service.apply_overrides(
+                scope="workspace",
+                changes={
+                    "workflow.default_provider_profile_ref": "enabled-not-ready-profile"
+                },
+                expected_versions={"workflow.default_provider_profile_ref": 1},
+            )
+
+    assert not_ready.value.issues[0].code == "provider_profile_not_ready"
+    dumped = str([issue.model_dump() for issue in not_ready.value.issues])
+    assert "disabled-secret-plaintext" not in dumped
+    assert "disabled-profile-secret" in dumped
+
+
+def test_provider_profile_readiness_treats_null_cooldown_as_blocker() -> None:
+    service = SettingsCatalogService(env={})
+    row = ManagedAgentProviderProfile(
+        profile_id="null-cooldown-profile",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        credential_source=ProviderCredentialSource.NONE,
+        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+        max_parallel_runs=1,
+        enabled=True,
+    )
+    row.cooldown_after_429_seconds = None
+
+    diagnostic = service._provider_profile_readiness_diagnostic(
+        row.profile_id,
+        row,
+    )
+
+    assert diagnostic is not None
+    assert diagnostic.code == "provider_profile_not_ready"
+    assert "cooldown is invalid" in diagnostic.details["readiness_blockers"]
 
 
 @pytest.mark.asyncio
@@ -2241,6 +2314,29 @@ async def test_audit_entries_expose_secret_ref_metadata_with_permission(
 
 
 @pytest.mark.asyncio
+async def test_rejected_audit_entries_expose_safe_secret_ref_metadata_with_permission(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.record_rejected_write_audit(
+            scope="workspace",
+            changes={"integrations.github.token_ref": "db://github-token"},
+            reason="version conflict",
+            request_id="settings-rejected-1",
+        )
+
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read", "secrets.metadata.read"},
+        )
+
+    assert entries[0].event_type == "settings.override.rejected"
+    assert entries[0].new_value == "db://github-token"
+    assert entries[0].redacted is False
+    assert entries[0].request_id == "settings-rejected-1"
+
+
+@pytest.mark.asyncio
 async def test_audit_entries_persist_actor_identity(settings_session_maker):
     user_id = uuid4()
     async with settings_session_maker() as settings_session:
@@ -2282,10 +2378,138 @@ async def test_audit_entries_expose_apply_mode_and_affected_systems(
     assert entries[0].event_type == "settings.override.updated"
     assert entries[0].key == "workflow.default_publish_mode"
     assert entries[0].scope == "workspace"
+    assert entries[0].source == "workspace_override"
     assert entries[0].apply_mode == "next_task"
     assert entries[0].affected_systems == ["task_creation", "publishing"]
     assert entries[0].validation_outcome == "accepted"
     assert entries[0].created_at is not None
+
+
+@pytest.mark.asyncio
+async def test_audit_source_preserves_intentional_null_override(settings_session_maker):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.apply_overrides(
+            scope="user",
+            changes={"integrations.github.token_ref": None},
+            expected_versions={"integrations.github.token_ref": 1},
+        )
+
+        updated_entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+        await service.reset_override(
+            "integrations.github.token_ref",
+            scope="user",
+        )
+        reset_entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+    assert updated_entries[0].event_type == "settings.override.updated"
+    assert updated_entries[0].source == "user_override"
+    assert updated_entries[0].new_value is None
+    reset_entry = next(
+        entry
+        for entry in reset_entries
+        if entry.event_type == "settings.override.reset"
+    )
+    assert reset_entry.source == "inherited"
+
+
+@pytest.mark.asyncio
+async def test_apply_overrides_returns_setting_changed_event_with_refresh_targets(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        entry_type = SettingsCatalogService(env={})._registry[0].__class__
+        service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            user_id=uuid4(),
+            registry=(
+                entry_type(
+                    key="test.provider_profile",
+                    title="Provider Profile",
+                    category="Test",
+                    section="user-workspace",
+                    value_type="string",
+                    ui="provider_profile_picker",
+                    scopes=("workspace",),
+                    default_value="profile-default",
+                    order=1,
+                    apply_mode="next_launch",
+                    applies_to=(
+                        "task_creation",
+                        "workflow_runtime",
+                        "provider_profiles",
+                    ),
+                ),
+            ),
+        )
+
+        response = await service.apply_overrides(
+            scope="workspace",
+            changes={"test.provider_profile": "profile-main"},
+            expected_versions={"test.provider_profile": 1},
+        )
+
+    event = response.change_events[0]
+    assert event.event_type == "setting_changed"
+    assert event.key == "test.provider_profile"
+    assert event.scope == "workspace"
+    assert event.source == "workspace_override"
+    assert event.apply_mode == "next_launch"
+    assert event.actor_user_id is not None
+    assert event.changed_at is not None
+    assert event.affected_systems == [
+        "task_creation",
+        "workflow_runtime",
+        "provider_profiles",
+    ]
+    assert event.refresh_targets == [
+        "provider_profile_manager",
+        "settings_catalog",
+        "task_creation_defaults",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_catalog_keeps_reload_setting_pending_until_reload(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.apply_overrides(
+            scope="workspace",
+            changes={"skills.policy_mode": "allowlist"},
+            expected_versions={"skills.policy_mode": 1},
+        )
+
+        catalog = await service.catalog_async(
+            section="user-workspace",
+            scope="workspace",
+        )
+        effective = await service.effective_value_async(
+            "skills.policy_mode",
+            scope="workspace",
+        )
+
+    skill_policy = next(
+        item
+        for item in catalog.categories["Skills"]
+        if item.key == "skills.policy_mode"
+    )
+    assert skill_policy.apply_mode == "worker_reload"
+    assert skill_policy.activation_state == "pending_reload"
+    assert skill_policy.active is False
+    assert skill_policy.pending_value == "allowlist"
+    assert skill_policy.affected_process_or_worker == "workflow_runtime, skills"
+    assert skill_policy.completion_guidance == "Reload affected workers to activate this value."
+    assert effective.activation_state == "pending_reload"
+    assert effective.active is False
+    assert effective.pending_value == "allowlist"
 
 
 @pytest.mark.asyncio
@@ -2340,6 +2564,44 @@ async def test_audit_redactor_blocks_embedded_secret_prefixes(settings_session_m
     assert entries[0].new_value is None
     assert "secret_like_value" in entries[0].redaction_reasons
     assert "prefix-ghp_embedded_suffix" not in entries[0].model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "sensitive_value",
+    [
+        "oauth_session=stateful-provider-return",
+        "-----BEGIN PRIVATE KEY-----\nmaterial\n-----END PRIVATE KEY-----",
+        {"generated_config": {"token": "provider-returned-diagnostic"}},
+        {"diagnostics": [{"credential": "provider-sensitive-detail"}]},
+    ],
+)
+@pytest.mark.asyncio
+async def test_audit_redactor_blocks_documented_sensitive_classes(
+    settings_session_maker,
+    sensitive_value,
+):
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsAuditEvent(
+                event_type="settings.override.updated",
+                key="workflow.default_publish_mode",
+                scope="workspace",
+                new_value_json=sensitive_value,
+                redacted=False,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(env={}, session=settings_session)
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+    assert entries[0].new_value is None
+    assert entries[0].redacted is True
+    assert "secret_like_value" in entries[0].redaction_reasons
+    assert "provider-returned-diagnostic" not in entries[0].model_dump_json()
+    assert "provider-sensitive-detail" not in entries[0].model_dump_json()
 
 
 @pytest.mark.asyncio

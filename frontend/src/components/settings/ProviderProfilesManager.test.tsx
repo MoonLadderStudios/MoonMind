@@ -41,6 +41,30 @@ function renderProviderProfilesManager(profiles: ProviderProfile[] = []) {
   return { onNotice, queryClient };
 }
 
+function renderReadOnlyProviderProfilesManager(profiles: ProviderProfile[] = []) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  const onNotice = vi.fn();
+
+  renderWithClient(
+    <ProviderProfilesManager
+      profiles={profiles}
+      secretSlugs={['OPENAI_API_KEY']}
+      onNotice={onNotice}
+      queryClient={queryClient}
+      defaultTaskModelByRuntime={{}}
+      canWriteProviderProfiles={false}
+    />,
+  );
+
+  return { onNotice, queryClient };
+}
+
 function renderProviderProfilesManagerWithQuery(profiles: ProviderProfile[] = []) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -1025,5 +1049,18 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.getByText('db://claude-team-key')).toBeTruthy();
     expect(screen.getByText(/Role-aware SecretRefs/)).toBeTruthy();
     expect(screen.queryByText(rawSecret)).toBeNull();
+  });
+
+  it('shows read-only profile details without write controls', () => {
+    renderReadOnlyProviderProfilesManager([profileWithReadiness]);
+
+    expect(screen.getByText('codex-diagnostic')).toBeTruthy();
+    expect(screen.getByText('Readiness: Blocked')).toBeTruthy();
+    expect(screen.getByText('Provider profile has launch blockers.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Disable' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Create provider profile' })).toBeNull();
+    expect(screen.queryByText('Create Provider Profile')).toBeNull();
   });
 });

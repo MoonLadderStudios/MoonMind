@@ -148,6 +148,11 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
   const defaultTaskModelByRuntime: Record<string, string> =
     (payload.initialData as { runtimeConfig?: { system?: { defaultTaskModelByRuntime?: Record<string, string> } } } | undefined)
       ?.runtimeConfig?.system?.defaultTaskModelByRuntime ?? {};
+  const settingsPermissions = new Set(
+    ((payload.initialData as { settingsPermissions?: string[] } | undefined)
+      ?.settingsPermissions ?? []),
+  );
+  const canWriteProviderProfiles = settingsPermissions.has('provider_profiles.write');
 
   useEffect(() => {
     const handlePopState = () => {
@@ -318,6 +323,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
               onNotice={setNotice}
               queryClient={queryClient}
               defaultTaskModelByRuntime={defaultTaskModelByRuntime}
+              canWriteProviderProfiles={canWriteProviderProfiles}
             />
           )}
 

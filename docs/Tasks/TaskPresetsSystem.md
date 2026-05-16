@@ -416,6 +416,24 @@ Rules:
 - Recursive expansion must detect cycles and fail safely.
 - Provenance records both parent and child preset ancestry.
 
+## Jira Breakdown Orchestrate Reconciliation
+
+`jira-breakdown-orchestrate` includes a repository reconciliation stage between
+MoonSpec breakdown and Jira creation. The reconciliation agent compares each
+generated story with the current repository state and annotates the story
+breakdown before any Jira mutation occurs:
+
+- fully implemented stories are marked for skip and do not create Jira issues or
+  downstream Jira Orchestrate tasks
+- partially implemented stories keep their original traceability but add
+  `remainingWork`, so Jira tracks only the unmet behavior
+- unverifiable stories are marked for manual review and are not automatically
+  converted into implementation work
+
+The deterministic Jira story-output tool consumes only eligible reconciled
+stories, then the downstream Jira Orchestrate task creator consumes only the
+Jira issue mappings that were actually created or reused.
+
 ## Submit-Time Auto-Expansion
 
 The user may click Create Task while one or more preset steps are still unexpanded. The submit path must:

@@ -436,16 +436,26 @@ def _docker_workflow_mode_forbidden_failure(*, workflow_docker_mode: str, tool_n
 CODEX_TRANSIENT_TURN_ERROR_TYPE = "CodexTransientTurnError"
 CODEX_PERMANENT_TURN_ERROR_TYPE = "CodexPermanentTurnError"
 
-def _codex_transient_turn_failure(reason: str) -> temporal_exceptions.ApplicationError:
+def _codex_transient_turn_failure(
+    reason: str,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> temporal_exceptions.ApplicationError:
     return temporal_exceptions.ApplicationError(
         reason or "codex turn produced no assistant output",
+        dict(metadata or {}),
         type=CODEX_TRANSIENT_TURN_ERROR_TYPE,
         non_retryable=False,
     )
 
-def _codex_permanent_turn_failure(reason: str) -> temporal_exceptions.ApplicationError:
+def _codex_permanent_turn_failure(
+    reason: str,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> temporal_exceptions.ApplicationError:
     return temporal_exceptions.ApplicationError(
         reason or "codex turn failed",
+        dict(metadata or {}),
         type=CODEX_PERMANENT_TURN_ERROR_TYPE,
         non_retryable=True,
     )
@@ -4948,6 +4958,10 @@ class TemporalAgentRuntimeActivities:
             instructions,
             parameters=parameters,
         )
+        prepared = cls._append_pr_resolver_initial_state_hint(
+            prepared,
+            parameters=parameters,
+        )
         prepared = cls._prepend_selected_skill_activation(
             prepared,
             parameters=parameters,
@@ -4959,6 +4973,192 @@ class TemporalAgentRuntimeActivities:
         )
         prepared = cls._append_managed_step_boundary(prepared)
         return append_managed_codex_runtime_note(prepared)
+
+    @staticmethod
+    def _first_mapping(*values: Any) -> Mapping[str, Any]:
+        for value in values:
+            if isinstance(value, Mapping):
+                return value
+        return {}
+
+    @staticmethod
+    def _state_value(
+        *mappings: Mapping[str, Any],
+        keys: tuple[str, ...],
+    ) -> Any:
+        for mapping in mappings:
+            for key in keys:
+                value = mapping.get(key)
+                if value is not None:
+                    return value
+        return None
+
+    @staticmethod
+    def _compact_state_value(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        text = str(value).strip()
+        if not text:
+            return None
+        return text[:200]
+
+    @classmethod
+    def _append_pr_resolver_initial_state_hint(
+        cls,
+        instructions: str,
+        *,
+        parameters: Mapping[str, Any] | None,
+    ) -> str:
+        params = parameters if isinstance(parameters, Mapping) else {}
+        if selected_agent_skill(params) != "pr-resolver":
+            return instructions
+        if "MoonMind PR resolver initial state:" in instructions:
+            return instructions
+
+        state = cls._first_mapping(
+            params.get("initialPrState"),
+            params.get("mergeGate"),
+            params.get("prResolverInitialState"),
+            params,
+        )
+        pr_state = cls._first_mapping(
+            state.get("pr"),
+            state.get("pullRequest"),
+            params.get("pr"),
+            params.get("pullRequest"),
+        )
+        ci_state = cls._first_mapping(
+            state.get("ci"),
+            state.get("checks"),
+            params.get("ci"),
+            params.get("checks"),
+        )
+        comments_state = cls._first_mapping(
+            state.get("commentsSummary"),
+            state.get("comments"),
+            params.get("commentsSummary"),
+            params.get("comments"),
+        )
+
+        pr_url = cls._state_value(
+            pr_state,
+            state,
+            params,
+            keys=("url", "htmlUrl", "pullRequestUrl", "prUrl"),
+        )
+        mergeable = cls._state_value(
+            pr_state,
+            state,
+            keys=("mergeable", "mergeableState"),
+        )
+        merge_state = cls._state_value(
+            pr_state,
+            state,
+            keys=("mergeStateStatus", "merge_state_status"),
+        )
+        ci_running = cls._state_value(ci_state, state, keys=("isRunning", "ciRunning"))
+        ci_failures = cls._state_value(ci_state, state, keys=("hasFailures", "ciFailed"))
+        ci_signal = cls._state_value(
+            ci_state,
+            state,
+            keys=("signalQuality", "statusCheckRollupQuality"),
+        )
+        rollup_count = cls._state_value(
+            ci_state,
+            state,
+            keys=("statusCheckRollupCount", "checkRunCount", "checksCount"),
+        )
+        comments_fetch = cls._state_value(
+            comments_state,
+            state,
+            keys=("fetchSucceeded", "succeeded", "commentsFetchSucceeded"),
+        )
+        actionable_comments = cls._state_value(
+            comments_state,
+            state,
+            keys=("hasActionableComments", "actionableComments"),
+        )
+
+        observed_values = (
+            pr_url,
+            mergeable,
+            merge_state,
+            ci_running,
+            ci_failures,
+            ci_signal,
+            rollup_count,
+            comments_fetch,
+            actionable_comments,
+        )
+        if all(value is None for value in observed_values):
+            return instructions
+
+        blockers: list[str] = []
+        mergeable_text = str(mergeable or "").strip().upper()
+        merge_state_text = str(merge_state or "").strip().upper()
+        if mergeable_text == "CONFLICTING" or merge_state_text in {"DIRTY", "BLOCKED"}:
+            blockers.append("merge_conflicts")
+        if ci_running is True:
+            blockers.append("ci_running")
+        if ci_failures is True:
+            blockers.append("ci_failures")
+        ci_signal_text = str(ci_signal or "").strip().lower()
+        if ci_signal_text in {"missing", "unavailable", "none", "empty"}:
+            blockers.append("ci_unavailable")
+        if rollup_count == 0:
+            blockers.append("ci_unavailable")
+        if actionable_comments is True:
+            blockers.append("actionable_comments")
+
+        lines = [
+            "MoonMind PR resolver initial state:",
+            "- Source: deterministic pre-agent launch context.",
+        ]
+        compact_pr_url = cls._compact_state_value(pr_url)
+        if compact_pr_url:
+            lines.append(f"- PR: {compact_pr_url}")
+        merge_parts = []
+        for label, value in (
+            ("mergeable", mergeable),
+            ("mergeStateStatus", merge_state),
+        ):
+            compact = cls._compact_state_value(value)
+            if compact is not None:
+                merge_parts.append(f"{label}={compact}")
+        if merge_parts:
+            lines.append("- Merge gate: " + ", ".join(merge_parts))
+        ci_parts = []
+        for label, value in (
+            ("isRunning", ci_running),
+            ("hasFailures", ci_failures),
+            ("signalQuality", ci_signal),
+            ("statusCheckRollupCount", rollup_count),
+        ):
+            compact = cls._compact_state_value(value)
+            if compact is not None:
+                ci_parts.append(f"{label}={compact}")
+        if ci_parts:
+            lines.append("- CI: " + ", ".join(ci_parts))
+        comment_parts = []
+        for label, value in (
+            ("fetchSucceeded", comments_fetch),
+            ("hasActionableComments", actionable_comments),
+        ):
+            compact = cls._compact_state_value(value)
+            if compact is not None:
+                comment_parts.append(f"{label}={compact}")
+        if comment_parts:
+            lines.append("- Comments: " + ", ".join(comment_parts))
+        lines.append(
+            "- Initial blocker hint: "
+            + (", ".join(dict.fromkeys(blockers)) if blockers else "none_detected")
+        )
+        lines.append(
+            "- Report this blocker explicitly if it prevents CI-dependent resolver work."
+        )
+        return instructions.rstrip() + "\n\n" + "\n".join(lines)
 
     @staticmethod
     def _append_skills_on_demand_disabled_notice(
@@ -5170,8 +5370,8 @@ class TemporalAgentRuntimeActivities:
             reason = str(metadata.get("reason") or "").strip()
             failure_class = str(metadata.get("failureClass") or "").strip()
             if failure_class == "transient":
-                raise _codex_transient_turn_failure(reason)
-            raise _codex_permanent_turn_failure(reason)
+                raise _codex_transient_turn_failure(reason, metadata=metadata)
+            raise _codex_permanent_turn_failure(reason, metadata=metadata)
         return validated_response
 
     async def agent_runtime_steer_turn(
