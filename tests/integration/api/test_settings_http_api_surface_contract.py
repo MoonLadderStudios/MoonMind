@@ -182,6 +182,38 @@ async def test_mm657_all_api_families_are_contract_covered(settings_http_api_db)
     assert audit.json()["items"]
 
 
+async def test_mm659_failed_write_produces_redacted_audit_event(
+    settings_http_api_db,
+):
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        rejected = await client.patch(
+            "/api/v1/settings/workspace",
+            headers={"x-request-id": "mm659-failed-write"},
+            json={
+                "changes": {"integrations.github.token_ref": "ghp_raw_plaintext"},
+                "expected_versions": {"integrations.github.token_ref": 1},
+                "reason": "configure integration token",
+            },
+        )
+        audit = await client.get(
+            "/api/v1/settings/audit",
+            params={"key": "integrations.github.token_ref"},
+        )
+
+    assert rejected.status_code == 400
+    assert "ghp_raw_plaintext" not in rejected.text
+    assert audit.status_code == 200
+    item = audit.json()["items"][0]
+    assert item["event_type"] == "settings.override.rejected"
+    assert item["validation_outcome"] == "rejected"
+    assert item["request_id"] == "mm659-failed-write"
+    assert item["redacted"] is True
+    assert item["new_value"] is None
+    assert "ghp_raw_plaintext" not in audit.text
+
+
 async def test_mm657_validate_preview_structured_errors_and_redaction(
     settings_http_api_db,
 ):

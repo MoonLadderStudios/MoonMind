@@ -2249,6 +2249,29 @@ async def test_audit_entries_expose_secret_ref_metadata_with_permission(
 
 
 @pytest.mark.asyncio
+async def test_rejected_audit_entries_expose_safe_secret_ref_metadata_with_permission(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        service = SettingsCatalogService(env={}, session=settings_session)
+        await service.record_rejected_write_audit(
+            scope="workspace",
+            changes={"integrations.github.token_ref": "db://github-token"},
+            reason="version conflict",
+            request_id="settings-rejected-1",
+        )
+
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read", "secrets.metadata.read"},
+        )
+
+    assert entries[0].event_type == "settings.override.rejected"
+    assert entries[0].new_value == "db://github-token"
+    assert entries[0].redacted is False
+    assert entries[0].request_id == "settings-rejected-1"
+
+
+@pytest.mark.asyncio
 async def test_audit_entries_persist_actor_identity(settings_session_maker):
     user_id = uuid4()
     async with settings_session_maker() as settings_session:
@@ -2348,6 +2371,44 @@ async def test_audit_redactor_blocks_embedded_secret_prefixes(settings_session_m
     assert entries[0].new_value is None
     assert "secret_like_value" in entries[0].redaction_reasons
     assert "prefix-ghp_embedded_suffix" not in entries[0].model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "sensitive_value",
+    [
+        "oauth_session=stateful-provider-return",
+        "-----BEGIN PRIVATE KEY-----\nmaterial\n-----END PRIVATE KEY-----",
+        {"generated_config": {"token": "provider-returned-diagnostic"}},
+        {"diagnostics": [{"credential": "provider-sensitive-detail"}]},
+    ],
+)
+@pytest.mark.asyncio
+async def test_audit_redactor_blocks_documented_sensitive_classes(
+    settings_session_maker,
+    sensitive_value,
+):
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsAuditEvent(
+                event_type="settings.override.updated",
+                key="workflow.default_publish_mode",
+                scope="workspace",
+                new_value_json=sensitive_value,
+                redacted=False,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(env={}, session=settings_session)
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+    assert entries[0].new_value is None
+    assert entries[0].redacted is True
+    assert "secret_like_value" in entries[0].redaction_reasons
+    assert "provider-returned-diagnostic" not in entries[0].model_dump_json()
+    assert "provider-sensitive-detail" not in entries[0].model_dump_json()
 
 
 @pytest.mark.asyncio
