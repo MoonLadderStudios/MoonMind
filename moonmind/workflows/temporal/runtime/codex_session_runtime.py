@@ -69,6 +69,8 @@ _DIAGNOSTIC_TEXT_MAX_CHARS = 1000
 _RPC_TRACE_MAX_ENTRIES = 80
 _ROLLUP_EVENT_TYPES_MAX = 24
 _LOG_EXCERPT_MAX_ROWS = 20
+_TURN_ITEMS_PAGE_LIMIT = 200
+_TURN_ITEMS_MAX_PAGES = 20
 _SECRET_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"ghp_[A-Za-z0-9_]{20,}"),
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
@@ -626,8 +628,7 @@ class CodexManagedSessionRuntime:
         return state
 
     @staticmethod
-    def _assistant_text_from_turn_payload(turn_payload: Mapping[str, Any]) -> str:
-        items = turn_payload.get("items")
+    def _assistant_text_from_items(items: Any) -> str:
         if not isinstance(items, list):
             return ""
         for item in reversed(items):
@@ -639,6 +640,10 @@ class CodexManagedSessionRuntime:
             if isinstance(text, str) and text.strip():
                 return text.strip()
         return ""
+
+    @classmethod
+    def _assistant_text_from_turn_payload(cls, turn_payload: Mapping[str, Any]) -> str:
+        return cls._assistant_text_from_items(turn_payload.get("items"))
 
     @classmethod
     def _extract_assistant_text(
@@ -1746,6 +1751,8 @@ class CodexManagedSessionRuntime:
         state: CodexSessionRuntimeState,
         thread_payload: Mapping[str, Any],
         vendor_turn_id: str,
+        client: CodexAppServerRpcClient | None = None,
+        vendor_thread_id: str | None = None,
     ) -> _CompletedTurnInspection:
         assistant_text = self._extract_assistant_text(
             thread_payload,
@@ -1753,6 +1760,14 @@ class CodexManagedSessionRuntime:
         )
         if assistant_text:
             return _CompletedTurnInspection(assistant_text=assistant_text)
+        if client is not None and vendor_thread_id:
+            assistant_text = self._assistant_text_from_turn_items_list(
+                client=client,
+                vendor_thread_id=vendor_thread_id,
+                vendor_turn_id=vendor_turn_id,
+            )
+            if assistant_text:
+                return _CompletedTurnInspection(assistant_text=assistant_text)
         vendor_thread_path = self._resolved_rollout_path(
             state=state,
             thread_payload=thread_payload,
@@ -1766,6 +1781,38 @@ class CodexManagedSessionRuntime:
             assistant_text=rollout_scan.assistant_text,
             rollout_scan=rollout_scan,
         )
+
+    def _assistant_text_from_turn_items_list(
+        self,
+        *,
+        client: CodexAppServerRpcClient,
+        vendor_thread_id: str,
+        vendor_turn_id: str,
+    ) -> str:
+        cursor: str | None = None
+        assistant_text = ""
+        for _ in range(_TURN_ITEMS_MAX_PAGES):
+            params: dict[str, Any] = {
+                "threadId": vendor_thread_id,
+                "turnId": vendor_turn_id,
+                "limit": _TURN_ITEMS_PAGE_LIMIT,
+                "sortDirection": "asc",
+            }
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                response = client.request("thread/turns/items/list", params)
+            except RuntimeError:
+                return assistant_text
+
+            text = self._assistant_text_from_items(response.get("data"))
+            if text:
+                assistant_text = text
+            next_cursor = response.get("nextCursor")
+            if not isinstance(next_cursor, str) or not next_cursor.strip():
+                return assistant_text
+            cursor = next_cursor.strip()
+        return assistant_text
 
     def _assistant_text_for_completed_turn(
         self,
@@ -2089,6 +2136,8 @@ class CodexManagedSessionRuntime:
                 state=state,
                 thread_payload=thread_payload,
                 vendor_turn_id=active_turn_id,
+                client=client,
+                vendor_thread_id=state.vendor_thread_id,
             )
             assistant_text = completed_turn_inspection.assistant_text
         if status == "completed" and not assistant_text:
@@ -2267,6 +2316,8 @@ class CodexManagedSessionRuntime:
                 state=state,
                 thread_payload=thread_payload,
                 vendor_turn_id=vendor_turn_id,
+                client=client,
+                vendor_thread_id=vendor_thread_id,
             )
             assistant_text = completed_turn_inspection.assistant_text
             if not assistant_text:
