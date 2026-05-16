@@ -8,7 +8,8 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
@@ -148,6 +149,48 @@ class DeploymentUpdateLockLease:
         await self.release()
 
 
+@dataclass(frozen=True, slots=True)
+class FileDeploymentUpdateLockManager:
+    """Atomic per-stack lock manager backed by an allowlisted filesystem path."""
+
+    lock_dir: str
+
+    async def acquire(self, stack: str) -> "FileDeploymentUpdateLockLease":
+        normalized = _required_string(stack, "stack")
+        lock_path = Path(self.lock_dir).expanduser() / f"{normalized}.lock"
+        try:
+            await asyncio.to_thread(_create_lock_file, lock_path, normalized)
+        except FileExistsError as exc:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_LOCKED",
+                message=(
+                    "Deployment update for stack "
+                    f"'{normalized}' is already running."
+                ),
+                retryable=False,
+                details={
+                    "stack": normalized,
+                    "lockPath": str(lock_path),
+                    "failureClass": "deployment_lock_unavailable",
+                },
+            ) from exc
+        return FileDeploymentUpdateLockLease(lock_path)
+
+
+@dataclass(frozen=True, slots=True)
+class FileDeploymentUpdateLockLease:
+    lock_path: Path
+
+    async def release(self) -> None:
+        await asyncio.to_thread(_unlink_lock_file, self.lock_path)
+
+    async def __aenter__(self) -> "FileDeploymentUpdateLockLease":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        await self.release()
+
+
 class InMemoryDesiredStateStore:
     """Deterministic desired-state store for hermetic execution tests."""
 
@@ -170,6 +213,74 @@ class InMemoryEvidenceWriter:
         record = dict(payload)
         self.records.append((kind, record))
         return _stable_ref(kind, record)
+
+
+@dataclass(frozen=True, slots=True)
+class FileDesiredStateStore:
+    """Atomic desired-state store backed by an allowlisted deployment env file.
+
+    The env file is the Compose-consumed desired state. A JSON sidecar preserves
+    the audit fields that do not belong in process environment variables.
+    """
+
+    env_file_path: str
+    json_file_path: str | None = None
+    image_env_var: str = "MOONMIND_IMAGE"
+
+    async def persist(self, payload: Mapping[str, Any]) -> str:
+        record = dict(payload)
+        env_path = Path(self.env_file_path).expanduser()
+        json_path = (
+            Path(self.json_file_path).expanduser()
+            if self.json_file_path
+            else env_path.with_suffix(env_path.suffix + ".json")
+        )
+        desired_image = _desired_deployed_image(record)
+        requested_image = _desired_requested_image(record)
+        run_id = str(record.get("sourceRunId") or "").strip()
+        env_payload = {
+            self.image_env_var: desired_image,
+            f"{self.image_env_var}_REQUESTED": requested_image,
+            "MOONMIND_DEPLOYMENT_RUN_ID": run_id,
+        }
+        await asyncio.to_thread(
+            _write_desired_state_files,
+            env_path,
+            json_path,
+            env_payload,
+            record,
+        )
+        return f"file:{env_path}"
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalDeploymentEvidenceWriter:
+    """Deployment evidence writer backed by Temporal artifacts."""
+
+    artifact_service: Any
+    principal: str = "system:deployment"
+    execution_ref: Mapping[str, Any] | None = None
+
+    async def write(self, kind: str, payload: Mapping[str, Any]) -> str:
+        encoded = (
+            json.dumps(payload, sort_keys=True, default=str, indent=2) + "\n"
+        ).encode("utf-8")
+        artifact, _upload = await self.artifact_service.create(
+            principal=self.principal,
+            content_type="application/json",
+            link=self.execution_ref,
+            metadata_json={
+                "artifactClass": "deployment.evidence",
+                "deploymentEvidenceKind": kind,
+            },
+        )
+        completed = await self.artifact_service.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=self.principal,
+            payload=encoded,
+            content_type="application/json",
+        )
+        return str(getattr(completed, "artifact_id", artifact.artifact_id))
 
 
 class DisabledComposeRunner:
@@ -316,6 +427,7 @@ class HostDockerComposeRunner:
     project_name: str = "moonmind"
     command_timeout_seconds: int = 900
     local_project_dir: str | None = None
+    env_file: str | None = None
 
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         services = await self._run_compose_json(("ps", "--format", "json"))
@@ -477,7 +589,7 @@ class HostDockerComposeRunner:
                     "failureClass": "policy_violation",
                 },
             )
-        return [
+        command = [
             "docker",
             "compose",
             "--project-name",
@@ -487,6 +599,11 @@ class HostDockerComposeRunner:
             "-f",
             str(compose_file),
         ]
+        if self.env_file:
+            env_file = Path(self.env_file).expanduser()
+            if env_file.exists():
+                command.extend(["--env-file", str(env_file)])
+        return command
 
     def _compose_command(self, command: Sequence[str]) -> list[str]:
         parts = list(command)
@@ -512,7 +629,7 @@ class HostDockerComposeRunner:
     ) -> Mapping[str, Any]:
         resolved = self._compose_command(command)
         env = os.environ.copy()
-        if requested_image:
+        if requested_image and not self.env_file:
             env["MOONMIND_IMAGE"] = requested_image
         process = await asyncio.create_subprocess_exec(
             *resolved,
@@ -1028,12 +1145,26 @@ def build_deployment_update_handler(
     async def _handler(
         inputs: Mapping[str, Any], context: Mapping[str, Any] | None = None
     ) -> ToolResult:
+        context = dict(context or {})
         context_executor = None
-        if isinstance(context, Mapping):
-            candidate = context.get("deployment_update_executor")
-            if isinstance(candidate, DeploymentUpdateExecutor):
-                context_executor = candidate
-        return await (context_executor or resolved_executor).execute(inputs, context)
+        candidate = context.get("deployment_update_executor")
+        if isinstance(candidate, DeploymentUpdateExecutor):
+            context_executor = candidate
+        active_executor = context_executor or resolved_executor
+        artifact_service = context.get("temporal_artifact_service")
+        if artifact_service is not None and context_executor is None:
+            active_executor = replace(
+                active_executor,
+                evidence_writer=TemporalDeploymentEvidenceWriter(
+                    artifact_service=artifact_service,
+                    principal=str(
+                        context.get("deployment_evidence_principal")
+                        or "system:deployment"
+                    ),
+                    execution_ref=_execution_ref_from_context(context),
+                ),
+            )
+        return await active_executor.execute(inputs, context)
 
     return _handler
 
@@ -1292,6 +1423,106 @@ def _split_requested_image(requested_image: str) -> tuple[str, str]:
     return repository, reference
 
 
+def _desired_requested_image(payload: Mapping[str, Any]) -> str:
+    repository = _required_string(payload.get("imageRepository"), "imageRepository")
+    reference = _required_string(payload.get("requestedReference"), "requestedReference")
+    separator = "@" if reference.startswith("sha256:") else ":"
+    return f"{repository}{separator}{reference}"
+
+
+def _desired_deployed_image(payload: Mapping[str, Any]) -> str:
+    repository = _required_string(payload.get("imageRepository"), "imageRepository")
+    resolved_digest = str(payload.get("resolvedDigest") or "").strip()
+    if resolved_digest:
+        return f"{repository}@{resolved_digest}"
+    return _desired_requested_image(payload)
+
+
+def _env_value(value: Any) -> str:
+    text = str(value or "").strip()
+    return text.replace("\r", "").replace("\n", " ")
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        with contextlib.suppress(OSError):
+            dir_fd = os.open(path.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temp_path.unlink()
+
+
+def _create_lock_file(lock_path: Path, stack: str) -> None:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "stack": stack,
+        "pid": os.getpid(),
+        "createdAt": _utc_now(),
+    }
+    encoded = (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
+    fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            lock_path.unlink()
+        raise
+
+
+def _unlink_lock_file(lock_path: Path) -> None:
+    with contextlib.suppress(FileNotFoundError):
+        lock_path.unlink()
+
+
+def _write_desired_state_files(
+    env_path: Path,
+    json_path: Path,
+    env_payload: Mapping[str, Any],
+    record: Mapping[str, Any],
+) -> None:
+    env_text = "".join(
+        f"{key}={_env_value(value)}\n"
+        for key, value in env_payload.items()
+        if _env_value(value)
+    )
+    _atomic_write_bytes(env_path, env_text.encode("utf-8"))
+    json_text = json.dumps(record, sort_keys=True, default=str, indent=2) + "\n"
+    _atomic_write_bytes(json_path, json_text.encode("utf-8"))
+
+
+def _execution_ref_from_context(context: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    workflow_id = str(context.get("workflow_id") or "").strip()
+    run_id = str(context.get("run_id") or "").strip()
+    if not workflow_id or not run_id:
+        return None
+    return {
+        "namespace": str(context.get("namespace") or "default"),
+        "workflow_id": workflow_id,
+        "run_id": run_id,
+        "link_type": "deployment.evidence",
+        "label": "deployment update evidence",
+    }
+
+
 def _stable_ref(kind: str, payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     digest = hashlib.sha256(kind.encode("utf-8") + b"\0" + encoded).hexdigest()
@@ -1311,9 +1542,12 @@ __all__ = [
     "DEPLOYMENT_UPDATE_STACKS",
     "DEPLOYMENT_UPDATE_MODES",
     "DisabledComposeRunner",
+    "FileDeploymentUpdateLockManager",
+    "FileDesiredStateStore",
     "HostDockerComposeRunner",
     "InMemoryDesiredStateStore",
     "InMemoryEvidenceWriter",
+    "TemporalDeploymentEvidenceWriter",
     "build_compose_command_plan",
     "build_deployment_update_handler",
     "register_deployment_update_tool_handler",
