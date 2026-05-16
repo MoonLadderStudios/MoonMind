@@ -1,6 +1,13 @@
 ---
 name: jira-verify
-description: Verify a Jira issue against the current repository state, then post a Jira comment with a PASS, PARTIAL, FAIL, or BLOCKED verdict. Works in two modes: (a) feature-branch mode, comparing a checked-out branch to its base ref; or (b) main/trunk mode, verifying that an issue is already implemented on the current default branch (typical for stories that have already merged). Use when a user asks whether a branch or merged change completes a Jira ticket, or needs a Jira-visible verification comment.
+description: >-
+  Verify a Jira issue against the current repository state, then post a Jira
+  comment with a PASS, PARTIAL, FAIL, or BLOCKED verdict. Works in two modes:
+  (a) feature-branch mode, comparing a checked-out branch to its base ref; or
+  (b) main/trunk mode, verifying that an issue is already implemented on the
+  current default branch (typical for stories that have already merged). Use
+  when a user asks whether a branch or merged change completes a Jira ticket,
+  or needs a Jira-visible verification comment.
 ---
 
 # Jira Verify
