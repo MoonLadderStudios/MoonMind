@@ -779,6 +779,28 @@ describe('Tasks List Entrypoint', () => {
     expect(selectedStatuses.textContent).not.toContain('canceled');
   });
 
+  it('summarizes multi-value excluded status filters unambiguously with a bounded label', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    fireEvent.change(await screen.findByLabelText('Status filter mode'), { target: { value: 'exclude' } });
+
+    const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
+    fireEvent.change(statusFilter, { target: { value: 'completed' } });
+    fireEvent.change(statusFilter, { target: { value: 'failed' } });
+    fireEvent.change(statusFilter, { target: { value: 'planning' } });
+    fireEvent.change(statusFilter, { target: { value: 'canceled' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+        '/api/executions?source=temporal&pageSize=50&scope=tasks&stateNotIn=completed%2Cfailed%2Cplanning%2Ccanceled',
+      );
+    });
+    expect(screen.getByRole('button', { name: 'Status filter: not (completed, failed, planning +1)' })).toBeTruthy();
+  });
+
   it('clears stale cursor state when the page size changes', async () => {
     window.history.pushState({}, 'Paged', '/tasks/list?nextPageToken=stale-token&limit=50');
     renderWithClient(<TasksListPage payload={mockPayload} />);
