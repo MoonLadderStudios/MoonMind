@@ -867,6 +867,7 @@ class SettingsCatalogService:
         self._user_id = user_id or _DEFAULT_SUBJECT_ID
         self._managed_secret_status_by_slug: dict[str, str | None] = {}
         self._provider_profile_enabled_by_id: dict[str, bool | None] = {}
+        self._provider_profile_readiness_by_id: dict[str, SettingDiagnostic | None] = {}
         self._provider_profile_metadata_by_id: dict[str, dict[str, Any]] = {}
         self._workspace_policy = (
             workspace_policy
@@ -2389,25 +2390,38 @@ class SettingsCatalogService:
         if not missing:
             return
         result = await self._session.execute(
-            select(
-                ManagedAgentProviderProfile.profile_id,
-                ManagedAgentProviderProfile.enabled,
-                ManagedAgentProviderProfile.credential_source,
-                ManagedAgentProviderProfile.volume_ref,
-            ).where(ManagedAgentProviderProfile.profile_id.in_(missing))
+            select(ManagedAgentProviderProfile).where(
+                ManagedAgentProviderProfile.profile_id.in_(missing)
+            )
         )
-        rows = result.all()
-        for profile_id, enabled, credential_source, volume_ref in rows:
-            is_enabled = bool(enabled)
-            self._provider_profile_enabled_by_id[profile_id] = is_enabled
-            self._provider_profile_metadata_by_id[profile_id] = {
-                "enabled": is_enabled,
-                "credential_source": credential_source,
-                "volume_ref": volume_ref,
-            }
+        rows_by_id = {row.profile_id: row for row in result.scalars().all()}
+        secret_slugs: set[str] = set()
+        for row in rows_by_id.values():
+            for ref in (row.secret_refs or {}).values():
+                if isinstance(ref, str) and ref.startswith("db://"):
+                    slug = ref.removeprefix("db://").strip()
+                    if slug:
+                        secret_slugs.add(slug)
+        if secret_slugs:
+            await self._prime_managed_secret_statuses(
+                f"db://{slug}" for slug in secret_slugs
+            )
         for profile_id in missing:
-            if profile_id not in self._provider_profile_enabled_by_id:
-                self._provider_profile_enabled_by_id[profile_id] = None
+            row = rows_by_id.get(profile_id)
+            self._provider_profile_enabled_by_id[profile_id] = (
+                bool(row.enabled) if row is not None else None
+            )
+            if row is not None:
+                self._provider_profile_metadata_by_id[profile_id] = {
+                    "enabled": bool(row.enabled),
+                    "credential_source": row.credential_source,
+                    "volume_ref": row.volume_ref,
+                }
+            self._provider_profile_readiness_by_id[profile_id] = (
+                self._provider_profile_readiness_diagnostic(profile_id, row)
+                if row is not None
+                else None
+            )
 
     def _resolve_value_from_overrides(
         self,
@@ -2977,6 +2991,10 @@ class SettingsCatalogService:
         provider_profile = values.get("workflow.default_provider_profile_ref")
         if isinstance(provider_profile, str) and provider_profile.strip():
             self._provider_profile_enabled_by_id.setdefault(
+                provider_profile.strip(),
+                None,
+            )
+            self._provider_profile_readiness_by_id.setdefault(
                 provider_profile.strip(),
                 None,
             )
@@ -3694,6 +3712,7 @@ class SettingsCatalogService:
                     "launch_blocker",
                     "operation_blocker",
                     "blocks",
+                    "readiness_blockers",
                 }
             }
             return [
@@ -3724,6 +3743,7 @@ class SettingsCatalogService:
                     "launch_blocker",
                     "operation_blocker",
                     "blocks",
+                    "readiness_blockers",
                 }
             }
             return [
@@ -3965,7 +3985,108 @@ class SettingsCatalogService:
                     "blocks": ["launch", "readiness"],
                 },
             )
+        readiness = self._provider_profile_readiness_by_id.get(profile_id)
+        if readiness is not None:
+            return readiness
         return None
+
+    def _provider_profile_readiness_diagnostic(
+        self,
+        profile_id: str,
+        row: ManagedAgentProviderProfile | None,
+    ) -> SettingDiagnostic | None:
+        if row is None:
+            return None
+        blockers: list[str] = []
+        missing_required = [
+            field_name
+            for field_name, value in {
+                "profile_id": row.profile_id,
+                "runtime_id": row.runtime_id,
+                "provider_id": row.provider_id,
+                "credential_source": row.credential_source,
+                "runtime_materialization_mode": row.runtime_materialization_mode,
+            }.items()
+            if value in {None, ""}
+        ]
+        if missing_required:
+            blockers.append("missing required fields: " + ", ".join(missing_required))
+
+        credential_source = (
+            row.credential_source.value if row.credential_source else None
+        )
+        materialization_mode = (
+            row.runtime_materialization_mode.value
+            if row.runtime_materialization_mode
+            else None
+        )
+        if credential_source == "secret_ref":
+            secret_refs = row.secret_refs or {}
+            if not secret_refs:
+                blockers.append("missing SecretRef bindings")
+            for role, ref in secret_refs.items():
+                if not isinstance(ref, str) or not ref.strip():
+                    blockers.append(f"{role}: missing SecretRef")
+                    continue
+                if not ref.startswith("db://"):
+                    continue
+                slug = ref.removeprefix("db://").strip()
+                status = self._managed_secret_status_by_slug.get(slug)
+                if status is None:
+                    blockers.append(f"{role}: managed secret db://{slug} was not found")
+                elif status != SecretStatus.ACTIVE.value:
+                    blockers.append(f"{role}: managed secret db://{slug} is {status}")
+
+        oauth_required = (
+            credential_source == "oauth_volume" or materialization_mode == "oauth_home"
+        )
+        if oauth_required:
+            missing_oauth = [
+                field_name
+                for field_name, value in {
+                    "volume_ref": row.volume_ref,
+                    "volume_mount_path": row.volume_mount_path,
+                }.items()
+                if not value
+            ]
+            if missing_oauth:
+                blockers.append(
+                    "missing OAuth volume metadata: " + ", ".join(missing_oauth)
+                )
+
+        if not row.max_parallel_runs or row.max_parallel_runs <= 0:
+            blockers.append("no configured concurrency is available")
+        if row.cooldown_after_429_seconds is None or row.cooldown_after_429_seconds < 0:
+            blockers.append("cooldown is invalid")
+
+        provider_readiness = (
+            row.command_behavior.get("auth_readiness")
+            if isinstance(row.command_behavior, dict)
+            else None
+        )
+        if isinstance(provider_readiness, dict):
+            launch_ready = provider_readiness.get("launch_ready")
+            if launch_ready is None:
+                launch_ready = provider_readiness.get("launchReady")
+            if launch_ready is False:
+                blockers.append("provider-specific validation blocks launch")
+
+        if not blockers:
+            return None
+        return SettingDiagnostic(
+            code="provider_profile_not_ready",
+            message=(
+                "workflow.default_provider_profile_ref references a provider "
+                "profile that is not launch ready."
+            ),
+            severity="error",
+            details={
+                "profile_id": profile_id,
+                "launch_blocker": True,
+                "blocks": ["launch", "readiness"],
+                "readiness_blockers": blockers,
+            },
+        )
 
     def _secret_ref_diagnostic(
         self, entry: SettingRegistryEntry, value: str

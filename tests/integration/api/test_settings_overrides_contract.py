@@ -10,7 +10,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
-from api_service.db.models import Base, ManagedAgentProviderProfile, ManagedSecret, SecretStatus
+from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    ManagedSecret,
+    ProviderCredentialSource,
+    RuntimeMaterializationMode,
+    SecretStatus,
+)
 from api_service.main import app
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -246,3 +253,47 @@ async def test_mm656_settings_override_contract_rejects_invalid_references_and_p
         "enum_value_invalid",
         "runtime_policy_denied",
     }
+
+
+async def test_mm661_settings_override_contract_rejects_not_ready_provider_profile_without_plaintext(
+    settings_contract_db,
+):
+    async with settings_contract_db() as session:
+        session.add(
+            ManagedSecret(
+                slug="not-ready-profile-secret",
+                ciphertext="not-ready-secret-plaintext",
+                status=SecretStatus.DISABLED,
+                details={},
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="enabled-not-ready-profile",
+                runtime_id="codex",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"provider_api_key": "db://not-ready-profile-secret"},
+                enabled=True,
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.patch(
+            "/api/v1/settings/workspace",
+            json={
+                "changes": {
+                    "workflow.default_provider_profile_ref": "enabled-not-ready-profile"
+                },
+                "expected_versions": {"workflow.default_provider_profile_ref": 1},
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["details"]["code"] == "provider_profile_not_ready"
+    assert "not-ready-secret-plaintext" not in response.text
+    assert "enabled-not-ready-profile" in response.text

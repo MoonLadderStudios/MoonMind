@@ -25,6 +25,7 @@ from api_service.db.models import (
     SecretStatus,
     User,
 )
+from api_service.services.settings_catalog import has_settings_permission
 from moonmind.auth.secret_refs import (
     ParsedSecretRef,
     SecretBackend,
@@ -257,6 +258,7 @@ async def list_profiles(
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: User = Depends(get_current_user()),
 ) -> list[dict[str, Any]]:
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
     stmt = select(ManagedAgentProviderProfile)
     if runtime_id:
         stmt = stmt.where(ManagedAgentProviderProfile.runtime_id == runtime_id)
@@ -292,6 +294,7 @@ async def get_profile(
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
     row = await session.get(ManagedAgentProviderProfile, profile_id)
     if not row:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -318,6 +321,7 @@ async def create_profile(
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
     existing = await session.get(ManagedAgentProviderProfile, body.profile_id)
     if existing:
         raise HTTPException(status_code=409, detail="Profile already exists")
@@ -385,6 +389,7 @@ async def update_profile(
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
 
     update_data = body.model_dump(exclude_unset=True)
@@ -436,6 +441,7 @@ async def commit_claude_manual_auth(
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
     _require_claude_anthropic_profile(profile)
 
@@ -532,6 +538,7 @@ async def validate_claude_oauth_profile(
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
     _require_claude_anthropic_profile(profile)
     if not profile.volume_ref or not profile.volume_mount_path:
@@ -610,6 +617,7 @@ async def disconnect_claude_oauth_profile(
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
     _require_claude_anthropic_profile(profile)
 
@@ -647,6 +655,7 @@ async def delete_profile(
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
     runtime_id = profile.runtime_id
     await session.delete(profile)
@@ -664,6 +673,14 @@ def _user_id(user: Any) -> str | None:
     if raw is None:
         return None
     return str(raw)
+
+def _require_provider_profile_permission(user: Any, permission: str) -> None:
+    if has_settings_permission(user, permission):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=f"Missing required provider profile permission: {permission}.",
+    )
 
 def _can_view_profile(row: ManagedAgentProviderProfile, user: Any) -> bool:
     user_id = _user_id(user)
@@ -1056,11 +1073,13 @@ def _concurrency_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
 
 
 def _cooldown_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    cooldown = row.cooldown_after_429_seconds
+    valid_cooldown = cooldown is not None and cooldown >= 0
     return _readiness_check(
         "cooldown",
         "Cooldown",
-        "pass" if row.cooldown_after_429_seconds >= 0 else "error",
-        f"Cooldown after provider rate limit is {row.cooldown_after_429_seconds}s.",
+        "pass" if valid_cooldown else "error",
+        f"Cooldown after provider rate limit is {cooldown}s.",
     )
 
 
