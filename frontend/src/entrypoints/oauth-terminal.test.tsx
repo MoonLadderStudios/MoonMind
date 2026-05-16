@@ -115,6 +115,8 @@ function mockAttachFetch() {
       return new Response(
         JSON.stringify({
           session_id: 'session-1',
+          runtime_id: 'claude_code',
+          profile_id: 'claude-anthropic',
           status: 'bridge_ready',
           terminal_session_id: 'terminal-1',
           terminal_bridge_id: 'bridge-1',
@@ -246,6 +248,45 @@ describe('OAuthTerminalPage clipboard behavior', () => {
       'moonmind:provider-profile-updated',
       expect.stringContaining('codex-oauth'),
     );
+  });
+
+  it('hides the authentication code paste helper for Codex OAuth sessions', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: RequestInfo | URL) => {
+        const href = String(url);
+        if (href.endsWith('/terminal/attach')) {
+          return new Response(
+            JSON.stringify({
+              session_id: 'session-1',
+              terminal_session_id: 'terminal-1',
+              terminal_bridge_id: 'bridge-1',
+              websocket_url: '/ws/oauth/terminal',
+              attach_token: 'attach-token',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            session_id: 'session-1',
+            runtime_id: 'codex_cli',
+            profile_id: 'codex-oauth',
+            status: 'bridge_ready',
+            terminal_session_id: 'terminal-1',
+            terminal_bridge_id: 'bridge-1',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }),
+    );
+
+    renderPage();
+    await waitForSocket();
+
+    expect(screen.queryByLabelText('Paste authentication code')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Paste from clipboard' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Send to terminal' })).toBeNull();
   });
 
   it('shows the recovery action only for recoverable terminal sessions', async () => {
