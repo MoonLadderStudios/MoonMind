@@ -1143,6 +1143,54 @@ async def test_settings_audit_endpoint_redacts_without_secret_metadata_permissio
 
 
 @pytest.mark.asyncio
+async def test_failed_settings_write_creates_redacted_audit_event_with_request_id(
+    settings_api_db,
+    settings_user_override,
+):
+    settings_user_override(
+        permissions={"settings.workspace.write", "settings.audit.read"}
+    )
+    raw_secret_value = "gh" + "p_raw_plaintext"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        rejected = await client.patch(
+            "/api/v1/settings/workspace",
+            headers={"x-request-id": "settings-write-req-1"},
+            json={
+                "changes": {"integrations.github.token_ref": raw_secret_value},
+                "expected_versions": {"integrations.github.token_ref": 1},
+                "reason": "wire github token",
+            },
+        )
+        audit = await client.get(
+            "/api/v1/settings/audit",
+            params={"key": "integrations.github.token_ref"},
+        )
+
+    assert rejected.status_code == 400
+    assert rejected.json()["error"] == "invalid_setting_value"
+    assert raw_secret_value not in rejected.text
+    assert await _settings_override_count(settings_api_db) == 0
+    assert await _settings_audit_count(settings_api_db) == 1
+    assert audit.status_code == 200
+    item = audit.json()["items"][0]
+    assert item["event_type"] == "settings.override.rejected"
+    assert item["key"] == "integrations.github.token_ref"
+    assert item["scope"] == "workspace"
+    assert item["validation_outcome"] == "rejected"
+    assert item["request_id"] == "settings-write-req-1"
+    assert item["reason"] == "wire github token"
+    assert item["apply_mode"] == "next_launch"
+    assert item["redacted"] is True
+    assert item["old_value"] is None
+    assert item["new_value"] is None
+    assert "stored_redacted" in item["redaction_reasons"]
+    assert raw_secret_value not in audit.text
+
+
+@pytest.mark.asyncio
 async def test_settings_audit_endpoint_exposes_secret_ref_with_metadata_permission(
     settings_api_db,
     settings_user_override,

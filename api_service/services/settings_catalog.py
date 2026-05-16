@@ -1488,6 +1488,7 @@ class SettingsCatalogService:
         changes: dict[str, Any],
         expected_versions: dict[str, int] | None = None,
         reason: str | None = None,
+        request_id: str | None = None,
         confirmation: str | None = None,
     ) -> EffectiveSettingsResponse:
         if self._session is None:
@@ -1644,6 +1645,7 @@ class SettingsCatalogService:
                     old_value=old_value,
                     new_value=value,
                     reason=reason,
+                    request_id=request_id,
                 )
             )
 
@@ -1724,6 +1726,7 @@ class SettingsCatalogService:
                     old_value=old_value,
                     new_value=None,
                     reason=reason,
+                    request_id=None,
                 )
             )
         await self._session.commit()
@@ -1767,6 +1770,30 @@ class SettingsCatalogService:
             self._audit_read_model(row, permissions=permissions)
             for row in result.scalars().all()
         ]
+
+    async def record_rejected_write_audit(
+        self,
+        *,
+        scope: SettingScope,
+        changes: dict[str, Any],
+        reason: str | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        if self._session is None or not changes:
+            return
+        for key, value in changes.items():
+            entry = self._entries_by_key.get(key)
+            self._session.add(
+                self._rejected_audit_event(
+                    entry,
+                    key=key,
+                    scope=scope,
+                    new_value=value,
+                    reason=reason,
+                    request_id=request_id,
+                )
+            )
+        await self._session.commit()
 
     async def diagnostics(
         self,
@@ -3685,6 +3712,7 @@ class SettingsCatalogService:
         old_value: Any,
         new_value: Any,
         reason: str | None,
+        request_id: str | None,
     ) -> SettingsAuditEvent:
         redacted = entry.audit.redact
         return SettingsAuditEvent(
@@ -3710,6 +3738,49 @@ class SettingsCatalogService:
             ),
             redacted=redacted,
             reason=reason,
+            request_id=request_id,
+        )
+
+    def _rejected_audit_event(
+        self,
+        entry: SettingRegistryEntry | None,
+        *,
+        key: str,
+        scope: SettingScope,
+        new_value: Any,
+        reason: str | None,
+        request_id: str | None,
+    ) -> SettingsAuditEvent:
+        descriptor_redacted = entry.audit.redact if entry is not None else False
+        unsafe_value = self._contains_secret_like_value(
+            new_value,
+        ) or self._contains_unsafe_payload(new_value)
+        redacted = descriptor_redacted or unsafe_value or entry is None
+        may_store_secret_ref_metadata = (
+            entry is not None
+            and entry.value_type == "secret_ref"
+            and descriptor_redacted
+            and isinstance(new_value, str)
+            and not unsafe_value
+        )
+        return SettingsAuditEvent(
+            event_type="settings.override.rejected",
+            key=key,
+            scope=scope,
+            workspace_id=self._workspace_id,
+            user_id=self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID,
+            actor_user_id=(
+                self._user_id if self._user_id != _DEFAULT_SUBJECT_ID else None
+            ),
+            old_value_json=None,
+            new_value_json=(
+                new_value
+                if (not redacted or may_store_secret_ref_metadata)
+                else None
+            ),
+            redacted=redacted,
+            reason=reason,
+            request_id=request_id,
         )
 
     def _diagnostics(
@@ -3869,6 +3940,7 @@ class SettingsCatalogService:
             .where(
                 SettingsAuditEvent.workspace_id == self._workspace_id,
                 SettingsAuditEvent.key.in_(keys),
+                SettingsAuditEvent.event_type != "settings.override.rejected",
                 SettingsAuditEvent.user_id.in_(
                     {_DEFAULT_SUBJECT_ID, self._user_id}
                 ),
@@ -3898,7 +3970,8 @@ class SettingsCatalogService:
         old_value, old_reasons = self._visible_audit_value(
             row.old_value_json,
             entry=entry,
-            row_redacted=row.redacted,
+            row_redacted=row.redacted
+            and (row.old_value_json is not None or row.new_value_json is None),
             permissions=permissions,
         )
         new_value, new_reasons = self._visible_audit_value(
@@ -3921,7 +3994,11 @@ class SettingsCatalogService:
             redaction_reasons=reasons,
             reason=row.reason,
             request_id=row.request_id,
-            validation_outcome="accepted",
+            validation_outcome=(
+                "rejected"
+                if row.event_type == "settings.override.rejected"
+                else "accepted"
+            ),
             apply_mode=entry.apply_mode if entry is not None else None,
             affected_systems=affected_systems,
             created_at=row.created_at,
@@ -3937,12 +4014,7 @@ class SettingsCatalogService:
     ) -> tuple[Any, list[str]]:
         reasons: list[str] = []
         if value is None:
-            secret_ref_metadata_visible = (
-                entry is not None
-                and entry.value_type == "secret_ref"
-                and "secrets.metadata.read" in permissions
-            )
-            if row_redacted and not secret_ref_metadata_visible:
+            if row_redacted:
                 reasons.append("stored_redacted")
             return None, reasons
         if entry is not None and entry.audit.redact:

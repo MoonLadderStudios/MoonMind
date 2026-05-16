@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any, get_args
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
@@ -142,6 +142,37 @@ def _settings_db_error_response(*, key: str | None = None, scope: str) -> JSONRe
             scope=scope,
         ),
     )
+
+
+def _settings_request_id(request: Request) -> str | None:
+    return request.headers.get("x-request-id") or request.headers.get(
+        "x-correlation-id"
+    )
+
+
+async def _record_rejected_write_audit(
+    *,
+    scope: SettingScope,
+    changes: dict[str, Any],
+    user: Any,
+    reason: str | None,
+    request_id: str | None,
+) -> None:
+    if not changes:
+        return
+    try:
+        async with db_base.async_session_maker() as session:
+            service = SettingsCatalogService(
+                session=session, **_service_context_kwargs(user)
+            )
+            await service.record_rejected_write_audit(
+                scope=scope,
+                changes=changes,
+                reason=reason,
+                request_id=request_id,
+            )
+    except Exception:
+        return
 
 
 def _validation_blocker_response(
@@ -572,9 +603,11 @@ async def get_settings_audit(
 async def patch_settings(
     scope: str,
     payload: SettingsPatchRequest,
+    request: Request,
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
     service = SettingsCatalogService()
+    request_id = _settings_request_id(request)
     resolved_scope = _coerce_scope(scope)
     if isinstance(resolved_scope, JSONResponse):
         return resolved_scope
@@ -590,6 +623,13 @@ async def patch_settings(
         )
     denied = _require_permission(user, required_permission)
     if denied is not None:
+        await _record_rejected_write_audit(
+            scope=resolved_scope,
+            changes=payload.changes,
+            user=user,
+            reason=payload.reason,
+            request_id=request_id,
+        )
         return denied
     if not payload.changes:
         return _error_response(
@@ -604,6 +644,13 @@ async def patch_settings(
         try:
             service.ensure_write_allowed(key, scope=resolved_scope)
         except KeyError:
+            await _record_rejected_write_audit(
+                scope=resolved_scope,
+                changes=payload.changes,
+                user=user,
+                reason=payload.reason,
+                request_id=request_id,
+            )
             return _error_response(
                 404,
                 settings_error(
@@ -614,6 +661,13 @@ async def patch_settings(
                 ),
             )
         except ValueError:
+            await _record_rejected_write_audit(
+                scope=resolved_scope,
+                changes=payload.changes,
+                user=user,
+                reason=payload.reason,
+                request_id=request_id,
+            )
             return _error_response(
                 400,
                 settings_error(
@@ -625,6 +679,13 @@ async def patch_settings(
             )
         except PermissionError as exc:
             error_code = service.write_lock_error_code(key)
+            await _record_rejected_write_audit(
+                scope=resolved_scope,
+                changes=payload.changes,
+                user=user,
+                reason=payload.reason,
+                request_id=request_id,
+            )
             return _error_response(
                 423,
                 settings_error(
@@ -644,9 +705,17 @@ async def patch_settings(
                 changes=payload.changes,
                 expected_versions=payload.expected_versions,
                 reason=payload.reason,
+                request_id=request_id,
                 confirmation=payload.confirmation,
             )
     except SettingsValidationError as exc:
+        await _record_rejected_write_audit(
+            scope=resolved_scope,
+            changes=payload.changes,
+            user=user,
+            reason=payload.reason,
+            request_id=request_id,
+        )
         error = exc.to_settings_error()
         return _error_response(_settings_validation_status(error), error)
     except ValueError as exc:
@@ -664,11 +733,25 @@ async def patch_settings(
             status_code = 400
             error_code = "invalid_setting_value"
             message = "One or more setting values are invalid."
+        await _record_rejected_write_audit(
+            scope=resolved_scope,
+            changes=payload.changes,
+            user=user,
+            reason=payload.reason,
+            request_id=request_id,
+        )
         return _error_response(
             status_code,
             settings_error(error_code, message, scope=resolved_scope),
         )
     except PermissionError as exc:
+        await _record_rejected_write_audit(
+            scope=resolved_scope,
+            changes=payload.changes,
+            user=user,
+            reason=payload.reason,
+            request_id=request_id,
+        )
         return _error_response(
             423,
             settings_error(

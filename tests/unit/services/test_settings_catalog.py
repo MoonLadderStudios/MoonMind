@@ -2342,6 +2342,44 @@ async def test_audit_redactor_blocks_embedded_secret_prefixes(settings_session_m
     assert "prefix-ghp_embedded_suffix" not in entries[0].model_dump_json()
 
 
+@pytest.mark.parametrize(
+    "sensitive_value",
+    [
+        "oauth_session=stateful-provider-return",
+        "-----BEGIN PRIVATE KEY-----\nmaterial\n-----END PRIVATE KEY-----",
+        {"generated_config": {"token": "provider-returned-diagnostic"}},
+        {"diagnostics": [{"credential": "provider-sensitive-detail"}]},
+    ],
+)
+@pytest.mark.asyncio
+async def test_audit_redactor_blocks_documented_sensitive_classes(
+    settings_session_maker,
+    sensitive_value,
+):
+    async with settings_session_maker() as settings_session:
+        settings_session.add(
+            SettingsAuditEvent(
+                event_type="settings.override.updated",
+                key="workflow.default_publish_mode",
+                scope="workspace",
+                new_value_json=sensitive_value,
+                redacted=False,
+            )
+        )
+        await settings_session.commit()
+
+        service = SettingsCatalogService(env={}, session=settings_session)
+        entries = await service.list_audit_events(
+            permissions={"settings.audit.read"},
+        )
+
+    assert entries[0].new_value is None
+    assert entries[0].redacted is True
+    assert "secret_like_value" in entries[0].redaction_reasons
+    assert "provider-returned-diagnostic" not in entries[0].model_dump_json()
+    assert "provider-sensitive-detail" not in entries[0].model_dump_json()
+
+
 @pytest.mark.asyncio
 async def test_audit_redactor_reports_stored_redacted_null_values(
     settings_session_maker,
