@@ -924,7 +924,7 @@ def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
 
 @pytest.mark.parametrize(
     "skill_id",
-    ["jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"],
+    ["jira-issue-creator", "jira-pr-verify", "jira-verify"],
 )
 def test_jira_side_effect_skills_reject_repository_publish_modes(
     skill_id: str,
@@ -934,6 +934,12 @@ def test_jira_side_effect_skills_reject_repository_publish_modes(
 
     assert resolve_publish_mode_for_skill(skill_id, None) == "none"
     assert resolve_publish_mode_for_skill(skill_id, "none") == "none"
+
+
+def test_jira_issue_updater_allows_explicit_repository_publish_modes() -> None:
+    assert resolve_publish_mode_for_skill("jira-issue-updater", "pr") == "pr"
+    assert resolve_publish_mode_for_skill("jira-issue-updater", "branch") == "branch"
+    assert resolve_publish_mode_for_skill("jira-issue-updater", None) == "none"
 
 
 def test_jira_orchestrate_preset_context_allows_first_step_skill_pr_publish() -> None:

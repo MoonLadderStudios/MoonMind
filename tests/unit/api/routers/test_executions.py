@@ -1803,10 +1803,11 @@ def test_create_task_shaped_execution_allows_jira_orchestrate_first_step_skill_p
     assert initial_parameters["task"]["skill"]["name"] == "jira-issue-updater"
 
 
-def test_create_task_shaped_execution_rejects_pr_publish_for_jira_updater(
+def test_create_task_shaped_execution_allows_pr_publish_for_jira_updater(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
 
     response = test_client.post(
         "/api/executions",
@@ -1833,15 +1834,12 @@ def test_create_task_shaped_execution_rejects_pr_publish_for_jira_updater(
         },
     )
 
-    assert response.status_code == 422
-    assert response.json()["detail"] == {
-        "code": "invalid_execution_request",
-        "message": (
-            "task.publish.mode must be 'none' when using non-repository skill "
-            "'jira-issue-updater'"
-        ),
-    }
-    service.create_execution.assert_not_awaited()
+    assert response.status_code == 201, response.json()
+    initial_parameters = service.create_execution.call_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["publishMode"] == "pr"
+    assert initial_parameters["task"]["publish"]["mode"] == "pr"
 
 
 def test_create_task_shaped_execution_defaults_jira_updater_publish_none(
