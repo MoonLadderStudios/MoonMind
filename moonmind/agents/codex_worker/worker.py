@@ -606,7 +606,15 @@ class CodexWorkerConfig:
             str(source.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower()
             or "codex"
         )
-        allowed_worker_runtimes = {"codex", "gemini_cli", "claude", "jules", "universal"}
+        allowed_worker_runtimes = {
+            "codex",
+            "codex_cli",
+            "gemini_cli",
+            "claude",
+            "claude_code",
+            "jules",
+            "universal",
+        }
         if worker_runtime not in allowed_worker_runtimes:
             supported = ", ".join(sorted(allowed_worker_runtimes))
             raise ValueError(f"MOONMIND_WORKER_RUNTIME must be one of: {supported}")
@@ -4257,10 +4265,15 @@ class CodexWorker:
                 str(
                     runtime.get("providerProfile")
                     or runtime.get("profileId")
+                    or runtime.get("executionProfileRef")
                     or canonical_payload.get("profileId")
                     or ""
                 ).strip()
                 or None
+            )
+            runtime_execution_profile_ref = (
+                str(runtime.get("executionProfileRef") or "").strip()
+                or runtime_provider_profile
             )
 
             repository = str(canonical_payload.get("repository") or "").strip()
@@ -4432,6 +4445,7 @@ class CodexWorker:
                     "effort": runtime_effort,
                     "providerProfile": runtime_provider_profile,
                     "profileId": runtime_provider_profile,
+                    "executionProfileRef": runtime_execution_profile_ref,
                 },
                 "skill": {
                     "id": (
@@ -11087,8 +11101,16 @@ class CodexWorker:
 
     def _runtime_can_execute(self, runtime_mode: str) -> bool:
         worker_runtime = self._config.worker_runtime
+        equivalent_runtimes = {
+            "codex": {"codex", "codex_cli"},
+            "codex_cli": {"codex", "codex_cli"},
+            "claude": {"claude", "claude_code"},
+            "claude_code": {"claude", "claude_code"},
+        }
         if worker_runtime == "universal":
             return runtime_mode in SUPPORTED_EXECUTION_RUNTIMES
+        if worker_runtime in equivalent_runtimes:
+            return runtime_mode in equivalent_runtimes[worker_runtime]
         return runtime_mode == worker_runtime
 
     def _validate_required_job_policy(
@@ -11115,6 +11137,14 @@ class CodexWorker:
             for item in self._config.worker_capabilities
             if str(item).strip()
         }
+        if "codex" in available:
+            available.add("codex_cli")
+        if "codex_cli" in available:
+            available.add("codex")
+        if "claude" in available:
+            available.add("claude_code")
+        if "claude_code" in available:
+            available.add("claude")
         missing = sorted(required - available)
         if missing:
             return f"worker is missing required capabilities: {', '.join(missing)}"
