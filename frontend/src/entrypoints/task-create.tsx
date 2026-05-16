@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -3855,12 +3855,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   >(null);
   const submitMessage = submitMessageState?.text ?? null;
   const submitMessageTone = submitMessageState?.tone ?? "error";
-  const setSubmitMessage = (
-    text: string | null,
-    tone: "error" | "pending" = "error",
-  ) => {
-    setSubmitMessageState(text === null ? null : { text, tone });
-  };
+  const setSubmitMessage = useCallback(
+    (text: string | null, tone: "error" | "pending" = "error") => {
+      setSubmitMessageState(text === null ? null : { text, tone });
+    },
+    [],
+  );
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isDeletingPreset, setIsDeletingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
