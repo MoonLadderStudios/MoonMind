@@ -3642,6 +3642,23 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   stroke-width: 3;
 }
 
+.queue-submit-primary--icon .queue-submit-primary-arrow-glyph {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition:
+    opacity 180ms ease-out,
+    transform 180ms ease-out;
+}
+
+.queue-submit-primary--icon .queue-submit-primary-arrow-glyph--check {
+  opacity: 0;
+  transform: scale(0.6);
+}
+
 .queue-submit-primary--icon:not(.queue-submit-primary--arrow-exit):not(:disabled):not([aria-disabled="true"]):hover
   .queue-submit-primary-arrow
   svg {
@@ -3649,9 +3666,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-submit-primary--icon.queue-submit-primary--arrow-exit
-  .queue-submit-primary-arrow
-  svg {
+  .queue-submit-primary-arrow-glyph[data-submit-icon="arrow"] {
   animation: queue-submit-primary-arrow-exit 230ms cubic-bezier(0.33, 0, 0.2, 1) both;
+}
+
+.queue-submit-primary--icon.queue-submit-primary--arrow-exit
+  .queue-submit-primary-arrow-glyph[data-submit-icon="check"] {
+  animation: queue-submit-primary-check-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 
 .queue-submit-primary--icon:hover {
@@ -3696,10 +3717,27 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 @keyframes queue-submit-primary-arrow-exit {
   0% {
-    transform: translateX(0);
+    opacity: 1;
+    transform: scale(1);
   }
   100% {
-    transform: translateX(145%);
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+@keyframes queue-submit-primary-check-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
   }
 }
 
@@ -3754,6 +3792,22 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   .queue-submit-primary--icon .queue-submit-primary-arrow svg {
     animation: none !important;
     transform: none !important;
+  }
+
+  .queue-submit-primary--icon .queue-submit-primary-arrow-glyph {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .queue-submit-primary--icon.queue-submit-primary--arrow-exit
+    .queue-submit-primary-arrow-glyph[data-submit-icon="arrow"] {
+    opacity: 0;
+  }
+
+  .queue-submit-primary--icon.queue-submit-primary--arrow-exit
+    .queue-submit-primary-arrow-glyph[data-submit-icon="check"] {
+    opacity: 1;
+    transform: scale(1);
   }
 
   .queue-submit-primary-ripple {
