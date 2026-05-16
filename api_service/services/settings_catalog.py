@@ -3891,7 +3891,7 @@ class SettingsCatalogService:
 
         if not row.max_parallel_runs or row.max_parallel_runs <= 0:
             blockers.append("no configured concurrency is available")
-        if row.cooldown_after_429_seconds < 0:
+        if row.cooldown_after_429_seconds is None or row.cooldown_after_429_seconds < 0:
             blockers.append("cooldown is invalid")
 
         provider_readiness = (

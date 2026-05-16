@@ -102,6 +102,21 @@ async def test_provider_profile_list_requires_read_permission(
 
 
 @pytest.mark.asyncio
+async def test_provider_profile_get_requires_read_permission_before_lookup(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user(settings_permissions=set())
+
+    async with client_app as client:
+        response = await client.get("/api/v1/provider-profiles/missing-profile")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Missing required provider profile permission: provider_profiles.read."
+    )
+
+
+@pytest.mark.asyncio
 async def test_provider_profile_write_actions_require_write_permission(
     client_app: AsyncClient, _module_db
 ) -> None:

@@ -294,10 +294,10 @@ async def get_profile(
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
     row = await session.get(ManagedAgentProviderProfile, profile_id)
     if not row:
         raise HTTPException(status_code=404, detail="Profile not found")
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     if not _can_view_profile(row, current_user):
         raise HTTPException(
             status_code=403,
@@ -1073,11 +1073,13 @@ def _concurrency_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
 
 
 def _cooldown_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    cooldown = row.cooldown_after_429_seconds
+    valid_cooldown = cooldown is not None and cooldown >= 0
     return _readiness_check(
         "cooldown",
         "Cooldown",
-        "pass" if row.cooldown_after_429_seconds >= 0 else "error",
-        f"Cooldown after provider rate limit is {row.cooldown_after_429_seconds}s.",
+        "pass" if valid_cooldown else "error",
+        f"Cooldown after provider rate limit is {cooldown}s.",
     )
 
 

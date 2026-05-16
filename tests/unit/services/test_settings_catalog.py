@@ -1670,6 +1670,29 @@ async def test_provider_profile_reference_rejects_enabled_not_ready_profile_with
     assert "disabled-profile-secret" in dumped
 
 
+def test_provider_profile_readiness_treats_null_cooldown_as_blocker() -> None:
+    service = SettingsCatalogService(env={})
+    row = ManagedAgentProviderProfile(
+        profile_id="null-cooldown-profile",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        credential_source=ProviderCredentialSource.NONE,
+        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+        max_parallel_runs=1,
+        enabled=True,
+    )
+    row.cooldown_after_429_seconds = None
+
+    diagnostic = service._provider_profile_readiness_diagnostic(
+        row.profile_id,
+        row,
+    )
+
+    assert diagnostic is not None
+    assert diagnostic.code == "provider_profile_not_ready"
+    assert "cooldown is invalid" in diagnostic.details["readiness_blockers"]
+
+
 @pytest.mark.asyncio
 async def test_provider_profile_override_preserves_resettable_source(
     settings_session_maker,
