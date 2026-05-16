@@ -5480,6 +5480,30 @@ export interface components {
             expires_at?: string | null;
         };
         /**
+         * OperationCommandDescriptorModel
+         * @description Discoverable Settings -> Operations command metadata.
+         */
+        OperationCommandDescriptorModel: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Target */
+            target: string;
+            /** Impact */
+            impact: string;
+            /** Requiresconfirmation */
+            requiresConfirmation: boolean;
+            /** Requiredpermission */
+            requiredPermission: string;
+            /** Available */
+            available: boolean;
+            /** Unavailablereason */
+            unavailableReason?: string | null;
+            /** Rollbackaction */
+            rollbackAction?: string | null;
+        };
+        /**
          * PinArtifactRequest
          * @description Request body for explicit artifact pinning.
          */
@@ -7694,6 +7718,8 @@ export interface components {
             reason?: string | null;
             /** Confirmation */
             confirmation?: string | null;
+            /** Idempotencykey */
+            idempotencyKey: string;
             /**
              * Forceresume
              * @default false
@@ -7715,12 +7741,23 @@ export interface components {
              * @enum {string}
              */
             action: "pause" | "resume";
+            /**
+             * Target
+             * @default workers
+             */
+            target: string;
             /** Mode */
             mode?: ("drain" | "quiesce") | null;
             /** Reason */
             reason?: string | null;
             /** Actoruserid */
             actorUserId?: string | null;
+            /** Resultstatus */
+            resultStatus?: string | null;
+            /** Signalstatus */
+            signalStatus?: string | null;
+            /** Idempotencykey */
+            idempotencyKey?: string | null;
             /**
              * Createdat
              * Format: date-time
@@ -7761,6 +7798,8 @@ export interface components {
         WorkerPauseSnapshotResponse: {
             system: components["schemas"]["QueueSystemMetadataModel"];
             metrics: components["schemas"]["WorkerPauseMetricsModel"];
+            /** Commands */
+            commands?: components["schemas"]["OperationCommandDescriptorModel"][];
             audit?: components["schemas"]["WorkerPauseAuditListModel"];
             /** Signalstatus */
             signalStatus?: string | null;

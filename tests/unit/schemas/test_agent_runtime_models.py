@@ -9,6 +9,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
     AgentRunStatus,
+    ManagedAgentRuntimeProfile,
     ManagedAgentProviderProfile,
     ManagedRuntimeProfile,
     LiveLogChunk,
@@ -16,6 +17,7 @@ from moonmind.schemas.agent_runtime_models import (
     RuntimeCommandRenderResult,
     extract_durable_retrieval_metadata,
     is_terminal_agent_run_state,
+    resolve_managed_runtime_workload_mode,
 )
 
 def test_agent_execution_request_requires_non_blank_idempotency_key() -> None:
@@ -581,3 +583,254 @@ def test_extract_durable_retrieval_metadata_only_allows_boolean_contract_fields(
         "retrievalContextTruncated": True,
         "retrievalMode": "semantic",
     }
+
+
+def _valid_docker_sidecar_profile() -> dict:
+    return {
+        "workloadMode": "docker-sidecar",
+        "workspace": {
+            "volume": "agent_workspaces",
+            "mountPath": "/work/agent_jobs",
+            "repoEnv": "MOONMIND_REPO_DIR",
+            "lifecycle": "session",
+        },
+        "agent": {
+            "image": "moonmind/managed-agent:2026-05-16",
+            "workspace": {"mountPath": "/work/agent_jobs"},
+            "dockerClient": {
+                "enabled": True,
+                "composePlugin": True,
+                "daemonInAgent": False,
+            },
+            "env": {
+                "DOCKER_HOST": "unix:///var/run/moonmind-docker/docker.sock",
+            },
+            "mounts": [
+                {"name": "workspace", "mountPath": "/work/agent_jobs"},
+                {"name": "docker-socket", "mountPath": "/var/run/moonmind-docker"},
+            ],
+        },
+        "dockerSidecar": {
+            "enabled": True,
+            "mode": "dind",
+            "image": "docker:27-dind",
+            "socket": {
+                "path": "/var/run/moonmind-docker/docker.sock",
+                "volumeName": "docker-socket",
+            },
+            "storage": {
+                "volumeName": "docker-graph",
+                "mountPath": "/var/lib/docker",
+                "lifecycle": "session",
+                "daemonScope": "session",
+            },
+            "workspace": {"mountPath": "/work/agent_jobs"},
+            "security": {
+                "privileged": True,
+                "hostDockerSocket": "forbidden",
+                "moonmindDeploymentSecrets": "forbidden",
+            },
+            "mounts": [
+                {"name": "workspace", "mountPath": "/work/agent_jobs"},
+                {"name": "docker-socket", "mountPath": "/var/run/moonmind-docker"},
+                {"name": "docker-graph", "mountPath": "/var/lib/docker"},
+            ],
+        },
+        "resources": {
+            "agent": {"cpu": "2", "memory": "4Gi"},
+            "dockerSidecar": {"cpu": "4", "memory": "8Gi"},
+        },
+        "readiness": {
+            "docker": {
+                "required": True,
+                "timeoutSeconds": 60,
+                "intervalSeconds": 2,
+            },
+        },
+        "policy": {
+            "hostDockerAccess": "forbidden",
+            "appContainerControlFromSession": "forbidden",
+            "deploymentSecretsInSession": "forbidden",
+            "apiContainerWorkloadDockerSocketAccess": False,
+        },
+    }
+
+
+def test_managed_agent_runtime_profile_accepts_valid_docker_sidecar_contract() -> None:
+    profile = ManagedAgentRuntimeProfile.model_validate(_valid_docker_sidecar_profile())
+
+    assert profile.workload_mode == "docker-sidecar"
+    assert profile.agent.docker_client.enabled is True
+    assert (
+        profile.agent.env["DOCKER_HOST"]
+        == "unix:///var/run/moonmind-docker/docker.sock"
+    )
+    assert profile.docker_sidecar is not None
+    assert profile.docker_sidecar.image == "docker:27-dind"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda p: p["agent"]["dockerClient"].update({"enabled": False}),
+            "agent.dockerClient.enabled must be true",
+        ),
+        (
+            lambda p: p["agent"]["dockerClient"].update({"daemonInAgent": True}),
+            "daemonInAgent must be false",
+        ),
+        (
+            lambda p: p["agent"]["env"].update(
+                {"DOCKER_HOST": "unix:///tmp/docker.sock"}
+            ),
+            "DOCKER_HOST must point at dockerSidecar.socket.path",
+        ),
+        (
+            lambda p: p["dockerSidecar"]["workspace"].update(
+                {"mountPath": "/mnt/workspace"}
+            ),
+            "workspace mount paths must match",
+        ),
+        (
+            lambda p: p["agent"]["mounts"].append(
+                {"source": "/var/run/docker.sock", "mountPath": "/var/run/docker.sock"}
+            ),
+            "host Docker socket must not be mounted",
+        ),
+        (
+            lambda p: p["agent"]["env"].update({"OPENAI_API_KEY": "secret"}),
+            "must not receive deployment credentials",
+        ),
+        (
+            lambda p: p["policy"].update(
+                {"apiContainerWorkloadDockerSocketAccess": True}
+            ),
+            "API container must not have normal workload Docker socket access",
+        ),
+        (
+            lambda p: p["dockerSidecar"].update({"image": "docker:latest"}),
+            "sidecar image must be pinned",
+        ),
+        (
+            lambda p: p["dockerSidecar"]["storage"].update(
+                {"daemonScope": "shared"}
+            ),
+            "Docker daemon scope must be per session",
+        ),
+    ],
+)
+def test_managed_agent_runtime_profile_rejects_unsafe_sidecar_invariants(
+    mutate, message
+) -> None:
+    payload = _valid_docker_sidecar_profile()
+    mutate(payload)
+
+    with pytest.raises(ValidationError, match=message):
+        ManagedAgentRuntimeProfile.model_validate(payload)
+
+
+def _valid_no_docker_profile() -> dict:
+    return {
+        "workloadMode": "no-docker",
+        "workspace": {
+            "volume": "agent_workspaces",
+            "mountPath": "/work/agent_jobs",
+            "lifecycle": "session",
+        },
+        "agent": {
+            "workspace": {"mountPath": "/work/agent_jobs"},
+            "dockerClient": {"enabled": False, "daemonInAgent": False},
+            "env": {},
+            "mounts": [{"name": "workspace", "mountPath": "/work/agent_jobs"}],
+        },
+        "policy": {
+            "hostDockerAccess": "forbidden",
+            "appContainerControlFromSession": "forbidden",
+            "deploymentSecretsInSession": "forbidden",
+        },
+    }
+
+
+def test_no_docker_profile_rejects_enabled_sidecar() -> None:
+    payload = _valid_no_docker_profile()
+    payload["dockerSidecar"] = {
+        "enabled": True,
+        "image": "docker:27-dind",
+        "socket": {
+            "path": "/var/run/moonmind-docker/docker.sock",
+            "volumeName": "docker-socket",
+        },
+        "storage": {
+            "volumeName": "docker-graph",
+            "mountPath": "/var/lib/docker",
+            "lifecycle": "session",
+            "daemonScope": "session",
+        },
+        "workspace": {"mountPath": "/work/agent_jobs"},
+    }
+    with pytest.raises(
+        ValidationError,
+        match="dockerSidecar.enabled must be false for no-docker profiles",
+    ):
+        ManagedAgentRuntimeProfile.model_validate(payload)
+
+
+def test_no_docker_profile_rejects_docker_host_env() -> None:
+    payload = _valid_no_docker_profile()
+    payload["agent"]["env"]["DOCKER_HOST"] = "unix:///var/run/moonmind-docker/docker.sock"
+    with pytest.raises(
+        ValidationError,
+        match="agent.env.DOCKER_HOST must not be set for no-docker profiles",
+    ):
+        ManagedAgentRuntimeProfile.model_validate(payload)
+
+
+def test_no_docker_profile_allows_disabled_sidecar() -> None:
+    payload = _valid_no_docker_profile()
+    payload["dockerSidecar"] = {"enabled": False}
+    profile = ManagedAgentRuntimeProfile.model_validate(payload)
+    assert profile.workload_mode == "no-docker"
+    assert profile.docker_sidecar is not None
+    assert profile.docker_sidecar.enabled is False
+
+
+def test_host_docker_socket_check_normalizes_paths() -> None:
+    payload = _valid_docker_sidecar_profile()
+    payload["agent"]["mounts"].append(
+        {"source": "//var/run/docker.sock/", "mountPath": "/host/docker.sock"}
+    )
+    with pytest.raises(
+        ValidationError, match="host Docker socket must not be mounted"
+    ):
+        ManagedAgentRuntimeProfile.model_validate(payload)
+
+
+def test_no_docker_profile_cannot_be_raised_by_task_requested_mode() -> None:
+    profile = ManagedAgentRuntimeProfile.model_validate(
+        {
+            "workloadMode": "no-docker",
+            "workspace": {
+                "volume": "agent_workspaces",
+                "mountPath": "/work/agent_jobs",
+                "lifecycle": "session",
+            },
+            "agent": {
+                "workspace": {"mountPath": "/work/agent_jobs"},
+                "dockerClient": {"enabled": False, "daemonInAgent": False},
+                "env": {},
+                "mounts": [{"name": "workspace", "mountPath": "/work/agent_jobs"}],
+            },
+            "policy": {
+                "hostDockerAccess": "forbidden",
+                "appContainerControlFromSession": "forbidden",
+                "deploymentSecretsInSession": "forbidden",
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="task instructions cannot raise Docker capability"):
+        resolve_managed_runtime_workload_mode(
+            profile,
+            task_requested_workload_mode="docker-sidecar",
+        )

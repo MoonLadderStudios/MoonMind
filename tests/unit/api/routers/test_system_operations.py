@@ -59,12 +59,18 @@ def system_operations_client(tmp_path) -> Iterator[tuple[TestClient, FakeTempora
     asyncio_run(engine.dispose())
 
 
-def _override_user(app: FastAPI, *, is_superuser: bool) -> None:
+def _override_user(
+    app: FastAPI,
+    *,
+    is_superuser: bool,
+    settings_permissions: set[str] | None = None,
+) -> None:
     user = SimpleNamespace(
         id=uuid4(),
         email="operator@example.com",
         is_active=True,
         is_superuser=is_superuser,
+        settings_permissions=settings_permissions or set(),
     )
     dependencies = {
         dep.call
@@ -92,6 +98,11 @@ def test_get_worker_pause_snapshot_returns_system_metrics_and_audit(
     assert body["metrics"]["isDrained"] is True
     assert body["audit"]["latest"] == []
     assert "signalStatus" in body
+    assert {command["id"] for command in body["commands"]} >= {
+        "pause-workers",
+        "resume-workers",
+        "drain-queue",
+    }
 
 
 def test_post_pause_and_resume_return_snapshots_and_call_subsystem(
@@ -107,11 +118,16 @@ def test_post_pause_and_resume_return_snapshots_and_call_subsystem(
             "mode": "quiesce",
             "reason": "Maintenance",
             "confirmation": "Pause workers confirmed",
+            "idempotencyKey": "router-pause",
         },
     )
     resume = client.post(
         "/api/system/worker-pause",
-        json={"action": "resume", "reason": "Maintenance complete"},
+        json={
+            "action": "resume",
+            "reason": "Maintenance complete",
+            "idempotencyKey": "router-resume",
+        },
     )
 
     assert pause.status_code == 200
@@ -125,7 +141,7 @@ def test_post_pause_and_resume_return_snapshots_and_call_subsystem(
     assert temporal.resume_calls == 1
 
 
-def test_non_admin_post_is_rejected_without_subsystem_invocation(
+def test_missing_operations_invoke_is_rejected_without_subsystem_invocation(
     system_operations_client: tuple[TestClient, FakeTemporalService],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -140,12 +156,60 @@ def test_non_admin_post_is_rejected_without_subsystem_invocation(
             "mode": "quiesce",
             "reason": "Maintenance",
             "confirmation": "Pause workers confirmed",
+            "idempotencyKey": "router-denied",
         },
     )
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "worker_operation_forbidden"
     assert temporal.pause_calls == 0
+
+
+def test_missing_operations_read_is_rejected(
+    system_operations_client: tuple[TestClient, FakeTemporalService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _temporal = system_operations_client
+    _override_user(
+        client.app,
+        is_superuser=False,
+        settings_permissions={"operations.invoke"},
+    )
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "default")
+
+    response = client.get("/api/system/worker-pause")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "worker_operation_forbidden"
+
+
+def test_non_superuser_with_operations_permissions_can_read_and_invoke(
+    system_operations_client: tuple[TestClient, FakeTemporalService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, temporal = system_operations_client
+    _override_user(
+        client.app,
+        is_superuser=False,
+        settings_permissions={"operations.read", "operations.invoke"},
+    )
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "default")
+
+    snapshot = client.get("/api/system/worker-pause")
+    command = client.post(
+        "/api/system/worker-pause",
+        json={
+            "action": "pause",
+            "mode": "quiesce",
+            "reason": "Maintenance",
+            "confirmation": "Pause workers confirmed",
+            "idempotencyKey": "router-permitted",
+        },
+    )
+
+    assert snapshot.status_code == 200
+    assert command.status_code == 200
+    assert temporal.pause_calls == 1
 
 
 def test_missing_confirmation_and_invalid_values_are_rejected(
@@ -156,11 +220,20 @@ def test_missing_confirmation_and_invalid_values_are_rejected(
 
     missing_confirmation = client.post(
         "/api/system/worker-pause",
-        json={"action": "pause", "mode": "drain", "reason": "Maintenance"},
+        json={
+            "action": "pause",
+            "mode": "drain",
+            "reason": "Maintenance",
+            "idempotencyKey": "missing-confirmation",
+        },
     )
     invalid_action = client.post(
         "/api/system/worker-pause",
-        json={"action": "shell", "reason": "Maintenance"},
+        json={
+            "action": "shell",
+            "reason": "Maintenance",
+            "idempotencyKey": "invalid-action",
+        },
     )
     forced_resume_without_confirmation = client.post(
         "/api/system/worker-pause",
@@ -168,6 +241,7 @@ def test_missing_confirmation_and_invalid_values_are_rejected(
             "action": "resume",
             "reason": "Maintenance complete",
             "forceResume": True,
+            "idempotencyKey": "force-resume",
         },
     )
 

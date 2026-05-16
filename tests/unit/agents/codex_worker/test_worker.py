@@ -9293,6 +9293,118 @@ async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
     )
     assert command[-2:] == ["--model", "gemini-2.5-pro"]
 
+
+async def test_build_non_codex_runtime_command_routes_claude_code_alias(
+    tmp_path: Path,
+) -> None:
+    """`claude_code` alias must dispatch through the claude command builder."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_runtime="claude_code",
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    from unittest.mock import Mock
+
+    prepared_mock = Mock()
+    prepared_mock.job_root = tmp_path
+
+    command = worker._build_non_codex_runtime_command(
+        runtime_mode="claude_code",
+        instruction="resolve the task",
+        model="claude-sonnet",
+        effort="high",
+        prepared=prepared_mock,
+    )
+
+    assert command[:3] == [config.claude_binary, "--print", "resolve the task"]
+    assert command[-4:] == ["--model", "claude-sonnet", "--effort", "high"]
+
+
+async def test_resolve_runtime_overrides_applies_codex_defaults_for_alias(
+    tmp_path: Path,
+) -> None:
+    """`codex_cli` alias should resolve codex default model/effort overrides."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_runtime="codex_cli",
+        default_codex_model="gpt-5",
+        default_codex_effort="medium",
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    model, effort = worker._resolve_runtime_overrides(
+        canonical_payload={"task": {"runtime": {}}},
+        runtime_mode="codex_cli",
+    )
+
+    assert model == "gpt-5"
+    assert effort == "medium"
+
+
+def test_runtime_can_execute_treats_aliases_as_equivalent(tmp_path: Path) -> None:
+    """`codex` and `codex_cli` (and the claude pair) must be mutually executable."""
+
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+
+    codex_worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+            worker_runtime="codex",
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+    assert codex_worker._runtime_can_execute("codex") is True
+    assert codex_worker._runtime_can_execute("codex_cli") is True
+    assert codex_worker._runtime_can_execute("claude") is False
+
+    claude_code_worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+            worker_runtime="claude_code",
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+    assert claude_code_worker._runtime_can_execute("claude") is True
+    assert claude_code_worker._runtime_can_execute("claude_code") is True
+    assert claude_code_worker._runtime_can_execute("codex") is False
+
+
 async def test_resolve_task_auth_context_includes_git_identity_without_token(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -525,6 +525,19 @@ publication fallback; workflow-local story handoff should use inline stories or
 artifact refs so Jira creation does not depend on a protected branch push. It is
 not the default path for ambiguous Jira requests.
 
+When a breakdown has been reconciled against the current repository
+implementation, `story.create_jira_issues` honors per-story `jiraCreation`
+metadata. Stories marked `jiraCreation.action = "skip"` or
+`implementationStatus = "fully_implemented"` do not create Jira issues. Stories
+marked `jiraCreation.action = "manual_review"` or
+`implementationStatus = "unverifiable"` are reported as blocked manual-review
+items and do not create Jira issues. Stories marked
+`jiraCreation.action = "create_remaining_work_issue"` or
+`implementationStatus = "partially_implemented"` create Jira issues from their
+`remainingWork` payload while preserving original story traceability. The output
+reports `skippedStories`, `blockedStories`, and `partialStoriesAdjusted` so
+downstream orchestration can create tasks only for returned Jira issue mappings.
+
 For breakdown-driven Jira output, the canonical traceability shape is
 `sourceReference.path` on every story, with `source.referencePath` or
 `source.path` as a breakdown-level fallback. The tool also accepts path-only

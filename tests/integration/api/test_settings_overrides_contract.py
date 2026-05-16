@@ -100,6 +100,15 @@ async def test_settings_override_contract_round_trips_and_resets(
     assert workspace.json()["values"]["integrations.github.token_ref"]["source"] == (
         "workspace_override"
     )
+    workspace_event = workspace.json()["change_events"][0]
+    assert workspace_event["event_type"] == "setting_changed"
+    assert workspace_event["key"] == "integrations.github.token_ref"
+    assert workspace_event["scope"] == "workspace"
+    assert workspace_event["source"] == "workspace_override"
+    assert workspace_event["apply_mode"] == "next_launch"
+    assert workspace_event["affected_systems"] == ["github", "integrations"]
+    assert workspace_event["refresh_targets"] == ["settings_catalog"]
+    assert workspace_event["changed_at"]
     assert user.status_code == 200
     assert user.json()["values"]["integrations.github.token_ref"]["source"] == (
         "user_override"

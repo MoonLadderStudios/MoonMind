@@ -6,7 +6,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Literal
 from uuid import UUID
 
@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.models import (
     ManagedAgentProviderProfile,
     ManagedSecret,
+    ProviderCredentialSource,
     SecretStatus,
     SettingsAuditEvent,
     SettingsOverride,
@@ -324,6 +325,7 @@ class EffectiveSettingValue(BaseModel):
 class EffectiveSettingsResponse(BaseModel):
     scope: SettingScope
     values: dict[str, EffectiveSettingValue]
+    change_events: list["SettingsChangeEvent"] = Field(default_factory=list)
 
 
 class SettingsValidationResponse(BaseModel):
@@ -384,6 +386,7 @@ class SettingsAuditRead(BaseModel):
     event_type: str
     key: str
     scope: str
+    source: str | None = None
     actor_user_id: UUID | None = None
     old_value: Any = None
     new_value: Any = None
@@ -399,6 +402,18 @@ class SettingsAuditRead(BaseModel):
 
 class SettingsAuditResponse(BaseModel):
     items: list[SettingsAuditRead]
+
+
+class SettingsChangeEvent(BaseModel):
+    event_type: Literal["setting_changed"] = "setting_changed"
+    key: str
+    scope: SettingScope
+    source: str
+    apply_mode: SettingApplyMode
+    actor_user_id: UUID | None = None
+    changed_at: datetime
+    affected_systems: list[str] = Field(default_factory=list)
+    refresh_targets: list[str] = Field(default_factory=list)
 
 
 class SettingsRecentChange(BaseModel):
@@ -853,6 +868,7 @@ class SettingsCatalogService:
         self._managed_secret_status_by_slug: dict[str, str | None] = {}
         self._provider_profile_enabled_by_id: dict[str, bool | None] = {}
         self._provider_profile_readiness_by_id: dict[str, SettingDiagnostic | None] = {}
+        self._provider_profile_metadata_by_id: dict[str, dict[str, Any]] = {}
         self._workspace_policy = (
             workspace_policy
             if isinstance(workspace_policy, SettingsWorkspacePolicy)
@@ -1044,7 +1060,11 @@ class SettingsCatalogService:
             override_value=None,
             source=metadata["source"],
             source_explanation=metadata["source_explanation"],
-            **self._activation_metadata(entry, value),
+            **self._activation_metadata(
+                entry,
+                value,
+                pending_activation=override_present,
+            ),
             options=[
                 SettingOption(value=value, label=label)
                 for value, label in entry.options
@@ -1120,7 +1140,11 @@ class SettingsCatalogService:
             scope=scope,
             value=value,
             **self._effective_metadata(entry, value, source, override_present, diagnostics),
-            **self._activation_metadata(entry, value),
+            **self._activation_metadata(
+                entry,
+                value,
+                pending_activation=override_present,
+            ),
             value_version=version,
             diagnostics=diagnostics,
         )
@@ -1182,7 +1206,11 @@ class SettingsCatalogService:
                 scope=scope,
                 value=data[0],
                 **self._effective_metadata(entry, data[0], data[1], data[3], diagnostics),
-                **self._activation_metadata(entry, data[0]),
+                **self._activation_metadata(
+                    entry,
+                    data[0],
+                    pending_activation=data[3],
+                ),
                 value_version=data[2],
                 diagnostics=diagnostics,
             )
@@ -1489,6 +1517,7 @@ class SettingsCatalogService:
         changes: dict[str, Any],
         expected_versions: dict[str, int] | None = None,
         reason: str | None = None,
+        request_id: str | None = None,
         confirmation: str | None = None,
     ) -> EffectiveSettingsResponse:
         if self._session is None:
@@ -1619,10 +1648,13 @@ class SettingsCatalogService:
         if pre_persistence_issues:
             raise SettingsValidationError(pre_persistence_issues)
 
+        changed_at = datetime.now(timezone.utc)
+        change_events: list[SettingsChangeEvent] = []
         for key, value in validated.items():
             entry = entries[key]
             row = current_rows.get((scope, key))
             old_value = row.value_json if row is not None else None
+            source = f"{scope}_override"
             if row is None:
                 row = SettingsOverride(
                     scope=scope,
@@ -1645,6 +1677,21 @@ class SettingsCatalogService:
                     old_value=old_value,
                     new_value=value,
                     reason=reason,
+                    request_id=request_id,
+                )
+            )
+            change_events.append(
+                SettingsChangeEvent(
+                    key=entry.key,
+                    scope=scope,
+                    source=source,
+                    apply_mode=entry.apply_mode,
+                    actor_user_id=(
+                        self._user_id if self._user_id != _DEFAULT_SUBJECT_ID else None
+                    ),
+                    changed_at=changed_at,
+                    affected_systems=list(entry.applies_to),
+                    refresh_targets=self._refresh_targets_for_entry(entry),
                 )
             )
 
@@ -1695,7 +1742,11 @@ class SettingsCatalogService:
                 value_version=data[2],
                 diagnostics=diagnostics,
             )
-        return EffectiveSettingsResponse(scope=scope, values=values)
+        return EffectiveSettingsResponse(
+            scope=scope,
+            values=values,
+            change_events=change_events,
+        )
 
     async def reset_override(
         self,
@@ -1725,6 +1776,7 @@ class SettingsCatalogService:
                     old_value=old_value,
                     new_value=None,
                     reason=reason,
+                    request_id=None,
                 )
             )
         await self._session.commit()
@@ -1768,6 +1820,30 @@ class SettingsCatalogService:
             self._audit_read_model(row, permissions=permissions)
             for row in result.scalars().all()
         ]
+
+    async def record_rejected_write_audit(
+        self,
+        *,
+        scope: SettingScope,
+        changes: dict[str, Any],
+        reason: str | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        if self._session is None or not changes:
+            return
+        for key, value in changes.items():
+            entry = self._entries_by_key.get(key)
+            self._session.add(
+                self._rejected_audit_event(
+                    entry,
+                    key=key,
+                    scope=scope,
+                    new_value=value,
+                    reason=reason,
+                    request_id=request_id,
+                )
+            )
+        await self._session.commit()
 
     async def diagnostics(
         self,
@@ -2046,6 +2122,19 @@ class SettingsCatalogService:
             "applies_to": list(entry.applies_to),
         }
 
+    def _refresh_targets_for_entry(self, entry: SettingRegistryEntry) -> list[str]:
+        targets = {"settings_catalog"}
+        applies_to = set(entry.applies_to)
+        if "task_creation" in applies_to:
+            targets.add("task_creation_defaults")
+        if "provider_profiles" in applies_to:
+            targets.add("provider_profile_manager")
+        if entry.apply_mode == "worker_reload" or entry.requires_reload:
+            targets.add("worker_reloaders")
+        if "operations" in applies_to or entry.apply_mode == "manual_operation":
+            targets.add("operational_controls")
+        return sorted(targets)
+
     def _resolve_value(self, entry: SettingRegistryEntry) -> tuple[Any, str]:
         if self._is_operator_locked(entry):
             return entry.operator_locked_value, "operator_lock"
@@ -2322,6 +2411,12 @@ class SettingsCatalogService:
             self._provider_profile_enabled_by_id[profile_id] = (
                 bool(row.enabled) if row is not None else None
             )
+            if row is not None:
+                self._provider_profile_metadata_by_id[profile_id] = {
+                    "enabled": bool(row.enabled),
+                    "credential_source": row.credential_source,
+                    "volume_ref": row.volume_ref,
+                }
             self._provider_profile_readiness_by_id[profile_id] = (
                 self._provider_profile_readiness_diagnostic(profile_id, row)
                 if row is not None
@@ -3710,6 +3805,7 @@ class SettingsCatalogService:
         old_value: Any,
         new_value: Any,
         reason: str | None,
+        request_id: str | None,
     ) -> SettingsAuditEvent:
         redacted = entry.audit.redact
         return SettingsAuditEvent(
@@ -3735,6 +3831,50 @@ class SettingsCatalogService:
             ),
             redacted=redacted,
             reason=reason,
+            request_id=request_id,
+        )
+
+    def _rejected_audit_event(
+        self,
+        entry: SettingRegistryEntry | None,
+        *,
+        key: str,
+        scope: SettingScope,
+        new_value: Any,
+        reason: str | None,
+        request_id: str | None,
+    ) -> SettingsAuditEvent:
+        descriptor_redacted = entry.audit.redact if entry is not None else False
+        contains_unsafe_payload = self._contains_unsafe_payload(new_value)
+        unsafe_value = self._contains_secret_like_value(
+            new_value,
+        ) or contains_unsafe_payload
+        redacted = descriptor_redacted or unsafe_value or entry is None
+        may_store_secret_ref_metadata = (
+            entry is not None
+            and entry.value_type == "secret_ref"
+            and descriptor_redacted
+            and isinstance(new_value, str)
+            and not contains_unsafe_payload
+        )
+        return SettingsAuditEvent(
+            event_type="settings.override.rejected",
+            key=key,
+            scope=scope,
+            workspace_id=self._workspace_id,
+            user_id=self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID,
+            actor_user_id=(
+                self._user_id if self._user_id != _DEFAULT_SUBJECT_ID else None
+            ),
+            old_value_json=None,
+            new_value_json=(
+                new_value
+                if (not redacted or may_store_secret_ref_metadata)
+                else None
+            ),
+            redacted=redacted,
+            reason=reason,
+            request_id=request_id,
         )
 
     def _diagnostics(
@@ -3816,6 +3956,31 @@ class SettingsCatalogService:
                 severity="error",
                 details={
                     "profile_id": profile_id,
+                    "launch_blocker": True,
+                    "blocks": ["launch", "readiness"],
+                },
+            )
+        metadata = self._provider_profile_metadata_by_id.get(profile_id, {})
+        credential_source = metadata.get("credential_source")
+        credential_source_value = (
+            credential_source.value
+            if isinstance(credential_source, ProviderCredentialSource)
+            else str(credential_source or "")
+        )
+        if (
+            credential_source_value == ProviderCredentialSource.OAUTH_VOLUME.value
+            and not str(metadata.get("volume_ref") or "").strip()
+        ):
+            return SettingDiagnostic(
+                code="provider_profile_oauth_volume_missing",
+                message=(
+                    f"{entry.key} references an OAuth-backed provider profile "
+                    "without an available OAuth volume."
+                ),
+                severity="error",
+                details={
+                    "profile_id": profile_id,
+                    "credential_source": credential_source_value,
                     "launch_blocker": True,
                     "blocks": ["launch", "readiness"],
                 },
@@ -3995,6 +4160,7 @@ class SettingsCatalogService:
             .where(
                 SettingsAuditEvent.workspace_id == self._workspace_id,
                 SettingsAuditEvent.key.in_(keys),
+                SettingsAuditEvent.event_type != "settings.override.rejected",
                 SettingsAuditEvent.user_id.in_(
                     {_DEFAULT_SUBJECT_ID, self._user_id}
                 ),
@@ -4024,7 +4190,8 @@ class SettingsCatalogService:
         old_value, old_reasons = self._visible_audit_value(
             row.old_value_json,
             entry=entry,
-            row_redacted=row.redacted,
+            row_redacted=row.redacted
+            and (row.old_value_json is not None or row.new_value_json is None),
             permissions=permissions,
         )
         new_value, new_reasons = self._visible_audit_value(
@@ -4040,6 +4207,11 @@ class SettingsCatalogService:
             event_type=row.event_type,
             key=row.key,
             scope=row.scope,
+            source=(
+                f"{row.scope}_override"
+                if row.event_type != "settings.override.reset"
+                else "inherited"
+            ),
             actor_user_id=row.actor_user_id,
             old_value=old_value,
             new_value=new_value,
@@ -4047,7 +4219,11 @@ class SettingsCatalogService:
             redaction_reasons=reasons,
             reason=row.reason,
             request_id=row.request_id,
-            validation_outcome="accepted",
+            validation_outcome=(
+                "rejected"
+                if row.event_type == "settings.override.rejected"
+                else "accepted"
+            ),
             apply_mode=entry.apply_mode if entry is not None else None,
             affected_systems=affected_systems,
             created_at=row.created_at,
@@ -4063,12 +4239,7 @@ class SettingsCatalogService:
     ) -> tuple[Any, list[str]]:
         reasons: list[str] = []
         if value is None:
-            secret_ref_metadata_visible = (
-                entry is not None
-                and entry.value_type == "secret_ref"
-                and "secrets.metadata.read" in permissions
-            )
-            if row_redacted and not secret_ref_metadata_visible:
+            if row_redacted:
                 reasons.append("stored_redacted")
             return None, reasons
         if entry is not None and entry.audit.redact:

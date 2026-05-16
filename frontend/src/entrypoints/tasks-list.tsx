@@ -518,17 +518,28 @@ function FilterPillMultiSelect({
   );
 }
 
+function summarizeValues(
+  filter: ValueFilter,
+  formatter = (value: string) => value,
+  options: { maxVisibleValues?: number } = {},
+): string {
+  if (filter.blank === 'include' && filter.values.length === 0) return 'blank';
+  if (filter.blank === 'exclude' && filter.values.length === 0) return 'not blank';
+  if (filter.values.length === 0) return '';
+
+  const maxVisibleValues = Math.max(1, options.maxVisibleValues ?? 1);
+  const visibleLabels = filter.values
+    .slice(0, maxVisibleValues)
+    .map((value) => formatter(value));
+  const hiddenCount = filter.values.length - visibleLabels.length;
+  const label = `${visibleLabels.join(', ')}${hiddenCount > 0 ? ` +${hiddenCount}` : ''}`;
+  if (filter.mode !== 'exclude') return label;
+  return filter.values.length > 1 ? `not (${label})` : `not ${label}`;
+}
+
 function filterSummary(field: FilterField, filters: ColumnFilters): string {
-  const summarizeValues = (filter: ValueFilter, formatter = (value: string) => value) => {
-    if (filter.blank === 'include' && filter.values.length === 0) return 'blank';
-    if (filter.blank === 'exclude' && filter.values.length === 0) return 'not blank';
-    if (filter.values.length === 0) return '';
-    const first = formatter(filter.values[0]!);
-    const suffix = filter.values.length > 1 ? ` +${filter.values.length - 1}` : '';
-    return `${filter.mode === 'exclude' ? 'not ' : ''}${first}${suffix}`;
-  };
   if (field === 'taskId') return filters.taskId.contains?.trim() || '';
-  if (field === 'status') return summarizeValues(filters.status, formatStatusLabel);
+  if (field === 'status') return summarizeValues(filters.status, formatStatusLabel, { maxVisibleValues: 3 });
   if (field === 'targetRuntime') return summarizeValues(filters.targetRuntime, formatRuntimeLabel);
   if (field === 'targetSkill') return summarizeValues(filters.targetSkill);
   if (field === 'repository') {

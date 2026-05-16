@@ -1205,6 +1205,14 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
                         "instructions": "Extract MoonSpec stories.",
                     },
                     {
+                        "id": "reconcile",
+                        "tool": {
+                            "type": "skill",
+                            "name": "story-reconcile-implementation",
+                        },
+                        "instructions": "Reconcile stories with current implementation.",
+                    },
+                    {
                         "id": "jira",
                         "tool": {"type": "skill", "name": "story.create_jira_issues"},
                         "instructions": "Create Jira issues from the generated breakdown.",
@@ -1240,7 +1248,24 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
         snapshot=snapshot,
     )
 
-    orchestrate = plan["nodes"][2]
+    breakdown = plan["nodes"][0]
+    reconcile = plan["nodes"][1]
+    jira = plan["nodes"][2]
+    orchestrate = plan["nodes"][3]
+    assert reconcile["tool"] == {
+        "type": "agent_runtime",
+        "name": "story-reconcile-implementation",
+        "version": "1.0",
+    }
+    assert reconcile["inputs"]["selectedSkill"] == "story-reconcile-implementation"
+    assert (
+        reconcile["inputs"]["storyBreakdownPath"]
+        == breakdown["inputs"]["storyBreakdownPath"]
+    )
+    assert (
+        jira["inputs"]["storyBreakdownPath"]
+        == breakdown["inputs"]["storyBreakdownPath"]
+    )
     assert orchestrate["tool"] == {
         "type": "skill",
         "name": "story.create_jira_orchestrate_tasks",

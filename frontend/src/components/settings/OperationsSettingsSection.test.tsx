@@ -17,7 +17,52 @@ const workerSnapshot = {
     staleRunning: 0,
     isDrained: true,
   },
-  audit: { latest: [] },
+  commands: [
+    {
+      id: 'pause-workers',
+      label: 'Pause Workers',
+      target: 'workers',
+      impact: 'Blocks new worker claims or quiesces active workers.',
+      requiresConfirmation: true,
+      requiredPermission: 'operations.invoke',
+      available: true,
+      rollbackAction: 'resume-workers',
+    },
+    {
+      id: 'resume-workers',
+      label: 'Resume Workers',
+      target: 'workers',
+      impact: 'Allows workers to claim queued work again.',
+      requiresConfirmation: false,
+      requiredPermission: 'operations.invoke',
+      available: true,
+    },
+    {
+      id: 'enable-maintenance-mode',
+      label: 'Enable Maintenance Mode',
+      target: 'scheduler',
+      impact: 'Prevents normal launch scheduling while maintenance is active.',
+      requiresConfirmation: true,
+      requiredPermission: 'operations.invoke',
+      available: false,
+      unavailableReason: 'Maintenance mode subsystem is not connected.',
+    },
+  ],
+  audit: {
+    latest: [
+      {
+        action: 'pause',
+        target: 'workers',
+        mode: 'drain',
+        reason: 'Previous maintenance',
+        actorUserId: '00000000-0000-0000-0000-000000000001',
+        resultStatus: 'succeeded',
+        signalStatus: 'succeeded',
+        idempotencyKey: 'previous-key',
+        createdAt: '2026-04-26T00:01:00Z',
+      },
+    ],
+  },
 };
 
 const stackState = {
@@ -205,8 +250,24 @@ describe('OperationsSettingsSection deployment update card', () => {
         mode: 'drain',
         reason: 'Maintenance window',
         confirmation: expect.stringContaining('Pause workers confirmed'),
+        idempotencyKey: expect.stringMatching(/^worker-pause-/),
       });
     });
+  });
+
+  it('renders command semantics, confirmation requirements, and audit result details', async () => {
+    renderOperations();
+
+    const workerCard = await screen.findByRole('region', { name: /worker operations/i });
+    expect(await within(workerCard).findByText('Pause Workers')).toBeTruthy();
+    expect(within(workerCard).getByText('Resume Workers')).toBeTruthy();
+    expect(within(workerCard).getByText('Enable Maintenance Mode')).toBeTruthy();
+    expect(within(workerCard).getAllByText(/requires confirmation/i).length).toBeGreaterThan(0);
+    expect(within(workerCard).getByText(/maintenance mode subsystem is not connected/i)).toBeTruthy();
+    expect(within(workerCard).getAllByText(/target: workers/i).length).toBeGreaterThan(0);
+    expect(within(workerCard).getByText(/result: succeeded/i)).toBeTruthy();
+    expect(within(workerCard).getByText(/actor: 00000000-0000-0000-0000-000000000001/i)).toBeTruthy();
+    expect(within(workerCard).getByText(/idempotency: previous-key/i)).toBeTruthy();
   });
 
   it('renders deployment state inside Operations without top-level deployment navigation', async () => {

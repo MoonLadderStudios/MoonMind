@@ -23,8 +23,24 @@ from moonmind.config.settings import settings
 from .job_types import CANONICAL_TASK_JOB_TYPE, LEGACY_TASK_JOB_TYPES
 
 DEFAULT_TASK_RUNTIME = "codex"
-SUPPORTED_RUNTIME_MODES = {"codex", "codex_cloud", "gemini_cli", "claude", "jules", "universal"}
-SUPPORTED_EXECUTION_RUNTIMES = {"codex", "gemini_cli", "claude", "jules"}
+SUPPORTED_RUNTIME_MODES = {
+    "codex",
+    "codex_cli",
+    "codex_cloud",
+    "gemini_cli",
+    "claude",
+    "claude_code",
+    "jules",
+    "universal",
+}
+SUPPORTED_EXECUTION_RUNTIMES = {
+    "codex",
+    "codex_cli",
+    "gemini_cli",
+    "claude",
+    "claude_code",
+    "jules",
+}
 SUPPORTED_PUBLISH_MODES = {"none", "branch", "pr"}
 _SECRET_REF_MOUNT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _SECRET_REF_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
@@ -37,6 +53,7 @@ _SELF_MANAGED_PUBLISH_SKILLS = frozenset({"pr-resolver", "batch-pr-resolver"})
 _NON_REPOSITORY_SIDE_EFFECT_SKILLS = frozenset(
     {"jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"}
 )
+_REPOSITORY_PUBLISH_COMPATIBLE_SIDE_EFFECT_SKILLS = frozenset({"jira-issue-updater"})
 _JIRA_ORCHESTRATE_PRESET_SLUGS = frozenset({"jira-orchestrate"})
 _RUNTIME_COMMAND_CAPABILITY_VERSION = "2026-05-13"
 _RUNTIME_COMMAND_HINT_CATALOG_VERSION = "2026-05-13"
@@ -560,7 +577,10 @@ def resolve_publish_mode_for_skill(
         if requested_mode is None:
             return "none"
         publish_mode = _normalize_publish_mode(requested_mode)
-        if allow_repository_publish:
+        if (
+            allow_repository_publish
+            or normalized_skill_id in _REPOSITORY_PUBLISH_COMPATIBLE_SIDE_EFFECT_SKILLS
+        ):
             return publish_mode
         if publish_mode != "none":
             raise TaskContractError(

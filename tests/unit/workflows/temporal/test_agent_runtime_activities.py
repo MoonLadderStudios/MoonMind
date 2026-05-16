@@ -1218,6 +1218,46 @@ async def test_send_turn_delegates_to_remote_session_controller() -> None:
     assert isinstance(result, CodexManagedSessionTurnResponse)
     assert result.turn_id == "turn-1"
 
+async def test_send_turn_transient_failure_preserves_diagnostic_metadata() -> None:
+    failure_metadata = {
+        "reason": "codex app-server turn/completed produced no assistant output",
+        "failureClass": "transient",
+        "failureCause": "app_server_protocol_empty_turn",
+        "turnFailureEvidence": {"schemaVersion": "v1", "runtimeLogExcerpts": []},
+    }
+    controller = AsyncMock()
+    controller.send_turn = AsyncMock(
+        return_value=CodexManagedSessionTurnResponse(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+                "activeTurnId": None,
+            },
+            turnId="turn-1",
+            status="failed",
+            metadata=failure_metadata,
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    with pytest.raises(
+        activity_runtime_module.temporal_exceptions.ApplicationError
+    ) as exc_info:
+        await activities.agent_runtime_send_turn(
+            {
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+                "instructions": "Inspect the workspace",
+            }
+        )
+
+    assert exc_info.value.type == "CodexTransientTurnError"
+    assert exc_info.value.details == (failure_metadata,)
+
 async def test_send_turn_heartbeats_while_waiting_for_remote_session_controller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2492,6 +2532,50 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_tool_hint(
     assert "`$MOONMIND_URL`" in result
     assert "POST $MOONMIND_URL/mcp/tools/call" in result
     assert "jira.create_issue" in result
+    assert "Managed Codex CLI note:" in result
+
+async def test_agent_runtime_prepare_turn_instructions_adds_pr_resolver_blocker_hint() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "skipSkillMaterialization": True,
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "parameters": {
+                    "instructions": "Resolve the pull request.",
+                    "publishMode": "none",
+                    "selectedSkill": "pr-resolver",
+                    "mergeGate": {
+                        "pullRequestUrl": "https://github.com/org/repo/pull/1791",
+                        "pr": {
+                            "mergeable": "CONFLICTING",
+                            "mergeStateStatus": "DIRTY",
+                        },
+                        "ci": {
+                            "isRunning": False,
+                            "hasFailures": False,
+                            "signalQuality": "missing",
+                            "statusCheckRollupCount": 0,
+                        },
+                        "commentsSummary": {
+                            "fetchSucceeded": True,
+                            "hasActionableComments": False,
+                        },
+                    },
+                },
+            },
+        }
+    )
+
+    assert "MoonMind PR resolver initial state:" in result
+    assert "https://github.com/org/repo/pull/1791" in result
+    assert "mergeable=CONFLICTING" in result
+    assert "mergeStateStatus=DIRTY" in result
+    assert "Initial blocker hint: merge_conflicts, ci_unavailable" in result
     assert "Managed Codex CLI note:" in result
 
 @pytest.mark.asyncio

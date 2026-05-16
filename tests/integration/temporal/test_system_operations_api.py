@@ -70,6 +70,17 @@ def test_worker_pause_route_matches_settings_runtime_contract(tmp_path) -> None:
                     "mode": "drain",
                     "reason": "Integration maintenance",
                     "confirmation": "Pause workers confirmed",
+                    "idempotencyKey": "integration-pause-workers",
+                },
+            )
+            duplicate = client.post(
+                "/api/system/worker-pause",
+                json={
+                    "action": "pause",
+                    "mode": "drain",
+                    "reason": "Integration maintenance",
+                    "confirmation": "Pause workers confirmed",
+                    "idempotencyKey": "integration-pause-workers",
                 },
             )
     finally:
@@ -79,9 +90,22 @@ def test_worker_pause_route_matches_settings_runtime_contract(tmp_path) -> None:
     assert settings_page.status_code == 200
     assert snapshot.status_code == 200
     assert snapshot.json()["system"]["workersPaused"] is False
+    assert {command["id"] for command in snapshot.json()["commands"]} >= {
+        "pause-workers",
+        "resume-workers",
+    }
     assert command.status_code == 200
     assert command.json()["system"]["workersPaused"] is True
-    assert command.json()["audit"]["latest"][0]["action"] == "pause"
+    latest = command.json()["audit"]["latest"][0]
+    assert latest["action"] == "pause"
+    assert latest["target"] == "workers"
+    assert latest["reason"] == "Integration maintenance"
+    assert latest["resultStatus"] == "succeeded"
+    assert latest["idempotencyKey"] == "integration-pause-workers"
+    assert duplicate.status_code == 200
+    assert duplicate.json()["audit"]["latest"][0]["idempotencyKey"] == (
+        "integration-pause-workers"
+    )
 
 
 def test_settings_catalog_contract_exposes_apply_semantics(tmp_path) -> None:
