@@ -6210,6 +6210,9 @@ describe.skip("Task Create Entrypoint", () => {
       ).toBe("none");
     });
 
+    fireEvent.change(publishSelect, { target: { value: "pr" } });
+    expect(publishSelect.value).toBe("pr");
+
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
       {
