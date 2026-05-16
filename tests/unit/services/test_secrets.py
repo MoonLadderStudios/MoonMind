@@ -1,10 +1,10 @@
 from unittest.mock import MagicMock
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import ManagedSecret, SecretStatus
-from api_service.db.models import SettingsOverride
 from api_service.services.secrets import SecretsService
 
 @pytest.fixture
@@ -159,13 +159,9 @@ async def test_list_secret_usage_reports_settings_consumers_without_plaintext(
     secret_status_result = MagicMock()
     secret_status_result.scalar_one_or_none.return_value = SecretStatus.ACTIVE
     usage_result = MagicMock()
-    usage_result.scalars.return_value.all.return_value = [
-        SettingsOverride(
-            scope="workspace",
-            key="integrations.github.token_ref",
-            value_json="db://github-pat-main",
-        )
-    ]
+    usage_result.__iter__.return_value = iter(
+        [("integrations.github.token_ref", "workspace", "db://github-pat-main")]
+    )
 
     async def mock_execute(*args, **kwargs):
         return secret_status_result if mock_db_session.execute.call_count == 1 else usage_result
@@ -175,6 +171,8 @@ async def test_list_secret_usage_reports_settings_consumers_without_plaintext(
     result = await SecretsService.list_secret_usage(
         mock_db_session,
         "github-pat-main",
+        workspace_id=uuid4(),
+        user_id=uuid4(),
     )
 
     assert result["secretRef"] == "db://github-pat-main"
@@ -188,6 +186,10 @@ async def test_list_secret_usage_reports_settings_consumers_without_plaintext(
         }
     ]
     assert raw_secret not in repr(result)
+    usage_statement = mock_db_session.execute.call_args_list[1].args[0]
+    assert "settings_overrides.key" in str(usage_statement)
+    assert "settings_overrides.value_json" in str(usage_statement)
+    assert "settings_overrides.workspace_id" in str(usage_statement)
 
 
 @pytest.mark.asyncio
@@ -197,7 +199,7 @@ async def test_list_secret_usage_reports_empty_and_missing_without_plaintext(
     active_result = MagicMock()
     active_result.scalar_one_or_none.return_value = SecretStatus.ACTIVE
     empty_usage_result = MagicMock()
-    empty_usage_result.scalars.return_value.all.return_value = []
+    empty_usage_result.__iter__.return_value = iter([])
     missing_result = MagicMock()
     missing_result.scalar_one_or_none.return_value = None
 
@@ -234,6 +236,36 @@ async def test_list_secret_usage_reports_empty_and_missing_without_plaintext(
         }
     ]
     assert "plaintext" not in repr(missing)
+
+
+@pytest.mark.asyncio
+async def test_list_secret_usage_restricts_query_to_caller_scope(mock_db_session):
+    workspace_id = uuid4()
+    user_id = uuid4()
+    active_result = MagicMock()
+    active_result.scalar_one_or_none.return_value = SecretStatus.ACTIVE
+    usage_result = MagicMock()
+    usage_result.__iter__.return_value = iter([])
+
+    async def mock_execute(*args, **kwargs):
+        return active_result if mock_db_session.execute.call_count == 1 else usage_result
+
+    mock_db_session.execute.side_effect = mock_execute
+
+    await SecretsService.list_secret_usage(
+        mock_db_session,
+        "github-pat-main",
+        workspace_id=workspace_id,
+        user_id=user_id,
+    )
+
+    usage_statement = mock_db_session.execute.call_args_list[1].args[0]
+    compiled = usage_statement.compile(compile_kwargs={"literal_binds": True})
+    statement = str(compiled)
+
+    assert workspace_id.hex in statement
+    assert user_id.hex in statement
+    assert UUID("00000000-0000-0000-0000-000000000000").hex in statement
 
 @pytest.mark.asyncio
 async def test_import_from_env(mock_db_session):

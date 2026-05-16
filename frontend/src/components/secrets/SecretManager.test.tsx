@@ -5,6 +5,7 @@ import { SecretManager } from './SecretManager';
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function renderSecretManager() {
@@ -99,6 +100,36 @@ describe('SecretManager', () => {
 
     expect(screen.getByText('Workspace setting integrations.github.token_ref')).toBeTruthy();
     expect(screen.getAllByText('db://github-pat-main').length).toBeGreaterThan(0);
+    expect(screen.queryByText('ghp_usage_plaintext')).toBeNull();
+  });
+
+  it('loads secret usage on demand from the usage endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        secretRef: 'db://github-pat-main',
+        usages: [
+          {
+            consumerType: 'setting_override',
+            objectName: 'Workspace setting integrations.github.token_ref',
+            reference: 'db://github-pat-main',
+            scope: 'workspace',
+            settingKey: 'integrations.github.token_ref',
+          },
+        ],
+        diagnostics: [],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderSecretManager();
+
+    fireEvent.click(screen.getByRole('button', { name: 'View usage' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/v1/secrets/github-pat-main/usage');
+    });
+    expect(await screen.findByText('Workspace setting integrations.github.token_ref')).toBeTruthy();
     expect(screen.queryByText('ghp_usage_plaintext')).toBeNull();
   });
 });

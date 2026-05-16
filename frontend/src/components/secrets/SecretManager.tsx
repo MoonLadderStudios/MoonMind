@@ -21,6 +21,16 @@ interface SecretUsage {
   settingKey?: string;
 }
 
+interface SecretUsageResponse {
+  secretRef: string;
+  usages: SecretUsage[];
+  diagnostics?: Array<{
+    code: string;
+    message: string;
+    severity: string;
+  }>;
+}
+
 interface SecretManagerProps {
   secrets: SecretMetadata[];
   onNotice: (notice: { level: 'ok' | 'error'; text: string } | null) => void;
@@ -34,6 +44,9 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
   const [rotatePromptOpen, setRotatePromptOpen] = useState(false);
   const [rotatePromptSlug, setRotatePromptSlug] = useState('');
   const [rotatePromptVal, setRotatePromptVal] = useState('');
+  const [usageBySlug, setUsageBySlug] = useState<Record<string, SecretUsageResponse>>({});
+  const [usageLoadingSlug, setUsageLoadingSlug] = useState<string | null>(null);
+  const [usageErrorBySlug, setUsageErrorBySlug] = useState<Record<string, string>>({});
 
   const createOp = useMutation({
     mutationFn: async ({
@@ -181,8 +194,53 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
     }
   };
 
+  const loadUsage = async (targetSlug: string) => {
+    setUsageLoadingSlug(targetSlug);
+    setUsageErrorBySlug((current) => {
+      const next = { ...current };
+      delete next[targetSlug];
+      return next;
+    });
+    try {
+      const response = await fetch(`/api/v1/secrets/${encodeURIComponent(targetSlug)}/usage`);
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        throw new Error(errorPayload.detail || 'Failed to load secret usage');
+      }
+      const usage = (await response.json()) as SecretUsageResponse;
+      setUsageBySlug((current) => ({ ...current, [targetSlug]: usage }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load secret usage';
+      setUsageErrorBySlug((current) => ({ ...current, [targetSlug]: message }));
+      onNotice({ level: 'error', text: message });
+    } finally {
+      setUsageLoadingSlug(null);
+    }
+  };
+
   const renderUsages = (secret: SecretMetadata) => {
-    const usages = secret.usages ?? [];
+    const loadedUsage = usageBySlug[secret.slug];
+    const usages = loadedUsage?.usages ?? secret.usages ?? [];
+    const usageError = usageErrorBySlug[secret.slug];
+    const usageLoaded = Boolean(loadedUsage || secret.usages);
+
+    if (usageError) {
+      return <span className="text-xs text-red-600 dark:text-red-400">{usageError}</span>;
+    }
+
+    if (!usageLoaded) {
+      return (
+        <button
+          type="button"
+          onClick={() => loadUsage(secret.slug)}
+          disabled={usageLoadingSlug === secret.slug}
+          className="btn btn-sm btn-outline"
+        >
+          {usageLoadingSlug === secret.slug ? 'Loading...' : 'View usage'}
+        </button>
+      );
+    }
+
     if (usages.length === 0) {
       return <span className="text-xs text-slate-500 dark:text-slate-400">No consumers</span>;
     }

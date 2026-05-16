@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
-from api_service.db.models import Base, ManagedSecret, SecretStatus
+from api_service.db.models import Base, ManagedSecret, SecretStatus, SettingsOverride
 from api_service.main import app
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -120,3 +120,38 @@ async def test_secret_usage_view_reports_empty_and_missing_without_plaintext(
     assert missing.json()["usages"] == []
     assert missing.json()["diagnostics"][0]["code"] == "secret_ref_unresolved"
     assert "plaintext" not in missing.text
+
+
+async def test_secret_usage_view_excludes_other_workspace_consumers(
+    secret_usage_db,
+):
+    async with secret_usage_db() as session:
+        session.add(
+            ManagedSecret(
+                slug="github-pat-main",
+                ciphertext="ghp_usage_plaintext",
+                status=SecretStatus.ACTIVE,
+                details={},
+            )
+        )
+        session.add(
+            SettingsOverride(
+                scope="workspace",
+                workspace_id=uuid4(),
+                key="integrations.github.token_ref",
+                value_json="db://github-pat-main",
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        usage = await client.get("/api/v1/secrets/github-pat-main/usage")
+
+    assert usage.status_code == 200
+    assert usage.json() == {
+        "secretRef": "db://github-pat-main",
+        "usages": [],
+        "diagnostics": [],
+    }
