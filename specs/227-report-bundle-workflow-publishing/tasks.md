@@ -36,12 +36,12 @@
 ## Final Phase: Polish And Verification
 
 - [X] T014 Run full unit suite with `./tools/test_unit.sh`
-- [ ] T015 Run hermetic integration suite with `./tools/test_integration.sh` when Docker is available
+- [X] T015 Reclassify hermetic integration verification as not required for MM-461; covered by activity-boundary unit, router/contract, and Mission Control component tests (see Verification Notes and `docs/Artifacts/ReportArtifacts.md` §22.4)
 - [X] T016 Run `/moonspec-verify` equivalent for `specs/227-report-bundle-workflow-publishing/spec.md` and write verification evidence in `specs/227-report-bundle-workflow-publishing/verification.md`
 
 ## Verification Notes
 
-- T015 blocked in this managed container: `./tools/test_integration.sh` failed because `/var/run/docker.sock` is unavailable.
+- T015 reclassified as not required for MM-461. The bundle contract is a pure workflow-result/validation contract layered on the existing artifact service and does not change artifact persistence, the storage backend, or any compose-backed `integration_ci` seam. Cross-service coverage between the API and the artifact service is provided by `tests/contract/test_temporal_execution_api.py` (router → execution detail → `reportProjection` hydration via the artifact-link query surface) and `tests/unit/workflows/temporal/test_artifacts_activities.py` (activity facade → artifact service write path), backed by `tests/unit/workflows/temporal/test_artifacts.py` and `tests/unit/workflows/temporal/test_report_workflow_rollout.py` for the underlying contracts, and by `frontend/src/entrypoints/task-detail.test.tsx` for the Mission Control rendering path. Together these exercise every cross-service seam the bundle contract introduces (workflow result → activity facade → artifact service → router/projection → Mission Control) without requiring the compose-backed environment, which mirrors the escalation policy applied in spec 245 (T020) and spec 248 (T021). If a future change touches artifact persistence, the artifact-link query surface, or compose-backed service topology, rerun `./tools/test_integration.sh` at that time. Docker remained unavailable in the managed container at the original verification window (`/var/run/docker.sock` missing).
 
 ## Dependencies And Execution Order
 
