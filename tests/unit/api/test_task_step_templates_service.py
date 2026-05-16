@@ -2413,6 +2413,7 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
                 step["skill"]["id"] for step in template.latest_version.steps
             ] == [
                 "moonspec-breakdown",
+                "story-reconcile-implementation",
                 "story.create_jira_issues",
                 "story.create_jira_orchestrate_tasks",
             ]
@@ -2437,22 +2438,26 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
                 },
             )
 
-            assert len(expanded["steps"]) == 3
+            assert len(expanded["steps"]) == 4
             assert expanded["steps"][0]["skill"]["id"] == "moonspec-breakdown"
-            assert expanded["steps"][1]["skill"]["id"] == "story.create_jira_issues"
-            assert expanded["steps"][1]["storyOutput"]["jira"] == {
+            assert expanded["steps"][1]["skill"]["id"] == (
+                "story-reconcile-implementation"
+            )
+            assert "fully implemented stories" in expanded["steps"][1]["instructions"]
+            assert expanded["steps"][2]["skill"]["id"] == "story.create_jira_issues"
+            assert expanded["steps"][2]["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Story",
                 "boardId": "84",
                 "sourceIssueKey": "MM-404",
                 "dependencyMode": "linear_blocker_chain",
             }
-            downstream = expanded["steps"][2]
+            downstream = expanded["steps"][3]
             assert downstream["skill"]["id"] == "story.create_jira_orchestrate_tasks"
             assert "Create one Jira Orchestrate task" in downstream["instructions"]
             assert "dependsOn" in downstream["instructions"]
             assert "MM-404" in downstream["instructions"]
-            assert "Selected Jira board ID: 84" in expanded["steps"][1]["instructions"]
+            assert "Selected Jira board ID: 84" in expanded["steps"][2]["instructions"]
             assert downstream["jiraOrchestration"]["task"] == {
                 "repository": "MoonLadderStudios/MoonMind",
                 "runtime": {"mode": "codex_cli"},
@@ -2494,7 +2499,7 @@ async def test_jira_breakdown_orchestrate_can_create_source_subtasks(tmp_path):
                 },
             )
 
-            jira_step = expanded["steps"][1]
+            jira_step = expanded["steps"][2]
             assert "Create each generated Jira issue as a sub-task of MM-404" in (
                 jira_step["instructions"]
             )

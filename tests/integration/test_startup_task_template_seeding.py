@@ -264,10 +264,13 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             for step in composite_template.latest_version.steps
         ] == [
             "moonspec-breakdown",
+            "story-reconcile-implementation",
             "story.create_jira_issues",
             "story.create_jira_orchestrate_tasks",
         ]
-        downstream_step = composite_template.latest_version.steps[2]
+        reconcile_step = composite_template.latest_version.steps[1]
+        assert "fully implemented stories" in reconcile_step["instructions"]
+        downstream_step = composite_template.latest_version.steps[3]
         assert "trusted Jira story output" in downstream_step["instructions"]
         assert "dependsOn" in downstream_step["instructions"]
         assert "orchestrationMode" not in downstream_step["jiraOrchestration"]["task"]
