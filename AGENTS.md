@@ -273,6 +273,8 @@ Key diagnostics:
 - Python 3.12 (existing MoonMind runtime); no new module files are added for this one-shot run. + Existing trusted Jira tool registry (`moonmind/mcp/jira_tool_registry.py`), `JiraToolService` (`moonmind/integrations/jira/tool.py`), `redact_sensitive_text` / `SecretRedactor` redaction helpers. (353-transition-mm658-in-progress)
 - Python 3.12 + Pydantic v2, Temporal Python SDK, existing managed runtime launcher/strategy stack, existing task contract runtime command metadata (356-runtime-command-rendering)
 - No new persistent storage; use existing task input snapshot data, `AgentExecutionRequest` payload fields/parameters, workflow history, and launcher diagnostics (356-runtime-command-rendering)
+- Python 3.12; TypeScript/React for Mission Control state surfaces. + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, pytest, existing task proposal service, existing execution router, existing Mission Control view model helpers. (700-normalize-proposal-submissions)
+- Existing Temporal execution records, existing task proposal records, existing artifact-backed original task input snapshots; no new persistent tables. (700-normalize-proposal-submissions)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
