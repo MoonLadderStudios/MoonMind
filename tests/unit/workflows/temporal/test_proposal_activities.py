@@ -14,6 +14,7 @@ from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalProposalActivities,
 )
+from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.task_proposals.models import (
     TaskProposalOriginSource,
     TaskProposalStatus,
@@ -632,6 +633,40 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(meta["trigger_repo"], "org/repo")
         self.assertEqual(meta["trigger_job_id"], "run-1")
 
+    async def test_workflow_origin_metadata_carries_canonical_source_and_id(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Fix bug",
+                        "summary": "Bug in module X",
+                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                    }
+                ],
+                "policy": {},
+                "origin": {
+                    "workflow_id": "wf-1",
+                    "temporal_run_id": "run-1",
+                    "trigger_repo": "org/repo",
+                    "trigger_job_id": "job-1",
+                },
+            }
+        )
+
+        call_kwargs = mock_service.create_proposal.await_args.kwargs
+        self.assertEqual(call_kwargs["origin_source"], TaskProposalOriginSource.WORKFLOW)
+        self.assertEqual(call_kwargs["origin_external_id"], "wf-1")
+        self.assertEqual(call_kwargs["origin_metadata"]["source"], "workflow")
+        self.assertEqual(call_kwargs["origin_metadata"]["id"], "wf-1")
+        self.assertEqual(call_kwargs["origin_metadata"]["workflow_id"], "wf-1")
+
     async def test_service_failure_recorded(self) -> None:
         mock_service = AsyncMock()
         mock_service.create_proposal.side_effect = RuntimeError("DB down")
@@ -742,6 +777,33 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["submitted_count"], 1)
         self.assertEqual(result["deliveredCount"], 0)
+
+    async def test_missing_workflow_origin_is_validation_error_before_delivery(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Fix bug",
+                        "summary": "Bug in module X",
+                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                    }
+                ],
+                "policy": {},
+                "origin": {"temporal_run_id": "run-1"},
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 0)
+        self.assertEqual(result["validationErrors"][0]["code"], "proposal_validation_error")
+        self.assertIn("workflow_id", result["validationErrors"][0]["message"])
+        mock_service.create_proposal.assert_not_called()
 
 class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
     async def test_default_runtime_stamped_into_candidate(self) -> None:
@@ -1026,6 +1088,8 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             call_kwargs["origin_metadata"],
             {
+                "source": "workflow",
+                "id": "wf-1",
                 "workflow_id": "wf-1",
                 "temporal_run_id": "run-1",
                 "trigger_repo": "org/repo",
@@ -1112,3 +1176,99 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call_kwargs["category"], "run_quality")
         self.assertEqual(call_kwargs["tags"], ["loop_detected"])
         self.assertEqual(result["delivery_decisions"][0]["target"], "moonmind")
+
+    async def test_project_target_preserves_candidate_repository(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Project follow-up",
+                        "summary": "Project-scoped cleanup",
+                        "category": "tests",
+                        "tags": ["tests"],
+                        "severity": "high",
+                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                    }
+                ],
+                "policy": {
+                    "targets": ["project", "moonmind"],
+                    "minSeverityForMoonMind": "medium",
+                },
+                "origin": {"workflow_id": "wf-1", "temporal_run_id": "run-1"},
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        call_kwargs = mock_service.create_proposal.await_args.kwargs
+        self.assertEqual(
+            call_kwargs["task_create_request"]["payload"]["repository"],
+            "org/repo",
+        )
+        self.assertEqual(call_kwargs["resolved_policy"]["target"], "project")
+        self.assertEqual(result["delivery_decisions"][0]["target"], "project")
+
+    async def test_resolved_policy_records_capacity_gates_and_runtime_decision(
+        self,
+    ) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Fix loop",
+                        "summary": "Loop detected",
+                        "category": "run_quality",
+                        "tags": ["loop_detected"],
+                        "severity": "high",
+                        "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+                    }
+                ],
+                "policy": {
+                    "targets": ["moonmind"],
+                    "maxItems": {"moonmind": 2},
+                    "minSeverityForMoonMind": "medium",
+                    "defaultRuntime": "codex",
+                    "delivery": {"provider": "jira", "jira": {"projectKey": "MM"}},
+                },
+                "origin": {"workflow_id": "wf-1", "temporal_run_id": "run-1"},
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        resolved = mock_service.create_proposal.await_args.kwargs["resolved_policy"]
+        self.assertEqual(resolved["provider"], "jira")
+        self.assertEqual(resolved["target"], "moonmind")
+        self.assertEqual(resolved["repository"], "MoonLadderStudios/MoonMind")
+        self.assertEqual(resolved["default_runtime"], "codex")
+        self.assertTrue(resolved["default_runtime_applied"])
+        self.assertEqual(resolved["capacity"]["moonmind"]["limit"], 2)
+        self.assertEqual(resolved["capacity"]["moonmind"]["accepted"], 1)
+        self.assertEqual(resolved["gates"]["moonmind"]["severity_floor"], "medium")
+        self.assertTrue(resolved["gates"]["moonmind"]["qualified"])
+        self.assertEqual(resolved["delivery"]["provider"], "jira")
+
+
+class TestProposalActivityCatalog(unittest.TestCase):
+    def test_proposal_activity_retry_metadata_is_bounded(self) -> None:
+        catalog = build_default_activity_catalog()
+
+        generate = catalog.resolve_activity("proposal.generate")
+        submit = catalog.resolve_activity("proposal.submit")
+
+        self.assertEqual(generate.retries.max_attempts, 3)
+        self.assertLessEqual(generate.retries.max_interval_seconds, 120)
+        self.assertEqual(submit.retries.max_attempts, 3)
+        self.assertLessEqual(submit.retries.max_interval_seconds, 60)
