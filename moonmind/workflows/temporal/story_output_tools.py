@@ -40,6 +40,38 @@ JIRA_DEPENDENCY_MODE_LINEAR_BLOCKER_CHAIN = "linear_blocker_chain"
 JIRA_DEPENDENCY_MODES = frozenset(
     {JIRA_DEPENDENCY_MODE_NONE, JIRA_DEPENDENCY_MODE_LINEAR_BLOCKER_CHAIN}
 )
+STORY_IMPLEMENTATION_STATUS_FULLY_IMPLEMENTED = "fully_implemented"
+STORY_IMPLEMENTATION_STATUS_PARTIALLY_IMPLEMENTED = "partially_implemented"
+STORY_IMPLEMENTATION_STATUS_UNVERIFIABLE = "unverifiable"
+STORY_JIRA_ACTION_CREATE_ISSUE = "create_issue"
+STORY_JIRA_ACTION_CREATE_REMAINING_WORK_ISSUE = "create_remaining_work_issue"
+STORY_JIRA_ACTION_SKIP = "skip"
+STORY_JIRA_ACTION_MANUAL_REVIEW = "manual_review"
+STORY_JIRA_SKIP_ACTIONS = frozenset(
+    {
+        STORY_JIRA_ACTION_SKIP,
+        "skip_issue",
+        "skip_jira",
+        "no_issue",
+        "none",
+    }
+)
+STORY_JIRA_BLOCK_ACTIONS = frozenset(
+    {
+        STORY_JIRA_ACTION_MANUAL_REVIEW,
+        "block",
+        "blocked",
+        "manual_review_required",
+        "do_not_create",
+    }
+)
+STORY_JIRA_CREATE_ACTIONS = frozenset(
+    {
+        STORY_JIRA_ACTION_CREATE_ISSUE,
+        "create",
+        "create_jira_issue",
+    }
+)
 _ACCEPTANCE_HEADING_RE = re.compile(
     r"(?im)^\s*(acceptance\s+criteria|acceptance|ac)\s*:?\s*$"
 )
@@ -493,6 +525,226 @@ def _story_description(story: Mapping[str, Any]) -> str:
         ),
     ]
     return (description + "".join(sections)).strip() or _story_summary(story, index=1)
+
+def _normalized_story_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", _string(value).lower()).strip("_")
+
+def _story_jira_creation(story: Mapping[str, Any]) -> dict[str, Any]:
+    value = story.get("jiraCreation") or story.get("jira_creation")
+    return dict(value) if isinstance(value, Mapping) else {}
+
+def _story_implementation_status(story: Mapping[str, Any]) -> str:
+    return _normalized_story_token(
+        story.get("implementationStatus")
+        or story.get("implementation_status")
+        or story.get("status")
+    )
+
+def _story_jira_creation_action(story: Mapping[str, Any]) -> str:
+    jira_creation = _story_jira_creation(story)
+    action = _normalized_story_token(
+        jira_creation.get("action")
+        or story.get("jiraCreationAction")
+        or story.get("jira_creation_action")
+    )
+    if action:
+        return action
+    status = _story_implementation_status(story)
+    if status == STORY_IMPLEMENTATION_STATUS_FULLY_IMPLEMENTED:
+        return STORY_JIRA_ACTION_SKIP
+    if status == STORY_IMPLEMENTATION_STATUS_PARTIALLY_IMPLEMENTED:
+        return STORY_JIRA_ACTION_CREATE_REMAINING_WORK_ISSUE
+    if status == STORY_IMPLEMENTATION_STATUS_UNVERIFIABLE:
+        return STORY_JIRA_ACTION_MANUAL_REVIEW
+    return STORY_JIRA_ACTION_CREATE_ISSUE
+
+def _story_jira_creation_reason(story: Mapping[str, Any]) -> str:
+    jira_creation = _story_jira_creation(story)
+    return _string(
+        jira_creation.get("reason")
+        or story.get("jiraCreationReason")
+        or story.get("jira_creation_reason")
+    )
+
+def _story_remaining_work(story: Mapping[str, Any]) -> dict[str, Any]:
+    value = story.get("remainingWork") or story.get("remaining_work")
+    return dict(value) if isinstance(value, Mapping) else {}
+
+def _story_implemented_evidence(story: Mapping[str, Any]) -> list[Any]:
+    return _list(
+        story.get("implementedEvidence")
+        or story.get("implemented_evidence")
+        or story.get("evidence")
+    )
+
+def _format_implemented_evidence_for_jira(story: Mapping[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for item in _story_implemented_evidence(story):
+        if isinstance(item, Mapping):
+            requirement = _string(
+                item.get("requirement")
+                or item.get("coverageId")
+                or item.get("coverage_id")
+                or item.get("id")
+            )
+            status = _string(item.get("status"))
+            evidence = _string(item.get("evidence") or item.get("details"))
+            parts = [part for part in (requirement, status, evidence) if part]
+            if parts:
+                lines.append(" - ".join(parts))
+        else:
+            text = _string(item)
+            if text:
+                lines.append(text)
+    return lines
+
+def _remaining_work_list(
+    remaining_work: Mapping[str, Any],
+    *keys: str,
+) -> list[Any]:
+    for key in keys:
+        items = _list(remaining_work.get(key))
+        if items:
+            return items
+    return []
+
+def _story_for_remaining_jira_work(
+    story: Mapping[str, Any],
+    *,
+    index: int,
+) -> dict[str, Any] | None:
+    remaining_work = _story_remaining_work(story)
+    if not remaining_work:
+        return None
+
+    adjusted = dict(story)
+    original_summary = _story_summary(story, index=index)
+    adjusted["summary"] = _string(
+        remaining_work.get("summary")
+        or remaining_work.get("title")
+    ) or f"Complete remaining work for {original_summary}"
+
+    remaining_description = _string(
+        remaining_work.get("description")
+        or remaining_work.get("body")
+        or remaining_work.get("narrative")
+    )
+    original_description = _story_description(story)
+    evidence_lines = _format_implemented_evidence_for_jira(story)
+    description_parts = [
+        "Remaining Work\n" + (remaining_description or adjusted["summary"]),
+        _format_story_section("Already Implemented Evidence", evidence_lines),
+        _format_story_section("Original Story Scope", original_description),
+    ]
+    adjusted["description"] = "\n".join(
+        part for part in description_parts if part
+    ).strip()
+
+    acceptance = _remaining_work_list(
+        remaining_work,
+        "acceptanceCriteria",
+        "acceptance_criteria",
+        "remainingAcceptanceCriteria",
+        "remaining_acceptance_criteria",
+    )
+    if acceptance:
+        adjusted["acceptanceCriteria"] = acceptance
+        adjusted.pop("acceptance_criteria", None)
+    else:
+        adjusted.pop("acceptanceCriteria", None)
+        adjusted.pop("acceptance_criteria", None)
+    requirements = _remaining_work_list(
+        remaining_work,
+        "requirements",
+        "remainingRequirements",
+        "remaining_requirements",
+    )
+    if requirements:
+        adjusted["requirements"] = requirements
+    else:
+        adjusted.pop("requirements", None)
+    adjusted["originalStorySummary"] = original_summary
+    return adjusted
+
+def _story_reconciliation_record(
+    story: Mapping[str, Any],
+    *,
+    index: int,
+    action: str,
+) -> dict[str, Any]:
+    record = {
+        "storyId": _story_id(story, index=index),
+        "storyIndex": index,
+        "summary": _story_summary(story, index=index),
+        "implementationStatus": _story_implementation_status(story),
+        "jiraCreationAction": action,
+    }
+    reason = _story_jira_creation_reason(story)
+    if reason:
+        record["reason"] = reason
+    evidence = _story_implemented_evidence(story)
+    if evidence:
+        record["implementedEvidence"] = evidence
+    return record
+
+def _reconcile_stories_for_jira_creation(
+    stories: Sequence[Mapping[str, Any]],
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    eligible: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    partial_adjusted: list[dict[str, Any]] = []
+
+    for index, story in enumerate(stories, start=1):
+        action = _story_jira_creation_action(story)
+        status = _story_implementation_status(story)
+        if action in STORY_JIRA_SKIP_ACTIONS or (
+            status == STORY_IMPLEMENTATION_STATUS_FULLY_IMPLEMENTED
+            and action not in STORY_JIRA_CREATE_ACTIONS
+        ):
+            skipped.append(
+                _story_reconciliation_record(story, index=index, action=action)
+            )
+            continue
+        if action in STORY_JIRA_BLOCK_ACTIONS or (
+            status == STORY_IMPLEMENTATION_STATUS_UNVERIFIABLE
+            and action not in STORY_JIRA_CREATE_ACTIONS
+        ):
+            blocked.append(
+                _story_reconciliation_record(story, index=index, action=action)
+            )
+            continue
+        if (
+            action == STORY_JIRA_ACTION_CREATE_REMAINING_WORK_ISSUE
+            or status == STORY_IMPLEMENTATION_STATUS_PARTIALLY_IMPLEMENTED
+        ):
+            adjusted = _story_for_remaining_jira_work(story, index=index)
+            if adjusted is None:
+                blocked_record = _story_reconciliation_record(
+                    story,
+                    index=index,
+                    action=STORY_JIRA_ACTION_MANUAL_REVIEW,
+                )
+                blocked_record.setdefault(
+                    "reason",
+                    "Partially implemented stories require remainingWork before "
+                    "Jira creation can safely narrow the issue scope.",
+                )
+                blocked.append(blocked_record)
+                continue
+            partial_adjusted.append(
+                _story_reconciliation_record(story, index=index, action=action)
+            )
+            eligible.append(adjusted)
+            continue
+        eligible.append(dict(story))
+
+    return eligible, skipped, blocked, partial_adjusted
 
 def _breakdown_source_path(value: Any) -> str:
     if not isinstance(value, Mapping):
@@ -1524,6 +1776,48 @@ async def create_jira_issues_from_stories(
                 dependency_mode=dependency_mode,
             )
         raise ValueError("No stories were available for Jira issue creation.")
+
+    original_story_count = len(stories)
+    (
+        stories,
+        skipped_stories,
+        blocked_stories,
+        partial_stories_adjusted,
+    ) = _reconcile_stories_for_jira_creation(stories)
+    if not stories:
+        return ToolResult(
+            status="COMPLETED",
+            outputs={
+                "storyOutput": {
+                    "mode": "jira",
+                    "status": "jira_noop",
+                    "storyCount": original_story_count,
+                    "eligibleStoryCount": 0,
+                    "createdCount": 0,
+                    "dependencyMode": dependency_mode,
+                    "skippedStories": skipped_stories,
+                    "blockedStories": blocked_stories,
+                    "partialStoriesAdjusted": partial_stories_adjusted,
+                },
+                "jira": {
+                    "createdCount": 0,
+                    "createdIssues": [],
+                    "dependencyMode": dependency_mode,
+                    "issueMappings": [],
+                    "linkResults": [],
+                    "linkCount": 0,
+                    "dependencyChainComplete": (
+                        None
+                        if dependency_mode == JIRA_DEPENDENCY_MODE_NONE
+                        else True
+                    ),
+                    "skippedStories": skipped_stories,
+                    "blockedStories": blocked_stories,
+                    "partialStoriesAdjusted": partial_stories_adjusted,
+                },
+            },
+        )
+
     if not project_key:
         reason = (
             "Jira projectKey and issueTypeId are required."
@@ -1716,7 +2010,9 @@ async def create_jira_issues_from_stories(
     link_count = sum(
         1 for item in link_results if item.get("status") in {"created", "existing"}
     )
-    partial = any(item.get("status") == "failed" for item in link_results)
+    partial = bool(blocked_stories) or any(
+        item.get("status") == "failed" for item in link_results
+    )
     story_status = "jira_partial" if partial else "jira_created"
 
     return ToolResult(
@@ -1725,9 +2021,13 @@ async def create_jira_issues_from_stories(
             "storyOutput": {
                 "mode": "jira",
                 "status": story_status,
-                "storyCount": len(stories),
+                "storyCount": original_story_count,
+                "eligibleStoryCount": len(stories),
                 "createdCount": len(created),
                 "dependencyMode": dependency_mode,
+                "skippedStories": skipped_stories,
+                "blockedStories": blocked_stories,
+                "partialStoriesAdjusted": partial_stories_adjusted,
             },
             "jira": {
                 "createdCount": len(created),
@@ -1737,6 +2037,9 @@ async def create_jira_issues_from_stories(
                 "linkResults": link_results,
                 "linkCount": link_count,
                 "dependencyChainComplete": dependency_chain_complete,
+                "skippedStories": skipped_stories,
+                "blockedStories": blocked_stories,
+                "partialStoriesAdjusted": partial_stories_adjusted,
                 **({"partial": True} if partial else {}),
             },
         },

@@ -69,12 +69,29 @@ steps:
       args: {}
       requiredCapabilities:
         - git
+  - title: Reconcile stories with current implementation
+    instructions: |-
+      Use story-reconcile-implementation to compare the generated MoonSpec story breakdown against the current repository implementation before any Jira issue creation occurs.
+
+      Read the runtime-provided story breakdown JSON path and rewrite that same JSON handoff with implementationStatus and jiraCreation fields for every story.
+      Mark fully implemented stories with jiraCreation.action = "skip" so no Jira issue or downstream Jira Orchestrate task is created for completed work.
+      For partially implemented stories, preserve the original story scope and add remainingWork so Jira tracks only the unmet requirements.
+      Mark unverifiable stories with jiraCreation.action = "manual_review" so deterministic Jira creation will not create implementation work automatically.
+      Write the reconciliation report to the runtime-provided markdown breakdown path when available.
+      Do not create Jira issues, do not create implementation tasks, and do not implement code in this reconciliation step.
+    skill:
+      id: story-reconcile-implementation
+      args: {}
+      requiredCapabilities:
+        - git
   - title: Create Jira issues
     instructions: |-
-      Create one Jira {{ inputs.jira_issue_type }} issue in project {{ inputs.jira_project_key }} for each story from the generated MoonSpec breakdown.
+      Create one Jira {{ inputs.jira_issue_type }} issue in project {{ inputs.jira_project_key }} for each eligible story from the reconciled MoonSpec breakdown.
 
       Use the runtime-provided story breakdown JSON path.
       Every Jira issue must include the Source Document path from the story breakdown.
+      Do not create Jira issues for stories where jiraCreation.action is skip or manual_review.
+      For stories where jiraCreation.action is create_remaining_work_issue, create the Jira issue from the story's remainingWork while preserving the original story traceability.
       {% if inputs.source_issue_key %}Source Jira issue key: {{ inputs.source_issue_key }}.{% endif %}
       {% if inputs.source_issue_key and inputs.jira_issue_type | lower in ["sub-task", "subtask", "sub task"] %}Create each generated Jira issue as a sub-task of {{ inputs.source_issue_key }}.{% endif %}
       {% if inputs.jira_board_id %}Selected Jira board ID: {{ inputs.jira_board_id }}.{% endif %}
@@ -96,9 +113,10 @@ steps:
       args: {}
   - title: Create dependent Jira Orchestrate tasks
     instructions: |-
-      Create one Jira Orchestrate task for each generated Jira story from the trusted Jira story output.
+      Create one Jira Orchestrate task for each Jira issue created from the trusted Jira story output.
 
       Use the ordered issue mappings returned by story.create_jira_issues. Preserve the generated story order when creating downstream tasks.
+      Do not create downstream tasks for skipped fully implemented stories or manual-review stories that did not produce Jira issue mappings.
       Each downstream task must run Jira Orchestrate on its corresponding Jira story issue and must not run implementation inline inside this breakdown run.
       Create task dependencies with dependsOn so each later generated task waits for the immediately earlier generated task workflow ID.
       Preserve source Jira issue {{ inputs.source_issue_key }} and the original source brief in downstream task instructions and result traceability.
