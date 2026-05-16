@@ -129,6 +129,9 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
             return _CODEX_PROGRESS_TIMEOUT_SECONDS
         return min(normalized_timeout, _CODEX_PROGRESS_TIMEOUT_SECONDS)
 
+    def supports_slash_passthrough(self) -> bool:
+        return True
+
     def build_command(
         self,
         profile: Any,

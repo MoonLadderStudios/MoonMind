@@ -999,6 +999,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Settings */
+        post: operations["validate_settings_api_v1_settings_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Settings */
+        post: operations["preview_settings_api_v1_settings_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/github/token-probe": {
         parameters: {
             query?: never;
@@ -6335,6 +6369,26 @@ export interface components {
             };
             /** Reason */
             reason?: string | null;
+            /** Confirmation */
+            confirmation?: string | null;
+        };
+        /** SettingsProposalRequest */
+        SettingsProposalRequest: {
+            /**
+             * Scope
+             * @default workspace
+             */
+            scope: string;
+            /** Changes */
+            changes?: {
+                [key: string]: unknown;
+            };
+            /** Expected Versions */
+            expected_versions?: {
+                [key: string]: number;
+            };
+            /** Confirmation */
+            confirmation?: string | null;
         };
         /**
          * SignalExecutionRequest
@@ -9812,6 +9866,72 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_settings_api_v1_settings_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsProposalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_settings_api_v1_settings_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsProposalRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

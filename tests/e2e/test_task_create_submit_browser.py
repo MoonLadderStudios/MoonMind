@@ -558,6 +558,48 @@ def test_create_page_shows_provider_profiles_for_selected_runtime(server):
         ]
         browser.close()
 
+def test_create_page_shows_runtime_command_previews(server):
+    base_url = server
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        _route_handlers(
+            page,
+            base_url=base_url,
+            create_status=201,
+            create_body=json.dumps(
+                {
+                    "workflowId": "mm:unused",
+                    "runId": "run-unused",
+                    "namespace": "moonmind",
+                    "redirectPath": "/tasks/mm:unused?source=temporal",
+                }
+            ),
+        )
+
+        page.goto(f"{base_url}/tasks/create")
+        page.wait_for_selector("#queue-submit-form")
+        instructions = page.locator(
+            'textarea[data-step-field="instructions"][data-step-index="0"]'
+        )
+        instructions.fill("/review\nCheck this branch.")
+        page.wait_for_selector("text=Runtime command: /review")
+        assert instructions.input_value() == "/review\nCheck this branch."
+
+        instructions.fill("/foo\nUse provider behavior.")
+        page.wait_for_selector("text=Runtime command: /foo")
+        page.wait_for_selector("text=Pass-through runtime command.")
+
+        page.select_option('select[name="runtime"]', "codex_cloud")
+        page.wait_for_selector("text=Unsupported runtime command: /foo")
+        assert instructions.input_value() == "/foo\nUse provider behavior."
+
+        instructions.fill("\\/review\nTreat as text.")
+        page.wait_for_selector("text=Literal text: /review")
+        assert page.locator("text=Runtime command: /review").count() == 0
+
+        browser.close()
+
 def test_temporal_submit_redirects_without_exposing_runtime_picker(server):
     base_url = server
     original_submit_enabled = settings.temporal_dashboard.submit_enabled

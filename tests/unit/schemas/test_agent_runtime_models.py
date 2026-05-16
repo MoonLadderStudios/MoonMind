@@ -12,6 +12,8 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedAgentProviderProfile,
     ManagedRuntimeProfile,
     LiveLogChunk,
+    RuntimeCommandInvocation,
+    RuntimeCommandRenderResult,
     extract_durable_retrieval_metadata,
     is_terminal_agent_run_state,
 )
@@ -57,6 +59,81 @@ def test_agent_execution_request_accepts_codex_managed_session_binding() -> None
     assert request.managed_session is not None
     assert request.managed_session.runtime_id == "codex_cli"
     assert request.managed_session.session_id == "sess:wf-run-1:codex_cli"
+
+def test_agent_execution_request_accepts_runtime_command_metadata() -> None:
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        instructionRef="/review\nCheck this.",
+        runtimeCommand={
+            "kind": "slash_command",
+            "source": "leading_slash",
+            "sourcePath": "objective.instructions",
+            "command": "review",
+            "rawCommand": "/review",
+            "args": "",
+            "instructionBody": "Check this.",
+            "targetRuntime": "codex_cli",
+            "detectionStatus": "detected",
+            "hintStatus": "hinted",
+            "recognitionMode": "hinted_runtime_passthrough",
+            "renderMode": "materialized_command",
+            "materializedCommand": {
+                "path": ".claude/commands/review.md",
+                "invocation": "/project:review",
+            },
+            "requiresRuntimeRecognition": True,
+            "runtimeCapabilityVersion": "2026-05-13",
+            "hintCatalogVersion": "2026-05-13",
+            "detectionPhase": "submit",
+        },
+    )
+
+    assert request.runtime_command is not None
+    assert request.runtime_command.command == "review"
+    assert request.runtime_command.render_mode == "materialized_command"
+    assert request.runtime_command.materialized_command == {
+        "path": ".claude/commands/review.md",
+        "invocation": "/project:review",
+    }
+    assert request.model_dump(by_alias=True)["runtimeCommand"]["rawCommand"] == "/review"
+
+def test_runtime_command_render_result_supports_failure_and_prompt_prefix() -> None:
+    invocation = RuntimeCommandInvocation(
+        kind="slash_command",
+        source="leading_slash",
+        sourcePath="objective.instructions",
+        command="review",
+        rawCommand="/review",
+        args="",
+        instructionBody="Check this.",
+        targetRuntime="codex_cli",
+        detectionStatus="detected",
+        hintStatus="hinted",
+        recognitionMode="hinted_runtime_passthrough",
+        requiresRuntimeRecognition=True,
+        runtimeCapabilityVersion="2026-05-13",
+        hintCatalogVersion="2026-05-13",
+        detectionPhase="submit",
+    )
+
+    ok = RuntimeCommandRenderResult(
+        status="ok",
+        renderMode="prompt_prefix",
+        renderedInstruction="/review\n\nCheck this.",
+        invocation=invocation,
+    )
+    failed = RuntimeCommandRenderResult(
+        status="failed",
+        failureReason="runtime_command_render_failed",
+        diagnostics={"message": "redacted"},
+    )
+
+    assert ok.render_mode == "prompt_prefix"
+    assert ok.rendered_instruction.startswith("/review")
+    assert failed.failure_reason == "runtime_command_render_failed"
 
 def test_agent_execution_request_rejects_managed_session_for_non_codex_runtime() -> None:
     with pytest.raises(

@@ -26,6 +26,17 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
     def default_command_template(self) -> list[str]:
         return ["claude"]
 
+    def supports_slash_passthrough(self) -> bool:
+        return True
+
+    def materialized_command_allowlist(self) -> dict[str, dict[str, str]]:
+        return {
+            "review": {
+                "path": ".claude/commands/review.md",
+                "invocation": "/project:review",
+            }
+        }
+
     def build_command(
         self,
         profile: Any,

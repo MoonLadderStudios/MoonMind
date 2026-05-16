@@ -4,7 +4,7 @@
       "user",
       "workspace"
     ],
-    "section": "user-workspace",
+    "section": "providers-secrets",
     "type": "secret_ref"
   },
   "live_sessions.default_enabled": {

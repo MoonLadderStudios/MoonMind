@@ -3118,6 +3118,7 @@ class MoonMindRunWorkflow:
                                 node_id=node_id,
                                 tool_name=tool_name,
                                 tool_type=tool_type,
+                                failure_mode=failure_mode,
                             )
                         )
                         if self._cancel_requested:
@@ -3942,6 +3943,9 @@ class MoonMindRunWorkflow:
 
     def _clear_jira_blocker_wait(self) -> None:
         self._jira_blocker_wait_active = False
+        self._jira_blocker_wait_started_at = None
+        self._jira_blocker_wait_issue_keys = []
+        self._jira_blocker_wait_summary = None
         if self._waiting_reason == "jira_blocker_wait":
             self._waiting_reason = None
         self._attention_required = False
@@ -3955,6 +3959,7 @@ class MoonMindRunWorkflow:
         node_id: str,
         tool_name: str,
         tool_type: str,
+        failure_mode: str,
     ) -> tuple[Any, bool]:
         skipped = False
         recheck_count = 0
@@ -3970,10 +3975,15 @@ class MoonMindRunWorkflow:
             )
             try:
                 await workflow.wait_condition(
-                    lambda: self._cancel_requested or self._jira_blocker_wait_skipped,
+                    lambda: (
+                        self._cancel_requested
+                        or self._jira_blocker_wait_skipped
+                        or self._paused
+                    ),
                     timeout=DEPENDENCY_RECONCILE_INTERVAL,
                 )
             except asyncio.TimeoutError:
+                # Timeout is the expected path for periodic blocker rechecks.
                 pass
             if self._cancel_requested:
                 return current_result, skipped
@@ -3983,6 +3993,9 @@ class MoonMindRunWorkflow:
 
             recheck_count += 1
             self._clear_jira_blocker_wait()
+            await self._wait_if_paused_at_safe_boundary()
+            if self._cancel_requested:
+                return current_result, skipped
             self._set_state(STATE_EXECUTING, summary="Re-checking Jira blockers.")
             self._mark_step_running(
                 node_id,
@@ -3995,12 +4008,24 @@ class MoonMindRunWorkflow:
                 recheck_payload["idempotency_key"] = (
                     f"{idempotency_key}_jira_blocker_recheck_{recheck_count}"
                 )
-            current_result = await workflow.execute_activity(
-                route.activity_type,
-                recheck_payload,
-                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                **self._execute_kwargs_for_route(route),
-            )
+            try:
+                current_result = await workflow.execute_activity(
+                    route.activity_type,
+                    recheck_payload,
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                    **self._execute_kwargs_for_route(route),
+                )
+            except Exception:
+                self._mark_step_terminal(
+                    node_id,
+                    status="failed",
+                    updated_at=workflow.now(),
+                    summary=f"Re-check of Jira blockers for {tool_name} failed",
+                    last_error="execution_error",
+                )
+                if failure_mode == "FAIL_FAST":
+                    raise
+                break
             self._record_step_result_evidence(
                 node_id,
                 execution_result=current_result,
@@ -5969,6 +5994,8 @@ class MoonMindRunWorkflow:
             idempotency_key=idempotency_key,
             instruction_ref=node_inputs.get("instructions")
             or node_inputs.get("instructionRef"),
+            runtime_command=node_inputs.get("runtimeCommand")
+            or node_inputs.get("runtime_command"),
             resolved_skillset_ref=resolved_skillset_ref,
             input_refs=input_refs,
             workspace_spec=workspace_spec,
@@ -7594,6 +7621,94 @@ class MoonMindRunWorkflow:
         self._update_memo()
         return True
 
+    @staticmethod
+    def _runtime_selection_from_source(
+        source: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not isinstance(source, Mapping):
+            return {}
+        selection: dict[str, Any] = {}
+        for source_key, target_key in (
+            ("executionProfileRef", "executionProfileRef"),
+            ("execution_profile_ref", "executionProfileRef"),
+            ("profileId", "executionProfileRef"),
+            ("profile_id", "executionProfileRef"),
+            ("providerProfile", "executionProfileRef"),
+            ("model", "model"),
+            ("requestedModel", "model"),
+            ("requested_model", "model"),
+            ("effort", "effort"),
+            ("targetRuntime", "targetRuntime"),
+            ("target_runtime", "targetRuntime"),
+            ("mode", "targetRuntime"),
+        ):
+            value = source.get(source_key)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    continue
+            selection[target_key] = value
+        return selection
+
+    def _runtime_selection_update_payload(
+        self, payload: Mapping[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if not isinstance(payload, Mapping):
+            return None
+        parameters_patch = payload.get("parameters_patch") or payload.get(
+            "parametersPatch"
+        )
+        if not isinstance(parameters_patch, Mapping):
+            return None
+
+        selection: dict[str, Any] = {}
+        for source in (parameters_patch,):
+            selection.update(self._runtime_selection_from_source(source))
+
+        runtime_block = parameters_patch.get("runtime")
+        if isinstance(runtime_block, Mapping):
+            selection.update(self._runtime_selection_from_source(runtime_block))
+
+        task_payload = parameters_patch.get("task")
+        if isinstance(task_payload, Mapping):
+            task_runtime = task_payload.get("runtime")
+            if isinstance(task_runtime, Mapping):
+                selection.update(self._runtime_selection_from_source(task_runtime))
+
+        authored_payload = parameters_patch.get("authoredTaskInput")
+        if isinstance(authored_payload, Mapping):
+            authored_runtime = authored_payload.get("runtime")
+            if isinstance(authored_runtime, Mapping):
+                selection.update(self._runtime_selection_from_source(authored_runtime))
+
+        if not selection:
+            return None
+        selection["parametersPatch"] = dict(parameters_patch)
+        return selection
+
+    async def _forward_runtime_selection_update_to_active_child(
+        self, payload: Mapping[str, Any] | None
+    ) -> bool:
+        if not self._active_agent_child_workflow_id:
+            return False
+        if str(self._active_agent_id or "").strip().lower() in {
+            "jules",
+            "jules_api",
+        }:
+            return False
+        runtime_update = self._runtime_selection_update_payload(payload)
+        if runtime_update is None:
+            return False
+        handle = workflow.get_external_workflow_handle(
+            self._active_agent_child_workflow_id
+        )
+        await handle.signal("update_runtime_selection", runtime_update)
+        self._summary = "Runtime selection update sent to active agent."
+        self._update_memo()
+        return True
+
     @workflow.update
     def update_title(self, new_title: str) -> None:
         self._title = new_title
@@ -7614,8 +7729,15 @@ class MoonMindRunWorkflow:
         if isinstance(parameters_patch, Mapping):
             self._parameters_updated = True
             self._updated_parameters = dict(parameters_patch)
+        forwarded_runtime_update = (
+            await self._forward_runtime_selection_update_to_active_child(payload)
+        )
         forwarded = await self._forward_operator_message_to_active_child(payload)
-        return {"accepted": True, "forwardedOperatorMessage": forwarded}
+        return {
+            "accepted": True,
+            "forwardedOperatorMessage": forwarded,
+            "forwardedRuntimeSelectionUpdate": forwarded_runtime_update,
+        }
 
     @workflow.query
     def get_status(self) -> dict[str, Any]:

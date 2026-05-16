@@ -878,6 +878,219 @@ async def test_run_execution_stage_rechecks_jira_blockers_in_dependency_wait(
     assert steps[1]["status"] == "succeeded"
 
 @pytest.mark.asyncio
+async def test_jira_blocker_recheck_wait_honors_pause_before_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    events: list[str] = []
+    route = type("Route", (), {"activity_type": "mm.skill.execute"})()
+    blocked_result = {
+        "status": "COMPLETED",
+        "outputs": {
+            "decision": "blocked",
+            "blockingIssues": [{"issueKey": "MM-685", "done": False}],
+            "summary": "Blocked by MM-685.",
+        },
+    }
+    continue_result = {
+        "status": "COMPLETED",
+        "outputs": {"decision": "continue", "blockingIssues": []},
+    }
+
+    async def fake_wait_condition(
+        predicate: Callable[[], bool],
+        **_kwargs: Any,
+    ) -> None:
+        assert predicate() is False
+        workflow._paused = True
+        assert predicate() is True
+        events.append("pause-observed")
+
+    async def fake_pause_boundary(self: MoonMindRunWorkflow) -> None:
+        assert self._paused is True
+        events.append("pause-boundary")
+        self._paused = False
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        events.append(f"activity:{activity_type}")
+        assert events[-2:] == ["pause-boundary", "activity:mm.skill.execute"]
+        assert _normalize_payload(payload)["idempotency_key"].endswith(
+            "_jira_blocker_recheck_1"
+        )
+        return continue_result
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_wait_if_paused_at_safe_boundary",
+        fake_pause_boundary,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_execute_kwargs_for_route",
+        lambda self, route: {},
+    )
+
+    result, skipped = await workflow._wait_for_jira_blocker_resolution(
+        execution_result=blocked_result,
+        route=route,
+        execute_payload={"idempotency_key": "wf-1_check-blockers_execute"},
+        node_id="check-blockers",
+        tool_name="jira.check_blockers",
+        tool_type="skill",
+        failure_mode="FAIL_FAST",
+    )
+
+    assert result == continue_result
+    assert skipped is False
+    assert events == [
+        "pause-observed",
+        "pause-boundary",
+        "activity:mm.skill.execute",
+    ]
+    assert workflow._jira_blocker_wait_active is False
+    assert workflow._jira_blocker_wait_started_at is None
+    assert workflow._jira_blocker_wait_issue_keys == []
+    assert workflow._jira_blocker_wait_summary is None
+
+
+@pytest.mark.asyncio
+async def test_jira_blocker_recheck_activity_failure_respects_failure_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    route = type("Route", (), {"activity_type": "mm.skill.execute"})()
+    blocked_result = {
+        "status": "COMPLETED",
+        "outputs": {
+            "decision": "blocked",
+            "blockingIssues": [{"issueKey": "MM-685", "done": False}],
+            "summary": "Blocked by MM-685.",
+        },
+    }
+
+    async def fake_execute_activity(
+        _activity_type: str,
+        _payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        raise RuntimeError("worker unavailable")
+
+    async def fake_noop_async(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _timeout_wait_condition,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_wait_if_paused_at_safe_boundary",
+        fake_noop_async,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_execute_kwargs_for_route",
+        lambda self, route: {},
+    )
+
+    result, skipped = await workflow._wait_for_jira_blocker_resolution(
+        execution_result=blocked_result,
+        route=route,
+        execute_payload={"idempotency_key": "wf-1_check-blockers_execute"},
+        node_id="check-blockers",
+        tool_name="jira.check_blockers",
+        tool_type="skill",
+        failure_mode="CONTINUE",
+    )
+
+    assert result == blocked_result
+    assert skipped is False
+    assert workflow._jira_blocker_wait_active is False
+    assert workflow._jira_blocker_wait_started_at is None
+    assert workflow._jira_blocker_wait_issue_keys == []
+    assert workflow._jira_blocker_wait_summary is None
+
+    with pytest.raises(RuntimeError, match="worker unavailable"):
+        await workflow._wait_for_jira_blocker_resolution(
+            execution_result=blocked_result,
+            route=route,
+            execute_payload={"idempotency_key": "wf-1_check-blockers_execute"},
+            node_id="check-blockers",
+            tool_name="jira.check_blockers",
+            tool_type="skill",
+            failure_mode="FAIL_FAST",
+        )
+
+
+def test_skip_dependency_wait_allows_active_jira_wait_without_issue_keys() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._state = run_workflow_module.STATE_WAITING_ON_DEPENDENCIES
+    workflow._jira_blocker_wait_active = True
+    workflow._jira_blocker_wait_issue_keys = []
+
+    workflow.validate_skip_dependency_wait()
+
+@pytest.mark.asyncio
 async def test_run_execution_stage_preserves_registry_read_for_unpatched_histories(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1951,6 +2164,7 @@ async def test_skipped_jira_blocker_wait_restores_executing_state(
         node_id="check-blockers",
         tool_name=run_workflow_module.JIRA_CHECK_BLOCKERS_TOOL_NAME,
         tool_type="skill",
+        failure_mode="FAIL_FAST",
     )
 
     assert skipped is True
@@ -1958,14 +2172,6 @@ async def test_skipped_jira_blocker_wait_restores_executing_state(
     assert workflow._state == run_workflow_module.STATE_EXECUTING
     assert workflow._jira_blocker_wait_active is False
     assert workflow._waiting_reason is None
-
-def test_skip_dependency_wait_allows_active_jira_wait_without_issue_keys() -> None:
-    workflow = MoonMindRunWorkflow()
-    workflow._state = run_workflow_module.STATE_WAITING_ON_DEPENDENCIES
-    workflow._jira_blocker_wait_active = True
-    workflow._jira_blocker_wait_issue_keys = []
-
-    workflow.validate_skip_dependency_wait()
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
