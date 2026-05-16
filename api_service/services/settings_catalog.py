@@ -6,7 +6,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Literal
 from uuid import UUID
 
@@ -325,6 +325,7 @@ class EffectiveSettingValue(BaseModel):
 class EffectiveSettingsResponse(BaseModel):
     scope: SettingScope
     values: dict[str, EffectiveSettingValue]
+    change_events: list["SettingsChangeEvent"] = Field(default_factory=list)
 
 
 class SettingsValidationResponse(BaseModel):
@@ -385,6 +386,7 @@ class SettingsAuditRead(BaseModel):
     event_type: str
     key: str
     scope: str
+    source: str | None = None
     actor_user_id: UUID | None = None
     old_value: Any = None
     new_value: Any = None
@@ -400,6 +402,18 @@ class SettingsAuditRead(BaseModel):
 
 class SettingsAuditResponse(BaseModel):
     items: list[SettingsAuditRead]
+
+
+class SettingsChangeEvent(BaseModel):
+    event_type: Literal["setting_changed"] = "setting_changed"
+    key: str
+    scope: SettingScope
+    source: str
+    apply_mode: SettingApplyMode
+    actor_user_id: UUID | None = None
+    changed_at: datetime
+    affected_systems: list[str] = Field(default_factory=list)
+    refresh_targets: list[str] = Field(default_factory=list)
 
 
 class SettingsRecentChange(BaseModel):
@@ -1045,7 +1059,11 @@ class SettingsCatalogService:
             override_value=None,
             source=metadata["source"],
             source_explanation=metadata["source_explanation"],
-            **self._activation_metadata(entry, value),
+            **self._activation_metadata(
+                entry,
+                value,
+                pending_activation=override_present,
+            ),
             options=[
                 SettingOption(value=value, label=label)
                 for value, label in entry.options
@@ -1121,7 +1139,11 @@ class SettingsCatalogService:
             scope=scope,
             value=value,
             **self._effective_metadata(entry, value, source, override_present, diagnostics),
-            **self._activation_metadata(entry, value),
+            **self._activation_metadata(
+                entry,
+                value,
+                pending_activation=override_present,
+            ),
             value_version=version,
             diagnostics=diagnostics,
         )
@@ -1183,7 +1205,11 @@ class SettingsCatalogService:
                 scope=scope,
                 value=data[0],
                 **self._effective_metadata(entry, data[0], data[1], data[3], diagnostics),
-                **self._activation_metadata(entry, data[0]),
+                **self._activation_metadata(
+                    entry,
+                    data[0],
+                    pending_activation=data[3],
+                ),
                 value_version=data[2],
                 diagnostics=diagnostics,
             )
@@ -1621,10 +1647,13 @@ class SettingsCatalogService:
         if pre_persistence_issues:
             raise SettingsValidationError(pre_persistence_issues)
 
+        changed_at = datetime.now(timezone.utc)
+        change_events: list[SettingsChangeEvent] = []
         for key, value in validated.items():
             entry = entries[key]
             row = current_rows.get((scope, key))
             old_value = row.value_json if row is not None else None
+            source = f"{scope}_override"
             if row is None:
                 row = SettingsOverride(
                     scope=scope,
@@ -1648,6 +1677,20 @@ class SettingsCatalogService:
                     new_value=value,
                     reason=reason,
                     request_id=request_id,
+                )
+            )
+            change_events.append(
+                SettingsChangeEvent(
+                    key=entry.key,
+                    scope=scope,
+                    source=source,
+                    apply_mode=entry.apply_mode,
+                    actor_user_id=(
+                        self._user_id if self._user_id != _DEFAULT_SUBJECT_ID else None
+                    ),
+                    changed_at=changed_at,
+                    affected_systems=list(entry.applies_to),
+                    refresh_targets=self._refresh_targets_for_entry(entry),
                 )
             )
 
@@ -1698,7 +1741,11 @@ class SettingsCatalogService:
                 value_version=data[2],
                 diagnostics=diagnostics,
             )
-        return EffectiveSettingsResponse(scope=scope, values=values)
+        return EffectiveSettingsResponse(
+            scope=scope,
+            values=values,
+            change_events=change_events,
+        )
 
     async def reset_override(
         self,
@@ -2073,6 +2120,19 @@ class SettingsCatalogService:
             "requires_process_restart": entry.requires_process_restart,
             "applies_to": list(entry.applies_to),
         }
+
+    def _refresh_targets_for_entry(self, entry: SettingRegistryEntry) -> list[str]:
+        targets = {"settings_catalog"}
+        applies_to = set(entry.applies_to)
+        if "task_creation" in applies_to:
+            targets.add("task_creation_defaults")
+        if "provider_profiles" in applies_to:
+            targets.add("provider_profile_manager")
+        if entry.apply_mode == "worker_reload" or entry.requires_reload:
+            targets.add("worker_reloaders")
+        if "operations" in applies_to or entry.apply_mode == "manual_operation":
+            targets.add("operational_controls")
+        return sorted(targets)
 
     def _resolve_value(self, entry: SettingRegistryEntry) -> tuple[Any, str]:
         if self._is_operator_locked(entry):
@@ -4026,6 +4086,11 @@ class SettingsCatalogService:
             event_type=row.event_type,
             key=row.key,
             scope=row.scope,
+            source=(
+                f"{row.scope}_override"
+                if row.event_type != "settings.override.reset"
+                else "inherited"
+            ),
             actor_user_id=row.actor_user_id,
             old_value=old_value,
             new_value=new_value,
