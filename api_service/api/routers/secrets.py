@@ -1,5 +1,6 @@
 import structlog
 from typing import Any
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +12,7 @@ from api_service.api.schemas import (
     SecretMetadataResponse,
     SecretStatusUpdateRequest,
     SecretUpdateRequest,
+    SecretUsageResponse,
 )
 from api_service.db.models import SecretStatus
 from api_service.services.secrets import SecretsService
@@ -19,6 +21,17 @@ from moonmind.utils.logging import redact_sensitive_payload
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
+
+
+def _uuid_attr(value: Any) -> UUID | None:
+    if isinstance(value, UUID):
+        return value
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 @router.post(
     "",
@@ -136,6 +149,25 @@ async def delete_secret(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found"
         )
+
+@router.get(
+    "/{slug}/usage",
+    response_model=SecretUsageResponse,
+    summary="List redacted consumers of a managed secret",
+    tags=["Secrets"],
+)
+async def get_secret_usage(
+    slug: str,
+    db: AsyncSession = Depends(get_async_session),
+    user: Any = Depends(get_current_user()),
+) -> SecretUsageResponse:
+    result = await SecretsService.list_secret_usage(
+        db,
+        slug,
+        workspace_id=_uuid_attr(getattr(user, "workspace_id", None)),
+        user_id=_uuid_attr(getattr(user, "id", None)),
+    )
+    return SecretUsageResponse.model_validate(redact_sensitive_payload(result))
 
 @router.get(
     "/{slug}/validate",

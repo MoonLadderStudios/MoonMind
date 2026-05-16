@@ -914,6 +914,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/secrets/{slug}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List redacted consumers of a managed secret */
+        get: operations["get_secret_usage_api_v1_secrets__slug__usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/secrets/{slug}/validate": {
         parameters: {
             query?: never;
@@ -6381,6 +6398,46 @@ export interface components {
              */
             plaintext: string;
         };
+        /**
+         * SecretUsageDiagnosticResponse
+         * @description Redacted diagnostic surfaced by a secret usage lookup.
+         */
+        SecretUsageDiagnosticResponse: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Severity */
+            severity: string;
+        };
+        /**
+         * SecretUsageItemResponse
+         * @description Metadata-only reference from a consumer to a managed secret.
+         */
+        SecretUsageItemResponse: {
+            /** Consumertype */
+            consumerType: string;
+            /** Objectname */
+            objectName: string;
+            /** Reference */
+            reference: string;
+            /** Scope */
+            scope?: string | null;
+            /** Settingkey */
+            settingKey?: string | null;
+        };
+        /**
+         * SecretUsageResponse
+         * @description Envelope for managed secret usage views.
+         */
+        SecretUsageResponse: {
+            /** Secretref */
+            secretRef: string;
+            /** Usages */
+            usages?: components["schemas"]["SecretUsageItemResponse"][];
+            /** Diagnostics */
+            diagnostics?: components["schemas"]["SecretUsageDiagnosticResponse"][];
+        };
         /** SettingsPatchRequest */
         SettingsPatchRequest: {
             /** Changes */
@@ -9752,6 +9809,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SecretMetadataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_secret_usage_api_v1_secrets__slug__usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretUsageResponse"];
                 };
             };
             /** @description Validation Error */
